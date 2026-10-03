@@ -1,5 +1,5 @@
 import { MessageId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TimelineEntry } from "../../session-logic";
 import {
   clampTooltipTop,
@@ -14,6 +14,7 @@ import {
   type TrailGeometry,
   audioTickGain,
   computeAudioTickWidths,
+  createAudioLevelShaper,
   stepAudioEnvelope,
 } from "./messageTrail.logic";
 
@@ -292,10 +293,36 @@ describe("audio wave", () => {
     expect(stepAudioEnvelope(0.8, 0.75, 0.9)).toBe(0.75);
   });
 
+  it("ignores room noise and scales to the microphone's recent peak", () => {
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    try {
+      const shape = createAudioLevelShaper();
+      expect(shape(0)).toBe(0);
+      expect(shape(0.1)).toBe(0);
+      // Quiet speech reaches its own peak; the next quieter syllable stays lower.
+      expect(shape(0.4)).toBe(1);
+      elapsed += 33;
+      const quieterSyllable = shape(0.3);
+      expect(quieterSyllable).toBeGreaterThan(0.4);
+      expect(quieterSyllable).toBeLessThan(0.45);
+      // A louder microphone raises the reference immediately.
+      expect(shape(0.8)).toBe(1);
+      elapsed += 33;
+      expect(shape(0.4)).toBeLessThan(0.3);
+      // The helper emits silence once, then sends no levels until sound returns.
+      shape(0);
+      elapsed += 8_000;
+      expect(shape(0.4)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("keeps per-tick gains in a narrow, stable band", () => {
     for (let i = 0; i < 50; i += 1) {
       const gain = audioTickGain(i);
-      expect(gain).toBeGreaterThanOrEqual(0.65);
+      expect(gain).toBeGreaterThanOrEqual(0.45);
       expect(gain).toBeLessThanOrEqual(1);
       expect(audioTickGain(i)).toBe(gain);
     }

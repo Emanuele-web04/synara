@@ -37,6 +37,7 @@ import {
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
 import {
   claimQuitResumeRecordAtStartup,
   resumeQuitInterruptedChats,
@@ -85,6 +86,7 @@ export interface ServerShape {
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
+    | ThreadSnoozeReactor
     | SqlClient.SqlClient
   >;
   readonly stopSignal: Effect.Effect<void, never>;
@@ -183,6 +185,7 @@ export const createEffectServer = Effect.fn(function* (
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const threadSnoozeReactor = yield* ThreadSnoozeReactor;
   const readiness = yield* makeServerReadiness;
 
   yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
@@ -263,6 +266,7 @@ export const createEffectServer = Effect.fn(function* (
       automationScheduler,
       automationRunReactor,
       threadDeletionReactor,
+      threadSnoozeReactor,
       providerSessionReaper,
       providerRuntimeReconciler,
     ],

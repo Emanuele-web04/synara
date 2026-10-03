@@ -57,6 +57,7 @@ export const DESKTOP_IPC_CHANNELS = {
   computerSetCursorStyle: "desktop:computer-set-cursor-style",
   audioLevel: {
     setSource: "desktop:audio-level-set-source",
+    listMicrophones: "desktop:audio-level-list-microphones",
     level: "desktop:audio-level",
   },
   storageMigration: {

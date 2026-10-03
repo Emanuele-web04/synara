@@ -147,6 +147,7 @@ import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
+import { useThreadIdsWithPendingDraft } from "../composerDraftStore";
 import { getThreadFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
@@ -169,7 +170,10 @@ import { derivePendingApprovals, derivePendingUserInputs } from "../session-logi
 import { useActivityThreads } from "../hooks/useActivityThreads";
 import { useCommittedPathname } from "../hooks/useCommittedPathname";
 import { countNeedsYouActions } from "./inbox/inbox.logic";
-import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
+import {
+  resolveThreadPullRequestFallback,
+  useThreadPullRequests,
+} from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
   providerModelsQueryOptions,
@@ -262,9 +266,14 @@ import {
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import {
   type ActivityScopeSelection,
+  buildActivityViewModel,
   hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
 } from "./SidebarActivityView.logic";
-import { SidebarActivityView } from "./SidebarActivityView";
+import {
+  ActivityThreadRow,
+  SidebarActivityView,
+  SidebarSnoozedThreadsSection,
+} from "./SidebarActivityView";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
@@ -293,6 +302,8 @@ import { RenameDialog } from "./RenameDialog";
 import { EditProjectDialog, type EditProjectValue } from "./EditProjectDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
+import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
@@ -385,6 +396,7 @@ import {
   groupSidebarThreadsByProjectId,
   mergeGroupMemberThreadsIntoProjectBuckets,
   partitionSidebarThreadsByProjectIds,
+  filterSidebarThreadsBySpace,
   isLatestPinnedProjectMutation,
   isProjectsSidebarSurface,
   pruneProjectThreadListPagingForCollapsedProjects,
@@ -449,6 +461,7 @@ import {
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
@@ -1598,6 +1611,7 @@ export default function Sidebar() {
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
+  const [snoozeDialogThreadId, setSnoozeDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectAgentDialogState, setProjectAgentDialogState] = useState<{
     projectId: ProjectId;
@@ -1662,6 +1676,9 @@ export default function Sidebar() {
     () => readSidebarUiState().activityScope,
   );
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
+  const [classicSnoozedVisibleThreadIds, setClassicSnoozedVisibleThreadIds] = useState<
+    readonly ThreadId[]
+  >([]);
   const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
     setActivityVisibleThreadIds((current) => {
       if (
@@ -1734,14 +1751,15 @@ export default function Sidebar() {
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
-  // Activity view + unread bell (and the Inbox) read the same visibility-filtered list,
-  // so the bell can never point at a row the Activity list is hiding.
+  // The bell and Inbox read current threads. Activity also receives snoozed rows
+  // for its separate section, so badges never point at work the user set aside.
   const {
     sidebarThreads,
     displaySidebarThreads,
     groupProjectIdSet,
     groupThreads: groupSidebarThreads,
     visibleNonGroupThreads: visibleNonGroupSidebarThreads,
+    activityNonGroupThreads: activityNonGroupSidebarThreads,
   } = useActivityThreads({ hideAutomationRunThreads });
   const displaySidebarTreeThreads = useMemo(
     () => excludeHiddenProjectAgentCoordinatorThreads(sidebarTreeThreads, coordinatorThreadIds),
@@ -1862,6 +1880,10 @@ export default function Sidebar() {
         markThreadVisited(threadId, thread.latestTurn?.completedAt ?? undefined);
         return;
       }
+      if (threadStatus.label === "Reminder") {
+        markThreadVisited(threadId, thread.snoozeReminderAt ?? undefined);
+        return;
+      }
       dismissThreadStatus(threadId, threadStatus.dismissalKey);
     },
     [
@@ -1883,11 +1905,30 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  const filterThreadsToActiveSpace = useCallback(
+    (threads: readonly SidebarThreadSummary[]) =>
+      filterSidebarThreadsBySpace({
+        threads,
+        projectById,
+        spaceId: activeSpaceId,
+        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
+      }),
+    [
+      activeSpaceId,
+      chatWorkspaceRoot,
+      groupsWorkspaceRoot,
+      homeDir,
+      projectById,
+      studioWorkspaceRoot,
+    ],
+  );
   const {
     pinnedThreadIds,
     pinnedThreadIdSet,
     toggleThreadPinned,
     setThreadSettledWithToast,
+    setThreadSnoozedUntil,
+    snoozeThread,
     settledOverrideByThreadId,
     deleteThread,
     confirmAndDeleteThread,
@@ -1900,6 +1941,7 @@ export default function Sidebar() {
     activeSplitView,
     appSettings,
     clearTerminalState,
+    filterThreadsToActiveSpace,
     handleNewChat,
     projectById,
     routeSplitViewId: routeSearch.splitViewId ?? null,
@@ -1909,6 +1951,29 @@ export default function Sidebar() {
     sidebarThreadSummaryById,
     threadsHydrated,
   });
+  const snoozedSidebarThreads = useMemo(
+    () =>
+      buildActivityViewModel({
+        threads: filterSidebarThreadsBySpace({
+          threads: activityNonGroupSidebarThreads,
+          projectById,
+          spaceId: activeSpaceId,
+          paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
+        }),
+        pinnedThreadIdSet,
+      }).snoozed,
+    [
+      activeSpaceId,
+      activityNonGroupSidebarThreads,
+      chatWorkspaceRoot,
+      groupsWorkspaceRoot,
+      homeDir,
+      pinnedThreadIdSet,
+      projectById,
+      studioWorkspaceRoot,
+    ],
+  );
+  const draftThreadIdSet = useThreadIdsWithPendingDraft();
   const {
     projectRunsByProjectId,
     projectRunServerByProjectId,
@@ -1976,16 +2041,11 @@ export default function Sidebar() {
   // pinned lists on every render (hooks can't be conditional, but the inputs can be).
   const activeSpaceNonGroupSidebarTreeThreads = useMemo(
     () =>
-      nonGroupSidebarTreeThreads.filter((thread) => {
-        const project = projectById.get(thread.projectId);
-        return (
-          !isOrdinarySpaceProject(project, {
-            homeDir,
-            chatWorkspaceRoot,
-            studioWorkspaceRoot,
-            groupsWorkspaceRoot,
-          }) || (project.spaceId ?? null) === activeSpaceId
-        );
+      filterSidebarThreadsBySpace({
+        threads: nonGroupSidebarTreeThreads,
+        projectById,
+        spaceId: activeSpaceId,
+        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
       }),
     [
       activeSpaceId,
@@ -2203,6 +2263,7 @@ export default function Sidebar() {
             (thread) =>
               thread.projectId === projectId &&
               (thread.archivedAt ?? null) === null &&
+              thread.snoozedUntil == null &&
               !isSidechatThread(thread),
           )
           .map((thread) => ({
@@ -2210,6 +2271,7 @@ export default function Sidebar() {
             createdAt: thread.createdAt,
             updatedAt: thread.updatedAt,
             latestUserMessageAt: thread.latestUserMessageAt,
+            snoozeReminderAt: thread.snoozeReminderAt,
           })),
         appSettings.sidebarThreadSortOrder,
       )[0];
@@ -2237,13 +2299,17 @@ export default function Sidebar() {
       const latestThread = sortThreadsForSidebar(
         snapshot.threads
           .filter(
-            (thread) => thread.projectId === projectId && (thread.archivedAt ?? null) === null,
+            (thread) =>
+              thread.projectId === projectId &&
+              (thread.archivedAt ?? null) === null &&
+              thread.snoozedUntil == null,
           )
           .map((thread) => ({
             id: thread.id,
             createdAt: thread.createdAt,
             updatedAt: thread.updatedAt,
             latestUserMessageAt: thread.latestUserMessageAt,
+            snoozeReminderAt: thread.snoozeReminderAt,
           })),
         appSettings.sidebarThreadSortOrder,
       )[0];
@@ -3210,6 +3276,11 @@ export default function Sidebar() {
           hasPendingUserInput,
         });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
+      const canSnooze =
+        !thread.parentThreadId &&
+        !groupProjectIdSet.has(thread.projectId) &&
+        !coordinatorThreadIds.has(threadId) &&
+        !isSidechatThread(thread);
       const handoffTargets = canHandoff
         ? resolveAvailableHandoffTargets({
             sourceProvider: thread.modelSelection.provider,
@@ -3335,6 +3406,36 @@ export default function Sidebar() {
               ]
             : []),
           { id: "mark-unread", label: "Mark unread", icon: THREAD_CONTEXT_MENU_ICONS.markUnread },
+          ...(canSnooze
+            ? [
+                ...(threadSummary?.snoozedUntil != null
+                  ? [
+                      {
+                        id: "snooze-cancel",
+                        label: "Return now",
+                        icon: "clock",
+                        separatorBefore: true,
+                      },
+                    ]
+                  : []),
+                ...contextMenuGroup(
+                  {
+                    id: "snooze",
+                    label: threadSummary?.snoozedUntil != null ? "Reschedule" : "Snooze",
+                    icon: "clock",
+                    separatorBefore: threadSummary?.snoozedUntil == null,
+                  },
+                  [
+                    ...SNOOZE_PRESETS.map((preset) => ({
+                      id: preset.id,
+                      label: preset.label,
+                      icon: "clock",
+                    })),
+                    { id: "snooze-custom", label: "Pick date & time…", icon: "clock" },
+                  ],
+                ),
+              ]
+            : []),
           ...handoffItems,
           ...forkItems,
           ...contextMenuGroup(
@@ -3414,6 +3515,19 @@ export default function Sidebar() {
       }
       if (clicked === "clear-notification") {
         clearThreadNotification(threadId);
+        return;
+      }
+      if (clicked === "snooze-cancel") {
+        setThreadSnoozedUntil(threadId, null);
+        return;
+      }
+      if (clicked === "snooze-custom") {
+        setSnoozeDialogThreadId(threadId);
+        return;
+      }
+      const snoozePreset = SNOOZE_PRESETS.find((preset) => preset.id === clicked);
+      if (snoozePreset) {
+        snoozeThread(threadId, snoozePreset.duration);
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff-here:")) {
@@ -3579,6 +3693,8 @@ export default function Sidebar() {
       resolveThreadStatusForSidebar,
       serverSettingsQuery.data?.providers,
       sidebarThreadSummaryById,
+      setThreadSnoozedUntil,
+      snoozeThread,
       summaryFor,
       toggleThreadPinned,
     ],
@@ -4739,8 +4855,14 @@ export default function Sidebar() {
       }
     }
 
+    for (const threadId of classicSnoozedVisibleThreadIds) addVisibleThreadId(threadId);
     return [...visibleThreadIdSet];
-  }, [pinnedThreads, surfaceProjectSidebarDataById, surfaceProjects]);
+  }, [
+    classicSnoozedVisibleThreadIds,
+    pinnedThreads,
+    surfaceProjectSidebarDataById,
+    surfaceProjects,
+  ]);
   const visibleSidebarThreadIds =
     activityViewEnabled && !isOnGroups ? activityVisibleThreadIds : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
@@ -4754,8 +4876,8 @@ export default function Sidebar() {
   );
   const visibleSidebarThreads = useMemo(
     // Tree source so an active subagent row also gets PR badges and git targets.
-    () => displaySidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
-    [displaySidebarTreeThreads, visibleSidebarThreadIdSet],
+    () => sidebarThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
+    [sidebarThreads, visibleSidebarThreadIdSet],
   );
   // PR badges only render on visible rows, so keep git/PR query setup off hidden project history.
   const prByThreadId = useThreadPullRequests({
@@ -4970,6 +5092,44 @@ export default function Sidebar() {
     );
   }
 
+  function renderSnoozedThreadRow(thread: SidebarThreadSummary) {
+    return (
+      <ActivityThreadRow
+        key={thread.id}
+        thread={thread}
+        project={projectById.get(thread.projectId)}
+        isActive={visualActiveSidebarThreadId === thread.id}
+        isSettled={false}
+        isPinned={pinnedThreadIdSet.has(thread.id)}
+        hasPendingDraft={draftThreadIdSet.has(thread.id)}
+        pr={
+          prByThreadId.has(thread.id)
+            ? (prByThreadId.get(thread.id) ?? null)
+            : resolveThreadPullRequestFallback({
+                branch: thread.branch,
+                hasDedicatedWorktree: thread.worktreePath !== null,
+                lastKnownPr: thread.lastKnownPr ?? null,
+              })
+        }
+        status={resolveThreadStatusForSidebar(thread)}
+        onOpen={() => activateThreadFromSidebarIntent(thread.id)}
+        onOpenPullRequest={(event, pr) => openThreadPullRequest(event, thread, pr)}
+        onSetSettled={(settled) => setThreadSettledWithToast(thread.id, settled)}
+        onReturnSnoozed={() => setThreadSnoozedUntil(thread.id, null)}
+        onTogglePinned={() => toggleThreadPinned(thread.id)}
+        onArchive={() => void archiveThreadWithUndo(thread.id)}
+        onRename={openRenameThreadDialog}
+        onRenamePointerUp={handleThreadRenamePointerUp}
+        onContextMenu={(threadId, position) => {
+          void handleThreadContextMenu(threadId, position);
+        }}
+        renderHoverCard={(anchorId) =>
+          renderThreadHoverCardPopup(thread, anchorId, visualActiveSidebarThreadId === thread.id)
+        }
+      />
+    );
+  }
+
   // Shared rich hover card for thread/chat rows. Worktree metadata is resolved
   // once here so pinned and nested rows stay visually and semantically identical.
   function renderThreadHoverCardPopup(
@@ -5113,7 +5273,11 @@ export default function Sidebar() {
               }),
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
-                : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+                : cn(
+                    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                    SIDEBAR_ROW_HOVER_CLASS_NAME,
+                    threadStatus?.label === "Reminder" && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
+                  ),
             )}
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
             onClick={() => activateThreadFromSidebarIntent(thread.id)}
@@ -5271,6 +5435,7 @@ export default function Sidebar() {
                   resolveThreadRowClassName({
                     isActive,
                     isSelected,
+                    isSnoozeReminder: threadStatus?.label === "Reminder",
                   }),
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
                   isSubagentThread
@@ -7009,7 +7174,7 @@ export default function Sidebar() {
                   ) : activityViewEnabled ? (
                     <SidebarGroup className="px-1.5 py-1.5">
                       <SidebarActivityView
-                        threads={visibleNonGroupSidebarThreads}
+                        threads={activityNonGroupSidebarThreads}
                         projectById={projectById}
                         activeThreadId={visualActiveSidebarThreadId}
                         pinnedThreadIdSet={pinnedThreadIdSet}
@@ -7021,6 +7186,7 @@ export default function Sidebar() {
                         onOpenThread={activateThreadFromSidebarIntent}
                         onOpenThreadPullRequest={openThreadPullRequest}
                         onSetThreadSettled={setThreadSettledWithToast}
+                        onReturnSnoozedThread={(threadId) => setThreadSnoozedUntil(threadId, null)}
                         onToggleThreadPinned={toggleThreadPinned}
                         onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
                         onMarkThreadRead={markThreadVisited}
@@ -7175,6 +7341,20 @@ export default function Sidebar() {
                 </div>
               </>
             )}
+            {!isOnSettings &&
+            !isOnGroups &&
+            !activityViewEnabled &&
+            !showRailSpacesPanel &&
+            !showRailAutomationsPanel &&
+            snoozedSidebarThreads.length > 0 ? (
+              <SidebarGroup className="px-1.5 pt-1 pb-2">
+                <SidebarSnoozedThreadsSection
+                  threads={snoozedSidebarThreads}
+                  renderThreadRow={renderSnoozedThreadRow}
+                  onVisibleThreadIdsChange={setClassicSnoozedVisibleThreadIds}
+                />
+              </SidebarGroup>
+            ) : null}
             {!isOnSettings &&
             !isOnGroups &&
             !activityViewEnabled &&
@@ -7748,6 +7928,20 @@ export default function Sidebar() {
         </DialogPopup>
       </Dialog>
 
+      <SnoozeUntilDialog
+        open={snoozeDialogThreadId !== null}
+        currentSnoozedUntil={
+          snoozeDialogThreadId
+            ? (sidebarThreadSummaryById[snoozeDialogThreadId]?.snoozedUntil ?? null)
+            : null
+        }
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setSnoozeDialogThreadId(null);
+        }}
+        onSnooze={(deadline) => {
+          if (snoozeDialogThreadId !== null) snoozeThread(snoozeDialogThreadId, deadline);
+        }}
+      />
       <RenameThreadDialog
         open={renameDialogThreadId !== null}
         currentTitle={
@@ -7933,7 +8127,10 @@ function SidebarSearchPaletteController(props: {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   // Search keeps automation-run threads as an intent-driven escape hatch, while
   // structurally nested side chats stay out of standalone thread results.
-  const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const selectSidebarDisplayThreads = useMemo(
+    () => createSidebarDisplayThreadsSelector({ includeSnoozed: true }),
+    [],
+  );
   const importCandidates = useMemo(
     () => buildThreadImportCandidates(props.providerInstances),
     [props.providerInstances],

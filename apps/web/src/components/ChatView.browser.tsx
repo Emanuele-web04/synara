@@ -73,6 +73,7 @@ import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { showContextMenuFallback } from "../contextMenuFallback";
 import { useRightDockStore } from "../rightDockStore";
+import { GITHUB_INBOX_DOCK_HOST_ID } from "../rightDockStore.logic";
 import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { resolveSplitViewPaneIdForThread, useSplitViewStore } from "../splitViewStore";
 import { splitViewPaneScopeId } from "../lib/chatPaneScope";
@@ -2384,6 +2385,122 @@ describe("ChatView transcript geometry (full app)", () => {
             ]),
           );
         });
+      } finally {
+        if (previousNativeApi) {
+          Object.defineProperty(window, "nativeApi", {
+            configurable: true,
+            value: previousNativeApi,
+          });
+        } else {
+          Reflect.deleteProperty(window, "nativeApi");
+        }
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { kind: "forked", repository: "acme/widgets", opens: "the host chat dock" },
+    { kind: "forked", repository: "other/repo", opens: "the external browser" },
+    { kind: "standalone", repository: "acme/widgets", opens: "Code review" },
+  ] as const)(
+    "opens a $repository pull request link from a $kind side chat in $opens",
+    async ({ kind, repository: linkedRepository }) => {
+      useRightDockStore.setState({ dockStateByThreadId: {} });
+      const url = `https://github.com/${linkedRepository}/pull/41`;
+      const sidechatId = ThreadId.makeUnsafe("sidechat-pr-link");
+      const base = addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("sidechat-pr-main"),
+          targetText: "Main conversation",
+        }),
+        sidechatId,
+      );
+      const snapshot = {
+        ...base,
+        threads: base.threads.map((thread) =>
+          thread.id === sidechatId
+            ? {
+                ...thread,
+                ...(kind === "forked"
+                  ? { sidechatSourceThreadId: THREAD_ID }
+                  : {
+                      sidechatContext: {
+                        kind: "github-item" as const,
+                        itemKind: "pullRequest" as const,
+                        repository: "acme/widgets",
+                        number: 1368,
+                        url: "https://github.com/acme/widgets/pull/1368",
+                      },
+                    }),
+                messages: [
+                  createAssistantMessage({
+                    id: MessageId.makeUnsafe("sidechat-pr-link"),
+                    text: `[Inspect PR](${url})`,
+                    offsetSeconds: 0,
+                  }),
+                ],
+              }
+            : thread,
+        ),
+      };
+      const dockHostId = kind === "forked" ? THREAD_ID : GITHUB_INBOX_DOCK_HOST_ID;
+      useRightDockStore.getState().openPane(dockHostId, { kind: "sidechat", threadId: sidechatId });
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      const repository = { nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" };
+      const openedExternally: string[] = [];
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: {
+          ...api,
+          git: {
+            ...api.git,
+            githubRepository: async () => ({ repository, repositories: [repository] }),
+          },
+          shell: {
+            ...api.shell,
+            openExternal: async (href: string) => {
+              openedExternally.push(href);
+            },
+          },
+        },
+      });
+      const pullRequestNumbers = (hostId: ThreadId) =>
+        (useRightDockStore.getState().dockStateByThreadId[hostId]?.panes ?? [])
+          .filter((pane) => pane.kind === "pullRequest")
+          .map((pane) => pane.pullRequestNumber);
+      try {
+        if (kind === "standalone") {
+          await mounted.router.navigate({
+            to: "/pull-requests",
+            search: {
+              kind: "pullRequest",
+              selectedProjectId: PROJECT_ID,
+              selectedRepo: "acme/widgets",
+              number: 1368,
+            },
+          });
+        }
+        await page.getByRole("link", { name: "Inspect PR", exact: true }).click();
+        await vi.waitFor(() => {
+          if (kind === "standalone") {
+            expect(mounted.router.state.location.pathname).toBe("/pull-requests");
+            expect(mounted.router.state.location.search).toMatchObject({
+              kind: "pullRequest",
+              selectedProjectId: PROJECT_ID,
+              selectedRepo: "acme/widgets",
+              number: 41,
+            });
+          } else if (linkedRepository === "acme/widgets") {
+            expect(pullRequestNumbers(THREAD_ID)).toEqual([41]);
+          } else {
+            expect(openedExternally).toEqual([url]);
+          }
+        });
+        // Nothing lands in the side chat's own dock, which no surface renders.
+        expect(pullRequestNumbers(sidechatId)).toEqual([]);
       } finally {
         if (previousNativeApi) {
           Object.defineProperty(window, "nativeApi", {

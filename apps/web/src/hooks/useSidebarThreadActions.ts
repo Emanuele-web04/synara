@@ -1,5 +1,5 @@
 // FILE: useSidebarThreadActions.ts
-// Purpose: Owns Sidebar thread pinning, archive/undo, deletion, and project-batch actions.
+// Purpose: Owns Sidebar thread pinning, snooze, archive/undo, deletion, and project-batch actions.
 // Layer: Web Sidebar controller hook
 // Exports: useSidebarThreadActions
 
@@ -14,6 +14,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import {
   getFallbackThreadIdAfterDelete,
+  getFallbackThreadIdAfterSnooze,
   derivePinnedThreadIdsForSidebar,
   excludeHiddenProjectAgentCoordinatorThreads,
   isLatestPinnedThreadMutation,
@@ -36,6 +37,12 @@ import {
   isThreadAlreadyUnarchivedError,
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
+import {
+  dispatchThreadSnoozedUntil,
+  formatSnoozeDeadline,
+  resolveSnoozeDeadline,
+  type SnoozeDuration,
+} from "../lib/threadSnooze";
 import {
   createOptimisticSettledMutation,
   recordOptimisticSettledMutationSequence,
@@ -103,6 +110,10 @@ export function useSidebarThreadActions(input: {
     | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
+  /** Limits the post-snooze focus fallback to chats reachable from the active Space. */
+  readonly filterThreadsToActiveSpace?: (
+    threads: readonly SidebarThreadSummary[],
+  ) => readonly SidebarThreadSummary[];
   readonly handleNewChat: (options?: { fresh?: boolean }) => Promise<unknown>;
   readonly projectById: ReadonlyMap<ProjectId, Project>;
   readonly routeSplitViewId: string | null;
@@ -116,6 +127,7 @@ export function useSidebarThreadActions(input: {
     activeSplitView,
     appSettings,
     clearTerminalState,
+    filterThreadsToActiveSpace,
     handleNewChat,
     projectById,
     routeSplitViewId,
@@ -442,6 +454,72 @@ export function useSidebarThreadActions(input: {
       });
     },
     [setThreadSettled],
+  );
+
+  const setThreadSnoozedUntil = dispatchThreadSnoozedUntil;
+
+  // Snooze confirms asynchronously; these refs let the confirmation see the
+  // route and thread list as they are then, not as they were when it started.
+  const snoozeFallbackThreadsRef = useRef(sidebarTreeThreads);
+  useEffect(() => {
+    snoozeFallbackThreadsRef.current = filterThreadsToActiveSpace
+      ? filterThreadsToActiveSpace(sidebarTreeThreads)
+      : sidebarTreeThreads;
+  }, [filterThreadsToActiveSpace, sidebarTreeThreads]);
+
+  const snoozeThread = useCallback(
+    (threadId: ThreadId, duration: SnoozeDuration) => {
+      const deadline = resolveSnoozeDeadline(duration, Date.now());
+      const previousSnoozedUntil = sidebarThreadSummaryById[threadId]?.snoozedUntil ?? null;
+      const navigationAtDispatch = closeNavigationInputRef.current;
+      const routeVersionAtDispatch =
+        navigationAtDispatch.routeThreadId === threadId &&
+        navigationAtDispatch.routeSplitViewId === null
+          ? navigationAtDispatch.routeVersion
+          : null;
+      void setThreadSnoozedUntil(threadId, deadline.toISOString()).then((confirmed) => {
+        if (!confirmed) return;
+        // Same compact Undo toast as archive, so chat-level undo reads alike.
+        toastManager.add({
+          id: `snooze-undo:${threadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+            archiveUndo: {
+              message: `Snoozed until ${formatSnoozeDeadline(deadline.toISOString())}`,
+              onUndo: () => setThreadSnoozedUntil(threadId, previousSnoozedUntil),
+            },
+          },
+        });
+        // A split opening or an away-and-back visit is newer navigation too.
+        const currentNavigation = closeNavigationInputRef.current;
+        if (
+          routeVersionAtDispatch === null ||
+          currentNavigation.routeVersion !== routeVersionAtDispatch ||
+          currentNavigation.routeThreadId !== threadId ||
+          currentNavigation.routeSplitViewId !== null
+        )
+          return;
+        const fallbackThreadId = getFallbackThreadIdAfterSnooze({
+          threads: excludeHiddenProjectAgentCoordinatorThreads(
+            snoozeFallbackThreadsRef.current,
+            hiddenCoordinatorThreadIds(),
+          ).filter((thread) => !thread.parentThreadId),
+          snoozedThreadId: threadId,
+        });
+        if (fallbackThreadId) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: fallbackThreadId },
+            replace: true,
+          });
+        } else {
+          void handleNewChat();
+        }
+      });
+    },
+    [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById],
   );
 
   // Drop optimistic settle entries once the server-confirmed state agrees, so
@@ -1016,6 +1094,8 @@ export function useSidebarThreadActions(input: {
     pinnedThreadIdSet,
     toggleThreadPinned,
     setThreadSettledWithToast,
+    setThreadSnoozedUntil,
+    snoozeThread,
     settledOverrideByThreadId: optimisticSettledStateByThreadId,
     deleteThread,
     confirmAndDeleteThread,

@@ -287,6 +287,7 @@ function needsYouKind(
   if (status?.label === "Pending Approval") return "approval";
   if (status?.label === "Awaiting Input") return "input";
   if (status?.label === "Plan Ready") return "plan";
+  if (status?.label === "Reminder") return "unread";
   // The sidebar shows a failed turn as a plain completion, so dismissing it hides both.
   if (status?.label === "Completed") return isUnseenFailedThread(thread) ? "failed" : "unread";
   return null;
@@ -303,7 +304,7 @@ export function collectNeedsYouItems(
 ): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   for (const thread of threads) {
-    if (!isActivityThread(thread)) continue;
+    if (thread.snoozedUntil != null || !isActivityThread(thread)) continue;
     const kind = needsYouKind(thread, dismissed);
     if (kind) items.push({ kind, thread });
   }
@@ -327,7 +328,8 @@ export function countNeedsYouActions(
 ): number {
   let count = 0;
   for (const thread of threads) {
-    if (thread.id === activeThreadId || !isActivityThread(thread)) continue;
+    if (thread.snoozedUntil != null || thread.id === activeThreadId || !isActivityThread(thread))
+      continue;
     const kind = needsYouKind(thread, dismissed);
     if (kind && NEEDS_YOU_ACTION_KINDS.has(kind)) count += 1;
   }
@@ -359,7 +361,10 @@ export function groupInboxThreads(
     working: threads
       .filter(
         (thread) =>
-          isActivityThread(thread) && !listed.has(thread.id) && isThreadRunningForActivity(thread),
+          thread.snoozedUntil == null &&
+          isActivityThread(thread) &&
+          !listed.has(thread.id) &&
+          isThreadRunningForActivity(thread),
       )
       .toSorted(byLatestUpdate),
     finished: items.filter((item) => item.kind === "unread").map((item) => item.thread),

@@ -143,6 +143,9 @@ export interface WorkLogEntry {
   // batch roll-up) render as compact centered pills in the coordinator
   // conversation, each carrying a link into the reported thread.
   synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
+  // A task the agent moved to the background finished. Its completion wakes the
+  // agent into a new turn, so the row also marks where that new response starts.
+  backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
   // Computer-control denial rows render as an actionable card (enable control
   // and retry) instead of a plain error line; carry just what that card needs.
   computerControlDenied?: WorkLogComputerControlDenied;
@@ -215,6 +218,12 @@ export interface WorkLogSynaraWorkerNoticeThread {
   pr: string | null;
   /** Owning group project — the needs-you actions resolve against it. */
   projectId: string | null;
+}
+
+export interface WorkLogBackgroundTaskCompletion {
+  taskId: string;
+  taskType: string | null;
+  description: string | null;
 }
 
 export interface WorkLogSynaraWorkerNotice {
@@ -400,7 +409,7 @@ export function deriveWorkLogEntries(
   // GitHub icon, user-input rows -> question / submit glyphs). Stripping
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
-  return reconcileSettledLiveActivities(
+  const derived = reconcileSettledLiveActivities(
     collapseDerivedWorkLogEntries(entries),
     ordered,
     latestTurnId,
@@ -418,6 +427,65 @@ export function deriveWorkLogEntries(
         ...entry
       }) => entry,
     );
+  const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
+  return completions.length > 0 ? [...derived, ...completions] : derived;
+}
+
+// Completions of tasks a visible "Moved to background" notice announced. They
+// carry no turn id (they land between turns), so they bypass the turn filter
+// once the notice that launched them is visible.
+function deriveBackgroundTaskCompletionEntries(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+  visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
+): WorkLogEntry[] {
+  const backgroundTasks = new Map<
+    string,
+    { taskType: string | null; description: string | null }
+  >();
+  const completions: WorkLogEntry[] = [];
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (
+      activity.kind === "runtime.warning" &&
+      payload?.nativeEventType === "background_tasks_changed"
+    ) {
+      if (!shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds)) continue;
+      const tasks = asRecord(payload.data)?.tasks;
+      if (!Array.isArray(tasks)) continue;
+      for (const task of tasks) {
+        const record = asRecord(task);
+        if (typeof record?.task_id !== "string") continue;
+        backgroundTasks.set(record.task_id, {
+          taskType: typeof record.task_type === "string" ? record.task_type : null,
+          description: typeof record.description === "string" ? record.description : null,
+        });
+      }
+      continue;
+    }
+    if (activity.kind !== "task.completed" || typeof payload?.taskId !== "string") continue;
+    const task = backgroundTasks.get(payload.taskId);
+    if (!task) continue;
+    backgroundTasks.delete(payload.taskId);
+    const noun = task.taskType === "local_agent" ? "Subagent" : "Background task";
+    const outcome =
+      payload.status === "failed"
+        ? "failed"
+        : payload.status === "stopped"
+          ? "stopped"
+          : "finished";
+    completions.push({
+      id: activity.id,
+      createdAt: activity.createdAt,
+      ...(activity.sequence !== undefined ? { sequence: activity.sequence } : {}),
+      // Status first: a trailing "finished" is trimmed as a tool status word.
+      label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
+      tone: payload.status === "failed" ? "error" : "info",
+      activityKind: activity.kind,
+      backgroundTaskCompletion: { taskId: payload.taskId, ...task },
+    });
+  }
+  return completions;
 }
 
 function shouldKeepActivityForWorkLog(

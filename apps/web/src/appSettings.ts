@@ -446,6 +446,14 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
   ),
   railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
+  // Usage popovers (rail rings, chat header, branch toolbar) open on the limit rows only;
+  // reset credits, credits, and token totals sit behind a "Details" toggle. The toggle
+  // writes back here, so the last choice sticks; Settings → Usage exposes it too.
+  usageDetailsDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Which detail sections usage popovers offer at all. Ignored when a provider reports no
+  // limit rows, since the details are then the only usage there is to show.
+  usagePopoverShowResetCredits: Schema.Boolean.pipe(withDefaults(() => true)),
+  usagePopoverShowUsageLines: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -456,12 +464,20 @@ export const AppSettingsSchema = Schema.Struct({
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Fold each finished turn's tool calls and intermediate messages behind one
+  // "Worked for…" line. Off keeps every step of finished turns visible.
+  collapseFinishedTurns: Schema.Boolean.pipe(withDefaults(() => true)),
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
   // Desktop on macOS: the message trail moves with the Mac's audio output,
   // the microphone, or both. Opt-in because the first use asks macOS for access.
   messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
+  // Core Audio UID of the microphone the trail listens to; "" follows the Mac's
+  // default input (which may be a Bluetooth headset).
+  messageTrailMicrophoneId: Schema.String.check(Schema.isMaxLength(512)).pipe(
+    withDefaults(() => ""),
+  ),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
@@ -472,6 +488,9 @@ export const AppSettingsSchema = Schema.Struct({
   useCustomTitleBar: Schema.Boolean.pipe(withDefaults(() => true)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Finished-work alerts wait for the agent's background subagents too, and a
+  // subagent's own thread never alerts. Off alerts every time any of them stops.
+  notifyAfterSubagentsFinish: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local desktop preference. Native capability/permission state remains owned by Electron.
   // AppSnap is opt-in because enabling its Settings toggle requests macOS
   // Input Monitoring and Screen Recording permissions.

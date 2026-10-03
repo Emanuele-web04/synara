@@ -249,6 +249,11 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.activityKind === "context-compaction") return ContextCompactionIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
+  if (workEntry.backgroundTaskCompletion) {
+    return workEntry.backgroundTaskCompletion.taskType === "local_agent"
+      ? AgentTaskIcon
+      : BackgroundTrayIcon;
+  }
   if (workEntry.providerHandoff) {
     return workEntry.providerHandoff.status === "failed" ? CircleAlertIcon : HandoffIcon;
   }
