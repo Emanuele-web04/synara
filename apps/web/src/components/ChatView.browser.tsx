@@ -78,6 +78,9 @@ import { resolveSplitViewPaneIdForThread, useSplitViewStore } from "../splitView
 import { splitViewPaneScopeId } from "../lib/chatPaneScope";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useRailShellStore } from "../railShellStore";
+import { usePinnedThreadsStore } from "../pinnedThreadsStore";
+import { getAppTypographyScale } from "../lib/appTypography";
+import { threadJumpCommandForIndex } from "../keybindings";
 import { useStore } from "../store";
 import {
   createShellSnapshotFromReadModel,
@@ -2305,6 +2308,227 @@ describe("ChatView transcript geometry (full app)", () => {
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
   });
+
+  it.each([
+    { activityViewEnabled: false, customShortcut: false },
+    { activityViewEnabled: true, customShortcut: false },
+    { activityViewEnabled: false, customShortcut: true },
+    { activityViewEnabled: true, customShortcut: true },
+  ])(
+    "keeps sidebar shortcut hints clear of row content (Activity: $activityViewEnabled, custom: $customShortcut)",
+    async ({ activityViewEnabled, customShortcut }) => {
+      const base = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("shortcut-layout"),
+        targetText: "Review the sidebar layout",
+      });
+      const titles = [
+        "Review authentication and session recovery",
+        "Improve the checkout flow",
+        "Check the background worker",
+        "Update the account settings",
+        "Investigate a long-running worktree task",
+        "Review the session cancellation tests",
+        "Review the deployment checklist",
+      ];
+      const now = new Date().toISOString();
+      const threads = titles.map((title, index) => ({
+        ...base.threads[0]!,
+        id: index === 0 ? THREAD_ID : ThreadId.makeUnsafe(`shortcut-layout-${index}`),
+        title,
+        createdAt: now,
+        updatedAt: now,
+        latestTurn: {
+          turnId: TurnId.makeUnsafe(`shortcut-layout-turn-${index}`),
+          state: "completed" as const,
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          assistantMessageId: null,
+        },
+        session: {
+          ...base.threads[0]!.session!,
+          threadId: index === 0 ? THREAD_ID : ThreadId.makeUnsafe(`shortcut-layout-${index}`),
+          updatedAt: now,
+        },
+        messages: index === 0 ? base.threads[0]!.messages : [],
+        envMode: index % 2 === 0 ? ("local" as const) : ("worktree" as const),
+        worktreePath: index % 2 === 0 ? null : `/repo/worktrees/sidebar-${index}`,
+        branch: index % 2 === 0 ? "main" : "fix/authentication-session-recovery",
+        forkSourceThreadId: index === 1 ? THREAD_ID : null,
+        parentThreadId:
+          index === 0 ? ThreadId.makeUnsafe("shortcut-layout-6") : index === 5 ? THREAD_ID : null,
+        subagentNickname: index === 0 ? "Atlas" : index === 5 ? "Nova" : null,
+      }));
+      const snapshot = {
+        ...base,
+        projects: base.projects.map((project) => ({
+          ...project,
+          title: "Customer portal workspace",
+        })),
+        threads,
+      };
+      const previousPins = usePinnedThreadsStore.getState().pinnedThreadIds;
+      usePinnedThreadsStore.setState({
+        pinnedThreadIds: threads
+          .slice(customShortcut ? 1 : 0, customShortcut ? 4 : 3)
+          .map((thread) => thread.id),
+      });
+      onTestFinished(() => {
+        usePinnedThreadsStore.setState({ pinnedThreadIds: previousPins });
+      });
+      localStorage.setItem("synara:sidebar-ui:v1", JSON.stringify({ activityViewEnabled }));
+      if (customShortcut) {
+        const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+        onTestFinished(() => platformSpy.mockRestore());
+      }
+      const mounted = await mountChatView({
+        viewport: { ...DEFAULT_VIEWPORT, width: 1280, height: 800 },
+        snapshot,
+        configureFixture: (nextFixture) => {
+          if (!customShortcut) return;
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            keybindings: Array.from({ length: 9 }, (_, index) => ({
+              command: threadJumpCommandForIndex(index)!,
+              shortcut: {
+                key: String(index + 1),
+                modKey: false,
+                metaKey: true,
+                ctrlKey: true,
+                shiftKey: true,
+                altKey: true,
+              },
+            })),
+          };
+        },
+      });
+      try {
+        await waitForServerConfigToApply();
+        const sidebar = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
+        expect(sidebar).toBeTruthy();
+        const wrapper = sidebar.closest<HTMLElement>('[data-slot="sidebar-wrapper"]')!;
+        const resizeSidebar = async (width: number) => {
+          wrapper.style.setProperty("--sidebar-width", `${width}px`);
+          await vi.waitFor(() =>
+            expect(sidebar.getBoundingClientRect().width).toBeCloseTo(width, 0),
+          );
+        };
+        const mod = isMacNavigatorPlatform() ? "Meta" : "Control";
+        document.activeElement instanceof HTMLElement && document.activeElement.blur();
+        await userEvent.unhover(sidebar);
+        for (const fontSize of [13, 18]) {
+          const scale = getAppTypographyScale(fontSize);
+          for (const [token, value] of Object.entries({
+            ui: scale.uiPx,
+            "ui-lg": scale.uiLgPx,
+            "ui-sm": scale.uiSmPx,
+            "ui-xs": scale.uiXsPx,
+            "ui-meta": scale.uiMetaPx,
+          })) {
+            document.documentElement.style.setProperty(`--app-font-size-${token}`, `${value}px`);
+          }
+          for (const width of [208, 256, 320]) {
+            await resizeSidebar(width);
+            window.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: mod,
+                metaKey: customShortcut || mod === "Meta",
+                ctrlKey: customShortcut || mod === "Control",
+                altKey: customShortcut,
+                shiftKey: customShortcut,
+                bubbles: true,
+              }),
+            );
+            await waitForLayout();
+            const hints = [
+              ...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd-group"]'),
+            ].filter((hint) => hint.closest("[data-thread-item]"));
+            expect(hints.length).toBe(activityViewEnabled ? 5 : 6);
+            expect(new Set(hints.map((hint) => hint.textContent)).size).toBe(hints.length);
+            if (!activityViewEnabled) expect(sidebar.textContent).toContain("Atlas");
+            if (customShortcut) expect(hints[0]!.textContent).toContain("CtrlAltShiftMeta");
+            for (const hint of hints) {
+              const row = hint.closest<HTMLElement>("[data-thread-item]")!;
+              expect(row).toBeTruthy();
+              const hintRect = hint.getBoundingClientRect();
+              expect(hintRect.right).toBeLessThanOrEqual(row.getBoundingClientRect().right);
+              expect(
+                hint.querySelector("kbd:last-child")!.getBoundingClientRect().width,
+              ).toBeGreaterThanOrEqual(20);
+              for (const chip of row.querySelectorAll<HTMLElement>(".sidebar-icon-chip")) {
+                const rect = chip.getBoundingClientRect();
+                if (rect.top < hintRect.bottom && rect.bottom > hintRect.top) {
+                  expect(rect.right).toBeLessThanOrEqual(hintRect.left);
+                }
+              }
+              const labels = [...row.querySelectorAll<HTMLElement>("span")].filter(
+                (element) =>
+                  element.classList.contains("truncate-fade") ||
+                  (!element.parentElement?.closest(".truncate-fade") &&
+                    (element.textContent === "Customer portal workspace" ||
+                      titles.includes(element.textContent ?? ""))),
+              );
+              expect(labels.length).toBeGreaterThan(0);
+              for (const label of labels) {
+                const rect = label.getBoundingClientRect();
+                if (rect.top < hintRect.bottom && rect.bottom > hintRect.top) {
+                  expect(
+                    rect.right,
+                    `${label.textContent} overlaps ${hint.textContent}`,
+                  ).toBeLessThanOrEqual(hintRect.left);
+                }
+              }
+            }
+            for (const hoverHint of hints.filter(
+              (hint, index) =>
+                index === 0 || hint.closest("[data-thread-item]")!.textContent?.includes("Atlas"),
+            )) {
+              const row = hoverHint.closest<HTMLElement>("[data-thread-item]")!;
+              await userEvent.hover(row);
+              const actions = activityViewEnabled
+                ? row.querySelector<HTMLElement>(
+                    'span[class*="group-hover/activity-row:opacity-100"]',
+                  )!
+                : row.querySelector<HTMLElement>('[data-testid^="thread-hover-actions-"]')!;
+              const assertHoverLayout = () => {
+                expect(Number(getComputedStyle(hoverHint).opacity)).toBe(0);
+                expect(Number(getComputedStyle(actions).opacity)).toBe(1);
+                const actionsRect = actions.getBoundingClientRect();
+                for (const label of [...row.querySelectorAll<HTMLElement>("span")].filter(
+                  (element) =>
+                    element.classList.contains("truncate-fade") ||
+                    (!element.parentElement?.closest(".truncate-fade") &&
+                      (element.textContent === "Customer portal workspace" ||
+                        titles.includes(element.textContent ?? ""))),
+                )) {
+                  const rect = label.getBoundingClientRect();
+                  if (rect.top < actionsRect.bottom && rect.bottom > actionsRect.top) {
+                    expect(
+                      rect.right,
+                      `${label.textContent} overlaps hover actions`,
+                    ).toBeLessThanOrEqual(actionsRect.left);
+                  }
+                }
+              };
+              await vi.waitFor(assertHoverLayout);
+              await userEvent.unhover(row);
+              const focusTarget = row.matches('[role="button"]')
+                ? row
+                : row.querySelector<HTMLElement>('button, [role="button"]')!;
+              focusTarget.focus();
+              await vi.waitFor(assertHoverLayout);
+              focusTarget.blur();
+            }
+            window.dispatchEvent(new KeyboardEvent("keyup", { key: mod, bubbles: true }));
+            await waitForLayout();
+            expect(sidebar.querySelector('[data-thread-item] [data-slot="kbd-group"]')).toBeNull();
+          }
+        }
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it.each(["user", "assistant"] as const)(
     "opens the linked PR number from a %s message when the repository path also contains pull",

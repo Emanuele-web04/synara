@@ -1,5 +1,6 @@
 import type * as React from "react";
 
+import { splitShortcutLabel } from "~/keybindings";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 
 function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
@@ -15,13 +16,29 @@ function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
   );
 }
 
-function KbdGroup({ className, ...props }: React.ComponentProps<"kbd">) {
+function KbdGroup({
+  className,
+  shortcutLabel,
+  children,
+  ...props
+}: React.ComponentProps<"kbd"> & { shortcutLabel?: string | null }) {
+  const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : null;
   return (
     <kbd
-      className={cn("inline-flex items-center gap-1", className)}
+      className={cn("inline-flex items-center gap-1", shortcutLabel && "min-w-0", className)}
       data-slot="kbd-group"
+      aria-label={shortcutLabel ?? undefined}
+      title={shortcutLabel ?? undefined}
       {...props}
-    />
+    >
+      {shortcutParts
+        ? shortcutParts.map((part, index) => (
+            <Kbd key={part} className={index === shortcutParts.length - 1 ? "shrink-0" : "min-w-0"}>
+              <span className="truncate">{part}</span>
+            </Kbd>
+          ))
+        : children}
+    </kbd>
   );
 }
 

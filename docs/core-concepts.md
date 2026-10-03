@@ -288,6 +288,8 @@ scaling beyond one task.
 - `mod+d` — toggle the diff view
 - `mod+shift+b` — toggle the browser
 - `mod+\` — split the current view
+- `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
+  default numbers in the classic and Activity views. Pinned threads show their number in Pinned.
 
 Check the [keyboard reference](https://www.trysynara.com/docs/reference/keyboard-shortcuts) for the
 complete current list.

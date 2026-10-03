@@ -85,6 +85,7 @@ import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
+import { KbdGroup } from "./ui/kbd";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
@@ -116,6 +117,7 @@ function ActivityThreadRow({
   hasPendingDraft,
   pr,
   status,
+  threadJumpLabel,
   onOpen,
   onOpenPullRequest,
   onSetSettled,
@@ -134,6 +136,7 @@ function ActivityThreadRow({
   hasPendingDraft: boolean;
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
+  threadJumpLabel: string | null;
   onOpen: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, pr: OrchestrationThreadPullRequest) => void;
   onSetSettled: (settled: boolean) => void;
@@ -159,7 +162,11 @@ function ActivityThreadRow({
   // One trailing slot, top-right, shared by every status: the accent dot for an
   // unread completion and the running spinner (or state dot) for everything
   // else — same rule and same glyphs the classic thread/project rows use.
-  const trailingStatus = resolveThreadStatusTrailingIndicator({ status, isActive });
+  const trailingStatus = resolveThreadStatusTrailingIndicator({
+    status,
+    isActive,
+    slotOccupied: Boolean(threadJumpLabel),
+  });
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
   // they also fire over the trailing status and hover-action cluster, which are
   // absolutely positioned siblings of the button.
@@ -201,7 +208,8 @@ function ActivityThreadRow({
         >
           <span
             className={cn(
-              "flex min-w-0 items-center gap-1.5 overflow-hidden pr-5 transition-[padding] duration-150 ease-out",
+              "flex min-w-0 items-center gap-1.5 overflow-hidden transition-[padding] duration-150 ease-out",
+              !threadJumpLabel && "pr-5",
               // Yield the title row to the hover action cluster (pin + archive + done).
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
             )}
@@ -215,13 +223,19 @@ function ActivityThreadRow({
             />
             <span
               className={cn(
-                "min-w-0 shrink truncate text-ui leading-5 font-normal",
+                "min-w-0 flex-1 truncate text-ui leading-5 font-normal",
                 isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
               )}
             >
               {thread.title}
             </span>
             {hasPendingDraft ? <SidebarDraftGlyph /> : null}
+            {threadJumpLabel ? (
+              <KbdGroup
+                shortcutLabel={threadJumpLabel}
+                className={sidebarHoverRevealHideClassName("activity-row")}
+              />
+            ) : null}
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
             {project?.cwd ? (
@@ -479,6 +493,7 @@ export function SidebarActivityView({
   onProjectContextMenu,
   renderThreadHoverCard,
   prByThreadId,
+  threadJumpLabelByThreadId,
   onVisibleThreadIdsChange,
   onCreateChat,
   onAddProject,
@@ -493,6 +508,7 @@ export function SidebarActivityView({
   scopeSelection: ActivityScopeSelection;
   onScopeSelectionChange: (selection: ActivityScopeSelection) => void;
   prByThreadId: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  threadJumpLabelByThreadId: ReadonlyMap<ThreadId, string>;
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
@@ -731,6 +747,7 @@ export function SidebarActivityView({
             })
       }
       status={resolveThreadStatus(thread)}
+      threadJumpLabel={threadJumpLabelByThreadId.get(thread.id) ?? null}
       onOpen={() => onOpenThread(thread.id)}
       onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
       onSetSettled={(settled) => {

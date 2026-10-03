@@ -539,50 +539,11 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
   return changed ? nextThreadListExtraPagesByProjectCwd : threadListExtraPagesByProjectCwd;
 }
 
-/**
- * Trailing padding that protects the title from the absolutely-positioned
- * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
- * far right as the on-screen content allows:
- *
- * - The relative time now lives in the row hover card, so an idle row with no
- *   status/jump glyph and no meta chips reserves almost nothing — the title runs
- *   to the row edge instead of truncating against permanently reserved space.
- * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
- *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
- *   badges that are present.
- * - The wider reserve that clears the hover pin/archive actions is applied only
- *   on hover/focus (mirroring the project header row), so the title gives up that
- *   width exactly when those actions appear and not a moment sooner.
- *
- * Literal class strings are required so Tailwind's JIT scanner emits them.
- */
-export function resolveThreadRowTrailingReserveClass(input: {
-  metaChipCount: number;
-  hasTrailingGlyph: boolean;
-}): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
-  // at the same time, so the hover reserve is constant regardless of rest content.
-  const hoverReserve =
-    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  const { metaChipCount, hasTrailingGlyph } = input;
-  if (metaChipCount <= 0) {
-    return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
-  }
-  if (metaChipCount === 1) {
-    return cn(hasTrailingGlyph ? "pr-[3rem]" : "pr-[1.75rem]", hoverReserve);
-  }
-  if (metaChipCount === 2) {
-    return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
-  }
-  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
-}
-
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
 }): string {
-  // Trailing reserve for the absolute cluster is applied separately by callers
-  // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
+  // The in-flow trailing cluster keeps metadata and shortcut hints clear of the title.
   const baseClassName = SIDEBAR_THREAD_ROW_BASE_CLASS_NAME;
 
   if (input.isSelected && input.isActive) {

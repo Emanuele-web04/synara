@@ -151,7 +151,6 @@ import { getThreadFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
-  splitShortcutLabel,
   shouldShowThreadJumpHints,
   spaceJumpCommandForIndex,
   spaceJumpIndexFromCommand,
@@ -344,7 +343,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-import { Kbd, KbdGroup } from "./ui/kbd";
+import { KbdGroup } from "./ui/kbd";
 import {
   Menu,
   MenuGroup,
@@ -404,7 +403,6 @@ import {
   resolveThreadProjectLabel,
   resolveThreadRowAriaLabel,
   resolveThreadRowClassName,
-  resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
@@ -545,7 +543,6 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
-const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
@@ -4755,13 +4752,6 @@ export default function Sidebar() {
   const visibleThreadJumpLabelByThreadId = showThreadJumpHints
     ? threadJumpLabelByThreadId
     : EMPTY_THREAD_JUMP_LABELS;
-  const visibleThreadJumpLabelPartsByThreadId = useMemo(() => {
-    const partsByThreadId = new Map<ThreadId, readonly string[]>();
-    for (const [threadId, label] of visibleThreadJumpLabelByThreadId) {
-      partsByThreadId.set(threadId, splitShortcutLabel(label));
-    }
-    return partsByThreadId;
-  }, [visibleThreadJumpLabelByThreadId]);
 
   useEffect(() => {
     const threadIdsToPrewarm = getSidebarThreadIdsToPrewarm({
@@ -4842,7 +4832,6 @@ export default function Sidebar() {
   function renderThreadRowTrailingCluster(input: {
     isSubagentThread: boolean;
     threadJumpLabel: string | null;
-    threadJumpLabelParts: readonly string[];
     rightMetaChips: ThreadMetaChip[];
     threadStatus: ReturnType<typeof resolveThreadStatusForSidebar>;
     timestampToneClassName?: string;
@@ -4855,18 +4844,17 @@ export default function Sidebar() {
       slotOccupied: Boolean(input.threadJumpLabel),
     });
     return (
-      <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
+      <div className="relative flex min-w-0 items-center justify-end gap-[3px] group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
         {input.rightMetaChips.length > 0 ? (
-          <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
+          <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
           </div>
         ) : null}
         {input.threadJumpLabel ? (
-          <KbdGroup className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
-            {input.threadJumpLabelParts.map((part) => (
-              <Kbd key={part}>{part}</Kbd>
-            ))}
-          </KbdGroup>
+          <KbdGroup
+            shortcutLabel={input.threadJumpLabel}
+            className={cn(THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME, "shrink")}
+          />
         ) : null}
         {trailingStatus ? (
           // The relative time now lives in the row hover card, so the trailing
@@ -5019,13 +5007,6 @@ export default function Sidebar() {
     const pr = prByThreadId.get(thread.id) ?? null;
     const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
-    const threadJumpLabelParts =
-      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    // The trailing cluster (meta chips + status glyph) is absolutely positioned; it
-    // only grows past the reserve when a live glyph (spinner/check/dot or jump label)
-    // occupies the status slot. In that state the right-aligned project label needs a
-    // hair of clearance so it stops kissing the worktree chip — see the margin below.
-    const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
       threadId: thread.id,
@@ -5055,16 +5036,9 @@ export default function Sidebar() {
             aria-label={resolveThreadRowAriaLabel(thread)}
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
-              // Match the normal thread row: a flex row whose title claims all free
-              // space, with a trailing reserve that grows only for the badges actually
-              // present — instead of a rigid grid that permanently fenced off a
-              // timestamp-era column and squeezed the title/project even when wide.
-              "relative gap-1.5 transition-colors",
+              // Metadata and shortcut hints occupy their actual width in the flex row.
+              "relative gap-1.5 pr-2 transition-colors",
               leadingPr && "pl-8",
-              resolveThreadRowTrailingReserveClass({
-                metaChipCount: rightMetaChips.length,
-                hasTrailingGlyph: hasTrailingStatusGlyph,
-              }),
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
                 : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
@@ -5103,29 +5077,16 @@ export default function Sidebar() {
               }
               suffix={
                 projectLabel ? (
-                  // Right-aligned project context for the flattened pinned list. The title
-                  // (flex-1) pushes it to the content edge, so it shows in full when the row
-                  // has room and only truncates under real pressure, shifting left as the
-                  // trailing reserve grows on hover/status. When a live status glyph occupies
-                  // the trailing slot (e.g. the running spinner), the absolute cluster reaches
-                  // a few px past the reserve — a small margin keeps the folder name from
-                  // touching the worktree chip. It costs no space when the row is idle.
-                  <span
-                    className={cn(
-                      "max-w-[40%] shrink-0 truncate text-right text-ui-meta text-muted-foreground/38 transition-[margin] duration-150 ease-out",
-                      hasTrailingStatusGlyph && "mr-2",
-                    )}
-                  >
+                  <span className="min-w-0 max-w-[40%] shrink truncate text-right text-ui-meta text-muted-foreground/38">
                     {projectLabel}
                   </span>
                 ) : null
               }
             />
-            <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
+            <div className="flex min-w-0 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
                 threadJumpLabel,
-                threadJumpLabelParts,
                 rightMetaChips,
                 threadStatus,
                 timestampToneClassName: "text-muted-foreground/38",
@@ -5189,9 +5150,11 @@ export default function Sidebar() {
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
-    const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
-    const threadJumpLabelParts =
-      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    // An active pinned thread can also appear in its project tree. Show its
+    // shortcut once, at the pinned row that owns its place in the jump order.
+    const threadJumpLabel = isPinned
+      ? null
+      : (visibleThreadJumpLabelByThreadId.get(thread.id) ?? null);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
@@ -5227,12 +5190,7 @@ export default function Sidebar() {
                     isSelected,
                   }),
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
-                  isSubagentThread
-                    ? "pr-7.5"
-                    : resolveThreadRowTrailingReserveClass({
-                        metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
-                        hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
-                      }),
+                  "pr-2",
                 )}
                 draggable
                 onDragStart={(event) => beginThreadDrag(event, thread.id)}
@@ -5300,17 +5258,16 @@ export default function Sidebar() {
                     </Tooltip>
                   </div>
                 ) : projectContextLabel ? (
-                  <span className="ml-auto shrink-0 truncate pl-1 pr-1 text-ui-meta text-muted-foreground/38">
+                  <span className="min-w-0 max-w-[40%] shrink truncate pl-1 pr-1 text-ui-meta text-muted-foreground/38">
                     {projectContextLabel}
                   </span>
                 ) : undefined
               }
             />
-            <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
+            <div className="flex min-w-0 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
                 threadJumpLabel,
-                threadJumpLabelParts,
                 rightMetaChips: showCompactMeta ? rightMetaChips : [],
                 threadStatus,
                 timestampToneClassName: isSubagentThread
@@ -6985,6 +6942,7 @@ export default function Sidebar() {
                         }}
                         onProjectContextMenu={handleProjectContextMenu}
                         prByThreadId={prByThreadId}
+                        threadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
                         onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
                         renderThreadHoverCard={(thread, anchorId) =>
                           renderThreadHoverCardPopup(
