@@ -17,6 +17,7 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { SidechatExpiryReactor } from "../Services/SidechatExpiryReactor.ts";
 import { makeSidechatExpiryReactor } from "./SidechatExpiryReactor.ts";
 
@@ -90,6 +91,7 @@ describe("SidechatExpiryReactor unarchive view race", () => {
     ).pipe(
       Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
     );
     const runtime = ManagedRuntime.make(layer);
     const scope = await Effect.runPromise(Scope.make("sequential"));

@@ -7,6 +7,7 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
+import { SIDECHAT_INACTIVITY_EXPIRY_MS, sidechatExpiryMs } from "@synara/shared/sidechatExpiry";
 import {
   Cause,
   Deferred,
@@ -25,6 +26,7 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   toPersistenceSqlError,
   type OrchestrationEventStoreError,
@@ -166,6 +168,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* Effect.serviceOption(ServerSettingsService);
   const deciderWorkspacePaths = {
     homeDir: serverConfig.homeDir,
     chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
@@ -910,6 +913,33 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         OrchestrationDispatchError,
         never
       > = Effect.gen(function* () {
+        if (command.type === "thread.sidechat.expire") {
+          // The timer may have fired before a live settings update while this
+          // command waited in the queue. Validate at the persistence owner, since
+          // interrupting the caller cannot withdraw an already-admitted envelope.
+          // Standalone compatibility layers retain their original one-hour default.
+          const expiryMs = Option.isSome(serverSettings)
+            ? sidechatExpiryMs(
+                (yield* serverSettings.value.getSettings.pipe(
+                  Effect.mapError(() =>
+                    makeCommandInternalError(
+                      command,
+                      "Could not verify the side chat expiry setting.",
+                    ),
+                  ),
+                )).sidechatExpiry,
+              )
+            : SIDECHAT_INACTIVITY_EXPIRY_MS;
+          if (
+            expiryMs === null ||
+            Date.now() < Date.parse(command.expectedLastActivityAt) + expiryMs
+          ) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: "Side chat is not due under the current expiry setting.",
+            });
+          }
+        }
         const committedEvents: OrchestrationEvent[] = [];
         const deferredSettledSequences = new Set<number>();
         let nextCommandReadModel = commandReadModel;

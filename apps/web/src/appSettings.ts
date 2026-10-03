@@ -23,6 +23,7 @@ import {
   GitHubInboxSort,
   TrimmedNonEmptyString,
   ProviderKind,
+  SidechatExpiry,
   type GitTextGenerationProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
@@ -408,6 +409,8 @@ export const AppSettingsSchema = Schema.Struct({
   ).pipe(withDefaults(() => ["authored", "reviewRequested"] as const)),
   // Server-backed: the inbox also reads each project's other GitHub remotes (fork upstreams).
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Server-backed: how long an idle side chat stays usable before it expires.
+  sidechatExpiry: SidechatExpiry.pipe(withDefaults(() => "1h" as const satisfies SidechatExpiry)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showGroupsSection` controls the
@@ -1511,6 +1514,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
+    sidechatExpiry: settings.sidechatExpiry,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
@@ -1651,6 +1655,13 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "githubInboxIncludeUpstreams")) {
     serverPatch.githubInboxIncludeUpstreams = Boolean(patch.githubInboxIncludeUpstreams);
+  }
+  if (
+    patch.sidechatExpiry === "1h" ||
+    patch.sidechatExpiry === "24h" ||
+    patch.sidechatExpiry === "never"
+  ) {
+    serverPatch.sidechatExpiry = patch.sidechatExpiry;
   }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;

@@ -283,6 +283,7 @@ describe("wsNativeApi", () => {
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         githubInboxIncludeUpstreams: false,
+        sidechatExpiry: "1h",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
         providers: {
           codex: {

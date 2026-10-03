@@ -38,6 +38,7 @@ import {
   Ref,
   Schema,
   SchemaIssue,
+  Scope,
   ServiceMap,
   Stream,
 } from "effect";
@@ -72,6 +73,8 @@ export interface ServerSettingsShape {
   readonly updateSettingsView: (
     patch: ServerSettingsPatch,
   ) => Effect.Effect<ServerSettingsView, ServerSettingsError>;
+  /** Attach before returning so startup snapshot reads cannot race live updates. */
+  readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
   readonly streamChanges: Stream.Stream<ServerSettings>;
   readonly streamViews: Stream.Stream<ServerSettingsView>;
 }
@@ -181,6 +184,11 @@ export class ServerSettingsService extends ServiceMap.Service<
           updateSettings,
           updateSettingsView: (patch) =>
             updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
+          subscribeChanges: PubSub.subscribe(changesPubSub).pipe(
+            Effect.map((subscription) =>
+              Stream.fromSubscription(subscription).pipe(Stream.map(projectSettings)),
+            ),
+          ),
           get streamChanges() {
             return Stream.fromPubSub(changesPubSub).pipe(Stream.map(projectSettings));
           },
@@ -1239,6 +1247,11 @@ const makeServerSettings = Effect.gen(function* () {
     ),
     updateSettings,
     updateSettingsView: (patch) => updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
+    subscribeChanges: PubSub.subscribe(changesPubSub).pipe(
+      Effect.map((subscription) =>
+        Stream.fromSubscription(subscription).pipe(Stream.map(projectSettings)),
+      ),
+    ),
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub).pipe(Stream.map(projectSettings));
     },

@@ -10,6 +10,10 @@ const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).
 );
 export const DEFAULT_CODEX_ACCOUNT_ID = "default";
 
+// How long an idle side chat stays usable before the server expires it.
+export const SidechatExpiry = Schema.Literals(["1h", "24h", "never"]);
+export type SidechatExpiry = typeof SidechatExpiry.Type;
+
 export const CodexAccountId = TrimmedString.check(Schema.isMaxLength(64));
 export type CodexAccountId = typeof CodexAccountId.Type;
 
@@ -127,6 +131,7 @@ export const ServerSettings = Schema.Struct({
   // The GitHub inbox reads one repository per project (the preferred remote). When true it also
   // reads the project's other GitHub remotes, such as the upstream of a fork.
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  sidechatExpiry: SidechatExpiry.pipe(Schema.withDecodingDefault(() => "1h")),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
@@ -183,6 +188,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),
+  sidechatExpiry: Schema.optionalKey(SidechatExpiry),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   providers: Schema.optionalKey(
     Schema.Struct({

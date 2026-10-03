@@ -203,6 +203,7 @@ function makeServerSettings(getSettings: ServerSettingsShape["getSettings"]): Se
     ),
     updateSettings: () => Effect.die("unused"),
     updateSettingsView: () => Effect.die("unused"),
+    subscribeChanges: Effect.succeed(Stream.empty),
     streamChanges: Stream.empty,
     streamViews: Stream.empty,
   };

@@ -128,7 +128,8 @@ A sidechat can also stand alone, with no source chat: **Ask** on a Code review i
 that pull request or issue. It has no transcript to import and no permissions to inherit, so it
 starts in Ask for approval, runs in the project's own checkout without switching branches, and
 is told to treat the item's text as untrusted reference data. Like any sidechat it stays out of
-the thread list and expires after an hour of inactivity. Its empty view likewise shows only the
+the thread list and expires after the inactivity window set in Settings → Conversation
+(1 hour by default, 24 hours, or never). Its empty view likewise shows only the
 composer and keeps the workspace assigned by Code review.
 
 ## Code review

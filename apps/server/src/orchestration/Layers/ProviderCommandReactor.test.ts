@@ -36,6 +36,7 @@ import {
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
 import type { DeepPartial } from "@synara/shared/Struct";
+import { SIDECHAT_INACTIVITY_EXPIRY_MS } from "@synara/shared/sidechatExpiry";
 import {
   Duration,
   Deferred,
@@ -6800,7 +6801,7 @@ describe("ProviderCommandReactor", () => {
   it("does not replay or recover goal continuations for an expired side chat", async () => {
     const harness = await createHarness({ startReactor: false });
     const sidechatId = ThreadId.makeUnsafe("thread-expired-goal-sidechat");
-    const createdAt = new Date().toISOString();
+    const createdAt = new Date(Date.now() - SIDECHAT_INACTIVITY_EXPIRY_MS - 1_000).toISOString();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -6853,7 +6854,7 @@ describe("ProviderCommandReactor", () => {
           sidechatBeforeExpiry?.sidechatLastActivityAt ??
           sidechatBeforeExpiry?.createdAt ??
           createdAt,
-        expiredAt: new Date(Date.parse(createdAt) + 3_600_000).toISOString(),
+        expiredAt: new Date().toISOString(),
       }),
     );
 
@@ -6870,7 +6871,7 @@ describe("ProviderCommandReactor", () => {
     const messageId = asMessageId("message-expired-turn-start-sidechat");
     const commandId = CommandId.makeUnsafe("cmd-persist-expired-turn-start-sidechat");
     const messageEventId = asEventId("evt-message-expired-turn-start-sidechat");
-    const createdAt = new Date().toISOString();
+    const createdAt = new Date(Date.now() - SIDECHAT_INACTIVITY_EXPIRY_MS - 1_000).toISOString();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -6947,7 +6948,7 @@ describe("ProviderCommandReactor", () => {
           sidechatBeforeExpiry?.sidechatLastActivityAt ??
           sidechatBeforeExpiry?.createdAt ??
           createdAt,
-        expiredAt: new Date(Date.parse(createdAt) + 3_600_000).toISOString(),
+        expiredAt: new Date().toISOString(),
       }),
     );
 

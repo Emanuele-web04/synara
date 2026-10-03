@@ -358,6 +358,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {
+    id: "behavior:sidechat-expiry",
+    section: "behavior",
+    title: "Side chat expiry",
+    keywords:
+      "Expire a side chat after it sits idle for this long. sidechat inactivity timeout 1 hour 24 hours never disable",
+  },
+  {
     id: "behavior:follow-up-behavior",
     section: "behavior",
     title: "Follow-up behavior",

@@ -7,6 +7,7 @@ import {
   type DesktopAudioInputDevice,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
+  type SidechatExpiry,
 } from "@synara/contracts";
 import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
@@ -195,6 +196,12 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
+const SIDECHAT_EXPIRY_OPTIONS = [
+  { value: "1h", label: "1 hour" },
+  { value: "24h", label: "24 hours" },
+  { value: "never", label: "Never" },
+] as const satisfies ReadonlyArray<{ value: SidechatExpiry; label: string }>;
 
 const GITHUB_LINK_OPEN_TARGET_LABELS = {
   app: "In Synara",
@@ -500,6 +507,7 @@ function SettingsRouteView() {
       ? ["Message trail microphone"]
       : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.sidechatExpiry !== defaults.sidechatExpiry ? ["Side chat expiry"] : []),
     ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
       ? ["Enter while dictating"]
       : []),
@@ -1341,6 +1349,31 @@ function SettingsRouteView() {
               onValueChange={(value) => updateSettings({ followUpBehavior: value })}
               ariaLabel="Follow-up behavior"
               options={FOLLOW_UP_BEHAVIOR_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Side chat expiry"
+          description="Expire a side chat after it sits idle, unviewed and not running, for this long. Expired side chats are read-only and unload their provider session."
+          resetAction={
+            settings.sidechatExpiry !== defaults.sidechatExpiry ? (
+              <SettingResetButton
+                label="side chat expiry"
+                onClick={() =>
+                  updateSettings({
+                    sidechatExpiry: defaults.sidechatExpiry,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.sidechatExpiry}
+              onValueChange={(value) => updateSettings({ sidechatExpiry: value })}
+              ariaLabel="Side chat expiry"
+              options={SIDECHAT_EXPIRY_OPTIONS}
             />
           }
         />
