@@ -12,6 +12,11 @@ import {
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
 } from "../chat/composerPickerStyles";
+import {
+  CHECKBOX_BOX_CLASS_NAME,
+  CHECKBOX_INDICATOR_CLASS_NAME,
+  CheckboxCheckGlyph,
+} from "./checkbox";
 import { SWITCH_THUMB_CLASS_NAME, SWITCH_TRACK_CLASS_NAME } from "./switch";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
@@ -176,7 +181,12 @@ function MenuCheckboxItem({
   variant: variantProp,
   ...props
 }: MenuPrimitive.CheckboxItem.Props & {
-  variant?: "default" | "switch";
+  /**
+   * `default`: a trailing ✓ only while checked. `switch`: a trailing toggle.
+   * `checkbox`: a visible box in the leading icon slot, empty while unchecked, so the row
+   * reads as an opt-in setting rather than a selected option.
+   */
+  variant?: "default" | "switch" | "checkbox";
 }) {
   const variant = variantProp ?? "default";
   return (
@@ -189,13 +199,25 @@ function MenuCheckboxItem({
         ),
         variant === "switch"
           ? "grid-cols-[1fr_auto] gap-4 pe-1.5"
-          : "grid-cols-[1fr_auto] gap-3 px-2.5",
+          : variant === "checkbox"
+            ? "flex gap-2 pe-2"
+            : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
       {...props}
       data-slot="menu-checkbox-item"
     >
-      {variant === "switch" ? (
+      {variant === "checkbox" ? (
+        <>
+          {/* Sized and inset like a MenuItem's leading icon so labels stay aligned. */}
+          <span aria-hidden className={cn(CHECKBOX_BOX_CLASS_NAME, "-mx-0.5 size-3.5 sm:size-3.5")}>
+            <MenuPrimitive.CheckboxItemIndicator className={CHECKBOX_INDICATOR_CLASS_NAME}>
+              <CheckboxCheckGlyph className="size-2.5 sm:size-2.5" />
+            </MenuPrimitive.CheckboxItemIndicator>
+          </span>
+          <span className="flex min-w-0 flex-1 items-center gap-2">{children}</span>
+        </>
+      ) : variant === "switch" ? (
         <>
           <span className="col-start-1">{children}</span>
           <MenuPrimitive.CheckboxItemIndicator

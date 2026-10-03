@@ -145,6 +145,7 @@ import Migration0126 from "./Migrations/126_ProjectionThreadsSidechatContext.ts"
 import Migration0127 from "./Migrations/127_ProjectImportHistory.ts";
 import Migration0128 from "./Migrations/128_HubWork.ts";
 import Migration0129 from "./Migrations/129_ProjectionThreadsSnooze.ts";
+import Migration0130 from "./Migrations/130_PullRequestAutoFix.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -290,6 +291,7 @@ export const migrationEntries = [
   [127, "ProjectImportHistory", Migration0127],
   [128, "HubWork", Migration0128],
   [129, "ProjectionThreadsSnooze", Migration0129],
+  [130, "PullRequestAutoFix", Migration0130],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

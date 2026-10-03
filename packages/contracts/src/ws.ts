@@ -202,6 +202,7 @@ import {
   PullRequestDetailInput,
   PullRequestSetPinnedInput,
 } from "./pullRequests";
+import { PullRequestAutoFixGetInput, PullRequestAutoFixSetInput } from "./pullRequestAutoFix";
 import {
   GitHubInboxListInput,
   GitHubIssueCommentInput,
@@ -286,6 +287,8 @@ export const WS_METHODS = {
   pullRequestsAction: "pullRequests.action",
   pullRequestsComment: "pullRequests.comment",
   pullRequestsSetPinned: "pullRequests.setPinned",
+  pullRequestsGetAutoFix: "pullRequests.getAutoFix",
+  pullRequestsSetAutoFix: "pullRequests.setAutoFix",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -556,6 +559,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.pullRequestsAction, PullRequestActionInput),
   tagRequestBody(WS_METHODS.pullRequestsComment, PullRequestCommentInput),
   tagRequestBody(WS_METHODS.pullRequestsSetPinned, PullRequestSetPinnedInput),
+  tagRequestBody(WS_METHODS.pullRequestsGetAutoFix, PullRequestAutoFixGetInput),
+  tagRequestBody(WS_METHODS.pullRequestsSetAutoFix, PullRequestAutoFixSetInput),
 
   // GitHub inbox (pull requests and issues)
   tagRequestBody(WS_METHODS.githubInboxList, GitHubInboxListInput),

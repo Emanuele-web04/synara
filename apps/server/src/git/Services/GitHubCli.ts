@@ -378,6 +378,8 @@ export interface GitHubCliShape {
     {
       readonly summary: GitHubPullRequestSummary;
       readonly checks: ReadonlyArray<GitPullRequestCheck>;
+      /** Commit the checks ran against; null when `gh` did not report it. */
+      readonly headSha: string | null;
     },
     GitHubCliError
   >;

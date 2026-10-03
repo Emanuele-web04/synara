@@ -503,6 +503,12 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
+  if (
+    activity.kind === "pull-request.auto-fix.paused" ||
+    activity.kind === "pull-request.auto-fix.stopped"
+  )
+    return true;
+
   // Authentication can start or finish outside a turn. Keep its latest state
   // visible even when the transcript has turn-scoped assistant messages.
   if (activity.kind === "auth.status") return true;

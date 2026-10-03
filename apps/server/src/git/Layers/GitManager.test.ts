@@ -2129,7 +2129,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commentsTruncated).toBe(true);
       expect(result.commentsError).toBeNull();
       expect(ghCalls).toContain(
-        `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+        `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
       );
       // Owner/repo come from the PR URL, not the local checkout's remotes.
       expect(ghCalls).toContain(

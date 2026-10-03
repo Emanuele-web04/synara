@@ -8,6 +8,7 @@ import {
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
   isBetaFeatureEnabled,
+  PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
@@ -36,6 +37,12 @@ export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
  * redirects home; the server refuses its recap RPC regardless.
  */
 export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
+
+/**
+ * Auto-fix CI is Beta-only. Off, the PR menu has no Auto-fix CI checkbox; the server refuses
+ * its RPCs and never starts the watcher regardless.
+ */
+export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

@@ -2,10 +2,13 @@ import type {
   GitHubInboxState,
   GitHubInboxSort,
   PullRequestActionInput,
+  PullRequestAutoFixListResult,
+  PullRequestAutoFixSetInput,
   PullRequestCommentInput,
   PullRequestSetPinnedInput,
   PullRequestState,
 } from "@synara/contracts";
+import { normalizeGitHubPullRequestUrl } from "@synara/shared/githubRepository";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 
 import { ensureNativeApi } from "~/nativeApi";
@@ -415,6 +418,33 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
     },
     onSettled: (_result, _error, _input, context) => {
       finishPullRequestRefresh(queryClient, context);
+    },
+  });
+}
+
+/** Auto-fix CI switch (Beta); shared by the PR menu checkbox and the composer hint. */
+export function pullRequestSetAutoFixMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: (input: PullRequestAutoFixSetInput) =>
+      ensureNativeApi().pullRequests.setAutoFix(input),
+    // Swap this PR's entry in the chat's list so every row and the composer tip update at once.
+    onSuccess: (result, input) => {
+      queryClient.setQueryData<PullRequestAutoFixListResult>(
+        pullRequestQueryKeys.autoFix(input.threadId),
+        (current) => ({
+          states: [
+            ...(current?.states ?? []).filter(
+              (state) =>
+                normalizeGitHubPullRequestUrl(state.pullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                normalizeGitHubPullRequestUrl(state.requestedPullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                state.pullRequestUrl !== result.state?.pullRequestUrl,
+            ),
+            ...(result.state ? [result.state] : []),
+          ],
+        }),
+      );
     },
   });
 }

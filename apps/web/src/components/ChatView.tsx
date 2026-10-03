@@ -318,6 +318,7 @@ import {
   shouldShowComputerControlEffortHint,
 } from "./chat/composerComputerControlHint";
 import { ComposerComputerControlEffortHint } from "./chat/ComposerComputerControlEffortHint";
+import { ComposerPullRequestAutoFixHint } from "./chat/ComposerPullRequestAutoFixHint";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
@@ -5863,6 +5864,22 @@ export default function ChatView({
                 }
               />
             ) : null}
+            <ComposerPullRequestAutoFixHint
+              threadId={threadId}
+              isServerThread={isServerThread}
+              pullRequest={gitStatusQuery.data?.pr ?? null}
+              isWorking={isWorking}
+              attachedToPrevious={
+                showComposerLiveChangesHeader ||
+                showComposerActiveTaskListCard ||
+                showComposerWorkflowRunCard ||
+                showComposerSubagentStrip ||
+                queuedComposerTurns.length > 0 ||
+                showComposerGoalHeader ||
+                showComposerComputerControlEffortHint ||
+                pendingBackgroundWorkCount > 0
+              }
+            />
             {settledThreadBranchMismatch ? (
               <div className="pb-2">
                 <ComposerBranchMismatchBanner {...settledThreadBranchMismatch} />

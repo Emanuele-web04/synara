@@ -666,6 +666,8 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.pullRequestsAction, input, { timeoutMs: null }),
       comment: (input) => transport.request(WS_METHODS.pullRequestsComment, input),
       setPinned: (input) => transport.request(WS_METHODS.pullRequestsSetPinned, input),
+      getAutoFix: (input) => transport.request(WS_METHODS.pullRequestsGetAutoFix, input),
+      setAutoFix: (input) => transport.request(WS_METHODS.pullRequestsSetAutoFix, input),
     },
     contextMenu: {
       show: async <T extends string>(

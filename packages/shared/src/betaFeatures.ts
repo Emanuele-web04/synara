@@ -32,10 +32,14 @@ export const INBOX_BETA_FEATURE = "inbox";
  */
 export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
 
+/** Auto-fix CI: the PR menu checkbox, its RPCs, and the server check watcher. */
+export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
   "tasks",
+  PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 ];
 
 /**

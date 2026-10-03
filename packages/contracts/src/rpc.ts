@@ -228,6 +228,12 @@ import {
   PullRequestsUnavailableError,
 } from "./pullRequests";
 import {
+  PullRequestAutoFixGetInput,
+  PullRequestAutoFixListResult,
+  PullRequestAutoFixResult,
+  PullRequestAutoFixSetInput,
+} from "./pullRequestAutoFix";
+import {
   GitHubInboxListInput,
   GitHubInboxListResult,
   GitHubIssueCommentInput,
@@ -1138,6 +1144,18 @@ export const WsPullRequestsSetPinnedRpc = Rpc.make(WS_METHODS.pullRequestsSetPin
   error: WsRpcError,
 });
 
+export const WsPullRequestsGetAutoFixRpc = Rpc.make(WS_METHODS.pullRequestsGetAutoFix, {
+  payload: PullRequestAutoFixGetInput,
+  success: PullRequestAutoFixListResult,
+  error: WsRpcError,
+});
+
+export const WsPullRequestsSetAutoFixRpc = Rpc.make(WS_METHODS.pullRequestsSetAutoFix, {
+  payload: PullRequestAutoFixSetInput,
+  success: PullRequestAutoFixResult,
+  error: WsRpcError,
+});
+
 export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
   payload: GitListBranchesInput,
   success: GitListBranchesResult,
@@ -1911,6 +1929,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsPullRequestsActionRpc,
   WsPullRequestsCommentRpc,
   WsPullRequestsSetPinnedRpc,
+  WsPullRequestsGetAutoFixRpc,
+  WsPullRequestsSetAutoFixRpc,
   WsGitListBranchesRpc,
   WsGitListRecentCommitsRpc,
   WsGitCreateWorktreeRpc,

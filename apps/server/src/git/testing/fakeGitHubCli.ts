@@ -50,6 +50,7 @@ export interface FakeGhScenario {
   };
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
   pullRequestChecks?: GitPullRequestCheck[];
+  pullRequestHeadSha?: string;
   pullRequestReviewComments?: GitPullRequestComment[];
   pullRequestReviewCommentsTruncated?: boolean;
   failWith?: GitHubCliError;
@@ -443,12 +444,13 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "view",
             input.reference,
             "--json",
-            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
           ],
         }).pipe(
           Effect.map((result) => ({
             summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
             checks: scenario.pullRequestChecks ?? [],
+            headSha: scenario.pullRequestHeadSha ?? null,
           })),
         ),
       getPullRequestReviewComments: (input) => {

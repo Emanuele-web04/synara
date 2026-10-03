@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isValidGitHubRepositoryNameWithOwner,
+  normalizeGitHubPullRequestUrl,
   parseGitHubRepositoryInput,
   parseGitHubRepositoryNameWithOwnerFromPullRequestUrl,
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
@@ -85,4 +86,20 @@ describe("parseGitHubRepositoryNameWithOwnerFromPullRequestUrl", () => {
   ])("rejects unsupported URL %s", (url) => {
     expect(parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url)).toBeNull();
   });
+});
+
+describe("normalizeGitHubPullRequestUrl", () => {
+  it("matches canonical identities across casing, subpaths, fragments and leading zeroes", () => {
+    expect(
+      normalizeGitHubPullRequestUrl(
+        " https://github.com/Owner/Repo/pull/007/files?diff=split#top ",
+      ),
+    ).toBe("https://github.com/owner/repo/pull/7");
+  });
+  it.each(["0", "9007199254740993", "9".repeat(400)])(
+    "rejects non-positive or unsafe PR number %s",
+    (number) => {
+      expect(normalizeGitHubPullRequestUrl(`https://github.com/o/r/pull/${number}`)).toBeNull();
+    },
+  );
 });
