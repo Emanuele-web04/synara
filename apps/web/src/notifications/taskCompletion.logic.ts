@@ -584,7 +584,17 @@ export function collectCompletedThreadCandidates(
     }
     if (
       previousThread.latestTurn?.turnId === thread.latestTurn?.turnId &&
-      isCompletionNotificationSettled(previousThread)
+      isCompletionNotificationSettled(previousThread) &&
+      // A held completion can be released by the final task or session settling
+      // without the parent entering another turn. Only dedupe a previously
+      // settled snapshot if it was already eligible for the alert.
+      !(
+        options.waitForSubagents &&
+        countOutstandingBackgroundWork({
+          activities: previousThread.activities,
+          session: previousThread.session,
+        }) > 0
+      )
     ) {
       continue;
     }

@@ -318,6 +318,35 @@ describe("collectCompletedThreadCandidates", () => {
       ).toHaveLength(1);
     });
 
+    it.each(["completed", "stopped", "error"] as const)(
+      "releases a held settled turn when background work becomes %s without a new turn",
+      (outcome) => {
+        const held = wokenTurnThread({ activities: [movedToBackground("agent-a")] });
+        const released = wokenTurnThread({
+          activities:
+            outcome === "completed"
+              ? [...held.activities, taskCompleted("agent-a", "2026-04-05T10:02:06.000Z")]
+              : held.activities,
+          session:
+            outcome === "completed"
+              ? held.session
+              : { ...held.session!, orchestrationStatus: outcome },
+        });
+
+        expect(
+          collectCompletedThreadCandidates(previous, [held], { waitForSubagents: true }),
+        ).toEqual([]);
+        const candidates = collectCompletedThreadCandidates([held], [released], {
+          waitForSubagents: true,
+        });
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]?.turnId).toBe(held.latestTurn?.turnId);
+        expect(
+          collectCompletedThreadCandidates([released], [released], { waitForSubagents: true }),
+        ).toEqual([]);
+      },
+    );
+
     it("does not alert for a subagent's own thread", () => {
       const parentThreadId = ThreadId.makeUnsafe("parent-thread");
       const next = [wokenTurnThread({ parentThreadId })];

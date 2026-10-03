@@ -5287,6 +5287,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // prevents a replacement process from being spawned concurrently.
         yield* teardownClaudeProcess(context.session.threadId, context.processOwner);
 
+        // Retired background tasks cannot report their own SDK notification.
+        // Publish terminal evidence only after the owned process has exited so
+        // replaying this thread in a replacement session cannot resurrect them.
+        for (const taskId of context.knownBackgroundTaskIds) {
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "task.completed",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            payload: { taskId: RuntimeTaskId.makeUnsafe(taskId), status: "stopped" },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+        context.knownBackgroundTaskIds.clear();
+
         const updatedAt = yield* nowIso;
         context.session = {
           ...context.session,

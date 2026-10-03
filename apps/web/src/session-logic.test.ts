@@ -319,14 +319,14 @@ describe("countOutstandingBackgroundWork", () => {
         data: { tasks: [{ task_id: taskId, task_type: "local_agent", description: taskId }] },
       },
     });
-  const completed = (taskId: string) =>
+  const completed = (taskId: string, status = "completed") =>
     makeActivity({
       id: `done-${taskId}`,
       createdAt: "2026-02-23T00:01:00.000Z",
       kind: "task.completed",
       summary: "Task completed",
       tone: "info",
-      payload: { taskId, status: "completed" },
+      payload: { taskId, status },
     });
   const activities = [
     movedToBackground("agent-a"),
@@ -334,17 +334,20 @@ describe("countOutstandingBackgroundWork", () => {
     completed("agent-a"),
   ];
 
-  it("counts subagents launched by earlier turns until they complete", () => {
-    expect(
-      countOutstandingBackgroundWork({ activities, session: { orchestrationStatus: "ready" } }),
-    ).toBe(1);
-    expect(
-      countOutstandingBackgroundWork({
-        activities: [...activities, completed("agent-b")],
-        session: { orchestrationStatus: "ready" },
-      }),
-    ).toBe(0);
-  });
+  it.each(["completed", "stopped"])(
+    "counts older subagents until %s evidence settles them in a live replacement session",
+    (status) => {
+      expect(
+        countOutstandingBackgroundWork({ activities, session: { orchestrationStatus: "ready" } }),
+      ).toBe(1);
+      expect(
+        countOutstandingBackgroundWork({
+          activities: [...activities, completed("agent-b", status)],
+          session: { orchestrationStatus: "ready" },
+        }),
+      ).toBe(0);
+    },
+  );
 
   it("stops counting once the session can no longer finish them", () => {
     expect(
