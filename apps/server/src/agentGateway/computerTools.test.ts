@@ -3137,8 +3137,10 @@ describe("screenshot delivery consistency", () => {
 });
 
 describe("computer operation ordering", () => {
-  it("keeps pane input after the action observation and refuses a queued call from an ended turn", async () => {
+  it("keeps pane input out of the action, lets it run during the observation, and refuses a queued call from an ended turn", async () => {
     const { backend, manager, byName, call } = await setup();
+    // A backend that serves pane input alongside an observation.
+    Object.assign(backend, { concurrentObservationInput: true });
     let finish = () => {};
     let entered = () => {};
     const held = new Promise<void>((resolve) => {
@@ -3155,14 +3157,24 @@ describe("computer operation ordering", () => {
       return result;
     };
     const events: string[] = [];
+    const paneInputLanded = Promise.withResolvers<void>();
     const capture = backend.captureScreenshot.bind(backend);
     backend.captureScreenshot = async (request) => {
       events.push("capture");
+      // The observation does not hold the desktop: pane input queued behind
+      // the key press lands while the agent is still looking. Bounded, so a
+      // regression fails the order check below instead of hanging.
+      await Promise.race([
+        paneInputLanded.promise,
+        new Promise((resolve) => setTimeout(resolve, 1_000)),
+      ]);
+      events.push("captured");
       return capture(request);
     };
     const type = backend.typeText.bind(backend);
     backend.typeText = async (text) => {
       events.push("pane input");
+      paneInputLanded.resolve();
       return type(text);
     };
     let active = true;
@@ -3183,12 +3195,16 @@ describe("computer operation ordering", () => {
         byName.get("computer_press_key")!.handler({ key: "escape" }, context),
       );
       active = false;
+      // The key press is still in flight: the pane's input waits for it.
+      await new Promise((resolve) => setTimeout(resolve, 20));
       expect(events).toEqual([]);
       finish();
       await first;
       await paneInput;
       expect((await next).isError).toBe(true);
-      expect(events).toEqual(["capture", "pane input"]);
+      // During the settle wait or the capture, never before the key press ended.
+      expect(events.toSorted()).toEqual(["capture", "captured", "pane input"]);
+      expect(events.at(-1)).toBe("captured");
       expect(backend.callsFor("pressKey")).toHaveLength(1);
     } finally {
       finish();
