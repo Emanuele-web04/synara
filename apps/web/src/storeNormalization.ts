@@ -161,6 +161,8 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     (left.settledAt ?? null) === (right.settledAt ?? null) &&
+    (left.snoozedUntil ?? null) === (right.snoozedUntil ?? null) &&
+    (left.snoozeReminderAt ?? null) === (right.snoozeReminderAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
     left.envMode === right.envMode &&
@@ -187,6 +189,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.handoff ?? null) === (right.handoff ?? null) &&
     deepEqualJson(left.claudeCacheReview ?? null, right.claudeCacheReview ?? null) &&
     left.claudeCacheReviewSequence === right.claudeCacheReviewSequence &&
+    left.snoozeSequence === right.snoozeSequence &&
     deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
     (left.notes ?? "") === (right.notes ?? "") &&
     (left.goal ?? "") === (right.goal ?? "") &&
@@ -1078,11 +1081,21 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
       : snapshotSequence < (previousThread.claudeCacheReviewSequence ?? 0))
       ? previousThread.claudeCacheReview
       : incoming.claudeCacheReview;
+  const preserveSnooze =
+    snapshotSequence === undefined
+      ? incoming.updatedAt < (previousThread.updatedAt ?? previousThread.createdAt)
+      : snapshotSequence < (previousThread.snoozeSequence ?? 0);
+  const snoozedUntil = preserveSnooze ? previousThread.snoozedUntil : incoming.snoozedUntil;
+  const snoozeReminderAt = preserveSnooze
+    ? previousThread.snoozeReminderAt
+    : incoming.snoozeReminderAt;
   if (
     messages === incoming.messages &&
     session === incoming.session &&
     latestTurn === incoming.latestTurn &&
-    claudeCacheReview === incoming.claudeCacheReview
+    claudeCacheReview === incoming.claudeCacheReview &&
+    snoozedUntil === incoming.snoozedUntil &&
+    snoozeReminderAt === incoming.snoozeReminderAt
   ) {
     return incoming;
   }
@@ -1092,6 +1105,8 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     session,
     latestTurn,
     ...(claudeCacheReview !== undefined ? { claudeCacheReview } : {}),
+    ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
+    ...(snoozeReminderAt !== undefined ? { snoozeReminderAt } : {}),
   };
 }
 
@@ -1624,6 +1639,18 @@ export function normalizeThreadFromReadModel(
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
       ? previous.handoff
       : (incoming.handoff ?? null);
+  const preserveSnooze =
+    previous !== undefined &&
+    (snapshotSequence === undefined
+      ? incoming.updatedAt < (previous.updatedAt ?? previous.createdAt)
+      : snapshotSequence < (previous.snoozeSequence ?? 0));
+  const snoozedUntil = (preserveSnooze ? previous?.snoozedUntil : incoming.snoozedUntil) ?? null;
+  const snoozeReminderAt =
+    (preserveSnooze ? previous?.snoozeReminderAt : incoming.snoozeReminderAt) ?? null;
+  const snoozeSequence =
+    snapshotSequence === undefined
+      ? previous?.snoozeSequence
+      : Math.max(snapshotSequence, previous?.snoozeSequence ?? 0);
   const incomingClaudeCacheReview =
     snapshotSequence !== undefined && snapshotSequence < (previous?.claudeCacheReviewSequence ?? 0)
       ? previous?.claudeCacheReview
@@ -1728,6 +1755,9 @@ export function normalizeThreadFromReadModel(
     previous.createdAt === incoming.createdAt &&
     (previous.archivedAt ?? null) === (incoming.archivedAt ?? null) &&
     (previous.settledAt ?? null) === (incoming.settledAt ?? null) &&
+    (previous.snoozedUntil ?? null) === snoozedUntil &&
+    (previous.snoozeReminderAt ?? null) === snoozeReminderAt &&
+    previous.snoozeSequence === snoozeSequence &&
     previous.updatedAt === incoming.updatedAt &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.latestTurn === latestTurn &&
@@ -1790,6 +1820,9 @@ export function normalizeThreadFromReadModel(
     createdAt: incoming.createdAt,
     archivedAt: incoming.archivedAt ?? null,
     settledAt: incoming.settledAt ?? null,
+    snoozedUntil,
+    snoozeReminderAt,
+    ...(snoozeSequence !== undefined ? { snoozeSequence } : {}),
     updatedAt: incoming.updatedAt,
     isPinned: incoming.isPinned ?? false,
     latestTurn,
@@ -1863,6 +1896,18 @@ export function normalizeThreadShellSnapshot(
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
       ? previous.handoff
       : (incoming.handoff ?? null);
+  const preserveSnooze =
+    previous !== undefined &&
+    (snapshotSequence === undefined
+      ? incoming.updatedAt < (previous.updatedAt ?? previous.createdAt)
+      : snapshotSequence < (previous.snoozeSequence ?? 0));
+  const snoozedUntil = (preserveSnooze ? previous?.snoozedUntil : incoming.snoozedUntil) ?? null;
+  const snoozeReminderAt =
+    (preserveSnooze ? previous?.snoozeReminderAt : incoming.snoozeReminderAt) ?? null;
+  const snoozeSequence =
+    snapshotSequence === undefined
+      ? previous?.snoozeSequence
+      : Math.max(snapshotSequence, previous?.snoozeSequence ?? 0);
   const incomingClaudeCacheReview =
     snapshotSequence !== undefined && snapshotSequence < (previous?.claudeCacheReviewSequence ?? 0)
       ? previous?.claudeCacheReview
@@ -1924,6 +1969,9 @@ export function normalizeThreadShellSnapshot(
     createdAt: incoming.createdAt,
     archivedAt: incoming.archivedAt ?? null,
     settledAt: incoming.settledAt ?? null,
+    snoozedUntil,
+    snoozeReminderAt,
+    ...(snoozeSequence !== undefined ? { snoozeSequence } : {}),
     updatedAt: incoming.updatedAt,
     isPinned: incoming.isPinned ?? false,
     envMode: incoming.envMode ?? "local",

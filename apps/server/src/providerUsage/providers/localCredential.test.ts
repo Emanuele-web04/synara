@@ -26,6 +26,20 @@ afterEach(() => {
 });
 
 describe("local credential usage fetchers", () => {
+  it("reads Pi authentication from its selected agent directory", async () => {
+    const homeDir = makeHome();
+    const agentDir = nodePath.join(homeDir, "work-agent");
+    mkdirSync(agentDir);
+    writeFileSync(nodePath.join(agentDir, "auth.json"), JSON.stringify({ provider: "openai" }));
+    const snapshot = await piUsageFetcher.fetch({
+      homeDir,
+      env: { PI_CODING_AGENT_DIR: agentDir },
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("ok");
+  });
+
   it("reports needs-auth when no local login is present", async () => {
     const homeDir = makeHome();
     const ctx = { homeDir, env: {}, platform: "linux" as const, nowMs: NOW_MS };

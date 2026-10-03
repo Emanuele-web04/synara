@@ -76,6 +76,44 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
+it("keeps the full runtime warning message so the row's hover card can reveal it", () => {
+  // The work-log row clips the notice to one line with CSS `truncate`; the hover
+  // card can only show what the server stored, so the payload must carry the full
+  // text (e.g. Claude's ~190-char token-usage warning) rather than a row-sized cut.
+  const claudeWarning =
+    "Claude is processing ~201k logical prompt tokens per request (~200k cached reads, ~1k new/cache-write). Large active contexts can consume usage faster; cached reads cost less than fresh input.";
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "runtime.warning",
+      eventId: "runtime-warning-full-message",
+      turnId: TURN_ID,
+      payload: { message: claudeWarning },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "runtime.warning",
+    summary: "Runtime warning",
+    payload: { message: claudeWarning, detail: claudeWarning },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized warnings.
+  const oversized = `prefix-${"x".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "runtime.warning",
+      eventId: "runtime-warning-oversized",
+      turnId: TURN_ID,
+      payload: { message: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { message: string; detail: string };
+  expect(cappedPayload.message).toHaveLength(2_000);
+  expect(cappedPayload.message.endsWith("...")).toBe(true);
+});
+
 describe("projected activities satisfy the orchestration command schema", () => {
   it("omits an absent approval request id instead of emitting an explicit undefined", () => {
     expectSchemaValidActivities(

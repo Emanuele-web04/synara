@@ -3,7 +3,7 @@
 //          state survives reloads.
 // Exports: Initial lastVisitedAt resolution for hydration plus the store's writer.
 
-import { hasUnseenCompletion } from "./components/Sidebar.logic";
+import { hasUnseenCompletion, hasUnseenSnoozeReturn } from "./components/Sidebar.logic";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 import type { AppState } from "./storeState";
 import type { SidebarThreadSummary } from "./types";
@@ -123,7 +123,12 @@ export function persistThreadVisitedState(
   let unread: SidebarThreadSummary[] = [];
   for (const thread of Object.values(summaries)) {
     watermarkMs = Math.max(watermarkMs, latestServerTimeMs(thread));
-    if (thread.lastVisitedAt !== undefined && hasUnseenCompletion(thread)) unread.push(thread);
+    if (
+      thread.lastVisitedAt !== undefined &&
+      (hasUnseenCompletion(thread) || hasUnseenSnoozeReturn(thread))
+    ) {
+      unread.push(thread);
+    }
   }
   if (unread.length > MAX_PERSISTED_VISITED_THREADS) {
     unread = unread

@@ -1,9 +1,10 @@
 // FILE: ProviderUsageSettingsPanel.tsx
-// Purpose: Settings → Usage panel. One card per supported provider showing live remaining
+// Purpose: Settings → Usage panel. One card per supported provider account showing live remaining
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
 // Usage is fetched read-only from each CLI's stored credentials by the server.
 
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
+import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import {
   PROVIDER_USAGE_PROVIDERS,
   providerUsageDisplayName,
@@ -35,15 +36,13 @@ import { Switch } from "~/components/ui/switch";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
-import { deriveAccountRateLimits, type ProviderRateLimit } from "~/lib/rateLimits";
 import {
   fetchAllProviderUsage,
   serverAllProviderUsageQueryOptions,
   serverQueryKeys,
+  serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
-import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
 
 const RAIL_USAGE_WINDOW_OPTIONS = [
   { value: "both", label: "Both" },
@@ -76,19 +75,16 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
 
 function ProviderUsageCard({
   snapshot,
-  threadRateLimits,
-  codexHomePath,
+  accountLabel,
 }: {
   snapshot: ServerProviderUsageSnapshot;
-  threadRateLimits: ReadonlyArray<ProviderRateLimit>;
-  codexHomePath: string | null;
+  accountLabel: string | null;
 }) {
   const provider = snapshot.provider;
   const status = snapshot.status ?? "ok";
   const usageSummary = useProviderUsageSummary({
     provider,
-    threadRateLimits,
-    codexHomePath,
+    instanceId: snapshot.instanceId ?? provider,
     providerSnapshot: snapshot,
   });
   const meterRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
@@ -106,9 +102,16 @@ function ProviderUsageCard({
             <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border)] bg-muted/60">
               <ProviderIcon provider={provider} className="size-4" />
             </span>
-            <span className="truncate text-ui-lg font-semibold text-foreground">
-              {providerUsageDisplayName(provider)}
-            </span>
+            <div className="min-w-0 space-y-0.5">
+              <span className="block truncate text-ui-lg font-semibold text-foreground">
+                {providerUsageDisplayName(provider)}
+              </span>
+              {accountLabel ? (
+                <p className="truncate text-ui-sm text-muted-foreground" title={accountLabel}>
+                  {accountLabel}
+                </p>
+              ) : null}
+            </div>
           </div>
           {status === "ok" && snapshot.planName ? (
             <span className={cn(PILL_CLASS_NAME, "bg-muted text-muted-foreground")}>
@@ -156,43 +159,45 @@ function ProviderUsageCard({
   );
 }
 
-function mergeProviderUsageRefresh(
-  previous: readonly ServerProviderUsageSnapshot[] | undefined,
-  next: readonly ServerProviderUsageSnapshot[],
-): readonly ServerProviderUsageSnapshot[] {
-  if (!previous) {
-    return next;
-  }
-  const previousByProvider = new Map(previous.map((snapshot) => [snapshot.provider, snapshot]));
-  const nextByProvider = new Map(next.map((snapshot) => [snapshot.provider, snapshot]));
-  return PROVIDER_USAGE_PROVIDERS.map(
-    (provider) => nextByProvider.get(provider) ?? previousByProvider.get(provider),
-  ).filter((snapshot): snapshot is ServerProviderUsageSnapshot => snapshot !== undefined);
-}
-
 export function ProviderUsageSettingsPanel() {
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
   const railUsageProviders = resolveRailUsageProviders(settings.railUsageProviders);
   const railUsageFull = railUsageProviders.length >= MAX_RAIL_USAGE_PROVIDERS;
-  const codexHomePath = settings.codexHomePath || null;
-  const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
-  // Account/thread fallback rows are shared by every provider card; derive them once per panel.
-  const threadRateLimits = deriveAccountRateLimits(threads);
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const providerInstances = useMemo(
+    () =>
+      new Map(
+        (serverSettingsQuery.data ? deriveProviderInstances(serverSettingsQuery.data) : []).map(
+          (instance) => [instance.instanceId, instance],
+        ),
+      ),
+    [serverSettingsQuery.data],
+  );
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const refreshMutation = useMutation({
     mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
     onSuccess: (data) => {
+      // The batch owns account membership. Keeping omitted previous snapshots
+      // would restore accounts that were removed or disabled since the last fetch.
       queryClient.setQueryData<readonly ServerProviderUsageSnapshot[]>(
         serverQueryKeys.allProviderUsage(),
-        (previous) => mergeProviderUsageRefresh(previous, data),
+        data,
       );
     },
   });
 
   // Use the live payload only. Inventing error placeholders for omitted providers
   // would count as "connected" and hide unsigned cards.
-  const cards = selectVisibleProviderUsageSnapshots(usageQuery.data ?? []);
+  // Loaded settings remove stale cached accounts immediately while a fresh
+  // batch is still in flight. Keep cached usage visible until settings arrive.
+  const activeSnapshots = serverSettingsQuery.data
+    ? (usageQuery.data ?? []).filter((snapshot) => {
+        const instance = providerInstances.get(snapshot.instanceId ?? snapshot.provider);
+        return instance?.enabled === true && instance.driver === snapshot.provider;
+      })
+    : (usageQuery.data ?? []);
+  const cards = selectVisibleProviderUsageSnapshots(activeSnapshots);
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
@@ -245,6 +250,45 @@ export function ProviderUsageSettingsPanel() {
           }
         />
       </SettingsSection>
+      <SettingsSection title="Usage popovers">
+        <SettingsListRow
+          title="Show details by default"
+          description="Open the details below the limits. When off, they stay behind the Details toggle; your last toggle also updates this preference."
+          actions={
+            <Switch
+              checked={settings.usageDetailsDefaultOpen}
+              onCheckedChange={(next) => updateSettings({ usageDetailsDefaultOpen: Boolean(next) })}
+              aria-label="Show usage details by default in usage popovers"
+            />
+          }
+        />
+        <SettingsListRow
+          title="Banked resets"
+          description="Include Codex banked resets in the details."
+          actions={
+            <Switch
+              checked={settings.usagePopoverShowResetCredits}
+              onCheckedChange={(next) =>
+                updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
+              }
+              aria-label="Show banked resets in usage popovers"
+            />
+          }
+        />
+        <SettingsListRow
+          title="Credits and token totals"
+          description="Include credit balances and recent token totals (24h, 7d, 30d) in the details."
+          actions={
+            <Switch
+              checked={settings.usagePopoverShowUsageLines}
+              onCheckedChange={(next) =>
+                updateSettings({ usagePopoverShowUsageLines: Boolean(next) })
+              }
+              aria-label="Show credits and token totals in usage popovers"
+            />
+          }
+        />
+      </SettingsSection>
       <SettingsSectionShell
         title="Provider usage"
         action={
@@ -268,14 +312,22 @@ export function ProviderUsageSettingsPanel() {
           </SettingsCard>
         ) : (
           <div className="flex flex-col gap-3">
-            {cards.map((snapshot) => (
-              <ProviderUsageCard
-                key={snapshot.provider}
-                snapshot={snapshot}
-                threadRateLimits={threadRateLimits}
-                codexHomePath={codexHomePath}
-              />
-            ))}
+            {cards.map((snapshot) => {
+              const instanceId = snapshot.instanceId ?? snapshot.provider;
+              const instance = providerInstances.get(instanceId);
+              const accountLabel =
+                instanceId !== snapshot.provider
+                  ? (instance?.displayName ?? instanceId)
+                  : instance?.raw.displayName?.trim() ||
+                    (snapshot.instanceId ? "Default account" : null);
+              return (
+                <ProviderUsageCard
+                  key={instanceId}
+                  snapshot={snapshot}
+                  accountLabel={accountLabel}
+                />
+              );
+            })}
           </div>
         )}
 

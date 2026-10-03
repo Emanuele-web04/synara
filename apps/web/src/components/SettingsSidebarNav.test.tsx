@@ -49,4 +49,18 @@ describe("rankSettingsSearchEntries", () => {
       }
     }
   });
+
+  it("finds the Behavior and Providers rows by their titles", () => {
+    const titles = (query: string) =>
+      rankSettingsSearchEntries(query, 12).map((entry) => entry.title);
+    expect(titles("dictating")).toContain("Enter while dictating");
+    expect(titles("diff colors")).toContain("Pull request diff colors");
+    expect(titles("enabled providers")).toContain("Enabled providers");
+  });
+
+  it("deep-links the provider picker result to the Available CLIs row", () => {
+    const [top] = rankSettingsSearchEntries("picker order", 12);
+    expect(top?.title).toBe("Available CLIs");
+    expect(settingsSearchEntryTarget(top!)).toBe("setting-available-clis");
+  });
 });

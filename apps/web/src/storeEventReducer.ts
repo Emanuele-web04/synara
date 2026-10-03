@@ -970,6 +970,13 @@ function applyOrchestrationEvent(
               event.payload.isPinned === (thread.isPinned ?? false)) &&
             (event.payload.settledAt === undefined ||
               (event.payload.settledAt ?? null) === (thread.settledAt ?? null)) &&
+            (event.payload.snoozedUntil === undefined ||
+              (event.payload.snoozedUntil ?? null) === (thread.snoozedUntil ?? null)) &&
+            (event.payload.snoozeReminderAt === undefined ||
+              (event.payload.snoozeReminderAt ?? null) === (thread.snoozeReminderAt ?? null)) &&
+            ((event.payload.snoozedUntil === undefined &&
+              event.payload.snoozeReminderAt === undefined) ||
+              thread.snoozeSequence === event.sequence) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -1012,6 +1019,16 @@ function applyOrchestrationEvent(
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
             ...(event.payload.settledAt !== undefined
               ? { settledAt: event.payload.settledAt }
+              : {}),
+            ...(event.payload.snoozedUntil !== undefined
+              ? { snoozedUntil: event.payload.snoozedUntil }
+              : {}),
+            ...(event.payload.snoozeReminderAt !== undefined
+              ? { snoozeReminderAt: event.payload.snoozeReminderAt }
+              : {}),
+            ...(event.payload.snoozedUntil !== undefined ||
+            event.payload.snoozeReminderAt !== undefined
+              ? { snoozeSequence: event.sequence }
               : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
@@ -1681,6 +1698,9 @@ function applyOrchestrationEvent(
         (thread) => ({
           ...thread,
           archivedAt: event.payload.archivedAt ?? event.occurredAt,
+          snoozedUntil: null,
+          snoozeReminderAt: null,
+          snoozeSequence: event.sequence,
           updatedAt: event.payload.updatedAt ?? event.occurredAt,
         }),
         {

@@ -607,6 +607,11 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
+  // Background subagents still running after the parent turn ended: the parent
+  // turn is idle but its work is not done, so it must not fold yet.
+  subagentsRunning?: boolean;
+  // User setting: false keeps every finished turn expanded.
+  collapseFinishedTurns?: boolean;
   activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
@@ -803,10 +808,11 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  if (input.conversationOnly !== true) {
+  if (input.conversationOnly !== true && input.collapseFinishedTurns !== false) {
     collapseSettledTurns(nextRows, {
       terminalAssistantMessageIds,
-      activeTurnInProgress: input.activeTurnInProgress ?? false,
+      activeTurnInProgress:
+        (input.activeTurnInProgress ?? false) || (input.subagentsRunning ?? false),
       activeTurnId: input.activeTurnId ?? null,
     });
   }

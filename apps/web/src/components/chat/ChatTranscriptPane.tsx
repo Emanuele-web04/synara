@@ -42,6 +42,8 @@ interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
+  subagentsRunning?: boolean;
+  collapseFinishedTurns?: boolean;
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
@@ -56,6 +58,8 @@ interface ChatTranscriptPaneProps {
   hasMessages: boolean;
   isRevertingCheckpoint: boolean;
   isTemporaryThread?: boolean;
+  /** A new chat the server has not created yet. The server refuses history requests for it. */
+  isLocalDraft?: boolean;
   isWorking: boolean;
   workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
   followLiveOutput: boolean;
@@ -133,6 +137,8 @@ export function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
+  subagentsRunning,
+  collapseFinishedTurns,
   activeTurnStartedAt,
   agentActivityDetail,
   contentInsetRightPx,
@@ -145,6 +151,7 @@ export function ChatTranscriptPane({
   hasMessages,
   isRevertingCheckpoint,
   isTemporaryThread,
+  isLocalDraft,
   isWorking,
   workingLabel,
   followLiveOutput,
@@ -239,7 +246,7 @@ export function ChatTranscriptPane({
   useEffect(() => {
     activeTrailStore.set(null);
   }, [activeThreadId, activeTrailStore]);
-  const importedHistory = useImportedHistory(activeThreadId, !isTemporaryThread);
+  const importedHistory = useImportedHistory(activeThreadId, !isTemporaryThread && !isLocalDraft);
   const olderTimelineEntries = useMemo(
     () =>
       importedHistory.messages.map((message) => ({
@@ -326,6 +333,8 @@ export function ChatTranscriptPane({
             {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
+            subagentsRunning={subagentsRunning === true}
+            collapseFinishedTurns={collapseFinishedTurns !== false}
             activeTurnStartedAt={activeTurnStartedAt}
             listRef={listRef}
             {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}

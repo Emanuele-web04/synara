@@ -141,3 +141,36 @@ it("prepends older imported messages without moving the reading position and iso
     host.remove();
   }
 });
+
+it("checks a new chat for imported history only after the server has created it", async () => {
+  let serverKnowsThread = false;
+  api.loadProjectImportHistory.mockReset();
+  api.loadProjectImportHistory.mockImplementation(async () => {
+    if (!serverKnowsThread) throw new Error("The imported conversation no longer exists.");
+    return { messages: [], nextCursor: "1" };
+  });
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;width:700px;height:520px;overflow:hidden;";
+  document.body.append(host);
+  const draftProps = { ...props, activeThreadId: "draft", hasMessages: false, timelineEntries: [] };
+  const screen = await render(<ChatTranscriptPane {...draftProps} isLocalDraft />, {
+    container: host,
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(api.loadProjectImportHistory).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("earlier messages");
+    expect(page.getByRole("alert").query()).toBeNull();
+
+    serverKnowsThread = true;
+    await screen.rerender(<ChatTranscriptPane {...draftProps} isLocalDraft={false} />);
+    await expect
+      .element(page.getByRole("button", { name: "Load earlier messages" }))
+      .toBeInTheDocument();
+    expect(api.loadProjectImportHistory).toHaveBeenCalledTimes(1);
+    expect(api.loadProjectImportHistory).toHaveBeenCalledWith({ threadId: "draft" });
+  } finally {
+    await screen.unmount();
+    host.remove();
+  }
+});

@@ -38,6 +38,31 @@ export interface ThreadAttentionCandidate {
   summary?: string;
 }
 
+export interface SnoozeReminderCandidate {
+  threadId: Thread["id"];
+  title: string;
+  reminderAt: string;
+}
+
+/** Reminders deliberately include the initial snapshot so an overdue wakeup
+ * survives a closed app. Persisted receipts, rather than a lifecycle transition,
+ * determine whether the notification has already been shown. */
+export function collectSnoozeReminderCandidates(
+  threads: readonly Pick<
+    Thread,
+    "id" | "title" | "archivedAt" | "snoozedUntil" | "snoozeReminderAt"
+  >[],
+): SnoozeReminderCandidate[] {
+  return threads.flatMap((thread) =>
+    thread.archivedAt == null &&
+    thread.snoozedUntil == null &&
+    thread.snoozeReminderAt &&
+    Number.isFinite(Date.parse(thread.snoozeReminderAt))
+      ? [{ threadId: thread.id, title: thread.title, reminderAt: thread.snoozeReminderAt }]
+      : [],
+  );
+}
+
 interface TerminalNotificationThreadState {
   runningTerminalIds: string[];
   terminalAttentionStatesById: Record<string, "attention" | "review">;
@@ -535,6 +560,7 @@ export function collectCompletedThreadCandidates(
   const candidates: CompletedThreadCandidate[] = [];
 
   for (const thread of nextThreads) {
+    if (thread.snoozedUntil != null) continue;
     // A subagent's own thread finishing is a step of its parent's work, and
     // its result reaches the parent thread anyway.
     if (options.waitForSubagents && thread.parentThreadId) {
@@ -735,6 +761,7 @@ export function collectThreadAttentionCandidates(
   const candidates: ThreadAttentionCandidate[] = [];
 
   for (const thread of nextThreads) {
+    if (thread.snoozedUntil != null) continue;
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
       continue;
