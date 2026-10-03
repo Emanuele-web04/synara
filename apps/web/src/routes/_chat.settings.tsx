@@ -393,6 +393,9 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.collapseFinishedTurns !== defaults.collapseFinishedTurns
+      ? ["Fold finished turns"]
+      : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
     ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
       ? ["Message trail sound"]
@@ -1274,6 +1277,15 @@ function SettingsRouteView() {
           description: "Show token-by-token output while a response is in progress.",
           resetLabel: "assistant output",
           ariaLabel: "Stream assistant messages",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "collapseFinishedTurns",
+          title: "Fold finished turns",
+          description:
+            'Hide a finished turn\'s tool calls and intermediate messages behind a single "Worked for…" line. A turn stays open while it runs or while its background subagents are still working. Turn this off to keep every step visible.',
+          resetLabel: "fold finished turns",
+          ariaLabel: "Fold finished turns",
         })}
 
         {renderBooleanSettingRow({
