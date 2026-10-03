@@ -15,6 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
+import { collectBetaImportStorageSnapshot } from "~/betaImportSnapshot";
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import { playAppSnapCaptureSound } from "~/lib/appSnapSound";
@@ -565,7 +566,11 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
   async function copyDataAndLaunch() {
     setActionPending("copy");
     try {
-      const result = await betaBridge!.importAndLaunch();
+      const storageSnapshot = collectBetaImportStorageSnapshot();
+      const result =
+        storageSnapshot === null
+          ? await betaBridge!.importAndLaunch()
+          : await betaBridge!.importAndLaunch({ storageSnapshot });
       if (!result.ok) {
         toastManager.add({
           type: "warning",

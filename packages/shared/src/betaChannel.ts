@@ -8,6 +8,7 @@ import { Schema } from "effect";
 export const SYNARA_BETA_HOME_DIR_NAME = ".synara-beta";
 export const BETA_IMPORT_REQUEST_FILE_NAME = "import-requested.json";
 export const BETA_IMPORT_RESULT_FILE_NAME = "import-result.json";
+export const BETA_IMPORT_STORAGE_FILE_NAME = "import-storage.json";
 
 /**
  * electron-builder NSIS `guid` for beta builds. The uninstall registry key is
