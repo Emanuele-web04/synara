@@ -467,10 +467,10 @@ export const createComposerDraftStoreState =
       if (!draftThread?.promotedTo) {
         return;
       }
-      // Promotion removes the scratch content, but the same server thread
-      // keeps its explicit Computer choice for subsequent turns.
+      // First-send submission already clears the sent content. Keep any follow-up
+      // draft and queued turns entered during setup when the server keeps this ID.
       get().clearDraftThread(threadId, {
-        preserveComputerControl: draftThread.promotedTo === threadId,
+        preserveComposerContent: draftThread.promotedTo === threadId,
       });
     },
     clearDraftThread: (threadId, options) => {
@@ -478,8 +478,10 @@ export const createComposerDraftStoreState =
         return;
       }
       const removedDraft = get().draftsByThreadId[threadId];
-      revokeDraftPreviewUrls(removedDraft);
-      deleteDraftComposerImageBlobs(removedDraft, () => get().draftsByThreadId);
+      if (!options?.preserveComposerContent) {
+        revokeDraftPreviewUrls(removedDraft);
+        deleteDraftComposerImageBlobs(removedDraft, () => get().draftsByThreadId);
+      }
       set((state) => {
         const hasDraftThread = state.draftThreadsByThreadId[threadId] !== undefined;
         const hasProjectMapping = Object.values(state.projectDraftThreadIdByProjectId).includes(
@@ -498,22 +500,10 @@ export const createComposerDraftStoreState =
           state.draftThreadsByThreadId;
         const { [threadId]: _removedComposerDraft, ...restDraftsByThreadId } =
           state.draftsByThreadId;
-        const computerControl = options?.preserveComputerControl
-          ? _removedComposerDraft?.enableComputerControl
-          : undefined;
         return {
-          draftsByThreadId:
-            computerControl === undefined
-              ? restDraftsByThreadId
-              : {
-                  ...restDraftsByThreadId,
-                  [threadId]: {
-                    ...createEmptyThreadDraft(),
-                    enableComputerControl: computerControl,
-                    computerControlMode: _removedComposerDraft?.computerControlMode,
-                    computerControlGeneration: _removedComposerDraft?.computerControlGeneration,
-                  },
-                },
+          draftsByThreadId: options?.preserveComposerContent
+            ? state.draftsByThreadId
+            : restDraftsByThreadId,
           draftThreadsByThreadId: restDraftThreadsByThreadId,
           projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
         };

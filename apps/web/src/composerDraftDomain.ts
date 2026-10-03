@@ -316,7 +316,7 @@ export interface ComposerDraftStoreState {
   finalizePromotedDraftThread: (threadId: ThreadId) => void;
   clearDraftThread: (
     threadId: ThreadId,
-    options?: { readonly preserveComputerControl?: boolean },
+    options?: { readonly preserveComposerContent?: boolean },
   ) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
