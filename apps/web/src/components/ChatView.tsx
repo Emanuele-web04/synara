@@ -85,6 +85,7 @@ import {
   parseGitHubItemUrl,
   type ChatLinkActions,
 } from "~/lib/linkContextMenu";
+import { openExternalLink } from "~/lib/linkChips";
 import {
   mergeProjectInstructionsIntoThreadNotes,
   useProjectInstructionsStore,
@@ -2597,10 +2598,17 @@ export default function ChatView({
   // browser. A pull request opens in the thread's PR pane, an issue in the inbox detail.
   // Left to the React Compiler to memoize: manual hooks here cannot be preserved.
   const openRightDockPane = useRightDockStore((store) => store.openPane);
+  // A side chat in a dock (the only chat without a header) has no dock or browser panel of its
+  // own on screen, so the fallbacks above change for it. A forked one selects a PR tab in its host
+  // chat's dock, a standalone one (Code review's Ask) selects the PR in Code review, and links
+  // meant for the in-app browser open externally.
+  const sidechatHostThreadId = hideHeader ? (activeThread?.sidechatSourceThreadId ?? null) : null;
+  const opensPullRequestInCodeReview = hideHeader && standaloneSidechatContext !== null;
+  const openLinkInBrowser = hideHeader ? openExternalLink : openBrowserUrl;
   const openGitHubItemLink = (url: string) => {
     const item = parseGitHubItemUrl(url);
     if (!item || !activeProjectId) {
-      openBrowserUrl(url);
+      openLinkInBrowser(url);
       return;
     }
     const { kind, repository, number } = item;
@@ -2610,10 +2618,10 @@ export default function ChatView({
           (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
         );
         if (!belongsToProject) {
-          openBrowserUrl(url);
+          openLinkInBrowser(url);
           return;
         }
-        if (kind === "issue") {
+        if (kind === "issue" || opensPullRequestInCodeReview) {
           void navigate({
             to: "/pull-requests",
             search: {
@@ -2625,7 +2633,7 @@ export default function ChatView({
           });
           return;
         }
-        openRightDockPane(threadId, {
+        openRightDockPane(sidechatHostThreadId ?? threadId, {
           kind: "pullRequest",
           pullRequestProjectId: activeProjectId,
           pullRequestRepository: repository,
@@ -2633,11 +2641,11 @@ export default function ChatView({
           pullRequestInitialTab: "summary",
         });
       },
-      () => openBrowserUrl(url),
+      () => openLinkInBrowser(url),
     );
   };
   const chatLinkActions: ChatLinkActions = {
-    openInBrowserPanel: openBrowserUrl,
+    openInBrowserPanel: openLinkInBrowser,
     openGitHubItem: openGitHubItemLink,
     githubLinkOpenTarget: settings.githubLinkOpenTarget,
   };
