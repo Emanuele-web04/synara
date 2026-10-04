@@ -463,14 +463,21 @@ export const createComposerDraftStoreState =
       });
     },
     finalizePromotedDraftThread: (threadId) => {
-      const draftThread = get().draftThreadsByThreadId[threadId];
-      if (!draftThread?.promotedTo) {
-        return;
-      }
-      // Promotion removes the scratch content, but the same server thread
-      // keeps its explicit Computer choice for subsequent turns.
-      get().clearDraftThread(threadId, {
-        preserveComputerControl: draftThread.promotedTo === threadId,
+      set((state) => {
+        if (!state.draftThreadsByThreadId[threadId]?.promotedTo) {
+          return state;
+        }
+        // The send owner clears captured content. A server acknowledgement only
+        // retires the local registration; the composer may already have newer edits.
+        const { [threadId]: _removedDraftThread, ...draftThreadsByThreadId } =
+          state.draftThreadsByThreadId;
+        return {
+          draftThreadsByThreadId,
+          projectDraftThreadIdByProjectId: removeProjectDraftMappingsForThread(
+            state.projectDraftThreadIdByProjectId,
+            threadId,
+          ),
+        };
       });
     },
     clearDraftThread: (threadId, options) => {
