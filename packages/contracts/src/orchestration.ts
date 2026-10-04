@@ -48,6 +48,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getShellSnapshot: "orchestration.getShellSnapshot",
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
+  settleTurnDispatch: "orchestration.settleTurnDispatch",
   importThread: "orchestration.importThread",
   listProjectImports: "orchestration.listProjectImports",
   importProject: "orchestration.importProject",
@@ -2827,6 +2828,18 @@ export const DispatchResult = Schema.Struct({
 });
 export type DispatchResult = typeof DispatchResult.Type;
 
+// Resolves a lost turn-start acknowledgement without starting a new turn. If
+// the command was never accepted, the server durably rejects late arrivals.
+export const OrchestrationSettleTurnDispatchInput = Schema.Struct({
+  command: ClientThreadTurnStartCommand,
+});
+export const OrchestrationSettleTurnDispatchResult = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("accepted"), sequence: NonNegativeInt }),
+  Schema.Struct({ status: Schema.Literal("rejected"), message: Schema.String }),
+]);
+export type OrchestrationSettleTurnDispatchResult =
+  typeof OrchestrationSettleTurnDispatchResult.Type;
+
 export const OrchestrationGetSnapshotInput = Schema.Struct({});
 export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput.Type;
 const OrchestrationGetSnapshotResult = OrchestrationReadModel;
@@ -3037,6 +3050,10 @@ export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
+  },
+  settleTurnDispatch: {
+    input: OrchestrationSettleTurnDispatchInput,
+    output: OrchestrationSettleTurnDispatchResult,
   },
   importThread: {
     input: OrchestrationImportThreadInput,

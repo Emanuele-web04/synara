@@ -1628,6 +1628,7 @@ export default function ChatView({
     turnTakenOver,
     isSendBusy,
     isAwaitingTurnStart,
+    isSettlingTurnDispatch,
     activeWorktreeSetup,
     isPreparingWorktree,
     beginLocalDispatch,
@@ -6548,6 +6549,7 @@ export default function ChatView({
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
                     workingLabel={resolveWorkingLabel({
+                      isSettlingTurnDispatch,
                       isSendBusy,
                       turnTakenOver,
                       isConnecting,

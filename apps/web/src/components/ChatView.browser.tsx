@@ -103,6 +103,7 @@ import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailS
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { trackWsTurnSettlement } from "../wsTransportEvents";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -5174,6 +5175,38 @@ describe("ChatView transcript geometry (full app)", () => {
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
+    }
+  });
+
+  it("shows uncertain delivery and blocks another send without a local dispatch marker", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-before-uncertain-delivery"),
+        targetText: "Previous message",
+      }),
+    });
+    const finishSettlement = trackWsTurnSettlement(THREAD_ID);
+    try {
+      // The ordinary loading marker can expire or be absent after navigation.
+      useThreadDispatchStore.setState({ threads: {} });
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Do not duplicate this send");
+      await expect.element(page.getByText("Checking message delivery…")).toBeVisible();
+      const form = document.querySelector<HTMLFormElement>("[data-chat-composer-form='true']")!;
+      form.requestSubmit();
+      await waitForLayout();
+      expect(
+        wsRequests.filter(
+          (request) => readDispatchedCommand(request)?.type === "thread.turn.start",
+        ),
+      ).toHaveLength(0);
+      finishSettlement();
+      await expect.element(page.getByText("Checking message delivery…")).not.toBeInTheDocument();
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+    } finally {
+      finishSettlement();
+      await mounted.cleanup();
     }
   });
 

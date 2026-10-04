@@ -27,6 +27,8 @@ import type { ManagedAttachmentPrincipal } from "../../managedAttachmentPrincipa
 
 export interface OrchestrationDispatchContext {
   readonly attachmentPrincipal?: ManagedAttachmentPrincipal;
+  /** Resolve an uncertain turn start, durably rejecting it if it has not committed. Never execute it. */
+  readonly settleOnly?: boolean;
 }
 
 export interface OrchestrationProjectionCatchUpStatus {

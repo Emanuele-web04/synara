@@ -1248,6 +1248,27 @@ const makeWsRpcHandlersLayer = () =>
       });
 
       return AdmittedWsFeatureRpcGroup.of({
+        [ORCHESTRATION_WS_METHODS.settleTurnDispatch]: ({ command }) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { command: normalizedCommand } = yield* normalizeDispatchCommand({ command });
+              const attachmentPrincipal = yield* CurrentManagedAttachmentPrincipal;
+              return yield* runtimeStartup
+                .enqueueCommand(
+                  orchestrationEngine.dispatch(normalizedCommand, {
+                    attachmentPrincipal,
+                    settleOnly: true,
+                  }),
+                )
+                .pipe(
+                  Effect.map(({ sequence }) => ({ status: "accepted" as const, sequence })),
+                  Effect.catchTag("OrchestrationCommandPreviouslyRejectedError", (error) =>
+                    Effect.succeed({ status: "rejected" as const, message: error.detail }),
+                  ),
+                );
+            }),
+            "Failed to resolve the original message delivery.",
+          ),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
