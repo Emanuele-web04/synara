@@ -239,9 +239,18 @@ describe("ChatTranscriptPane", () => {
         expect(clampWrapper).not.toBeNull();
         expect(clampWrapper!.scrollHeight).toBeGreaterThan(clampWrapper!.clientHeight);
       });
-      expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
-        "Show more",
-      );
+      const clamp = screen.container.querySelector<HTMLElement>(
+        '[data-user-message-clamp="true"]',
+      )!;
+      expect(clamp.textContent).toContain(hiddenTail);
+      expect(getComputedStyle(clamp).maskImage).toContain("linear-gradient");
+      const expandButton = screen.container.querySelector<HTMLButtonElement>(
+        "button[data-scroll-anchor-ignore]",
+      )!;
+      expect(expandButton.textContent).toBe("Show more");
+      expect(expandButton.getAttribute("aria-expanded")).toBe("false");
+      expect(clamp.id).not.toBe("");
+      expect(expandButton.getAttribute("aria-controls")).toBe(clamp.id);
 
       await page.getByText("Show more").click();
 
@@ -251,6 +260,7 @@ describe("ChatTranscriptPane", () => {
         expect(wrapper!.scrollHeight).toBeLessThanOrEqual(wrapper!.clientHeight + 1);
       });
       await expect.element(page.getByText("Show less")).toBeInTheDocument();
+      expect(expandButton.getAttribute("aria-expanded")).toBe("true");
       expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
         "Show less",
       );

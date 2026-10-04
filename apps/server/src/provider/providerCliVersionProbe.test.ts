@@ -18,10 +18,16 @@ describe("probeProviderCliVersion", () => {
   });
 
   it("distinguishes missing commands from other execution failures", async () => {
-    const missing = new Error("spawn provider ENOENT");
-    await expect(
-      Effect.runPromise(probeProviderCliVersion(Effect.fail(missing), 100)),
-    ).resolves.toEqual({ outcome: "missing", cause: missing });
+    for (const message of [
+      "spawn provider ENOENT",
+      "NotFound: provider",
+      "Command not found: provider",
+    ]) {
+      const missing = new Error(message);
+      await expect(
+        Effect.runPromise(probeProviderCliVersion(Effect.fail(missing), 100)),
+      ).resolves.toEqual({ outcome: "missing", cause: missing });
+    }
 
     const failure = new Error("permission denied");
     await expect(

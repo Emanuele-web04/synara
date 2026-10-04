@@ -14,7 +14,6 @@ import {
   DEFAULT_CODEX_ACCOUNT_ID,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
-  GIT_TEXT_GENERATION_PROVIDERS,
   type ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   type ProviderDriverKind,
@@ -24,7 +23,6 @@ import {
   TrimmedNonEmptyString,
   ProviderKind,
   SidechatExpiry,
-  type GitTextGenerationProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -606,13 +604,6 @@ type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPat
 export interface AppModelOption extends ProviderModelOption {
   provider: ProviderKind;
   isCustom: boolean;
-}
-
-export interface GitTextGenerationModelPickerOption {
-  readonly key: string;
-  readonly value: string;
-  readonly instance: ProviderInstanceOption;
-  readonly option: AppModelOption;
 }
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
@@ -2152,141 +2143,6 @@ export function getAppModelOptions(
   }
 
   return options;
-}
-
-export function mapCatalogModelOptionsToAppModelOptions(
-  provider: GitTextGenerationProvider,
-  options: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>,
-): AppModelOption[] {
-  return options.map((option) => ({
-    ...option,
-    provider,
-    isCustom: option.isCustom ?? false,
-  }));
-}
-
-export function getGitTextGenerationModelOptions(
-  settings: Pick<AppSettings, "textGenerationModel" | "textGenerationProvider"> &
-    Partial<Pick<AppSettings, CustomModelSettingsKey>>,
-  discoveredOptionsByProvider?: Partial<
-    Record<GitTextGenerationProvider, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
-  >,
-): AppModelOption[] {
-  const options = GIT_TEXT_GENERATION_PROVIDERS.flatMap((provider) => {
-    const discovered = discoveredOptionsByProvider?.[provider];
-    if (discovered !== undefined) {
-      return mapCatalogModelOptionsToAppModelOptions(provider, discovered);
-    }
-    const customModels = settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey] ?? [];
-    return getAppModelOptions(provider, customModels);
-  });
-  const deduped: AppModelOption[] = [];
-  const seen = new Set<string>();
-
-  for (const option of options) {
-    const key = `${option.provider}:${option.slug}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(option);
-  }
-
-  const selectedModel = settings.textGenerationModel?.trim();
-  const selectedProvider =
-    settings.textGenerationProvider ??
-    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
-  if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
-    deduped.push({
-      provider: selectedProvider,
-      slug: selectedModel,
-      name: formatProviderModelOptionName({
-        provider: selectedProvider,
-        slug: selectedModel,
-      }),
-      isCustom: true,
-    });
-  }
-
-  return deduped;
-}
-
-export function getGitTextGenerationPickerOptions(
-  settings: Pick<
-    AppSettings,
-    | CustomModelSettingsKey
-    | "codexAccounts"
-    | "codexHomePath"
-    | "providerInstances"
-    | "selectedCodexAccountId"
-    | "textGenerationModel"
-    | "textGenerationProvider"
-    | "textGenerationProviderInstanceId"
-  >,
-  discoveredOptionsByProviderInstance?: Partial<
-    Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
-  >,
-): GitTextGenerationModelPickerOption[] {
-  const selectedModel = settings.textGenerationModel?.trim();
-  const selectedProvider =
-    settings.textGenerationProvider ??
-    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
-  const selectedInstanceId = ProviderInstanceId.makeUnsafe(
-    settings.textGenerationProviderInstanceId?.trim() || selectedProvider,
-  );
-  const entries: GitTextGenerationModelPickerOption[] = [];
-  const seen = new Set<string>();
-
-  for (const instance of getProviderInstanceOptions(settings)) {
-    if (
-      !instance.enabled ||
-      !GIT_TEXT_GENERATION_PROVIDERS.includes(instance.provider as GitTextGenerationProvider)
-    ) {
-      continue;
-    }
-    const selectedModelForInstance =
-      selectedModel &&
-      instance.provider === selectedProvider &&
-      instance.instanceId === selectedInstanceId
-        ? selectedModel
-        : undefined;
-    const selectedModelOption = selectedModelForInstance
-      ? getAppModelOptions(instance.provider, [], selectedModelForInstance).find(
-          (option) =>
-            option.slug === normalizeModelSlug(selectedModelForInstance, instance.provider),
-        )
-      : undefined;
-    const discoveredOptions = discoveredOptionsByProviderInstance?.[instance.instanceId];
-    const catalogOptions = discoveredOptions
-      ? mapCatalogModelOptionsToAppModelOptions(
-          instance.provider as GitTextGenerationProvider,
-          discoveredOptions,
-        )
-      : null;
-    const options = catalogOptions
-      ? [
-          ...catalogOptions,
-          ...(selectedModelOption &&
-          !catalogOptions.some((option) => option.slug === selectedModelOption.slug)
-            ? [selectedModelOption]
-            : []),
-        ]
-      : getAppModelOptions(
-          instance.provider,
-          getCustomModelsForProviderInstance(settings, instance),
-          selectedModelForInstance,
-        );
-    for (const option of options) {
-      const key = `${instance.instanceId}:${option.provider}:${option.slug}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      entries.push({ key, value: key, instance, option });
-    }
-  }
-
-  return entries;
 }
 
 export function resolveAppModelSelection(

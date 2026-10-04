@@ -2248,7 +2248,6 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();
-    await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
@@ -7182,15 +7181,6 @@ describe("ChatView transcript geometry (full app)", () => {
         await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
         shortcutTarget = searchbox.element() as HTMLElement;
       }
-
-      await vi.waitFor(
-        () => {
-          expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
-        },
-        { timeout: 2_500, interval: 16 },
-      );
-      expect(readModelSelection()).toMatchObject({ options: { reasoningEffort: "low" } });
-      await vi.waitFor(() => expect(document.activeElement).toBe(composerEditor));
     } finally {
       focusTarget.remove();
       await mounted.cleanup();

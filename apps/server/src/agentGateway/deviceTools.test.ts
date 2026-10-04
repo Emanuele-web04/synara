@@ -267,13 +267,36 @@ describe("agent gateway device tool handlers", () => {
     expect(result.kind).toBe("boot-limit-reached");
   });
 
-  it("surfaces a backend failure as a tool error and records it on the thread", async () => {
+  it("reports every backend failure to the agent and only actionable errors to the pane", async () => {
     const { manager, call } = await setup();
 
     const result = await call("device_tap", { udid: "FAKE-0002", x: 1, y: 1 });
 
     expect(result.isError).toBe(true);
     expect((await manager.getThreadState(THREAD)).lastError).toContain("not booted");
+
+    for (const [message, viewerFacing] of [
+      [
+        'Scrolling stopped moving "Settings" after 2 swipes; the list appears to be at its end and the element is still out of reach.',
+        false,
+      ],
+      ['No element matching label "Dark mode" is on screen.', false],
+      ['Label "Save" matched more than one element.', false],
+      ['Element "Developer" is not visible on screen.', false],
+      ["Device helper could not be built: xcodebuild exited with code 65", true],
+      ["simulator B9802326 is not booted (state 1)", true],
+      ["display has no framebuffer surface yet", true],
+      ["Xcode is not installed", true],
+    ] as const) {
+      const fixture = await setup();
+      fixture.backend.failNext("tap", new DeviceBackendError(message));
+      const failure = await fixture.call("device_tap", { udid: DEVICE, x: 1, y: 1 });
+      expect(failure.isError, message).toBe(true);
+      expect(failure.content).toContainEqual({ type: "text", text: message });
+      expect((await fixture.manager.getThreadState(THREAD)).lastError, message).toBe(
+        viewerFacing ? message : null,
+      );
+    }
   });
 
   it("rejects malformed arguments without touching the device", async () => {

@@ -215,8 +215,11 @@ not added together into an overall percentage.
 `node --test .github/scripts/ci-contracts.test.mjs` executes the actual aggregate
 shell for successful code/docs runs and rejects failures, cancellations, invalid
 change outputs and unexpected skips. It also guards install scopes, native Windows
-test inventory, three-way server/component distribution, browser preparation and
-complementary ChatView ownership.
+test inventory, three-way server/component distribution and browser preparation.
+`scripts/browser-ci-partitions.test.ts` owns complementary ChatView membership,
+complete file ownership, serial execution and geometry exclusion through the
+resolved Vitest configuration. Its expected membership is independent of that
+configuration, so accidentally relaxing the quarantine fails the test.
 
 After editing CI, run `bun run fmt:check`, `bun run lint`, `bun run typecheck`,
 `bun run test`, the CI contract tests and workflow syntax/expression validation.
