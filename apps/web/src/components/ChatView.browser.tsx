@@ -12095,6 +12095,42 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("closing the last visible tab returns to an unsent draft hidden from the strip", async () => {
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("last-tab-hidden-draft"),
+        targetText: "Completed conversation",
+      }),
+    });
+    try {
+      await waitForLayout();
+      const draftId = ThreadId.makeUnsafe("hidden-unsent-draft");
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, draftId, {});
+      useComposerDraftStore.getState().setPrompt(draftId, "Unsent text behind the only tab");
+      // The draft is open but has no tab, so the saved chat is the last one in the strip.
+      useOpenThreadTabsStore.setState({ threadIds: [draftId, THREAD_ID] });
+      const close = await waitForElement<HTMLButtonElement>(
+        () => document.querySelector('nav[aria-label="Open threads"] button[aria-label^="Close "]'),
+        "The active thread should have a closeable tab.",
+      );
+      close.click();
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${draftId}`,
+        "Closing the last visible tab should return to the open draft.",
+      );
+      expect(useComposerDraftStore.getState().draftsByThreadId[draftId]?.prompt).toBe(
+        "Unsent text behind the only tab",
+      );
+      expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(THREAD_ID);
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
+
   it.each(["home", "project"] as const)(
     "closing the last %s tab opens a fresh draft in the same project",
     async (surface) => {
