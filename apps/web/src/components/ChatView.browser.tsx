@@ -10016,7 +10016,7 @@ describe("ChatView transcript geometry (full app)", () => {
           projectId: PROJECT_ID,
           thread: null,
           defaultProvider: "codex",
-          assistantDeliveryMode: "default",
+          assistantDeliveryMode: "buffered",
         });
       try {
         const prompt = "Send this shared draft once";
