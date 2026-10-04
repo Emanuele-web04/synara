@@ -33,6 +33,7 @@ import {
 } from "@synara/contracts";
 import {
   formatProviderDeliveryBlockDetail,
+  isProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
 import type { DeepPartial } from "@synara/shared/Struct";
@@ -6034,6 +6035,288 @@ describe("ProviderCommandReactor", () => {
         outcome: "abandon",
         note: expect.stringContaining("without replay"),
       });
+  });
+
+  // The quarantine alone does not reach the UI: "Unblock thread" only renders
+  // for the provider-delivery block contract, which used to be written lazily
+  // by the first skipped turn start. A terminal settle must surface it at once.
+  it.each(["uncertain", "dead"] as const)(
+    "REL-01B gate: surfaces the delivery block when a provider command settles %s",
+    async (terminalState) => {
+      const failure =
+        terminalState === "dead"
+          ? new PersistenceSqlError({
+              operation: "ProviderService.interruptTurn",
+              detail: "durability probe failed",
+            })
+          : new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "turn/interrupt",
+              detail: "connection closed after request write",
+            });
+      const harness = await createHarness({
+        interruptTurn: () => Effect.fail(failure),
+      });
+      const now = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      await seedRollbackTarget(harness, {
+        messageId: asMessageId(`user-message-settle-${terminalState}`),
+        turnId: asTurnId(`turn-settle-${terminalState}`),
+        createdAt: now,
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`cmd-settle-${terminalState}-session`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId(`turn-settle-${terminalState}`),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.conversation.rollback",
+          commandId: CommandId.makeUnsafe(`cmd-settle-${terminalState}-rollback`),
+          threadId,
+          messageId: asMessageId(`user-message-settle-${terminalState}`),
+          numTurns: 1,
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(async () =>
+        Effect.runPromise(
+          harness.deliveryRepository
+            .firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId,
+            })
+            .pipe(
+              Effect.map(
+                (blocker) => Option.isSome(blocker) && blocker.value.state === terminalState,
+              ),
+            ),
+        ),
+      );
+      await waitFor(async () =>
+        isProviderDeliveryBlockDetail((await readHarnessThread(harness))?.session?.lastError),
+      );
+      const thread = await readHarnessThread(harness);
+      // The block detail merges over the session as it stands: quarantining a
+      // delivery must not flatten a live turn's status or activeTurnId.
+      expect(thread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId(`turn-settle-${terminalState}`),
+      });
+      expect(thread?.session?.lastError).toContain(PROVIDER_DELIVERY_BLOCK_SUMMARY);
+      expect(thread?.session?.lastError).toContain(
+        terminalState === "dead" ? "durability probe failed" : "connection closed",
+      );
+    },
+  );
+
+  // A blocker that survives startup recovery keeps the thread quarantined but
+  // stayed invisible until a later turn start was skipped. Surface the block
+  // once per thread so a restart still offers "Unblock thread".
+  it("REL-01B gate: surfaces a surviving startup blocker once per thread", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = "2026-10-04T10:00:00.000Z";
+    const failedAt = "2026-10-04T10:00:01.000Z";
+
+    const seedSurvivingBlocker = async (commandId: string, lastError: string) => {
+      const requested = await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.task.stop",
+          commandId: CommandId.makeUnsafe(commandId),
+          threadId,
+          taskId: `task-${commandId}`,
+          createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.claim({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          threadId,
+          claimOwner: "old-process",
+          claimedAt: createdAt,
+          claimExpiresAt: createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.markTerminalFailure({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          expectedClaimOwner: "old-process",
+          state: "uncertain",
+          error: lastError,
+          updatedAt: failedAt,
+        }),
+      );
+      return requested;
+    };
+    const first = await seedSurvivingBlocker(
+      "blocker-earlier",
+      "Provider process tree did not prove exit.",
+    );
+    const second = await seedSurvivingBlocker("blocker-later", "Provider acceptance is unknown.");
+    for (const event of await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)))) {
+      await Effect.runPromise(
+        harness.deliveryRepository.advanceCursor({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: event.sequence,
+          updatedAt: failedAt,
+        }),
+      );
+    }
+
+    await harness.startReactor();
+    await harness.drain();
+
+    const delivery = (sequence: number) =>
+      Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: sequence,
+        }),
+      );
+    expect(Option.getOrThrow(await delivery(first.sequence)).state).toBe("uncertain");
+    expect(Option.getOrThrow(await delivery(second.sequence)).state).toBe("uncertain");
+    const thread = await readHarnessThread(harness);
+    // Exactly one surfacing write per thread: the earliest surviving blocker's
+    // detail wins and a second blocker must not rewrite or double it.
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.lastError).toBe(
+      formatProviderDeliveryBlockDetail("Provider process tree did not prove exit."),
+    );
+    const blockDetailWrites = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).filter(
+      (event) =>
+        event.type === "thread.session-set" &&
+        isProviderDeliveryBlockDetail(event.payload.session.lastError),
+    );
+    expect(blockDetailWrites).toHaveLength(1);
+  });
+
+  // The lazy skip path already wrote the block detail; the settle-time write
+  // must not regress it — a skipped turn start still surfaces the same contract.
+  it("REL-01B gate: keeps skipped turn starts surfacing the block after settle-time writes", async () => {
+    const harness = await createHarness({
+      interruptTurn: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/interrupt",
+            detail: "connection closed after request write",
+          }),
+        ),
+    });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-skip-block"),
+      turnId: asTurnId("turn-skip-block"),
+      createdAt: now,
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-skip-block"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-rollback"),
+        threadId,
+        messageId: asMessageId("user-message-skip-block"),
+        numTurns: 1,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () =>
+      Effect.runPromise(
+        harness.deliveryRepository
+          .firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId,
+          })
+          .pipe(Effect.map(Option.isSome)),
+      ),
+    );
+
+    // Settle the session so the follow-up message starts a turn instead of queueing.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-session-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    const skippedTurn = await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("skip-block-user"),
+          role: "user",
+          text: "Message sent while the thread was blocked",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const state = await Effect.runPromise(
+        harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+      );
+      return state.pipe(Option.getOrThrow).lastAckedSequence >= skippedTurn.sequence;
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.status).toBe("error");
+    expect(isProviderDeliveryBlockDetail(thread?.session?.lastError)).toBe(true);
+    expect(
+      thread?.activities.some(
+        (activity) =>
+          activity.kind === "provider.turn.start.failed" &&
+          activity.summary === PROVIDER_DELIVERY_BLOCK_SUMMARY,
+      ),
+    ).toBe(true);
   });
 
   it("REL-01D gate: resumes an operator-authorized retry after process loss", async () => {

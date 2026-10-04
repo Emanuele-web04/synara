@@ -75,6 +75,7 @@ import { claudeCacheForModel } from "../../provider/claudeCacheObservation.ts";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   formatProviderDeliveryBlockDetail,
+  isProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
@@ -7024,6 +7025,48 @@ const make = Effect.gen(function* () {
       return true;
     });
 
+    // The "Unblock thread" action only renders for the block-detail contract,
+    // which used to be written lazily on the first skipped turn start. Read the
+    // durable session log rather than the projection so callers during replay
+    // or startup see the session other writers just persisted, and merge the
+    // detail over the session's actual state: quarantining a delivery must
+    // never flatten a live turn's status or activeTurnId, and the conditional
+    // write loses to any session that moved on since the read.
+    const surfaceQuarantinedThreadBlock = Effect.fnUntraced(function* (input: {
+      readonly threadId: ThreadId;
+      readonly detail: string;
+    }) {
+      const detail = formatProviderDeliveryBlockDetail(input.detail);
+      const highWater = yield* orchestrationEngine.getEventHighWaterSequence;
+      const session = yield* orchestrationEngine
+        .readThreadEventsThrough(input.threadId, 0, highWater, ["thread.session-set"])
+        .pipe(
+          Stream.runFold(
+            () => null as OrchestrationSession | null,
+            (_latest, event) =>
+              event.type === "thread.session-set" ? event.payload.session : _latest,
+          ),
+        );
+      const createdAt = new Date().toISOString();
+      if (session === null) {
+        // No durable session yet: seed a full error session the way the skip
+        // path does so the block still has somewhere to live.
+        yield* setThreadSessionError({
+          threadId: input.threadId,
+          detail,
+          createdAt,
+        });
+        return;
+      }
+      if (isProviderDeliveryBlockDetail(session.lastError)) return;
+      yield* setThreadSession({
+        threadId: input.threadId,
+        expectedSession: { status: session.status, updatedAt: session.updatedAt },
+        session: { ...session, lastError: detail, updatedAt: createdAt },
+        createdAt,
+      });
+    });
+
     const settleTerminalFailure = Effect.fnUntraced(function* (input: {
       readonly event: ProviderIntentEvent;
       readonly claimOwner: string;
@@ -7054,6 +7097,17 @@ const make = Effect.gen(function* () {
         );
       }
       quarantinedThreads.add(input.event.payload.threadId);
+      yield* surfaceQuarantinedThreadBlock({
+        threadId: input.event.payload.threadId,
+        detail: input.detail,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to surface quarantined-thread block", {
+            threadId: input.event.payload.threadId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
       if (input.event.type === "thread.claude-cache-response-requested") {
         const review = (yield* resolveThread(input.event.payload.threadId))?.claudeCacheReview;
         if (review?.reviewId === input.event.payload.review.reviewId) {
@@ -7695,6 +7749,7 @@ const make = Effect.gen(function* () {
     // Skipped prompts are not replayed at startup; instead, surface a durable
     // activity asking the user to resend them.
     const startupRecoveryNotifiedThreads = new Set<ThreadId>();
+    const startupRecoverySurfacedThreads = new Set<ThreadId>();
     yield* Effect.gen(function* () {
       const pageSize = 100;
       let afterEventSequence: number | undefined;
@@ -7706,7 +7761,26 @@ const make = Effect.gen(function* () {
         });
         for (const blocker of startupBlockers) {
           const settledQuit = yield* isSettledQuitInterruptBlocker(blocker);
-          if (!settledQuit && !isSafeLegacyProviderBlocker(blocker.lastError)) continue;
+          if (!settledQuit && !isSafeLegacyProviderBlocker(blocker.lastError)) {
+            // A surviving blocker keeps the thread quarantined across the
+            // restart; without this the "Unblock thread" contract only appears
+            // after another message is skipped. Surface it once per thread.
+            if (!startupRecoverySurfacedThreads.has(blocker.threadId)) {
+              startupRecoverySurfacedThreads.add(blocker.threadId);
+              yield* surfaceQuarantinedThreadBlock({
+                threadId: blocker.threadId,
+                detail: blocker.lastError ?? "an earlier provider command failed",
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to surface quarantined-thread block at startup", {
+                    threadId: blocker.threadId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+            }
+            continue;
+          }
           const reconciled = yield* deliveryRepository.reconcile({
             reconciliationId: crypto.randomUUID(),
             consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
