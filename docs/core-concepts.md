@@ -51,8 +51,9 @@ is cancelled, the task and its prompt remain available for retry.
   dedicated worktree. Drafts can be sent as persistent goals. Kanban and Tasks reuse the
   same draft dispatcher, preserving provider-instance selection and edits made while sending.
   The `synara_*_kanban_*` gateway tools read and drive durable cards within the caller's
-  ordinary project; local composer drafts remain client-only. These tools do not change
-  the Beta-only Tasks to-do records.
+  ordinary project; local composer drafts remain client-only. Gateway draft creation uses
+  the local checkout; isolated worktree callers can create a task instead. These tools do
+  not change the Beta-only Tasks to-do records.
 - **Inbox** (Beta) — today’s due and overdue to-dos, tasks with an agent, and tasks finished
   since the working day began at 4am, beside the day’s agent recap. Add a task here to make it due
   on today’s calendar date, or select it to edit and delegate through the same card as Tasks.
