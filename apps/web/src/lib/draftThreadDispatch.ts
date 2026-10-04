@@ -285,16 +285,22 @@ async function dispatchDraftThreadOnce(
   const skills = draftComposerState?.skills ?? [];
   const mentions = draftComposerState?.mentions ?? [];
   const liveComposerImages = draftComposerState?.images ?? [];
-  const hydratedPendingImages = await hydratePendingBlobComposerAttachments(
-    findPendingBlobComposerAttachments({
-      persistedAttachments: draftComposerState?.persistedAttachments ?? [],
-      images: liveComposerImages,
-    }),
-  );
+  const pendingImages = findPendingBlobComposerAttachments({
+    persistedAttachments: draftComposerState?.persistedAttachments ?? [],
+    images: liveComposerImages,
+  });
+  const hydratedPendingImages = await hydratePendingBlobComposerAttachments(pendingImages);
   // Headless hydration only needs each File for upload, never its preview.
   // These URLs do not belong to the composer store and its cleanup cannot
   // release them, including when dispatch is refused.
   for (const image of hydratedPendingImages) revokeObjectPreviewUrl(image.previewUrl);
+  if (hydratedPendingImages.length !== pendingImages.length) {
+    return {
+      kind: "error",
+      message:
+        "Could not restore saved images. Open the chat to retry or remove them before sending.",
+    };
+  }
   const composerImages = [...liveComposerImages, ...hydratedPendingImages];
 
   const composerFiles = draftComposerState?.files ?? [];

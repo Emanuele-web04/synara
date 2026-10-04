@@ -336,7 +336,7 @@ describe("kanbanDispatch persisted image attachments", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["accepted", "refused"] as const)(
+  it.each(["accepted", "refused", "unreadable"] as const)(
     "hydrates saved images and releases temporary previews when dispatch is %s",
     async (outcome) => {
       const threadId = ThreadId.makeUnsafe("thread-persisted-image");
@@ -359,7 +359,9 @@ describe("kanbanDispatch persisted image attachments", () => {
         };
       });
       const blobFile = new File(["png"], "saved-capture.png", { type: "image/png" });
-      vi.spyOn(composerImageBlobStore, "readComposerImageBlob").mockResolvedValue(blobFile);
+      vi.spyOn(composerImageBlobStore, "readComposerImageBlob").mockResolvedValue(
+        outcome === "unreadable" ? null : blobFile,
+      );
 
       if (outcome === "refused") {
         nativeApiMocks.dispatchCommand.mockRejectedValue(new Error("Turn refused"));
@@ -373,6 +375,16 @@ describe("kanbanDispatch persisted image attachments", () => {
       });
 
       expect(result.kind).toBe(outcome === "accepted" ? "dispatched" : "error");
+      if (outcome === "unreadable") {
+        expect(nativeApiMocks.dispatchCommand).not.toHaveBeenCalled();
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments,
+        ).toEqual([persisted]);
+        expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+          "Prompt with a saved screenshot",
+        );
+        return;
+      }
       expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:saved-capture.png");
       // The staged turn carries the hydrated image — it is not silently dropped
       // before the composer clear deletes its persisted blob.
