@@ -993,7 +993,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     definition: {
       name: "synara_create_kanban_draft",
       description:
-        "Create a Kanban draft card: starts a new Synara thread without starting a turn, so the card renders in Draft until synara_move_kanban_card starts its work with a message. Optional description is stored as the thread notes. requestId is required as the in-flight concurrency key but drafts are not idempotent: every call creates one thread, so never retry blindly — check the board first.",
+        "Create a Kanban draft card from a local-checkout thread: starts a new Synara thread without starting a turn, so the card renders in Draft until synara_move_kanban_card starts its work with a message. Optional description is stored as the thread notes. requestId is required as the in-flight concurrency key but drafts are not idempotent: every call creates one thread, so never retry blindly — check the board first.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1058,6 +1058,15 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               const callerShell = yield* requireThreadShell(context.callerThreadId).pipe(
                 Effect.mapError((error) => new ToolInputError(errorText(error))),
               );
+              // Draft wiring creates local threads. Refuse an isolated caller
+              // before writing a card that its drive fence would reject.
+              if (callerShell.envMode === "worktree") {
+                return yield* Effect.fail(
+                  new ToolInputError(
+                    "Kanban drafts currently use the local checkout and cannot be created from an isolated worktree. Use synara_create_kanban_task to create an isolated task, or ask the user to create a draft from a local thread.",
+                  ),
+                );
+              }
               // Provider sessions may only create drafts in their own project.
               if (projectId !== undefined && projectId !== String(callerShell.projectId)) {
                 return yield* Effect.fail(

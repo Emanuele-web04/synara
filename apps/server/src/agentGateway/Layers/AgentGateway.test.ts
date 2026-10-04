@@ -5212,6 +5212,33 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("rejects Kanban draft creation from a worktree before writing local state", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent", {
+        envMode: "worktree",
+        worktreePath: "/tmp/worktrees/caller",
+        branch: "agent/caller",
+      }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_kanban_draft",
+        args: {
+          title: "Keep this work isolated",
+          description: "Do not write a local draft or its notes.",
+          requestId: "isolated-draft",
+        },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "worktree");
+      assert.include(toolErrorText(response.result), "synara_create_kanban_task");
+      assert.lengthOf(harness.dispatched, 0);
+      assert.lengthOf(harness.worktreeCreates, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects tokens whose caller thread no longer exists", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
