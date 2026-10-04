@@ -284,7 +284,11 @@ function EditorRailTabs(props: {
   }, [props.terminalAvailable]);
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
-  const shouldShowTabs = tabCount > 1;
+  const shouldShowTabs =
+    tabCount > 1 ||
+    (props.activeSurface === "chat" &&
+      chatTabs.length > 0 &&
+      !chatTabs.some((tab) => tab.threadId === props.activeThreadId));
   const newTerminalTab = () => {
     cancelChatTabSelection();
     setTerminalTabOpen(true);

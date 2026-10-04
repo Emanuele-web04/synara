@@ -33,31 +33,49 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it("labels a draft tab with its selected account's provider instead of its instance id", async () => {
-  localStorage.clear();
+it("retains a background draft through hydration and reveals its tab after promotion", async () => {
   localStorage.setItem("synara:server-settings-migrated:v1", "1");
-  resetComposerDraftStore();
-  useStore.setState(initialState);
-  const threadId = ThreadId.makeUnsafe("custom-account-draft");
-  useComposerDraftStore
-    .getState()
-    .setProjectDraftThreadId(ProjectId.makeUnsafe("project"), threadId, {});
-  useComposerDraftStore.getState().setModelSelectionAndSticky(threadId, {
-    provider: "codex",
-    instanceId: "codex_work",
-    model: "gpt-5.4",
+  const projectId = ProjectId.makeUnsafe("project");
+  const threadId = ThreadId.makeUnsafe("background-draft");
+  const activeThreadId = ThreadId.makeUnsafe("saved-thread");
+  const summary = {
+    id: activeThreadId,
+    projectId,
+    title: "Saved thread",
+    modelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5.4" },
+    session: null,
+    latestTurn: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+  } as SidebarThreadSummary;
+  useComposerDraftStore.getState().setProjectDraftThreadId(projectId, threadId, {});
+  useOpenThreadTabsStore.setState({ threadIds: [activeThreadId, threadId] });
+  useStore.setState({
+    threadsHydrated: true,
+    sidebarThreadSummaryById: { [activeThreadId]: summary },
   });
-  useOpenThreadTabsStore.setState({ threadIds: [threadId] });
   const queryClient = createQueryClient();
-  const hook = await renderHook(() => useOpenThreadTabs({ activeThreadId: threadId }), {
+  const hook = await renderHook(() => useOpenThreadTabs({ activeThreadId }), {
     wrapper: ({ children }: PropsWithChildren) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     ),
   });
   try {
-    expect(hook.result.current).toEqual([
-      expect.objectContaining({ threadId, provider: "codex", isDraft: true }),
-    ]);
+    expect(hook.result.current.map((tab) => tab.threadId)).toEqual([activeThreadId]);
+    expect(useOpenThreadTabsStore.getState().threadIds).toContain(threadId);
+    useComposerDraftStore.getState().clearDraftThread(threadId);
+    useStore.setState({
+      sidebarThreadSummaryById: {
+        [activeThreadId]: summary,
+        [threadId]: { ...summary, id: threadId, title: "First message" },
+      },
+    });
+    await expect
+      .poll(() => hook.result.current)
+      .toEqual([
+        expect.objectContaining({ threadId: activeThreadId, provider: "codex" }),
+        expect.objectContaining({ threadId, title: "First message", provider: "codex" }),
+      ]);
   } finally {
     await hook.unmount();
     queryClient.clear();

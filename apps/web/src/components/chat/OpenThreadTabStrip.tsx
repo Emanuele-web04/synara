@@ -170,7 +170,6 @@ export function OpenThreadTabStrip(props: {
       if (row) closeTabsInScope(tab.threadId, row.scope);
     };
     if (
-      !tab.isDraft &&
       showThreadContextMenu(tab.threadId, position, {
         extraItems: closeItems,
         onExtraAction: onCloseAction,
@@ -178,8 +177,7 @@ export function OpenThreadTabStrip(props: {
     ) {
       return;
     }
-    // An unsent draft has no thread actions yet (and a phone's closed sidebar sheet cannot
-    // show them): the menu is just the tab's close rows.
+    // A phone's closed sidebar sheet cannot show thread actions; keep the tab's close rows available.
     const api = readNativeApi();
     if (!api || closeItems.length === 0) return;
     void api.contextMenu.show(closeItems, position).then((itemId) => {
@@ -195,9 +193,6 @@ export function OpenThreadTabStrip(props: {
       onMove={moveThreadTab}
       tabs={tabs.map((tab) => {
         const active = tab.threadId === shownThreadId;
-        // A lone unsent draft has nowhere to go: closing it would land on a new chat
-        // that is the same draft again.
-        const closable = tabs.length > 1 || !tab.isDraft;
         return {
           key: tab.threadId,
           title: tab.title,
@@ -215,7 +210,7 @@ export function OpenThreadTabStrip(props: {
           onSelect: () => {
             if (!active) selectTab(tab.threadId);
           },
-          onClose: closable ? () => closeTab(tab.threadId, tab.projectId) : undefined,
+          onClose: () => closeTab(tab.threadId, tab.projectId),
           onTitleDoubleClick:
             tab.threadId === activeThreadId ? props.onRenameActiveThread : undefined,
           onContextMenu: (position) => openTabContextMenu(tab, position),
