@@ -21,7 +21,7 @@ import {
   CircleAlertIcon,
   ExternalLinkIcon,
   GlobeIcon,
-  Link01Icon,
+  LinkIcon,
   LoaderCircleIcon,
   MoreHorizontalIcon,
   type LucideIcon,
@@ -1903,7 +1903,7 @@ export function BrowserPanel({
             title="Copy link"
             onClick={copyActiveTabLink}
           >
-            <Link01Icon className="size-3.5" />
+            <LinkIcon className="size-3.5" />
           </IconButton>
         </ButtonGroup>
         <ButtonGroup label="Browser menu">

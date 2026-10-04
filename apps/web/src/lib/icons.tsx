@@ -352,7 +352,6 @@ export {
   Camera01Icon,
   CornerDownRightIcon as SteerIcon,
   Key01Icon,
-  Link01Icon,
   MoreHorizontalIcon,
   LinkSquare02Icon as ExternalLinkIcon,
   LayoutAlignLeftIcon,
