@@ -77,6 +77,7 @@ import { GITHUB_INBOX_DOCK_HOST_ID } from "../rightDockStore.logic";
 import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { resolveSplitViewPaneIdForThread, useSplitViewStore } from "../splitViewStore";
 import { splitViewPaneScopeId } from "../lib/chatPaneScope";
+import { gitQueryKeys } from "../lib/gitReactQuery";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useRailShellStore } from "../railShellStore";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
@@ -2744,6 +2745,10 @@ describe("ChatView transcript geometry (full app)", () => {
     );
     const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
     try {
+      mounted.router.options.context.queryClient.setQueryData(
+        gitQueryKeys.workingTreeDiffStats("/repo/project"),
+        { additions: 604, deletions: 27, fileCount: 18 },
+      );
       useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "surviving draft");
       const splitViewId = useSplitViewStore.getState().createFromDrop({
         sourceThreadId: THREAD_ID,
@@ -2774,11 +2779,30 @@ describe("ChatView transcript geometry (full app)", () => {
       )!;
       const survivingChat = survivingEditor.closest("[data-chat-pane-scope]")!;
       await vi.waitFor(() => expect(survivingEditor.textContent).toContain("surviving draft"));
-      // The public split store publishes the one remaining leaf before the router
-      // commits its new parameter, just as closing the current pane does.
-      useSplitViewStore
-        .getState()
-        .removePaneFromSplitView({ splitViewId, paneId: split.root.first.id });
+      const closingScope = splitViewPaneScopeId(splitViewId, split.root.first.id);
+      const closingChat = document.querySelector(`[data-chat-pane-scope="${closingScope}"]`)!;
+      const closingPane = closingChat.closest('[data-slot="sidebar-inset"]')!;
+      const survivingPane = survivingChat.closest('[data-slot="sidebar-inset"]')!;
+      await userEvent.click(survivingEditor);
+      await vi.waitFor(() =>
+        expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`),
+      );
+      for (const chat of [closingPane, survivingPane]) {
+        const header = chat.querySelector("header")!;
+        expect(header.querySelectorAll('button[aria-label="Close chat"]')).toHaveLength(1);
+        expect(header.querySelector('button[aria-label="Expand this chat"]')).toBeNull();
+        expect(header.querySelector('button[aria-label="Change thread"]')).toBeNull();
+        expect(header.querySelector('[data-slot="diff-stat"]')).toBeNull();
+        const close = header.querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!;
+        const diff = header.querySelector<HTMLButtonElement>(
+          'button[aria-label="Toggle diff panel"]',
+        )!;
+        expect(getComputedStyle(close).color).toBe(getComputedStyle(diff).color);
+      }
+      await page.screenshot({ path: "../../../../output/playwright/split-chat-headers.png" });
+      await userEvent.click(
+        closingPane.querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
+      );
       await vi.waitFor(() => {
         expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
         expect(mounted.router.state.location.search.splitViewId).toBeUndefined();
@@ -2869,7 +2893,10 @@ describe("ChatView transcript geometry (full app)", () => {
           splitViewId
         ];
       expect(persistedSplit()).toBeDefined();
-      await page.getByRole("button", { name: "Close selected Side", exact: true }).click();
+      const closingChat = editorForThread(closingThreadId).closest('[data-slot="sidebar-inset"]')!;
+      await userEvent.click(
+        closingChat.querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
+      );
       await vi.waitFor(() => {
         expect(mounted.router.state.location.pathname).toBe(`/${targetThreadId}`);
         expect(mounted.router.state.location.search.splitViewId).toBe(

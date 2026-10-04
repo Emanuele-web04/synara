@@ -317,6 +317,9 @@ scaling beyond one task.
 - `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
   default numbers in the classic and Activity views.
 
+Every split chat has an **X** in its header to close it. Split headers keep the diff
+panel toggle without showing change totals, and omit expand and replace controls.
+
 Check the [keyboard reference](https://www.trysynara.com/docs/reference/keyboard-shortcuts) for the
 complete current list.
 

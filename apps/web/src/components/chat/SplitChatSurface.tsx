@@ -66,23 +66,11 @@ import {
 import { useStore } from "../../store";
 import { createThreadShellsSelector } from "../../storeSelectors";
 import {
-  normalizeSingleSearchFromPane,
   resolveSplitPaneCloseDecision,
-  resolveSplitPaneMaximizeDecision,
   resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
 } from "../../routes/-chatThreadRoute.logic";
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
-import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
 import { ChatPaneBody, KeptChatPane } from "./ChatPaneKeepAlive";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
@@ -500,9 +488,7 @@ function SplitPaneSurface(props: {
   onUpdatePanelState: (
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
-  onMaximize: () => void;
   onCloseThreadPane: () => void;
-  onChooseThread: () => void;
   onSelectThread: (threadId: ThreadId) => void;
   onChatMounted: () => void;
   onDropThread: (payload: {
@@ -568,8 +554,6 @@ function SplitPaneSurface(props: {
               onToggleBrowser={props.onToggleBrowser}
               onOpenBrowserUrl={props.onOpenBrowserUrl}
               onOpenTurnDiff={props.onOpenTurnDiff}
-              onMaximize={props.onMaximize}
-              onChangeThread={props.onChooseThread}
               onCloseThreadPane={props.onCloseThreadPane}
               onMounted={props.onChatMounted}
             />
@@ -628,7 +612,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const dropThreadOnPane = useSplitViewStore((store) => store.dropThreadOnPane);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const removePaneFromSplitView = useSplitViewStore((store) => store.removePaneFromSplitView);
-  const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
   const requestFloatingBrowser = useFloatingBrowserRequestStore((store) => store.request);
   const dismissFloatingBrowserForThread = useFloatingBrowserRequestStore((store) => store.dismiss);
   const floatingBrowserRequestedByThreadId = useFloatingBrowserRequestStore(
@@ -802,32 +785,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
   };
 
-  const maximizeFocusedPane = () => {
-    if (!activeSplitView) return;
-    const focusedLeaf = findLeafPaneById(activeSplitView.root, activeSplitView.focusedPaneId);
-    const decision = resolveSplitPaneMaximizeDecision({
-      splitViewId: activeSplitView.id,
-      focusedThreadId: focusedLeaf?.threadId ?? null,
-      focusedPanelState: focusedLeaf?.panel ?? null,
-    });
-
-    if (decision) {
-      // Keep the departing split until the route points at the retained thread;
-      // otherwise the single surface can claim a pane using the stale parameter.
-      void navigate({
-        to: "/$threadId",
-        params: { threadId: decision.threadId },
-        replace: true,
-        search: () =>
-          decision.panelState ? normalizeSingleSearchFromPane(decision.panelState) : {},
-      }).then(() => removeSplitView(decision.splitViewIdToRemove));
-      return;
-    }
-
-    removeSplitView(activeSplitView.id);
-    void handleNewChat();
-  };
-
   const closePaneThread = (paneId: PaneId) => {
     if (!activeSplitView) return;
     const closingLeaf = findLeafPaneById(activeSplitView.root, paneId);
@@ -959,13 +916,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     return <ChatMountLoader />;
   }
 
-  const chooseThreadForPane = (threadId: ThreadId, paneOverride?: PaneId) => {
-    const paneId = paneOverride ?? threadPickerPaneId;
-    if (!paneId) {
-      return;
-    }
-    setThreadPickerPaneId(null);
-
+  const chooseThreadForPane = (threadId: ThreadId, paneId: PaneId) => {
     const existingPaneIdForThread = resolveSplitViewPaneIdForThread(activeSplitView, threadId);
     if (existingPaneIdForThread && existingPaneIdForThread !== paneId) {
       setPaneFocus(existingPaneIdForThread);
@@ -1029,12 +980,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
         }}
         onPopFloatingBrowser={() => popFloatingBrowser(leaf.id)}
         onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
-        onMaximize={maximizeFocusedPane}
         onCloseThreadPane={() => closePaneThread(leaf.id)}
-        onChooseThread={() => {
-          setPaneFocus(leaf.id);
-          setThreadPickerPaneId(leaf.id);
-        }}
         onSelectThread={(threadId) => chooseThreadForPane(threadId, leaf.id)}
         onChatMounted={noopChatSurfaceAction}
         onDropThread={(payload) => handleDropThreadOnPane(leaf.id, payload)}
@@ -1042,78 +988,13 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     );
   };
 
-  const pickerLeaf = threadPickerPaneId
-    ? findLeafPaneById(activeSplitView.root, threadPickerPaneId)
-    : null;
-
   return (
-    <>
-      <div
-        className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
-      >
-        <PaneRenderer
-          pane={activeSplitView.root}
-          renderLeaf={renderLeaf}
-          onSetRatio={handleSetRatio}
-        />
-      </div>
-      <Dialog
-        open={threadPickerPaneId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setThreadPickerPaneId(null);
-          }
-        }}
-      >
-        <DialogPopup className="max-w-lg">
-          <DialogHeader className="items-center text-center">
-            <DialogTitle>Choose Chat</DialogTitle>
-            <DialogDescription className="max-w-sm text-center">
-              Pick which chat should appear in the focused split pane.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="space-y-3">
-            <div className="max-h-[56vh] space-y-1 overflow-y-auto">
-              {selectableThreads.map((thread) => {
-                const projectName =
-                  projects.find((project) => project.id === thread.projectId)?.name ?? "Project";
-                const isSelected = pickerLeaf?.threadId === thread.id;
-                return (
-                  <button
-                    key={thread.id}
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
-                      isSelected
-                        ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)]"
-                        : "border-[color:var(--color-border-light)] hover:bg-[var(--sidebar-accent)]",
-                    )}
-                    onClick={() => chooseThreadForPane(thread.id)}
-                  >
-                    <ProviderIcon
-                      provider={thread.modelSelection.provider}
-                      className="size-4 shrink-0"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-ui-lg leading-snug font-medium text-foreground">
-                        {resolveThreadPickerTitle(thread.title)}
-                      </div>
-                      <div className="truncate text-ui leading-snug text-muted-foreground">
-                        {projectName}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            <DialogFooter variant="bare">
-              <Button type="button" variant="outline" onClick={() => setThreadPickerPaneId(null)}>
-                Cancel
-              </Button>
-            </DialogFooter>
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
-    </>
+    <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
+      <PaneRenderer
+        pane={activeSplitView.root}
+        renderLeaf={renderLeaf}
+        onSetRatio={handleSetRatio}
+      />
+    </div>
   );
 }
