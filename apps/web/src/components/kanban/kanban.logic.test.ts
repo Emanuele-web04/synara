@@ -1176,6 +1176,12 @@ describe("buildKanbanBoard v2 mode", () => {
         threads: [reviewThread, makeSidebarThreadSummary({ id: dispatchedId })],
         draftThreads: [makeDraftThread(draftId)],
         composerDraftByThreadId: {
+          [reviewThread.id]: {
+            prompt: "An unsent follow-up on the review thread",
+            hasAttachments: false,
+            providerInstanceId: "codex",
+            provider: "codex",
+          },
           [draftId]: {
             prompt: "WIP",
             hasAttachments: false,

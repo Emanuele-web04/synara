@@ -114,6 +114,7 @@ export function KanbanProjectBoardView({
     }
   };
   const hasRevealedReviewFold = useKanbanUiStore((state) => state.hasRevealedReviewFold);
+  const needsReviewFilter = useKanbanUiStore((state) => state.kanbanNeedsReviewFilter);
   const setHasRevealedReviewFold = useKanbanUiStore((state) => state.setHasRevealedReviewFold);
   const [activeCard, setActiveCard] = useState<KanbanCard | null>(null);
   // A completed drag still emits a click on the source card; swallow exactly that one
@@ -359,6 +360,7 @@ export function KanbanProjectBoardView({
           <KanbanColumn
             projectId={board.projectId}
             columnKey="done"
+            capDone={viewMode !== "v2" || !needsReviewFilter}
             cards={board.done}
             onOpenCard={handleOpenCard}
             onCardContextMenu={onCardContextMenu}

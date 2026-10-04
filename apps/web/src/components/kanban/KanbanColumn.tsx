@@ -97,6 +97,7 @@ function KanbanColumnComponent({
   onNewCard,
   prByThreadId,
   nowMs,
+  capDone = true,
 }: {
   projectId: ProjectId;
   columnKey: KanbanColumnKey;
@@ -117,6 +118,8 @@ function KanbanColumnComponent({
   prByThreadId: KanbanCardPrLookup;
   /** Shared board clock for live elapsed labels. */
   nowMs?: number;
+  /** The review board owns its fold; other boards keep the local Done cap. */
+  capDone?: boolean;
 }) {
   const sortable = sortableProp ?? false;
   const droppable = droppableProp ?? false;
@@ -128,7 +131,7 @@ function KanbanColumnComponent({
   const [showAll, setShowAll] = useState(false);
 
   const cappedCards =
-    columnKey === "done" && !showAll && cards.length > DONE_RENDER_CAP
+    columnKey === "done" && capDone && !showAll && cards.length > DONE_RENDER_CAP
       ? cards.slice(0, DONE_RENDER_CAP)
       : cards;
   const hiddenCount = cards.length - cappedCards.length;

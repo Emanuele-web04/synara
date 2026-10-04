@@ -2,7 +2,7 @@
 import "../../index.css";
 
 import { page } from "vitest/browser";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 vi.mock("~/appSettings", () => ({
@@ -34,11 +34,42 @@ vi.mock("../../lib/kanbanDispatch", () => ({
   }),
 }));
 
+// Keep the page owner and its board controls real; replace unrelated route chrome
+// and remote/data owners so the mode interaction does not require a running server.
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+}));
+vi.mock("../RouteInsetSurface", () => ({
+  RouteInsetSurface: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock("../RouteSurface", () => ({
+  RouteSurface: ({ children }: { children: React.ReactNode }) => children,
+  RouteSurfaceHeader: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock("./KanbanNewTaskDialog", () => ({ KanbanNewTaskDialog: () => null }));
+vi.mock("./useKanbanCardContextMenu", () => ({
+  useKanbanCardContextMenu: () => ({ onCardContextMenu: vi.fn(), renameDialog: null }),
+}));
+vi.mock("~/hooks/useThreadPullRequests", () => ({
+  useThreadPullRequests: () => new Map(),
+  resolveThreadPullRequestFallback: () => null,
+}));
+vi.mock("../../store", () => ({
+  useStore: (select: (state: { threadsHydrated: boolean; projects: never[] }) => unknown) =>
+    select({ threadsHydrated: true, projects: [] }),
+}));
+vi.mock("./useKanbanBoard", () => ({
+  useKanbanBoard: () => ({ projects: [board], totalCount: board.totalCount }),
+}));
+
 import type { ServerProviderStatus, ThreadId } from "@synara/contracts";
 import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { dispatchKanbanDraftCardAsGoal } from "../../lib/kanbanDispatch";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
-import type { KanbanCard, KanbanProjectBoard } from "./kanban.logic";
+import { buildKanbanBoard, type KanbanCard, type KanbanProjectBoard } from "./kanban.logic";
+import type { SidebarThreadSummary } from "../../types";
+import KanbanView from "./KanbanView";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 
 const dispatchAsGoalMock = vi.mocked(dispatchKanbanDraftCardAsGoal);
@@ -164,7 +195,129 @@ async function dragCardOntoColumn(titleSnippet: string, columnHeading: string) {
   source.dispatchEvent(pointerEvent("pointerup", toX, toY));
 }
 
+beforeEach(() => {
+  useKanbanUiStore.setState({
+    kanbanViewMode: "v2",
+    kanbanNeedsReviewFilter: false,
+    hasRevealedReviewFold: false,
+  });
+});
+
 describe("KanbanProjectBoardView v2 (browser)", () => {
+  it("lets users select Classic in the page header and remembers it on remount", async () => {
+    const screen = await render(<KanbanView projectId="project-1" />);
+    try {
+      // Immediate lookup makes the missing-control regression fail without a timeout.
+      expect(page.getByRole("button", { name: "Classic", exact: true }).elements()).toHaveLength(1);
+      await page.getByRole("button", { name: "Classic", exact: true }).click();
+      expect(useKanbanUiStore.getState().kanbanViewMode).toBe("classic");
+      await expect
+        .element(page.getByRole("heading", { name: "Awaiting you" }))
+        .not.toBeInTheDocument();
+      expect(
+        JSON.parse(localStorage.getItem("synara:kanban-ui:v1") ?? "null").state.kanbanViewMode,
+      ).toBe("classic");
+    } finally {
+      await screen.unmount();
+    }
+    const remounted = await render(<KanbanView projectId="project-1" />);
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Classic", exact: true }))
+        .toHaveAttribute("aria-pressed", "true");
+      await page.getByRole("button", { name: "Attention", exact: true }).click();
+      await expect.element(page.getByRole("heading", { name: "Awaiting you" })).toBeVisible();
+    } finally {
+      await remounted.unmount();
+    }
+  });
+
+  it("reveals and refolds the review Done tail with one board control", async () => {
+    const threads: SidebarThreadSummary[] = Array.from({ length: 38 }, (_, index) => ({
+      id: `review-${index}` as ThreadId,
+      projectId: board.projectId,
+      title: `Review ${index}`,
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      session: null,
+      createdAt: new Date(NOW_MS).toISOString(),
+      updatedAt: new Date(NOW_MS).toISOString(),
+      latestTurn: {
+        turnId: `turn-${index}` as never,
+        state: "completed",
+        assistantMessageId: null,
+        requestedAt: new Date(NOW_MS).toISOString(),
+        startedAt: new Date(NOW_MS).toISOString(),
+        completedAt: new Date(NOW_MS).toISOString(),
+      },
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      hasLiveTailWork: false,
+      pendingBackgroundWorkCount: 0,
+    }));
+    useKanbanUiStore.getState().setKanbanNeedsReviewFilter(true);
+    function ReviewBoard() {
+      const revealed = useKanbanUiStore((state) => state.hasRevealedReviewFold);
+      const filtered = useKanbanUiStore((state) => state.kanbanNeedsReviewFilter);
+      const project = buildKanbanBoard(
+        {
+          projects: [{ id: board.projectId, name: board.projectName, kind: "project" }],
+          threads,
+          draftThreads: [],
+          composerDraftByThreadId: {},
+          draftOrderByProjectId: {},
+        },
+        {
+          now: NOW_MS,
+          isNeedsReviewActive: filtered,
+          uncapped: revealed,
+          needsReviewByThreadId: Object.fromEntries(threads.map((thread) => [thread.id, true])),
+        },
+      ).projects[0]!;
+      return (
+        <KanbanProjectBoardView
+          board={project}
+          onOpenCard={vi.fn()}
+          onNewTask={vi.fn()}
+          prByThreadId={new Map()}
+          nowMs={NOW_MS}
+          viewMode="v2"
+        />
+      );
+    }
+    const screen = await render(<ReviewBoard />);
+    try {
+      expect(document.querySelectorAll("li button").length).toBe(30);
+      await page.getByRole("button", { name: "Show 8 more", exact: true }).click();
+      expect(
+        [...document.querySelectorAll("li button")].filter((button) =>
+          button.textContent?.includes("Review "),
+        ).length,
+      ).toBe(38);
+      expect(
+        page.getByRole("button", { name: "Show 8 more", exact: true }).elements(),
+      ).toHaveLength(0);
+      await page.getByRole("button", { name: "Show fewer", exact: true }).click();
+      expect(document.querySelectorAll("li button").length).toBe(30);
+      // Leaving the review filter restores the ordinary column's thirty-card
+      // cap and its own reveal, rather than removing that existing safeguard.
+      await page.getByRole("checkbox", { name: "Needs review" }).click();
+      expect(
+        [...document.querySelectorAll("li button")].filter((button) =>
+          button.textContent?.includes("Review "),
+        ).length,
+      ).toBe(30);
+      await page.getByRole("button", { name: "Show 8 more", exact: true }).click();
+      expect(document.querySelectorAll("li button").length).toBe(38);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("renders the four-column attention-first layout with pills and filter", async () => {
     await render(
       <KanbanProjectBoardView

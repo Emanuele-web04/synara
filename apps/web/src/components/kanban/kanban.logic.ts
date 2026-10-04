@@ -883,7 +883,7 @@ export function buildKanbanBoard(
         input.composerDraftByThreadId,
         isTerminal,
       );
-      if (unsentPromptCard) {
+      if (unsentPromptCard && cardPassesNeedsReviewFilter(unsentPromptCard)) {
         bucket.draft.push(unsentPromptCard);
       }
     }
