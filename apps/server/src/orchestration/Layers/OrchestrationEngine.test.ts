@@ -5,12 +5,16 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  THREAD_GOAL_INLINE_MAX_CHARS,
   ThreadId,
   TurnId,
   type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@synara/contracts";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Effect, Layer, ManagedRuntime, Option, Stream } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
@@ -22,6 +26,8 @@ import {
   type OrchestrationEventStoreShape,
 } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import { pruneThreadGoalFiles } from "../threadGoalMaterialization.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive as OrchestrationProjectionSnapshotQueryBase } from "./ProjectionSnapshotQuery.ts";
@@ -55,6 +61,16 @@ vi.mock("../commandFingerprint.ts", async (importOriginal) => {
       }
       return actual.fingerprintOrchestrationCommand(command);
     },
+  };
+});
+
+// Goal-file pruning is wrapped in vi.fn so a test can inject a one-shot
+// rejection; every other materialization helper delegates to the real module.
+vi.mock("../threadGoalMaterialization.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../threadGoalMaterialization.ts")>();
+  return {
+    ...actual,
+    pruneThreadGoalFiles: vi.fn(actual.pruneThreadGoalFiles),
   };
 });
 
@@ -124,8 +140,8 @@ async function createOrchestrationSystem() {
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provide(OrchestrationEventStoreLive),
-    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -135,9 +151,17 @@ async function createOrchestrationSystem() {
   const managedAttachmentRepository = await runtime.runPromise(
     Effect.service(ManagedAttachmentRepository),
   );
+  const serverConfig = await runtime.runPromise(Effect.service(ServerConfig));
+  const sql = await runtime.runPromise(Effect.service(SqlClient.SqlClient));
+  const receiptRepository = await runtime.runPromise(
+    Effect.service(OrchestrationCommandReceiptRepository),
+  );
   return {
     engine,
+    sql,
+    receiptRepository,
     managedAttachmentRepository,
+    stateDir: serverConfig.stateDir,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
@@ -912,6 +936,470 @@ describe("OrchestrationEngine", () => {
       await system.dispose();
     }
   }, 15_000);
+
+  it("materializes an oversized thread goal to a file and stores a read-file reference", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-materialize");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-materialize"),
+        projectId: asProjectId("project-goal-materialize"),
+        title: "Goal Materialize Project",
+        workspaceRoot: "/tmp/project-goal-materialize",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-materialize-create"),
+        threadId,
+        projectId: asProjectId("project-goal-materialize"),
+        title: "goal-materialize",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const oversizedGoal = `Long-lived objective. ${"d".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-materialize-update"),
+        threadId,
+        goal: oversizedGoal,
+      }),
+    );
+
+    const thread = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    expect(thread?.goal).toMatch(/^Read this file: /);
+    const goalFilePath = thread?.goal?.replace("Read this file: ", "");
+    expect(goalFilePath).toContain("thread-goals");
+    await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
+
+    // Edit goal exposes this exact reference. Saving it unchanged must retain
+    // the objective even though the reference itself fits the inline budget.
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-materialize-save-reference"),
+        threadId,
+        goal: thread!.goal!,
+      }),
+    );
+    await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
+
+    // A second oversized goal gets its own file — the previous file is pruned
+    // once the new reference commits, so the live file can never be clobbered.
+    const supersedingGoal = `Replacement objective. ${"r".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-materialize-supersede"),
+        threadId,
+        goal: supersedingGoal,
+      }),
+    );
+    const supersededThread = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    const supersededPath = supersededThread?.goal?.replace("Read this file: ", "");
+    expect(supersededPath).not.toBe(goalFilePath);
+    await expect(fs.readFile(supersededPath ?? "", "utf8")).resolves.toBe(supersedingGoal);
+    await expect(fs.access(goalFilePath ?? "")).rejects.toThrow();
+
+    // Moving the goal back inline removes the thread's goal files.
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-materialize-inline"),
+        threadId,
+        goal: "Ship it",
+      }),
+    );
+    expect(
+      (await system.run(engine.getReadModel())).threads.find((entry) => entry.id === threadId)
+        ?.goal,
+    ).toBe("Ship it");
+    await expect(fs.readdir(path.dirname(supersededPath ?? ""))).rejects.toThrow();
+
+    await system.dispose();
+  });
+
+  it("removes the materialized goal file when the update is rejected before commit", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-reject");
+    const stateDir = system.stateDir;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-reject"),
+        projectId: asProjectId("project-goal-reject"),
+        title: "Goal Reject Project",
+        workspaceRoot: "/tmp/project-goal-reject",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-reject-create"),
+        threadId,
+        projectId: asProjectId("project-goal-reject"),
+        title: "goal-reject",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    // The goal file is written before command invariants run: a stale title
+    // sequence rejects the update after its candidate file already exists.
+    const oversizedGoal = `Rejected objective. ${"x".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-goal-reject"),
+          threadId,
+          goal: oversizedGoal,
+          expectedTitleSequence: 9_999,
+        }),
+      ),
+    ).rejects.toThrow("title changed");
+
+    const goalRoot = path.join(stateDir, "thread-goals");
+    const directories = await fs.readdir(goalRoot).catch(() => [] as string[]);
+    const leftover = (
+      await Promise.all(directories.map((dir) => fs.readdir(path.join(goalRoot, dir))))
+    ).flat();
+    expect(leftover).toEqual([]);
+    expect(
+      (await system.run(engine.getReadModel())).threads.find((entry) => entry.id === threadId)
+        ?.goal,
+    ).toBeUndefined();
+
+    await system.dispose();
+  });
+
+  it("still commits the goal update when post-commit goal-file pruning fails", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-prune-fail");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-prune-fail"),
+        projectId: asProjectId("project-goal-prune-fail"),
+        title: "Goal Prune Fail Project",
+        workspaceRoot: "/tmp/project-goal-prune-fail",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-prune-fail-create"),
+        threadId,
+        projectId: asProjectId("project-goal-prune-fail"),
+        title: "goal-prune-fail",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const firstGoal = `First objective. ${"a".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-prune-fail-first"),
+        threadId,
+        goal: firstGoal,
+      }),
+    );
+    const firstPath = (await system.run(engine.getReadModel())).threads
+      .find((entry) => entry.id === threadId)
+      ?.goal?.replace("Read this file: ", "");
+
+    // Pruning is best-effort: a rejection must be logged and contained, never
+    // fail the committed command or strand the new reference.
+    vi.mocked(pruneThreadGoalFiles).mockRejectedValueOnce(new Error("EACCES: locked"));
+    const secondGoal = `Second objective. ${"b".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-prune-fail-second"),
+        threadId,
+        goal: secondGoal,
+      }),
+    );
+
+    const thread = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    const secondPath = thread?.goal?.replace("Read this file: ", "");
+    expect(secondPath).not.toBe(firstPath);
+    await expect(fs.readFile(secondPath ?? "", "utf8")).resolves.toBe(secondGoal);
+    // The failed prune leaves the superseded file on disk rather than hiding it.
+    await expect(fs.readFile(firstPath ?? "", "utf8")).resolves.toBe(firstGoal);
+
+    await system.dispose();
+  });
+
+  it.each([
+    ["goal:file", "goal_file"],
+    ["cmd-A", "cmd-a"],
+  ])(
+    "keeps the committed goal file when %s is followed by rejected %s",
+    async (acceptedId, rejectedId) => {
+      const system = await createOrchestrationSystem();
+      const { engine } = system;
+      const createdAt = now();
+      const threadId = ThreadId.makeUnsafe("thread-goal-collision");
+      const projectId = asProjectId("project-goal-collision");
+
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-goal-collision"),
+          projectId,
+          title: "Goal Collision Project",
+          workspaceRoot: "/tmp/project-goal-collision",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-goal-collision-create"),
+          threadId,
+          projectId,
+          title: "goal-collision",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+
+      // Rejected candidates must not alias a committed file through either
+      // punctuation encoding or filesystem case folding.
+      const committedGoal = `Committed objective. ${"c".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+      await system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe(acceptedId),
+          threadId,
+          goal: committedGoal,
+        }),
+      );
+      const committedThread = (await system.run(engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      const committedPath = committedThread?.goal?.replace("Read this file: ", "");
+      await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
+
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(rejectedId),
+            threadId,
+            goal: `Rejected objective. ${"r".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`,
+            expectedTitleSequence: 9_999,
+          }),
+        ),
+      ).rejects.toThrow("title changed");
+
+      await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
+      await system.dispose();
+    },
+  );
+
+  it("retains an accepted goal file when interruption leaves its receipt unreadable", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine, sql, receiptRepository } = system;
+    const threadId = ThreadId.makeUnsafe("thread-goal-uncertain");
+    const projectId = asProjectId("project-goal-uncertain");
+    const createdAt = now();
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-uncertain-project"),
+        projectId,
+        title: "Uncertain goal",
+        workspaceRoot: "/tmp/goal-uncertain",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-uncertain-thread"),
+        threadId,
+        projectId,
+        title: "Uncertain goal",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    const commandId = CommandId.makeUnsafe("cmd-goal-uncertain-set");
+    const goal = `Accepted objective. ${"g".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    const originalTransaction = sql.withTransaction;
+    const originalLookup = receiptRepository.getByCommandId;
+    // Run the real SQLite commit, then interrupt before the engine records its
+    // local commit flag. Only the cleanup lookup fails; receipt storage is real.
+    const transaction = vi
+      .spyOn(sql, "withTransaction")
+      .mockImplementationOnce((effect) =>
+        originalTransaction(effect).pipe(Effect.andThen(Effect.interrupt)),
+      );
+    const lookup = vi
+      .spyOn(receiptRepository, "getByCommandId")
+      .mockImplementationOnce(originalLookup)
+      .mockImplementationOnce(() =>
+        Effect.fail(
+          new PersistenceSqlError({
+            operation: "test.cleanupReceipt",
+            detail: "temporary receipt read failure",
+            cause: new Error("temporary receipt read failure"),
+          }),
+        ),
+      );
+    try {
+      const pending = system.run(
+        engine
+          .dispatch({ type: "thread.meta.update", commandId, threadId, goal })
+          .pipe(Effect.timeoutOption("2 seconds")),
+      );
+      await pending;
+      const receipt = await system.run(originalLookup({ commandId }));
+      expect(Option.isSome(receipt) && receipt.value.status).toBe("accepted");
+      const events = Array.from(await system.run(Stream.runCollect(engine.readEvents(0))));
+      const persisted = events.find(
+        (event) => event.commandId === commandId && event.type === "thread.meta-updated",
+      );
+      if (persisted?.type !== "thread.meta-updated")
+        throw new Error("Accepted goal event missing.");
+      expect(persisted.payload.goal).toMatch(/^Read this file: /);
+      await expect(
+        fs.readFile(persisted.payload.goal!.replace("Read this file: ", ""), "utf8"),
+      ).resolves.toBe(goal);
+    } finally {
+      transaction.mockRestore();
+      lookup.mockRestore();
+      await system.dispose();
+    }
+  });
+
+  it("records the full oversized goal text in the achievement when the goal completes", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-achieved");
+    const projectId = asProjectId("project-goal-achieved");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-achieved"),
+        projectId,
+        title: "Goal Achieved Project",
+        workspaceRoot: "/tmp/project-goal-achieved",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-achieved-create"),
+        threadId,
+        projectId,
+        title: "goal-achieved",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const oversizedGoal = `Durable objective. ${"d".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-achieved-set"),
+        threadId,
+        goal: oversizedGoal,
+      }),
+    );
+    const beforeAchieve = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    const goalFilePath = beforeAchieve?.goal?.replace("Read this file: ", "");
+    expect(goalFilePath).toContain("thread-goals");
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-achieved-done"),
+        threadId,
+        goalAchieved: true,
+      }),
+    );
+
+    const thread = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    // The persisted goal was only a file reference; the achievement must hold
+    // the real text because the post-commit prune drops the whole directory.
+    expect(thread?.goalAchievements?.at(-1)?.goal).toBe(oversizedGoal);
+    expect(thread?.goal ?? "").toBe("");
+    await expect(fs.access(goalFilePath ?? "")).rejects.toThrow();
+
+    await system.dispose();
+  });
 
   it("stores completed checkpoint summaries even when no files changed", async () => {
     const system = await createOrchestrationSystem();

@@ -19,6 +19,7 @@ import { getDefaultModel } from "@synara/shared/model";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { useCallback } from "react";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { waitForDraftThreadDispatchToSettle } from "~/lib/draftThreadDispatch";
 import { runComposerSendOnce } from "~/lib/composerSendOwnership";
 import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
@@ -256,6 +257,29 @@ export function useChatTurnExecution({
         preparedTurnDispatchSettings,
         queuedChatTurn,
       );
+      const settledDraftDispatch = await waitForDraftThreadDispatchToSettle(threadIdForSend);
+      if (
+        (settledDraftDispatch?.kind === "error" && settledDraftDispatch.outcomeUnknown) ||
+        (!queuedChatTurn &&
+          settledDraftDispatch?.kind === "dispatched" &&
+          !settledDraftDispatch.deferred)
+      ) {
+        await turnAttachmentsPromise.then(
+          (staged) => staged.cleanup(),
+          () => undefined,
+        );
+        // Submission already armed local UI state and added an optimistic row.
+        // The shared draft dispatch owns the real message; release this attempt.
+        sendInFlightRef.current = false;
+        worktreeSetupResolutionRef.current = null;
+        resetLocalDispatch();
+        if (activeThreadIdRef.current === threadIdForSend) {
+          setOptimisticUserMessages((messages) =>
+            messages.filter((message) => message.id !== messageIdForSend),
+          );
+        }
+        return false;
+      }
       let createdServerThreadForLocalDraft = false;
       let createdWorktreeForSendPath: string | null = null;
       let switchedToLocalCheckout = false;

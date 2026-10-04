@@ -2052,6 +2052,51 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("wires the kanban draft/update/delete helpers through the gateway", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+
+      // Draft creation dispatches thread.create but starts no turn.
+      const draft = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_kanban_draft",
+        args: { title: "Draft it", requestId: "wiring-draft" },
+      });
+      assert.isFalse(isToolError(draft.result), toolErrorText(draft.result));
+      assert.isString(toolResultJson(draft.result).threadId);
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.create"),
+        1,
+      );
+      assert.isTrue(harness.dispatched.every((command) => command.type !== "thread.turn.start"));
+
+      // Metadata update dispatches a patch and settles no work.
+      const updated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_kanban_card",
+        args: { threadId: "thread-child", title: "Child v2" },
+      });
+      assert.isFalse(isToolError(updated.result), toolErrorText(updated.result));
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.meta.update"),
+        1,
+      );
+
+      // Delete dispatches thread removal.
+      const deleted = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_delete_kanban_card",
+        args: { threadId: "thread-child" },
+      });
+      assert.isFalse(isToolError(deleted.result), toolErrorText(deleted.result));
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.delete"),
+        1,
+      );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("drives a second app on a full-access thread without a second-app card", () => {
     // The packaged E2E was full-access and stalled behind "Allow the agent to
     // drive Google Chrome?" for the driver-owned isolated Chromium it had
@@ -2196,6 +2241,14 @@ describe("AgentGateway", () => {
         "synara_cancel_automation",
         "synara_update_automation_memory",
         "synara_report_automation_result",
+        "synara_read_kanban_board",
+        "synara_read_kanban_card",
+        "synara_create_kanban_task",
+        "synara_create_kanban_draft",
+        "synara_update_kanban_card",
+        "synara_set_kanban_goal",
+        "synara_delete_kanban_card",
+        "synara_move_kanban_card",
         // Group tools the coordinator delegates through — the playbook names
         // these, so a capability regression would silently gut delegation.
         "synara_project_get_overview",
@@ -5156,6 +5209,33 @@ describe("AgentGateway", () => {
       assert.isTrue(isToolError(response.result));
       assert.include(toolErrorText(response.result), "local");
       assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects Kanban draft creation from a worktree before writing local state", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent", {
+        envMode: "worktree",
+        worktreePath: "/tmp/worktrees/caller",
+        branch: "agent/caller",
+      }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_kanban_draft",
+        args: {
+          title: "Keep this work isolated",
+          description: "Do not write a local draft or its notes.",
+          requestId: "isolated-draft",
+        },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "worktree");
+      assert.include(toolErrorText(response.result), "synara_create_kanban_task");
+      assert.lengthOf(harness.dispatched, 0);
+      assert.lengthOf(harness.worktreeCreates, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
