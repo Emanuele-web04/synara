@@ -338,13 +338,19 @@ export async function negotiateOverHttp(
   } catch {
     return null;
   }
-  const body: unknown = await response.json().catch(() => null);
   if (response.status === 426) {
+    const body: unknown = await response.json().catch(() => null);
     const issue = Schema.decodeUnknownOption(WsCompatibilityError)(body);
     if (Option.isSome(issue)) throw issue.value;
     throw new Error("WebSocket negotiation was refused with an unreadable 426 response.");
   }
-  if (!response.ok) return null;
+  if (!response.ok) {
+    // The legacy bootstrap can recover from this status without waiting for an
+    // irrelevant (possibly stalled) error body. Release that body immediately.
+    void response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  const body: unknown = await response.json().catch(() => null);
   const result = Schema.decodeUnknownOption(WsBootstrapNegotiateResult)(body);
   return Option.isSome(result) ? result.value : null;
 }

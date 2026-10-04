@@ -1641,6 +1641,35 @@ describe("WsTransport", () => {
     await expect(negotiateOverHttp("ws://localhost:3020")).resolves.toBeNull();
   });
 
+  it.each([404, 503])(
+    "falls back on HTTP %s without waiting for its error body",
+    async (status) => {
+      let finishBody!: () => void;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          finishBody = () => controller.close();
+        },
+        cancel() {
+          finishBody = () => undefined;
+        },
+      });
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status })));
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          negotiateOverHttp("ws://localhost:3020"),
+          new Promise<string>((resolve) => {
+            timeout = setTimeout(() => resolve("still waiting for an irrelevant error body"), 100);
+          }),
+        ]);
+        expect(result).toBeNull();
+      } finally {
+        clearTimeout(timeout);
+        finishBody();
+      }
+    },
+  );
+
   it("falls back to bootstrap when the negotiate request never settles", async () => {
     // A connection that accepts and then stalls (WAN/tunnel black hole) must
     // not wedge the transport: browsers apply no default fetch timeout, so
