@@ -2857,17 +2857,22 @@ diffs-container {
   background: var(--color-background-surface);
 }
 
-/* Code, diff, and file viewers paint their own fill inside the dock (`--synara-code-surface`
-   in diffRendering.ts). On whole-window glass they go clear like the dock body, so the pane
-   reads as one sheet of glass instead of an opaque slab; only what content scrolls under
-   (sticky diff headers, the gutter once a row scrolls sideways) keeps the composer's dense
-   tint. A maximized dock and the mobile sheet are opaque, so their viewers keep their own fill. */
+/* Code, diff, and file viewers paint their own fill (`--synara-code-surface` in
+   diffRendering.ts). On whole-window glass they go clear like the surface around them in the
+   dock and the editor workspace, so the pane reads as one sheet of glass instead of an opaque
+   slab; only what content scrolls under (sticky diff headers, the gutter once a row scrolls
+   sideways) keeps the composer's dense tint. A maximized dock and the mobile sheet are opaque,
+   so their viewers keep their own fill. */
 :root[data-window-translucency="window"]
-  [data-slot="sidebar-container"]:not([data-dock-maximized])
-  [data-right-dock-content] {
+  :is(
+    [data-slot="sidebar-container"]:not([data-dock-maximized]) [data-right-dock-content],
+    [data-editor-workspace]
+  ) {
   --app-code-viewer-surface: transparent;
   --app-code-viewer-sticky-surface: color-mix(in srgb, var(--popover) 96%, transparent);
   --app-code-viewer-gutter-animation: synara-code-gutter-backing;
+  --app-code-viewer-addition-row: color-mix(in srgb, var(--success) 10%, transparent);
+  --app-code-viewer-deletion-row: color-mix(in srgb, var(--destructive) 10%, transparent);
 }
 
 /* Terminals follow the window's glass: xterm resolves its background from this token

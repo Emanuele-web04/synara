@@ -23,16 +23,20 @@ afterEach(() => {
   else root.setAttribute("style", originalRootStyle);
 });
 
-function mountDockPane(options: { glass: boolean; maximized?: boolean }) {
+function mountDockPane(options: { glass: boolean; maximized?: boolean; editor?: boolean }) {
   if (options.glass) root.setAttribute("data-window-translucency", "window");
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <div
-        data-slot="sidebar-container"
+        data-slot={options.editor ? undefined : "sidebar-container"}
         data-dock-maximized={options.maximized ? "true" : undefined}
       >
-        <div data-right-dock-content style={{ width: 320, height: 240, display: "flex" }}>
+        <div
+          data-right-dock-content={options.editor ? undefined : ""}
+          data-editor-workspace={options.editor ? "" : undefined}
+          style={{ width: 320, height: 240, display: "flex" }}
+        >
           <DiffPanelShell mode="sidebar" header={<span>Header</span>}>
             <CodeEditorPane
               fileName="sample.ts"
@@ -72,23 +76,29 @@ function viewerParts() {
 const isClear = (element: Element | null) =>
   element !== null && /[,/] 0\)$/.test(getComputedStyle(element).backgroundColor);
 
-it("clears the pane shell and viewer fill, backing the gutter only under scrolled code", async () => {
-  // The shell's fill is the theme's `--app-content-surface`, applied by useTheme at runtime.
-  root.style.setProperty("--app-content-surface", "transparent");
-  const view = await mountDockPane({ glass: true });
-  await expect.element(page.getByRole("textbox")).toBeVisible();
-  const { shell, host, code, file, line, lineNumber, gutter } = viewerParts();
+it.each([
+  { name: "right dock", editor: false },
+  { name: "editor workspace", editor: true },
+])(
+  "clears the $name shell and viewer fill, backing the gutter only under scrolled code",
+  async ({ editor }) => {
+    // The shell's fill is the theme's `--app-content-surface`, applied by useTheme at runtime.
+    root.style.setProperty("--app-content-surface", "transparent");
+    const view = await mountDockPane({ glass: true, editor });
+    await expect.element(page.getByRole("textbox")).toBeVisible();
+    const { shell, host, code, file, line, lineNumber, gutter } = viewerParts();
 
-  expect([shell, host, file, code, line, lineNumber, gutter].map(isClear)).not.toContain(false);
+    expect([shell, host, file, code, line, lineNumber, gutter].map(isClear)).not.toContain(false);
 
-  code.scrollLeft = 120;
-  await expect.poll(() => isClear(gutter)).toBe(false);
-  code.scrollLeft = 0;
-  await expect.poll(() => isClear(gutter)).toBe(true);
+    code.scrollLeft = 120;
+    await expect.poll(() => isClear(gutter)).toBe(false);
+    code.scrollLeft = 0;
+    await expect.poll(() => isClear(gutter)).toBe(true);
 
-  root.style.removeProperty("--app-content-surface");
-  await view.unmount();
-});
+    root.style.removeProperty("--app-content-surface");
+    await view.unmount();
+  },
+);
 
 it.each([
   { name: "an opaque window", glass: false, maximized: false },
@@ -105,59 +115,65 @@ it.each([
   await view.unmount();
 });
 
-// Change tint must remain readable independently of the transparent context fill.
+// Changed rows stay glass on a clear viewer, but keep a visible tint of their own.
 // Exercise actual Pierre split/unified rows, rather than testing CSS source strings.
 it.each([
   { theme: "light" as const, split: false },
   { theme: "light" as const, split: true },
   { theme: "dark" as const, split: false },
   { theme: "dark" as const, split: true },
-])("keeps $theme changed rows dense in glass diffs (split: $split)", async ({ theme, split }) => {
-  root.classList.toggle("dark", theme === "dark");
-  root.setAttribute("data-window-translucency", "window");
-  const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
-  const view = await render(
-    <QueryClientProvider client={client}>
-      <div data-slot="sidebar-container">
-        <div data-right-dock-content style={{ width: 600, height: 240, display: "flex" }}>
-          <CodeDiffEditorPane
-            original="const unchanged = 0;\nconst before = 1;\n"
-            originalVersion={0}
-            modified="const unchanged = 0;\nconst after = 2;\n"
-            modifiedVersion={0}
-            fileName="sample.ts"
-            resolvedTheme={theme}
-            renderSideBySide={split}
-            onChange={() => {}}
-            onSave={() => {}}
-          />
+])(
+  "keeps $theme changed rows tinted glass in glass diffs (split: $split)",
+  async ({ theme, split }) => {
+    root.classList.toggle("dark", theme === "dark");
+    root.setAttribute("data-window-translucency", "window");
+    const client = new QueryClient({
+      defaultOptions: { queries: { enabled: false, retry: false } },
+    });
+    const view = await render(
+      <QueryClientProvider client={client}>
+        <div data-slot="sidebar-container">
+          <div data-right-dock-content style={{ width: 600, height: 240, display: "flex" }}>
+            <CodeDiffEditorPane
+              original="const unchanged = 0;\nconst before = 1;\n"
+              originalVersion={0}
+              modified="const unchanged = 0;\nconst after = 2;\n"
+              modifiedVersion={0}
+              fileName="sample.ts"
+              resolvedTheme={theme}
+              renderSideBySide={split}
+              onChange={() => {}}
+              onSave={() => {}}
+            />
+          </div>
         </div>
-      </div>
-    </QueryClientProvider>,
-  );
-  await expect.element(page.getByRole("textbox")).toBeVisible();
-  const shadow = page.getByRole("textbox").element().getRootNode() as ShadowRoot;
-  const changes = [
-    ...shadow.querySelectorAll<HTMLElement>(
-      '[data-line-type="change-addition"], [data-line-type="change-deletion"]',
-    ),
-  ];
-  expect(changes.length).toBeGreaterThan(0);
-  // Alpha >= 0.9 protects readable tint over arbitrary window backdrops. Context stays clear.
-  for (const row of changes) {
-    const color = getComputedStyle(
-      row,
-      row.hasAttribute("data-line") ? "::after" : null,
-    ).backgroundColor;
+      </QueryClientProvider>,
+    );
+    await expect.element(page.getByRole("textbox")).toBeVisible();
+    const shadow = page.getByRole("textbox").element().getRootNode() as ShadowRoot;
+    const changes = [
+      ...shadow.querySelectorAll<HTMLElement>(
+        '[data-line-type="change-addition"], [data-line-type="change-deletion"]',
+      ),
+    ];
+    expect(changes.length).toBeGreaterThan(0);
+    // Tinted (not washed out to clear) yet see-through. Context stays clear.
+    for (const row of changes) {
+      const color = getComputedStyle(
+        row,
+        row.hasAttribute("data-line") ? "::after" : null,
+      ).backgroundColor;
 
-    const alpha = color.includes("/")
-      ? Number(color.match(/\/ ([\d.]+)\)$/)?.[1])
-      : color.startsWith("rgba")
-        ? Number(color.match(/, ([\d.]+)\)$/)?.[1])
-        : 1;
-    expect(alpha, color).toBeGreaterThanOrEqual(0.9);
-  }
-  expect(isClear(shadow.querySelector("[data-code]"))).toBe(true);
-  await view.unmount();
-  root.classList.remove("dark");
-});
+      const alpha = color.includes("/")
+        ? Number(color.match(/\/ ([\d.]+)\)$/)?.[1])
+        : color.startsWith("rgba")
+          ? Number(color.match(/, ([\d.]+)\)$/)?.[1])
+          : 1;
+      expect(alpha, color).toBeGreaterThan(0.05);
+      expect(alpha, color).toBeLessThan(0.5);
+    }
+    expect(isClear(shadow.querySelector("[data-code]"))).toBe(true);
+    await view.unmount();
+    root.classList.remove("dark");
+  },
+);
