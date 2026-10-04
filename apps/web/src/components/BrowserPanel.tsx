@@ -17,13 +17,13 @@ import {
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
-  CameraIcon,
+  Camera01Icon,
   CircleAlertIcon,
-  EllipsisIcon,
   ExternalLinkIcon,
   GlobeIcon,
-  LinkIcon,
+  Link01Icon,
   LoaderCircleIcon,
+  MoreHorizontalIcon,
   type LucideIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -1893,7 +1893,7 @@ export function BrowserPanel({
             title="Copy screenshot"
             onClick={onCopyScreenshotToClipboard}
           >
-            <CameraIcon className="size-3.5" />
+            <Camera01Icon className="size-3.5" />
           </IconButton>
           <IconButton
             variant="ghost"
@@ -1903,7 +1903,7 @@ export function BrowserPanel({
             title="Copy link"
             onClick={copyActiveTabLink}
           >
-            <LinkIcon className="size-3.5" />
+            <Link01Icon className="size-3.5" />
           </IconButton>
         </ButtonGroup>
         <ButtonGroup label="Browser menu">
@@ -1915,7 +1915,7 @@ export function BrowserPanel({
             <MenuTrigger
               render={
                 <IconButton variant="ghost" size="icon-sm" label="Browser actions">
-                  <EllipsisIcon className="size-3.5" />
+                  <MoreHorizontalIcon className="size-3.5" />
                 </IconButton>
               }
             />
@@ -1933,7 +1933,7 @@ export function BrowserPanel({
                 disabled={!activeTab}
                 onClick={onCaptureScreenshot}
               >
-                <BrowserActionMenuIcon icon={CameraIcon} />
+                <BrowserActionMenuIcon icon={Camera01Icon} />
                 <span>Capture screenshot</span>
               </MenuItem>
               <MenuItem

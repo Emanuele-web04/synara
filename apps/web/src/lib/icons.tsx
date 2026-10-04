@@ -101,7 +101,6 @@ export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wal
 export const ContextCompactionIcon: LucideIcon = centralIconWrapper("arrows-hide");
 export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");
 export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
-export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
@@ -350,6 +349,11 @@ export {
   GitCompareArrowsIcon as CodeReviewIcon,
   Home07Icon as HomeIcon,
   InboxIcon,
+  Camera01Icon,
+  CornerDownRightIcon as SteerIcon,
+  Key01Icon,
+  Link01Icon,
+  MoreHorizontalIcon,
   LinkSquare02Icon as ExternalLinkIcon,
   LayoutAlignLeftIcon,
   LayoutAlignRightIcon,

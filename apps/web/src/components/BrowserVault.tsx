@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserVaultSettings, BrowserVaultSnapshot } from "@synara/contracts";
 import { CentralIcon } from "~/lib/central-icons";
+import { Key01Icon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
@@ -30,7 +31,7 @@ export function BrowserVaultButton({
         )
       }
     >
-      <CentralIcon name="key-1" className="size-3.5" />
+      <Key01Icon className="size-3.5" />
     </IconButton>
   );
 }
