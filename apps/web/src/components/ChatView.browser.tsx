@@ -68,6 +68,8 @@ import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
+import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
+import { useKanbanUiStore } from "../kanbanUiStore";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
@@ -1335,6 +1337,7 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
 function installDeterministicSendNativeApi(options?: {
   rejectTurnStart?: boolean;
   beforeWorktreeCreation?: () => Promise<void>;
+  beforeTurnStart?: () => Promise<void>;
   projectThreadCommands?: boolean;
 }): () => void {
   const previousNativeApi = window.nativeApi;
@@ -1389,6 +1392,7 @@ function installDeterministicSendNativeApi(options?: {
             _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
             command,
           });
+          if (command.type === "thread.turn.start") await options?.beforeTurnStart?.();
           if (options?.rejectTurnStart && command.type === "thread.turn.start") {
             throw new Error("Turn start failed for test.");
           }
@@ -9983,6 +9987,139 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["board", "chat"] as const)(
+    "dispatches a draft once when %s owns the send before the other surface",
+    async (firstOwner) => {
+      let releaseTurn!: () => void;
+      const turnGate = new Promise<void>((resolve) => {
+        releaseTurn = resolve;
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi({
+        projectThreadCommands: true,
+        beforeTurnStart: () => turnGate,
+      });
+      useKanbanUiStore.setState({ optimisticDispatchByThreadId: {} });
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createDraftOnlySnapshot(),
+      });
+      let boardSend: ReturnType<typeof dispatchKanbanDraftThread> | undefined;
+      const turnCommands = () =>
+        wsRequests
+          .map(readDispatchedCommand)
+          .filter((command) => command?.type === "thread.turn.start");
+      const sendFromBoard = () =>
+        dispatchKanbanDraftThread({
+          threadId: THREAD_ID,
+          projectId: PROJECT_ID,
+          thread: null,
+          defaultProvider: "codex",
+          assistantDeliveryMode: "default",
+        });
+      try {
+        const prompt = "Send this shared draft once";
+        const newerPrompt = "Keep this newer edit for my next turn";
+        await page.getByTestId("composer-editor").fill(prompt);
+        const sendButton = await waitForSendButton();
+        await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+        if (firstOwner === "board") boardSend = sendFromBoard();
+        else sendButton.click();
+        await vi.waitFor(() => expect(turnCommands()).toHaveLength(1));
+        if (firstOwner === "board") {
+          sendButton.click();
+          // The actual chat send must have entered its pending UI before releasing the board RPC.
+          await vi.waitFor(() =>
+            expect(
+              useThreadDispatchStore.getState().threads[THREAD_ID]?.localDispatch,
+            ).toBeTruthy(),
+          );
+        } else {
+          boardSend = sendFromBoard();
+          expect(await boardSend).toMatchObject({ kind: "dispatched", deferred: true });
+          expect(
+            useKanbanUiStore.getState().optimisticDispatchByThreadId[THREAD_ID],
+          ).toBeUndefined();
+        }
+        await page.getByTestId("composer-editor").fill(newerPrompt);
+        releaseTurn();
+        expect(await boardSend).toMatchObject({ kind: "dispatched" });
+        await vi.waitFor(() => expect(turnCommands()).toHaveLength(1));
+        const command = turnCommands()[0]!;
+        const message = command.message as { messageId: MessageId; text: string };
+        expect(message.text).toBe(prompt);
+        const created = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
+        const startedThread = {
+          ...created.threads.find((thread) => thread.id === THREAD_ID)!,
+          messages: [
+            createUserMessage({ id: message.messageId, text: message.text, offsetSeconds: 1 }),
+          ],
+          session: {
+            ...createSnapshotForTargetUser({
+              targetMessageId: message.messageId,
+              targetText: prompt,
+            }).threads[0]!.session!,
+            threadId: THREAD_ID,
+            status: "ready" as const,
+            activeTurnId: null,
+          },
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("board-chat-race-turn"),
+            state: "completed" as const,
+            requestedAt: NOW_ISO,
+            startedAt: NOW_ISO,
+            completedAt: NOW_ISO,
+            assistantMessageId: null,
+          },
+        };
+        fixture.snapshot = {
+          ...created,
+          threads: [startedThread],
+          snapshotSequence: created.snapshotSequence + 1,
+        };
+        useStore.getState().syncServerReadModel(fixture.snapshot);
+        useStore.getState().syncServerThreadDetailHotPath(startedThread);
+        await vi.waitFor(() => {
+          expect(useThreadDispatchStore.getState().threads[THREAD_ID]?.localDispatch).toBeFalsy();
+          expect(document.querySelectorAll('[data-message-role="user"]')).toHaveLength(1);
+          expect(page.getByTestId("composer-editor").element().textContent).toContain(newerPrompt);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            newerPrompt,
+          );
+        });
+        // Real board reconciliation consumes the runtime acknowledgement and drops its optimistic move.
+        await mounted.router.navigate({
+          to: "/kanban/$projectId",
+          params: { projectId: PROJECT_ID },
+        });
+        await vi.waitFor(() =>
+          expect(
+            useKanbanUiStore.getState().optimisticDispatchByThreadId[THREAD_ID],
+          ).toBeUndefined(),
+        );
+        await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+        await vi.waitFor(() => {
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            newerPrompt,
+          );
+          expect(page.getByTestId("composer-editor").element().textContent).toContain(newerPrompt);
+          expect(
+            document.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')
+              ?.disabled,
+          ).toBe(false);
+        });
+        (await waitForSendButton()).click();
+        await vi.waitFor(() => expect(turnCommands()).toHaveLength(2));
+        expect((turnCommands()[1]!.message as { text: string }).text).toBe(newerPrompt);
+      } finally {
+        releaseTurn();
+        await boardSend;
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    },
+  );
 
   it("keeps the first sent message visible throughout draft promotion", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
