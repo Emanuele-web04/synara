@@ -22,6 +22,7 @@ import {
   OrchestrationProposedPlanId,
   type OrchestrationReadModel,
   type ProjectId,
+  type ProjectAgentOverview,
   type ServerConfig,
   SpaceId,
   ThreadId,
@@ -108,6 +109,7 @@ import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
+import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -1311,6 +1313,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       truncated: false,
     };
   }
+  if (tag === WS_METHODS.projectAgentListTasks) return { tasks: [], nextCursor: null };
+  if (tag === WS_METHODS.projectAgentListActivity) return { activity: [], nextCursor: null };
+  if (tag === WS_METHODS.projectAgentListDocuments) return { documents: [] };
+  if (tag === WS_METHODS.projectAgentListThreadIndex) return { threads: [] };
   if (tag === WS_METHODS.projectAgentGetOverview) {
     const projectId = typeof body.projectId === "string" ? body.projectId : "";
     return fixture.projectAgentOverviews[projectId] ?? {};
@@ -9136,6 +9142,134 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("keeps hub suggestions above the composer as image attachments change", async () => {
+    const previousSummaries = useProjectAgentSummariesStore.getState();
+    const snapshot = withStudioProject(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-hub-welcome" as MessageId,
+        targetText: "Welcome to your Hub",
+      }),
+    );
+    const hubSnapshot = {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? {
+              ...thread,
+              projectId: STUDIO_PROJECT_ID,
+              messages: [
+                createAssistantMessage({
+                  id: "msg-hub-welcome" as MessageId,
+                  text: "Welcome to your Hub. Connect repositories, set a goal, or add instructions to get started.",
+                  offsetSeconds: 0,
+                }),
+              ],
+            }
+          : thread,
+      ),
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: hubSnapshot,
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = {
+          projectId: STUDIO_PROJECT_ID,
+          configured: true,
+          config: {
+            projectId: STUDIO_PROJECT_ID,
+            coordinatorThreadId: THREAD_ID,
+            coordinatorName: "Studio lead",
+            coordinatorModelSelection: { provider: "codex", model: "gpt-5" },
+            workerRouting: {
+              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-5" },
+              providerOptions: { claudeAgent: { enableArtifacts: true } },
+            },
+            limits: {
+              maxConcurrentWorkers: 8,
+              maxNewWorkersPerTurn: 8,
+              maxWorkerCreationsPerGoal: 40,
+              maxAutomaticContinuationsPerGoal: 20,
+              maxRepairRoundsPerTask: 2,
+            },
+            captureEnabled: true,
+            enabled: true,
+            automationId: null,
+            revision: 1,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+            disabledAt: null,
+          },
+          linkedProjectIds: [],
+          goal: null,
+          digest: null,
+          blockers: [],
+          recentOutcomes: [],
+          coordinatorStatus: "idle",
+        };
+      },
+    });
+    try {
+      useProjectAgentSummariesStore
+        .getState()
+        .applyOverview(fixture.projectAgentOverviews[STUDIO_PROJECT_ID] as ProjectAgentOverview);
+      await page.getByRole("button", { name: "Close hub panel", exact: true }).click();
+      for (const viewport of [DEFAULT_VIEWPORT, { name: "narrow", width: 480, height: 640 }]) {
+        await mounted.setViewport(viewport);
+        for (const count of [0, 1, 4, 0]) {
+          useComposerDraftStore.getState().clearComposerContent(THREAD_ID);
+          for (let index = 0; index < count; index += 1) {
+            useComposerDraftStore.getState().addImage(
+              THREAD_ID,
+              createComposerImage({
+                id: `hub-image-${index}`,
+                name: `reference-${index + 1}.png`,
+                previewUrl: `data:image/svg+xml,${encodeURIComponent(ATTACHMENT_SVG)}`,
+              }),
+            );
+          }
+          await vi.waitFor(() => {
+            expect(document.querySelectorAll('img[alt^="reference-"]')).toHaveLength(count);
+            const surface = document.querySelector(".chat-composer-surface")!;
+            const top = surface.getBoundingClientRect().top;
+            for (const label of ["Connect repositories", "Add a goal", "Write instructions"]) {
+              const button = [...document.querySelectorAll("button")].find(
+                (node) => node.textContent === label,
+              );
+              expect(button).toBeDefined();
+              const rect = button!.getBoundingClientRect();
+              expect(rect.top).toBeGreaterThanOrEqual(0);
+              expect(rect.bottom).toBeLessThanOrEqual(top - 4);
+              expect(
+                button!.contains(
+                  document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+                ),
+              ).toBe(true);
+            }
+          });
+          if (count === 4) {
+            for (const label of ["Connect repositories", "Add a goal", "Write instructions"]) {
+              const button = page.getByRole("button", { name: label, exact: true });
+              (button.element() as HTMLButtonElement).focus();
+              expect(document.activeElement).toBe(button.element());
+              if (label === "Connect repositories") await button.click();
+              else await userEvent.keyboard("{Enter}");
+              await expect.element(page.getByRole("dialog")).toBeVisible();
+              await userEvent.keyboard("{Escape}");
+              await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+            }
+          }
+        }
+      }
+    } finally {
+      await mounted.cleanup();
+      useProjectAgentSummariesStore.setState(previousSummaries);
+    }
+  });
 
   it("seeds a fresh hub chat draft from the hub's workerRouting", async () => {
     useComposerDraftStore.setState({

@@ -6606,10 +6606,9 @@ export default function ChatView({
                     contentInsetBottomPx={composerTranscriptInsetPx}
                     contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
-                  {/* The composer floats `bottom-full` over this trailing
-                      block, so the last in-flow element must reserve the
-                      same `pb-28` clearance CoordinatorSuggestions does or
-                      the composer surface covers its controls. */}
+                  {/* Suggestions reserve clearance for both sets of controls.
+                      Without them, the paused banner needs its own minimum gap
+                      above the composer floating at `bottom-full`. */}
                   {isCoordinatorConversation && activeGroupSummary?.pausedAt ? (
                     <div
                       className={cn(
@@ -6638,6 +6637,7 @@ export default function ChatView({
                   {showCoordinatorSuggestions ? (
                     <CoordinatorSuggestions
                       chips={coordinatorSuggestionChips}
+                      composerHeightPx={composerOverlayHeightPx}
                       onOpenSettings={(section) => {
                         setCoordinatorSettingsSection(section);
                         setCoordinatorSettingsOpen(true);
