@@ -82,8 +82,11 @@ list of suggested threads (title, repository, one-line brief) and waits for your
 Tell it once if you always want this, and it will remember.
 
 The coordinator's own Synara tools (starting threads, saving memory, adding Library files, linking
-repositories) run without asking for approval while the hub is active. File edits, shell
-commands, and every other tool still ask. In a paused or archived hub, every tool asks again.
+repositories) run without asking for approval while the hub is active, including with Codex.
+File edits, shell commands, and other tools follow the thread's access mode. Full Access also
+allows workers to use their authorized Synara tools without an extra provider approval.
+In a paused or archived hub, the coordinator's automatic Synara tool grant ends and its
+tools follow the thread's access mode again. Gateway permissions still apply to every call.
 
 After it starts threads, Synara watches them for you (see
 [How monitoring works](#how-monitoring-works)). Status updates appear in the coordinator

@@ -204,6 +204,23 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("passes the Hub coordinator tool grant to the Codex manager", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-coordinator"),
+        runtimeMode: "approval-required",
+        autoApproveSynaraTools: true,
+      });
+      assert.strictEqual(
+        validationManager.startSessionImpl.mock.calls[0]?.[0].autoApproveSynaraTools,
+        true,
+      );
+    }),
+  );
+
   it.effect(
     "preserves startup cleanup evidence without reclassifying unknown process failures",
     () =>

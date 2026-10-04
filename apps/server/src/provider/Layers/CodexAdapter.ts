@@ -2143,6 +2143,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         agentGatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
+        ...(input.autoApproveSynaraTools !== undefined
+          ? { autoApproveSynaraTools: input.autoApproveSynaraTools }
+          : {}),
         runtimeMode: input.runtimeMode,
         ...codexModelSelectionOverrides(input.modelSelection),
       };
