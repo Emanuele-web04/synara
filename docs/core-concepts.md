@@ -49,7 +49,8 @@ is cancelled, the task and its prompt remain available for retry.
   since the working day began at 4am, beside the day’s agent recap. Add a task here to make it due
   on today’s calendar date, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog.
-- **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity
+- **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared

@@ -2739,6 +2739,97 @@ describe("ChatView transcript geometry (full app)", () => {
 
   // #1374: real route, dock and Lexical composers; only the server boundary is
   // simulated. The main agent must keep running while the panel toggles.
+  it("previews split widths without persisting and restores the released ratio after remount", async () => {
+    const snapshot = addThreadToSnapshot(
+      createSnapshotWithLongAssistantResponse(),
+      OTHER_THREAD_ID,
+    );
+    let mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Resize draft");
+      const splitViewId = useSplitViewStore.getState().createFromDrop({
+        sourceThreadId: THREAD_ID,
+        ownerProjectId: PROJECT_ID,
+        droppedThreadId: OTHER_THREAD_ID,
+        direction: "horizontal",
+        side: "second",
+      });
+      const openSplit = () =>
+        mounted.router.navigate({
+          to: "/$threadId",
+          params: { threadId: THREAD_ID },
+          search: () => ({ splitViewId }),
+        });
+      await openSplit();
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
+      );
+      await waitForLayout();
+      const editors = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')];
+      const divider = document.querySelector<HTMLElement>('[data-split-divider="true"]')!;
+      const frame = divider.parentElement!.getBoundingClientRect();
+      const sourceScope = splitViewPaneScopeId(
+        splitViewId,
+        resolveSplitViewPaneIdForThread(
+          useSplitViewStore.getState().splitViewsById[splitViewId]!,
+          THREAD_ID,
+        )!,
+      );
+      const sourceChat = document.querySelector(`[data-chat-pane-scope="${sourceScope}"]`)!;
+      const sourceBox = sourceChat.closest('[data-slot="sidebar-inset"]')!.parentElement!;
+      const persistedRatio = () =>
+        JSON.parse(localStorage.getItem("synara:split-view-state:v1")!).state.splitViewsById[
+          splitViewId
+        ].root.ratio;
+      const dispatch = (target: EventTarget, type: string, ratio: number, buttons: number) =>
+        target.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            pointerId: 1,
+            pointerType: "mouse",
+            button: 0,
+            buttons,
+            clientX: frame.left + frame.width * ratio,
+            clientY: frame.top + frame.height / 2,
+          }),
+        );
+      const widthBefore = sourceBox.getBoundingClientRect().width;
+      dispatch(divider, "pointerdown", 0.5, 1);
+      const overlay = document.querySelector("[data-panel-resize-overlay]") ?? window;
+      dispatch(overlay, "pointermove", 0.65, 1);
+      await vi.waitFor(() =>
+        expect(sourceBox.getBoundingClientRect().width).toBeCloseTo(frame.width * 0.65, 0),
+      );
+      expect(sourceBox.getBoundingClientRect().width).toBeGreaterThan(widthBefore);
+      expect(persistedRatio()).toBe(0.5);
+      expect([...document.querySelectorAll('[contenteditable="true"]')]).toEqual(editors);
+      expect(sourceChat.textContent).toContain("Resize draft");
+      dispatch(overlay, "pointerup", 0.65, 0);
+      await vi.waitFor(() => expect(persistedRatio()).toBeCloseTo(0.65));
+      expect([...document.querySelectorAll('[contenteditable="true"]')]).toEqual(editors);
+      const saved = localStorage.getItem("synara:split-view-state:v1")!;
+      await mounted.cleanup();
+      useSplitViewStore.setState({ splitViewsById: {}, splitViewIdBySourceThreadId: {} });
+      localStorage.setItem("synara:split-view-state:v1", saved);
+      await useSplitViewStore.persist.rehydrate();
+      mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      await openSplit();
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
+      );
+      const restoredDivider = document.querySelector<HTMLElement>('[data-split-divider="true"]')!;
+      const restoredFrame = restoredDivider.parentElement!.getBoundingClientRect();
+      expect(restoredDivider.getBoundingClientRect().left - restoredFrame.left).toBeCloseTo(
+        restoredFrame.width * 0.65,
+        0,
+      );
+      expect(persistedRatio()).toBeCloseTo(0.65);
+    } finally {
+      window.dispatchEvent(new Event("blur"));
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the surviving non-route chat mounted when a split collapses", async () => {
     const snapshot = addThreadToSnapshot(
       createSnapshotWithLongAssistantResponse(),
