@@ -1853,6 +1853,41 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── parseAuthStatusFromOutput pure tests ──────────────────────────
 
   describe("parseAuthStatusFromOutput", () => {
+    it("recognizes the Codex CLI ChatGPT login status on stderr as voice capable", () => {
+      const parsed = parseAuthStatusFromOutput({
+        stdout: "",
+        stderr: "Logged in using ChatGPT\n",
+        code: 0,
+      });
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.strictEqual(parsed.voiceTranscriptionAvailable, true);
+    });
+
+    it("recognizes the Codex CLI API key login status without enabling voice", () => {
+      const parsed = parseAuthStatusFromOutput({
+        stdout: "Logged in using an API key - sk-…\n",
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.strictEqual(parsed.voiceTranscriptionAvailable, false);
+    });
+
+    it("does not infer voice capability from an unknown successful login response", () => {
+      const parsed = parseAuthStatusFromOutput({ stdout: "OK\n", stderr: "", code: 0 });
+      assert.strictEqual(parsed.voiceTranscriptionAvailable, undefined);
+    });
+
+    it("does not enable voice from ChatGPT login text when the command fails", () => {
+      const parsed = parseAuthStatusFromOutput({
+        stdout: "",
+        stderr: "Logged in using ChatGPT\n",
+        code: 1,
+      });
+      assert.notStrictEqual(parsed.authStatus, "authenticated");
+      assert.notStrictEqual(parsed.voiceTranscriptionAvailable, true);
+    });
+
     it("JSON with authenticated=false is unauthenticated", () => {
       const parsed = parseAuthStatusFromOutput({
         stdout: '[{"authenticated":false}]\n',
