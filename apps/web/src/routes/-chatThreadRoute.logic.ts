@@ -3,7 +3,13 @@
 // Layer: Route UI logic helpers.
 // Exports: thread title fallback, deep-link bootstrap replay handling, and panel toggle helpers.
 
-import type { ProjectId, ThreadEnvironmentMode, ThreadId, TurnId } from "@synara/contracts";
+import type {
+  ProjectId,
+  ThreadEnvironmentMode,
+  ThreadId,
+  ThreadSidechatContext,
+  TurnId,
+} from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
 import type { ChatRightPanel, DiffRouteSearch } from "../diffRouteSearch";
@@ -176,6 +182,7 @@ export function resolveSplitPaneCloseDecision(input: {
   sourceThreadId: ThreadId;
   closingThreadId: ThreadId | null | undefined;
   closingSidechatSourceThreadId: ThreadId | null | undefined;
+  closingSidechatContext?: ThreadSidechatContext | null | undefined;
   nextFocusedThreadId: ThreadId | null | undefined;
   nextLeafCount: number;
 }): SplitPaneCloseDecision {
@@ -187,7 +194,11 @@ export function resolveSplitPaneCloseDecision(input: {
     };
   }
 
-  if (input.closingThreadId && input.closingThreadId !== input.sourceThreadId) {
+  if (
+    input.closingSidechatContext &&
+    input.closingThreadId &&
+    input.closingThreadId !== input.sourceThreadId
+  ) {
     return {
       kind: "single-thread",
       threadId: input.sourceThreadId,

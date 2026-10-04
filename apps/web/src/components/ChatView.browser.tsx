@@ -2816,111 +2816,191 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it.each([
-    { panes: 2, closing: "non-source" },
-    { panes: 3, closing: "non-source" },
-    { panes: 3, closing: "source" },
-  ] as const)("closes a standalone Side in $panes panes ($closing)", async ({ panes, closing }) => {
-    const thirdId = ThreadId.makeUnsafe("third-standalone-grid-chat");
-    const closingThreadId = closing === "source" ? THREAD_ID : OTHER_THREAD_ID;
-    const base = addThreadToSnapshot(
-      addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID),
-      thirdId,
-    );
-    const snapshot = {
-      ...base,
-      threads: base.threads.map((thread) =>
-        thread.id === closingThreadId
-          ? {
-              ...thread,
-              sidechatContext: {
-                kind: "github-item" as const,
-                itemKind: "pullRequest" as const,
-                repository: "acme/widgets",
-                number: 1472,
-                url: "https://github.com/acme/widgets/pull/1472",
-              },
-            }
-          : thread,
-      ),
-    };
-    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
-    try {
-      const splitViewId = useSplitViewStore.getState().createFromDrop({
-        sourceThreadId: THREAD_ID,
-        ownerProjectId: PROJECT_ID,
-        droppedThreadId: OTHER_THREAD_ID,
-        direction: "horizontal",
-        side: "second",
-      });
-      const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
-      const sourcePaneId = resolveSplitViewPaneIdForThread(split, THREAD_ID)!;
-      if (panes === 3)
+  it.each(["source", "non-source"] as const)(
+    "closes only the inactive ordinary %s pane and preserves the focused chat",
+    async (closing) => {
+      const thirdId = ThreadId.makeUnsafe("third-ordinary-grid-chat");
+      const snapshot = addThreadToSnapshot(
+        addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID),
+        thirdId,
+      );
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      try {
+        const splitViewId = useSplitViewStore.getState().createFromDrop({
+          sourceThreadId: THREAD_ID,
+          ownerProjectId: PROJECT_ID,
+          droppedThreadId: OTHER_THREAD_ID,
+          direction: "horizontal",
+          side: "second",
+        });
+        const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         useSplitViewStore.getState().dropThreadOnPane({
           splitViewId,
-          targetPaneId: sourcePaneId,
+          targetPaneId: resolveSplitViewPaneIdForThread(split, OTHER_THREAD_ID)!,
           threadId: thirdId,
           direction: "vertical",
-          side: "first",
+          side: "second",
         });
-      await mounted.router.navigate({
-        to: "/$threadId",
-        params: { threadId: THREAD_ID },
-        search: () => ({ splitViewId }),
-      });
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(panes),
-      );
-      await waitForLayout();
-      const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
-      const targetThreadId = closing === "source" ? thirdId : THREAD_ID;
-      const editorForThread = (threadId: ThreadId) => {
-        const scope = splitViewPaneScopeId(
-          splitViewId,
-          resolveSplitViewPaneIdForThread(readySplit, threadId)!,
+        await mounted.router.navigate({
+          to: "/$threadId",
+          params: { threadId: THREAD_ID },
+          search: () => ({ splitViewId }),
+        });
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(3),
         );
-        return document.querySelector<HTMLElement>(
-          `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+        await waitForLayout();
+        const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+        const editorForThread = (threadId: ThreadId) => {
+          const scope = splitViewPaneScopeId(
+            splitViewId,
+            resolveSplitViewPaneIdForThread(readySplit, threadId)!,
+          );
+          return document.querySelector<HTMLElement>(
+            `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+          )!;
+        };
+        const retainedEditor = editorForThread(thirdId);
+        await userEvent.click(retainedEditor);
+        await vi.waitFor(() => expect(mounted.router.state.location.pathname).toBe(`/${thirdId}`));
+        const closingThreadId = closing === "source" ? THREAD_ID : OTHER_THREAD_ID;
+        const closingPane = editorForThread(closingThreadId).closest(
+          '[data-slot="sidebar-inset"]',
         )!;
+        await userEvent.click(
+          closingPane.querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
+        );
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.pathname).toBe(`/${thirdId}`);
+          expect(mounted.router.state.location.search.splitViewId).toBe(splitViewId);
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2);
+          const remaining = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+          expect(resolveSplitViewPaneIdForThread(remaining, closingThreadId)).toBeNull();
+          expect(remaining.focusedPaneId).toBe(resolveSplitViewPaneIdForThread(remaining, thirdId));
+        });
+        expect(retainedEditor.isConnected).toBe(true);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { kind: "standalone", panes: 2, closing: "non-source" },
+    { kind: "standalone", panes: 3, closing: "non-source" },
+    { kind: "standalone", panes: 3, closing: "source" },
+    { kind: "forked", panes: 2, closing: "non-source" },
+    { kind: "forked", panes: 3, closing: "non-source" },
+  ] as const)(
+    "closes a $kind Side in $panes panes ($closing)",
+    async ({ kind, panes, closing }) => {
+      const thirdId = ThreadId.makeUnsafe("third-standalone-grid-chat");
+      const closingThreadId = closing === "source" ? THREAD_ID : OTHER_THREAD_ID;
+      const base = addThreadToSnapshot(
+        addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID),
+        thirdId,
+      );
+      const snapshot = {
+        ...base,
+        threads: base.threads.map((thread) =>
+          thread.id === closingThreadId
+            ? {
+                ...thread,
+                ...(kind === "forked"
+                  ? { sidechatSourceThreadId: THREAD_ID }
+                  : {
+                      sidechatContext: {
+                        kind: "github-item" as const,
+                        itemKind: "pullRequest" as const,
+                        repository: "acme/widgets",
+                        number: 1472,
+                        url: "https://github.com/acme/widgets/pull/1472",
+                      },
+                    }),
+              }
+            : thread,
+        ),
       };
-      const retainedEditor = editorForThread(targetThreadId);
-      await userEvent.click(editorForThread(closingThreadId));
-      await vi.waitFor(() =>
-        expect(mounted.router.state.location.pathname).toBe(`/${closingThreadId}`),
-      );
-      const persistedSplit = () =>
-        JSON.parse(localStorage.getItem("synara:split-view-state:v1")!).state.splitViewsById[
-          splitViewId
-        ];
-      expect(persistedSplit()).toBeDefined();
-      const closingChat = editorForThread(closingThreadId).closest('[data-slot="sidebar-inset"]')!;
-      await userEvent.click(
-        closingChat.querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
-      );
-      await vi.waitFor(() => {
-        expect(mounted.router.state.location.pathname).toBe(`/${targetThreadId}`);
-        expect(mounted.router.state.location.search.splitViewId).toBe(
-          closing === "source" ? splitViewId : undefined,
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      try {
+        const splitViewId = useSplitViewStore.getState().createFromDrop({
+          sourceThreadId: THREAD_ID,
+          ownerProjectId: PROJECT_ID,
+          droppedThreadId: OTHER_THREAD_ID,
+          direction: "horizontal",
+          side: "second",
+        });
+        const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+        const sourcePaneId = resolveSplitViewPaneIdForThread(split, THREAD_ID)!;
+        if (panes === 3)
+          useSplitViewStore.getState().dropThreadOnPane({
+            splitViewId,
+            targetPaneId: sourcePaneId,
+            threadId: thirdId,
+            direction: "vertical",
+            side: "first",
+          });
+        await mounted.router.navigate({
+          to: "/$threadId",
+          params: { threadId: THREAD_ID },
+          search: () => ({ splitViewId }),
+        });
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(panes),
         );
-        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(
-          closing === "source" ? 2 : 1,
+        await waitForLayout();
+        const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+        const targetThreadId = closing === "source" ? thirdId : THREAD_ID;
+        const editorForThread = (threadId: ThreadId) => {
+          const scope = splitViewPaneScopeId(
+            splitViewId,
+            resolveSplitViewPaneIdForThread(readySplit, threadId)!,
+          );
+          return document.querySelector<HTMLElement>(
+            `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+          )!;
+        };
+        const retainedEditor = editorForThread(targetThreadId);
+        await userEvent.click(editorForThread(closingThreadId));
+        await vi.waitFor(() =>
+          expect(mounted.router.state.location.pathname).toBe(`/${closingThreadId}`),
         );
-        if (closing === "source") {
-          expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeDefined();
-          expect(persistedSplit()).toBeDefined();
-          expect(persistedSplit().sourceThreadId).toBe(thirdId);
-        } else {
-          expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeUndefined();
-          expect(persistedSplit()).toBeUndefined();
-        }
-      });
-      await waitForLayout();
-      expect(retainedEditor.isConnected).toBe(true);
-      expect(document.querySelectorAll('[contenteditable="true"]')).toContain(retainedEditor);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
+        const persistedSplit = () =>
+          JSON.parse(localStorage.getItem("synara:split-view-state:v1")!).state.splitViewsById[
+            splitViewId
+          ];
+        expect(persistedSplit()).toBeDefined();
+        const closingChat = editorForThread(closingThreadId).closest(
+          '[data-slot="sidebar-inset"]',
+        )!;
+        await userEvent.click(
+          closingChat.querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
+        );
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.pathname).toBe(`/${targetThreadId}`);
+          expect(mounted.router.state.location.search.splitViewId).toBe(
+            closing === "source" ? splitViewId : undefined,
+          );
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(
+            closing === "source" ? 2 : 1,
+          );
+          if (closing === "source") {
+            expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeDefined();
+            expect(persistedSplit()).toBeDefined();
+            expect(persistedSplit().sourceThreadId).toBe(thirdId);
+          } else {
+            expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeUndefined();
+            expect(persistedSplit()).toBeUndefined();
+          }
+        });
+        await waitForLayout();
+        expect(retainedEditor.isConnected).toBe(true);
+        expect(document.querySelectorAll('[contenteditable="true"]')).toContain(retainedEditor);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("opens one sidechat, preserves its draft on toggle, and restores composer focus", async () => {
     useRightDockStore.setState({ dockStateByThreadId: {} });

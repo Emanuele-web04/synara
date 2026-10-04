@@ -841,6 +841,7 @@ export function ChatHeader({
                   type="button"
                   tone="surface"
                   label="Close chat"
+                  onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     onCloseThreadPane();

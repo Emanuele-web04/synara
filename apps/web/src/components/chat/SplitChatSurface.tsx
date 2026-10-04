@@ -796,13 +796,16 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     // navigation commits, so publishing leftover leaves cannot race the exit.
     if (
       closingThread?.sidechatSourceThreadId ||
-      (closingLeaf?.threadId && closingLeaf.threadId !== activeSplitView.sourceThreadId)
+      (closingThread &&
+        isSidechatThread(closingThread) &&
+        closingThread.id !== activeSplitView.sourceThreadId)
     ) {
       const decision = resolveSplitPaneCloseDecision({
         splitViewId: activeSplitView.id,
         sourceThreadId: activeSplitView.sourceThreadId,
         closingThreadId: closingLeaf?.threadId ?? null,
         closingSidechatSourceThreadId: closingThread?.sidechatSourceThreadId ?? null,
+        closingSidechatContext: closingThread?.sidechatContext ?? null,
         nextFocusedThreadId: null,
         nextLeafCount: 0,
       });
