@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import {
-  ApprovalRequestId,
   EventId,
+  ApprovalRequestId,
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
+  type ProviderInstanceId,
   type ProviderSession,
+  type ProviderStartOptions,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -22,8 +26,10 @@ import {
   type CodexAppServerStartSessionInput,
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
+import { CodexJsonlFramer, CodexJsonlWriter } from "../../codexAppServerTransport.ts";
 import { ServerConfig } from "../../config.ts";
 import { CodexSessionStartError } from "../../codexErrorClassification.ts";
+import { resolveCodexGeneratedImagesRoots } from "../../codexGeneratedImages.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -35,6 +41,12 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
 
 class FakeCodexManager extends CodexAppServerManager {
+  public sessionSnapshots: ProviderSession[] = [];
+  public codexOptionsByThreadId = new Map<
+    ThreadId,
+    NonNullable<ProviderStartOptions["codex"]> | undefined
+  >();
+
   public startSessionImpl = vi.fn(
     async (input: CodexAppServerStartSessionInput): Promise<ProviderSession> => {
       const now = new Date().toISOString();
@@ -144,7 +156,23 @@ class FakeCodexManager extends CodexAppServerManager {
   override async stopSession(_threadId: ThreadId): Promise<void> {}
 
   override listSessions(): ProviderSession[] {
-    return [];
+    return this.sessionSnapshots;
+  }
+
+  override inspectSessions(): ReturnType<CodexAppServerManager["inspectSessions"]> {
+    return this.sessionSnapshots.map((session) => {
+      const codexOptions = this.codexOptionsByThreadId.get(session.threadId);
+      return {
+        session,
+        ...(codexOptions ? { codexOptions } : {}),
+      };
+    });
+  }
+
+  override getSessionCodexOptions(
+    threadId: ThreadId,
+  ): NonNullable<ProviderStartOptions["codex"]> | undefined {
+    return this.codexOptionsByThreadId.get(threadId);
   }
 
   override hasSession(_threadId: ThreadId): boolean {
@@ -234,6 +262,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.equal(validationManager.startSessionImpl.mock.calls.length, 0);
     }),
   );
+
   it.effect("maps codex model options before starting a session", () =>
     Effect.gen(function* () {
       validationManager.startSessionImpl.mockClear();
@@ -242,6 +271,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       yield* adapter.startSession({
         provider: "codex",
         threadId: asThreadId("thread-1"),
+        expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
         lifecycleGeneration: "generation-start-a",
         modelSelection: {
           provider: "codex",
@@ -261,8 +291,30 @@ validationLayer("CodexAdapterLive validation", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
+        expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
+        runtimeMode: "full-access",
+        // The manager owns Codex session restarts, so it carries the capability
+        // facts its gateway lease derives from.
+        agentGatewayCapabilityInput: { enableComputerControl: false },
+      });
+    }),
+  );
+  it.effect("carries computer control into the manager's gateway lease facts", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-computer"),
+        enableComputerControl: true,
         runtimeMode: "full-access",
       });
+
+      assert.deepStrictEqual(
+        validationManager.startSessionImpl.mock.calls[0]?.[0]?.agentGatewayCapabilityInput,
+        { enableComputerControl: true },
+      );
     }),
   );
   it.effect("forwards an external fork cursor when starting a session", () =>
@@ -283,6 +335,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-import"),
         forkSourceResumeCursor,
         runtimeMode: "full-access",
+        agentGatewayCapabilityInput: { enableComputerControl: false },
       });
     }),
   );
@@ -304,6 +357,94 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
 
       assert.equal(validationManager.startSessionImpl.mock.calls[0]?.[0].serviceTier, "default");
+    }),
+  );
+
+  it.effect("lists only explicit generated-image homes from live session Codex options", () =>
+    Effect.gen(function* () {
+      const now = new Date().toISOString();
+      const originalSynaraHome = process.env.SYNARA_HOME;
+      process.env.SYNARA_HOME = "/tmp/synara-live-generated-images";
+      validationManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work" as ProviderInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-work"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          providerInstanceId: "codex_disabled" as ProviderInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-disabled"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-without-context"),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+      validationManager.codexOptionsByThreadId.clear();
+      validationManager.codexOptionsByThreadId.set(asThreadId("thread-live-work"), {
+        homePath: "/tmp/codex-live-work",
+        accountId: "work",
+      });
+      validationManager.codexOptionsByThreadId.set(asThreadId("thread-live-disabled"), {
+        homePath: "/tmp/codex-live-disabled",
+        accountId: "disabled",
+      });
+      const adapter = yield* CodexAdapter;
+      const listGeneratedImageHomePaths = adapter.listGeneratedImageHomePaths;
+      if (!listGeneratedImageHomePaths) {
+        throw new Error("Expected Codex adapter to expose generated-image home paths.");
+      }
+      const lifecycleListSpy = vi.spyOn(validationManager, "listSessions");
+      const lifecycleOptionsSpy = vi.spyOn(validationManager, "getSessionCodexOptions");
+
+      try {
+        const homes = yield* listGeneratedImageHomePaths({
+          enabledProviderInstanceIds: new Set(["codex_work" as ProviderInstanceId]),
+        });
+
+        assert.deepStrictEqual(homes, [
+          {
+            homePath: "/tmp/codex-live-work",
+            accountId: "work",
+          },
+        ]);
+        const roots = homes.flatMap((home) => resolveCodexGeneratedImagesRoots(home));
+        assert.ok(roots.includes(path.join("/tmp/codex-live-work", "generated_images")));
+        assert.ok(roots.some((root) => root.includes(path.join("codex-home-overlay", "accounts"))));
+        assert.equal(
+          lifecycleListSpy.mock.calls.length,
+          0,
+          "generated-image home inspection must not invoke lifecycle session pruning",
+        );
+        assert.equal(
+          lifecycleOptionsSpy.mock.calls.length,
+          0,
+          "generated-image home inspection must not trigger per-session auth validation",
+        );
+      } finally {
+        lifecycleOptionsSpy.mockRestore();
+        lifecycleListSpy.mockRestore();
+        if (originalSynaraHome === undefined) {
+          delete process.env.SYNARA_HOME;
+        } else {
+          process.env.SYNARA_HOME = originalSynaraHome;
+        }
+        validationManager.sessionSnapshots = [];
+        validationManager.codexOptionsByThreadId.clear();
+      }
     }),
   );
 });
@@ -543,6 +684,83 @@ const lifecycleLayer = it.layer(
   ),
 );
 
+const realStopTeardown = vi.fn(async () => ({
+  escalated: false,
+  signalErrors: [],
+  capturedBeforeRootExit: true,
+}));
+const realStopManager = new CodexAppServerManager(undefined, {
+  teardownProcessTree: realStopTeardown,
+});
+const realStopLayer = it.layer(
+  makeCodexAdapterLive({ manager: realStopManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+realStopLayer("CodexAdapterLive real manager lifecycle", (it) => {
+  it.effect("keeps a non-default provider instance on session/closed after map removal", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-real-stop-work");
+      const providerInstanceId = "codex_work" as ProviderInstanceId;
+      class FakeCodexChild extends EventEmitter {
+        readonly pid = 6060;
+        exitCode: number | null = null;
+        signalCode: NodeJS.Signals | null = null;
+        killed = false;
+        readonly stdin = new PassThrough();
+        readonly stdout = new PassThrough();
+        readonly stderr = new PassThrough();
+      }
+      const child = new FakeCodexChild();
+      realStopTeardown.mockClear();
+      (
+        realStopManager as unknown as {
+          sessions: Map<ThreadId, unknown>;
+        }
+      ).sessions.set(threadId, {
+        session: {
+          provider: "codex",
+          providerInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        account: { type: "unknown", planType: null, sparkEnabled: true },
+        child,
+        stdoutFramer: new CodexJsonlFramer(),
+        stdinWriter: new CodexJsonlWriter(child.stdin),
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+        collabReceiverTurns: new Map(),
+        collabReceiverParents: new Map(),
+        reviewTurnIds: new Set(),
+        nextRequestId: 1,
+        stopping: false,
+      });
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* adapter.stopSession(threadId);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.exited");
+      assert.equal(firstEvent.value.providerInstanceId, providerInstanceId);
+      assert.deepEqual(realStopManager.listSessions(), []);
+      assert.equal(realStopTeardown.mock.calls.length, 1);
+    }),
+  );
+});
+
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   it.effect("maps session/started to a canonical session.started runtime event", () =>
     Effect.gen(function* () {
@@ -778,6 +996,100 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("preserves Codex MCP and dynamic tool identity in lifecycle titles", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-mcp-start"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_1"),
+        payload: {
+          item: {
+            type: "mcpToolCall",
+            id: "mcp_1",
+            server: "computer-use",
+            tool: "get_app_state",
+            arguments: { app: "com.apple.Safari" },
+            status: "inProgress",
+            appContext: {
+              connectorId: "computer-use",
+              actionName: "Read the screen",
+              appName: "Safari",
+            },
+          },
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-dynamic-start"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("dynamic_1"),
+        payload: {
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic_1",
+            tool: "read_workspace_file",
+            arguments: {},
+            status: "inProgress",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events[0]?.type, "item.started");
+      assert.equal(events[1]?.type, "item.started");
+      if (events[0]?.type === "item.started") {
+        assert.equal(events[0].payload.title, "Read the screen in Safari");
+      }
+      if (events[1]?.type === "item.started") {
+        assert.equal(events[1].payload.title, "read_workspace_file");
+      }
+    }),
+  );
+
+  it.effect("maps current Codex MCP progress itemId and message fields", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-mcp-progress"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/mcpToolCall/progress",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_1"),
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          itemId: "mcp_1",
+          message: "Waiting for Safari",
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "tool.progress") return;
+      assert.equal(firstEvent.value.payload.toolUseId, "mcp_1");
+      assert.equal(firstEvent.value.payload.summary, "Waiting for Safari");
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -814,6 +1126,98 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.itemId, "msg_1");
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+    }),
+  );
+
+  it.effect("preserves async questions without emitting a blocking request", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      const event: ProviderEvent = {
+        id: asEventId("evt-msg-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("msg_1"),
+        payload: {
+          item: {
+            type: "agentMessage",
+            id: "msg_1",
+            delivery: "async",
+            questions: [
+              { title: "Which action?", options: ["Click", "Scroll"] },
+              { title: "Anything else?", options: null },
+            ],
+          },
+        },
+      };
+
+      lifecycleManager.emit("event", event);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.itemId, "msg_1");
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      assert.deepStrictEqual(firstEvent.value.payload.asyncQuestions, [
+        { title: "Which action?", options: ["Click", "Scroll"] },
+        { title: "Anything else?" },
+      ]);
+    }),
+  );
+
+  it.effect("falls back to assistant text for malformed async questions", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      const event: ProviderEvent = {
+        id: asEventId("evt-msg-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("msg_1"),
+        payload: {
+          item: {
+            type: "agentMessage",
+            id: "msg_1",
+            delivery: "async",
+            text: "Which action?",
+            questions: [{ title: "", options: ["Click"] }],
+          },
+        },
+      };
+
+      lifecycleManager.emit("event", event);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.itemId, "msg_1");
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      assert.equal(firstEvent.value.payload.asyncQuestions, undefined);
+      assert.equal(firstEvent.value.payload.detail, "Which action?");
     }),
   );
 
@@ -1088,6 +1492,43 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("stamps untagged Codex events with the live session provider instance", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      lifecycleManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-1"),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-session-closed-work"),
+        kind: "session",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "session/closed",
+        message: "Work session stopped",
+      } satisfies ProviderEvent);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      lifecycleManager.sessionSnapshots = [];
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.exited");
+      assert.equal(firstEvent.value.providerInstanceId, "codex_work");
+    }),
+  );
+
   it.effect("maps retryable Codex error notifications to runtime.warning", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -1263,6 +1704,71 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         reason: "Needs network access",
         permissions: { network: { enabled: true } },
       });
+    }),
+  );
+
+  it.effect("maps MCP tool-call approval elicitations to tool approvals", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-mcp-tool-approval"),
+        kind: "request",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "mcpServer/elicitation/request",
+        requestId: ApprovalRequestId.makeUnsafe("req-mcp-tool-1"),
+        requestKind: "tool",
+        payload: {
+          message: "Allow the tool call?",
+          _meta: {
+            tool_name: "computer_launch_app",
+            tool_params_display: [{ name: "app", value: "kcalc" }],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "request.opened") return;
+      assert.equal(firstEvent.value.payload.requestType, "tool_approval");
+      assert.equal(firstEvent.value.payload.detail, "Allow the tool call?");
+      assert.deepEqual(firstEvent.value.payload.args, {
+        message: "Allow the tool call?",
+        _meta: {
+          tool_name: "computer_launch_app",
+          tool_params_display: [{ name: "app", value: "kcalc" }],
+        },
+      });
+    }),
+  );
+
+  it.effect("maps unrenderable MCP elicitations to runtime warnings", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-mcp-elicitation-warning"),
+        kind: "error",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "mcpServer/elicitation/request/unrenderable",
+        message: "Synara declined an MCP elicitation it cannot render yet.",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      assert.equal(firstEvent.value.type, "runtime.warning");
+      if (firstEvent.value.type !== "runtime.warning") return;
+      assert.equal(
+        firstEvent.value.payload.message,
+        "Synara declined an MCP elicitation it cannot render yet.",
+      );
     }),
   );
 

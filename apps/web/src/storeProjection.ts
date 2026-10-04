@@ -87,6 +87,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     settledAt: thread.settledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozeReminderAt: thread.snoozeReminderAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     envMode: thread.envMode,
@@ -105,16 +107,25 @@ function toThreadShell(thread: Thread): ThreadShell {
     subagentRole: thread.subagentRole ?? null,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
+    claudeCacheReview: thread.claudeCacheReview ?? null,
+    ...(thread.snoozeSequence !== undefined ? { snoozeSequence: thread.snoozeSequence } : {}),
+    ...(thread.claudeCacheReviewSequence !== undefined
+      ? { claudeCacheReviewSequence: thread.claudeCacheReviewSequence }
+      : {}),
     ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
     ...(thread.notes !== undefined ? { notes: thread.notes } : {}),
     ...(thread.goal !== undefined ? { goal: thread.goal } : {}),
     ...(thread.goalStartedAt !== undefined ? { goalStartedAt: thread.goalStartedAt } : {}),
     ...(thread.goalPausedAt !== undefined ? { goalPausedAt: thread.goalPausedAt } : {}),
     ...(thread.goalAchievements !== undefined ? { goalAchievements: thread.goalAchievements } : {}),
+    ...(thread.latestHumanMessageAt !== undefined
+      ? { latestHumanMessageAt: thread.latestHumanMessageAt }
+      : {}),
     ...(thread.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: thread.latestUserMessageAt }
       : {}),
@@ -339,6 +350,8 @@ function sidebarThreadSummariesEqual(
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     (left.settledAt ?? null) === (right.settledAt ?? null) &&
+    (left.snoozedUntil ?? null) === (right.snoozedUntil ?? null) &&
+    (left.snoozeReminderAt ?? null) === (right.snoozeReminderAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
     left.latestTurn === right.latestTurn &&
@@ -349,12 +362,16 @@ function sidebarThreadSummariesEqual(
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
+    left.latestHumanMessageAt === right.latestHumanMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
     left.hasLiveTailWork === right.hasLiveTailWork &&
+    left.pendingBackgroundWorkCount === right.pendingBackgroundWorkCount &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
+    // The context never changes after creation; its URL identifies the item.
+    (left.sidechatContext?.url ?? null) === (right.sidechatContext?.url ?? null) &&
     (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
@@ -384,6 +401,8 @@ function buildSidebarThreadSummary(
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     settledAt: thread.settledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozeReminderAt: thread.snoozeReminderAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     latestTurn: thread.latestTurn,
@@ -394,12 +413,15 @@ function buildSidebarThreadSummary(
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
     latestUserMessageAt: metadata.latestUserMessageAt,
+    latestHumanMessageAt: metadata.latestHumanMessageAt ?? null,
     hasPendingApprovals: metadata.hasPendingApprovals,
     hasPendingUserInput: metadata.hasPendingUserInput,
     hasActionableProposedPlan: metadata.hasActionableProposedPlan,
     hasLiveTailWork: metadata.hasLiveTailWork,
+    pendingBackgroundWorkCount: metadata.pendingBackgroundWorkCount,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
@@ -579,6 +601,7 @@ function writeThreadShellProjection(
 function rebuildThreadShellRecords(
   state: AppState,
   snapshotThreads: readonly OrchestrationShellSnapshot["threads"][number][],
+  snapshotSequence: number,
 ): {
   threadShellById: Record<ThreadId, ThreadShell>;
   threadSessionById: Record<ThreadId, ThreadSession | null>;
@@ -593,7 +616,19 @@ function rebuildThreadShellRecords(
   const threadTurnStateById = {} as Record<ThreadId, ThreadTurnState>;
 
   for (const thread of snapshotThreads) {
-    const next = normalizeThreadShellSnapshot(thread, getThreadFromState(state, thread.id));
+    const previousThread = getThreadFromState(state, thread.id);
+    const next = normalizeThreadShellSnapshot(
+      thread,
+      previousThread,
+      thread.claudeCacheReview != null ||
+        previousThread?.claudeCacheReviewSequence !== undefined ||
+        thread.snoozedUntil != null ||
+        thread.snoozeReminderAt != null ||
+        previousThread?.snoozeSequence !== undefined
+        ? snapshotSequence
+        : undefined,
+      { restoringSession: true },
+    );
     const threadId = next.shell.id;
 
     threadShellById[threadId] = resolveShellEntry(previousShellById[threadId], next.shell);
@@ -1179,6 +1214,7 @@ function deriveThreadStateSignals(
 ): Pick<
   Thread,
   | "latestUserMessageAt"
+  | "latestHumanMessageAt"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "hasActionableProposedPlan"
@@ -1194,6 +1230,10 @@ function deriveThreadStateSignals(
   );
   return {
     latestUserMessageAt: metadata.latestUserMessageAt,
+    latestHumanMessageAt:
+      thread.latestHumanMessageAt !== undefined
+        ? thread.latestHumanMessageAt
+        : metadata.latestHumanMessageAt,
     hasPendingApprovals:
       actionableInteractions?.some((interaction) => interaction.interactionKind === "approval") ??
       metadata.hasPendingApprovals,
@@ -1208,6 +1248,7 @@ function withDerivedThreadStateSignals(thread: Thread): Thread {
   const nextSignals = deriveThreadStateSignals(thread);
   if (
     thread.latestUserMessageAt === nextSignals.latestUserMessageAt &&
+    thread.latestHumanMessageAt === nextSignals.latestHumanMessageAt &&
     thread.hasPendingApprovals === nextSignals.hasPendingApprovals &&
     thread.hasPendingUserInput === nextSignals.hasPendingUserInput &&
     thread.hasActionableProposedPlan === nextSignals.hasActionableProposedPlan
@@ -1279,7 +1320,7 @@ export function syncServerShellSnapshot(
   const normalizedState: AppState = {
     ...state,
     threadIds: reuseThreadIdRegistry(state.threadIds, nextThreadIds),
-    ...rebuildThreadShellRecords(state, snapshotThreads),
+    ...rebuildThreadShellRecords(state, snapshotThreads, snapshot.snapshotSequence),
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),
@@ -1331,17 +1372,20 @@ function syncServerThreadDetailWithOptions(
   thread: ReadModelThread,
   options?: {
     updateSidebarSummary?: boolean;
+    snapshotSequence?: number;
   },
 ): AppState {
   const previousThread = getThreadFromState(state, thread.id);
   const nextThreadDetail = options
-    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread)
+    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
     : thread;
   return writeThreadDetailSyncState(
     commitThreadProjection(
       writeThreadState(
         state,
-        normalizeThreadFromReadModel(nextThreadDetail, previousThread),
+        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence, {
+          restoringSession: !state.threadsHydrated,
+        }),
         previousThread,
       ),
       thread.id,
@@ -1364,14 +1408,21 @@ export function syncServerThreadDetail(state: AppState, thread: ReadModelThread)
   return syncServerThreadDetailWithOptions(state, thread);
 }
 
-export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModelThread): AppState {
+export function syncServerThreadDetailHotPath(
+  state: AppState,
+  thread: ReadModelThread,
+  snapshotSequence?: number,
+): AppState {
   if (
     state.deletedProjectIdsById?.[thread.projectId] !== undefined ||
     state.deletedThreadIdsById?.[thread.id] !== undefined
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, { updateSidebarSummary: false });
+  return syncServerThreadDetailWithOptions(state, thread, {
+    updateSidebarSummary: false,
+    ...(snapshotSequence !== undefined ? { snapshotSequence } : {}),
+  });
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
@@ -1395,7 +1446,12 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
       }
       const nextState = writeThreadShellProjection(
         state,
-        normalizeThreadShellSnapshot(event.thread, getThreadFromState(state, event.thread.id)),
+        normalizeThreadShellSnapshot(
+          event.thread,
+          getThreadFromState(state, event.thread.id),
+          event.sequence,
+          { restoringSession: !state.threadsHydrated },
+        ),
       );
       return commitThreadProjection(nextState, event.thread.id);
     }
@@ -1443,7 +1499,18 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     )
     .map((thread) => {
       const existing = getThreadFromState(state, thread.id);
-      return normalizeThreadFromReadModel(thread, existing);
+      return normalizeThreadFromReadModel(
+        thread,
+        existing,
+        thread.claudeCacheReview != null ||
+          existing?.claudeCacheReviewSequence !== undefined ||
+          thread.snoozedUntil != null ||
+          thread.snoozeReminderAt != null ||
+          existing?.snoozeSequence !== undefined
+          ? readModel.snapshotSequence
+          : undefined,
+        { restoringSession: true },
+      );
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
   // This full resync (including the "Repair local state" action) replaces

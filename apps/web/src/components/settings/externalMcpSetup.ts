@@ -190,5 +190,8 @@ export function describeExternalMcpPermissions(
   if (capabilities.includes("runtime:full-access")) {
     descriptions.push("Run without approval prompts");
   }
+  if (capabilities.includes("computer:control")) {
+    descriptions.push("Control this Mac (per-action approval still applies)");
+  }
   return descriptions.join(" · ");
 }

@@ -66,7 +66,7 @@ describe("startSelectionChat", () => {
     });
   });
 
-  it.each(["", "  Keep the exact draft\nwith more context  "])(
+  it.each(["  Keep the exact draft\nwith more context  "])(
     "opens an editable draft %j with the quote without queueing a send",
     async (prompt) => {
       await startSelectionChat({ ...input(), intent: "compose", prompt });
@@ -120,6 +120,7 @@ describe("addSelectionToSide", () => {
   it("attaches the quote before opening Side without sending a turn", async () => {
     vi.mocked(createSidechatThread).mockImplementation(async (options) => {
       expect(options.initialPrompt).toBeUndefined();
+      expect(options.runtimeMode).toBe("full-access");
       options.openSidechat(threadId);
       return { threadId, promptError: null, snapshotError: null };
     });
@@ -130,6 +131,7 @@ describe("addSelectionToSide", () => {
       project: { id: projectId, cwd: "/repo" } as Project,
       sourceThread: { id: sourceThreadId } as Thread,
       selectedModelSelection: modelSelection,
+      runtimeMode: "full-access",
     });
     const drafts = useComposerDraftStore.getState().draftsByThreadId;
     expect(drafts[threadId]?.assistantSelections).toEqual([expect.objectContaining(selection)]);

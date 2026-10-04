@@ -294,7 +294,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         data-floating-browser-panel="true"
         role="region"
         aria-label="Floating browser"
-        className="group/floating-browser pointer-events-auto absolute flex flex-col overflow-visible rounded-xl border border-border bg-background text-foreground shadow-2xl ring-1 ring-black/10"
+        className="group/floating-browser pointer-events-auto absolute flex flex-col overflow-visible rounded-2xl border border-border bg-popover/95 text-foreground shadow-[0_12px_48px_-12px_rgb(0_0_0/0.25)] backdrop-blur-xl"
         style={{
           left: `${panelRect.left}px`,
           top: `${panelRect.top}px`,
@@ -330,7 +330,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
           data-floating-browser-controls="true"
           className="pointer-events-none absolute right-2 top-2 z-[70]"
         >
-          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border/80 bg-background/90 p-0.5 shadow-sm backdrop-blur-md">
+          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border bg-popover/95 p-0.5 text-xs text-muted-foreground shadow-sm backdrop-blur-xl">
             <IconButton
               type="button"
               variant="ghost"

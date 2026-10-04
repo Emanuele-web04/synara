@@ -39,6 +39,7 @@ describe("threadDetailSubscriptionRetention", () => {
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
           hasLiveTailWork: false,
+          pendingBackgroundWorkCount: 0,
         },
       },
     });
@@ -170,6 +171,7 @@ describe("threadDetailSubscriptionRetention", () => {
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
           hasLiveTailWork: true,
+          pendingBackgroundWorkCount: 0,
         },
       },
     });

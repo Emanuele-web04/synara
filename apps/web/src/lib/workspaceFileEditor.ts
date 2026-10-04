@@ -35,7 +35,6 @@ export type WorkspaceFileEditorAction =
   | { type: "saveStarted" }
   | { type: "saveSucceeded"; contents: string; expectedVersion: string }
   | { type: "saveFailed"; message: string; conflict: boolean }
-  | { type: "conflictDismissed" }
   | { type: "closed" };
 
 export const INITIAL_WORKSPACE_FILE_EDITOR_STATE: WorkspaceFileEditorState = {
@@ -151,10 +150,6 @@ export function workspaceFileEditorReducer(
       };
     case "saveFailed":
       return { ...state, saving: false, conflict: action.conflict, saveError: action.message };
-    case "conflictDismissed":
-      return state.conflict || state.saveError !== null
-        ? { ...state, conflict: false, saveError: null }
-        : state;
     case "closed":
       return state.key === null ? state : INITIAL_WORKSPACE_FILE_EDITOR_STATE;
   }

@@ -134,7 +134,7 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
             </DialogHeader>
 
             {info?.supported ? (
-              <ol className="mx-6 mt-5 space-y-3 text-sm leading-relaxed">
+              <ol className="mx-6 mt-5 space-y-3 text-ui leading-relaxed">
                 <Step n={1}>
                   Open <span className="font-medium text-foreground">System Settings</span> ›
                   Privacy &amp; Security › Full Disk Access.
@@ -164,13 +164,13 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
               </ol>
             ) : null}
 
-            <p className="mx-6 mt-5 text-xs leading-relaxed text-muted-foreground/80">
+            <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground/80">
               Full Disk Access is a broad macOS permission that reaches beyond Safari. If you'd
               rather not, that's fine. You can find this again under Settings › General.
             </p>
 
             {status ? (
-              <p role="status" className="mx-6 mt-3 text-xs leading-relaxed text-muted-foreground">
+              <p role="status" className="mx-6 mt-3 text-ui leading-relaxed text-muted-foreground">
                 {status}
               </p>
             ) : null}
@@ -200,7 +200,7 @@ function Step({ n, children }: { n: number; children: ReactNode }) {
     <li className="flex gap-3 text-muted-foreground">
       <span
         aria-hidden
-        className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium tabular-nums text-foreground/70"
+        className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-ui-sm font-medium tabular-nums text-foreground/70"
       >
         {n}
       </span>

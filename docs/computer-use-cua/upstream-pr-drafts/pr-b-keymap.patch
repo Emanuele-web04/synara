@@ -1,0 +1,102 @@
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
+index 2b9baf8e5..f2252c3d6 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
+@@ -654,15 +654,15 @@ pub(super) fn key_name_to_code(key: &str) -> anyhow::Result<u16> {
+         "escape" | "esc" => 53,
+         "command" | "cmd" => 55,
+         "shift" => 56,
+-        "capslock" => 57,
++        "capslock" | "caps_lock" => 57,
+         "option" | "alt" => 58,
+         "control" | "ctrl" => 59,
+         "fn" => 63,
+         "home" => 115,
+-        "pageup" => 116,
++        "pageup" | "page_up" | "pgup" | "prior" => 116,
+         "del" | "forward_delete" => 117,
+         "end" => 119,
+-        "pagedown" => 121,
++        "pagedown" | "page_down" | "pgdn" | "next" => 121,
+         "left" | "left_arrow" => 123,
+         "right" | "right_arrow" => 124,
+         "down" | "down_arrow" => 125,
+@@ -679,6 +679,42 @@ pub(super) fn key_name_to_code(key: &str) -> anyhow::Result<u16> {
+         "f10" => 109,
+         "f11" => 103,
+         "f12" => 111,
++        // Extended function row: real keycodes Apple reserves even though no
++        // current Apple keyboard ships these keys.
++        "f13" => 105,
++        "f14" => 107,
++        "f15" => 113,
++        "f16" => 106,
++        "f17" => 64,
++        "f18" => 79,
++        "f19" => 80,
++        "f20" => 90,
++        // PC editing-cluster and ANSI keypad keys (Apple kVK_* constants).
++        // "menu" is the Application/Context-Menu key; "help" is what the Insert
++        // key on a PC keyboard maps to — it is NOT Insert semantics, so
++        // "insert" stays unmapped. Keypad navigation names (kp_home,
++        // kp_insert, kp_delete, kp_begin, kp_tab, kp_space, kp_f1-f4,
++        // kp_separator, kp_page_up/down, kp arrows) have no macOS keycode.
++        "help" => 114,
++        "menu" | "context_menu" | "application" => 110,
++        "kp_decimal" | "keypad_decimal" => 65,
++        "kp_multiply" | "keypad_multiply" => 67,
++        "kp_add" | "kp_plus" | "keypad_plus" => 69,
++        "kp_clear" | "keypad_clear" | "numlock" | "num_lock" => 71,
++        "kp_divide" | "keypad_divide" => 75,
++        "kp_enter" | "keypad_enter" => 76,
++        "kp_subtract" | "kp_minus" | "keypad_minus" => 78,
++        "kp_equals" | "kp_equal" | "keypad_equals" => 81,
++        "kp_0" | "keypad_0" => 82,
++        "kp_1" | "keypad_1" => 83,
++        "kp_2" | "keypad_2" => 84,
++        "kp_3" | "keypad_3" => 85,
++        "kp_4" | "keypad_4" => 86,
++        "kp_5" | "keypad_5" => 87,
++        "kp_6" | "keypad_6" => 88,
++        "kp_7" | "keypad_7" => 89,
++        "kp_8" | "keypad_8" => 91,
++        "kp_9" | "keypad_9" => 92,
+         "a" => 0,
+         "s" => 1,
+         "d" => 2,
+@@ -882,4 +918,35 @@ mod tests {
+         assert!(!is_screen_sharing_bundle_id("com.apple.screensharing"));
+         assert!(!is_screen_sharing_bundle_id("com.microsoft.rdc.macos"));
+     }
++
++    #[test]
++    fn extended_keymap_names_resolve_to_macos_virtual_keycodes() {
++        for (name, code) in [
++            ("f13", 105_u16),
++            ("f14", 107),
++            ("f15", 113),
++            ("f16", 106),
++            ("f17", 64),
++            ("f18", 79),
++            ("f19", 80),
++            ("f20", 90),
++            ("help", 114),
++            ("menu", 110),
++            ("kp_decimal", 65),
++            ("kp_multiply", 67),
++            ("kp_add", 69),
++            ("kp_clear", 71),
++            ("kp_divide", 75),
++            ("kp_enter", 76),
++            ("kp_subtract", 78),
++            ("kp_equals", 81),
++            ("kp_0", 82),
++            ("kp_5", 87),
++            ("kp_9", 92),
++            ("page_up", 116),
++            ("caps_lock", 57),
++        ] {
++            assert_eq!(key_name_to_code(name).unwrap(), code, "{name}");
++        }
++    }
+ }

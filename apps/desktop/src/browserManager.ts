@@ -1723,6 +1723,20 @@ export class DesktopBrowserManager {
       this.perfCounters.setPanelBoundsNoopSkips += 1;
       return;
     }
+    const previousBounds = this.getVisibleBoundsForThread(input.threadId);
+    if (
+      state.open &&
+      nextBounds &&
+      activeRuntime &&
+      (previousBounds?.width !== nextBounds.width ||
+        previousBounds?.height !== nextBounds.height ||
+        this.getVisiblePageZoomFactor(input.threadId) !== nextPageZoomFactor ||
+        previewChanged)
+    ) {
+      // browser_resize pins Chromium's layout even after the native view resizes.
+      // Restore panel sizing on a new presentation, while preserving overrides on moves.
+      this.clearRuntimeViewportOverride(activeRuntime);
+    }
     this.setActivePageZoomFactor(input.threadId, nextPageZoomFactor);
     this.setActiveBounds(input.threadId, nextBounds);
 
@@ -2340,6 +2354,15 @@ export class DesktopBrowserManager {
     this.runtimePageZoomFactors.set(runtime.key, nextPageZoomFactor);
   }
 
+  private clearRuntimeViewportOverride(runtime: LiveTabRuntime): void {
+    if (runtime.webContents.isDestroyed() || !runtime.webContents.debugger.isAttached()) return;
+    void runtime.webContents.debugger
+      .sendCommand("Emulation.clearDeviceMetricsOverride")
+      .catch(() => {
+        // A closing guest can disconnect between the bounds update and CDP acknowledgement.
+      });
+  }
+
   private resetRuntimePageZoomForThread(threadId: ThreadId): void {
     for (const runtime of this.runtimes.values()) {
       if (runtime.threadId === threadId) {
@@ -2736,11 +2759,8 @@ export class DesktopBrowserManager {
       return;
     }
 
-    try {
-      window.contentView.removeChildView(runtime.view);
-    } catch {
-      // Electron throws when the view is not attached yet; adding it below is the desired state.
-    }
+    // Electron reorders an existing child in place. Removing it first drops
+    // native focus even when the user is already interacting with this page.
     window.contentView.addChildView(runtime.view);
   }
 
@@ -2871,6 +2891,8 @@ export class DesktopBrowserManager {
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
       webPreferences: {
         ...popupOptions?.webPreferences,
+        // Navigation must preserve shell keyboard focus, including hidden previews.
+        focusOnNavigation: false,
         partition: BROWSER_SESSION_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,

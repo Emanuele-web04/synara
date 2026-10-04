@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserAutomationErrorMessages } from "@synara/contracts";
 import { createLocalCredentialVault } from "betterwright";
 import { BrowserVault } from "./browserVault";
@@ -9,6 +9,9 @@ import { VaultKeyProtection } from "./vaultKeyProtection";
 
 const homes: string[] = [];
 const master = "synthetic-master-password-only";
+// These tests intentionally exercise the production-strength password KDF, often
+// more than once, so they need headroom while the workspace suite competes for CPU.
+const VAULT_TEST_TIMEOUT_MS = 30_000;
 afterEach(async () => {
   for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
 });
@@ -22,7 +25,56 @@ async function fixture() {
 const origin = "https://login.example.test";
 const page = (url = origin) => ({ getURL: () => url, isDestroyed: () => false });
 
-describe("browser vault", () => {
+// These integration tests repeat production scrypt derivations and durable writes.
+// Allow for CPU contention when release preflight runs all workspace suites together.
+describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
+  it("defers OS key access for an empty vault until password saving is enabled", async () => {
+    const home = await mkdtemp(join(tmpdir(), "synara-empty-vault-"));
+    homes.push(home);
+    const store = {
+      available: vi.fn(async () => true),
+      encrypt: vi.fn((value: string) => Buffer.from(value)),
+      decrypt: vi.fn((value: Buffer) => value.toString()),
+    };
+    const vault = new BrowserVault(home, store);
+    try {
+      expect(await vault.snapshot()).toMatchObject({
+        protection: { configured: false, locked: true, osProtected: false },
+        logins: [],
+      });
+      expect(store.available).not.toHaveBeenCalled();
+      await expect(readFile(join(home, "vault", "key-protection.json"))).rejects.toThrow();
+      expect(
+        await vault.configure({ agentUse: true, offerSave: true, autosave: false }),
+      ).toMatchObject({ protection: { locked: false, osProtected: true } });
+      await vault.saveCaptured(origin, { username: "human", password: "saved-synthetic" }, "user");
+      expect(store.encrypt).toHaveBeenCalledTimes(1);
+      expect((await vault.snapshot()).logins).toMatchObject([{ username: "human" }]);
+      const restored = new BrowserVault(home, store);
+      try {
+        expect((await restored.snapshot()).logins).toMatchObject([{ username: "human" }]);
+      } finally {
+        restored.dispose();
+      }
+    } finally {
+      vault.dispose();
+    }
+  });
+
+  it("does not initialize an unused vault during or after disposal", async () => {
+    const home = await mkdtemp(join(tmpdir(), "synara-disposed-vault-"));
+    homes.push(home);
+    const available = vi.fn(async () => true);
+    const vault = new BrowserVault(home, {
+      available,
+      encrypt: (value) => Buffer.from(value),
+      decrypt: (value) => value.toString(),
+    });
+    vault.dispose();
+    await expect(vault.setupMaster(master)).rejects.toThrow("Vault closed");
+    expect(available).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "preserves saved passwords when provenance persistence fails (update=%s)",
     async (update) => {

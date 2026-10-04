@@ -88,7 +88,7 @@ export function AgentActivityDetailView({
                 <h2 className="truncate text-[18px] font-medium leading-6 text-foreground/92">
                   {detail.title}
                 </h2>
-                <span className="rounded-full border border-border/45 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/56">
+                <span className="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/56">
                   {`${detail.entries.length} ${pluralize(detail.entries.length, "update")}`}
                 </span>
               </div>
@@ -148,7 +148,7 @@ export function AgentActivityDetailView({
 function AgentActivitySection(props: { title: string; children: ReactNode }) {
   return (
     <section className="border-b border-border/45 py-4 last:border-b-0">
-      <h3 className="mb-2 text-[11px] font-medium text-muted-foreground/48">{props.title}</h3>
+      <h3 className="mb-2 text-ui-sm font-medium text-muted-foreground/48">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -164,7 +164,10 @@ function AgentActivityEventRow(props: {
 }) {
   const preview = formatAgentActivityEntryPreview(props.entry);
   const title = formatAgentActivityEntryTitle(props.entry);
-  const body = isReasoningUpdateWorkEntry(props.entry) ? preview : (preview ?? props.entry.detail);
+  const body =
+    isReasoningUpdateWorkEntry(props.entry) || props.entry.activityKind === "tool.summary"
+      ? (props.entry.detail ?? preview)
+      : (preview ?? props.entry.detail);
 
   return (
     <div className="py-3 first:pt-0 last:pb-0">

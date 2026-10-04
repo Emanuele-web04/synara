@@ -48,7 +48,7 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
   const listRows = SqlSchema.findAll({
     Request: ListProjectionPendingInteractionsInput,
     Result: ProjectionPendingInteraction,
-    execute: ({ threadId }) => sql`
+    execute: ({ threadId, unsettledOnly }) => sql`
       SELECT
         interaction_kind AS "interactionKind",
         request_id AS "requestId",
@@ -63,6 +63,7 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
         resolved_at AS "resolvedAt"
       FROM projection_pending_interactions
       WHERE thread_id = ${threadId}
+        AND (${unsettledOnly === true ? 1 : 0} = 0 OR status NOT IN ('confirmed', 'uncertain'))
       ORDER BY created_at ASC, interaction_kind ASC, request_id ASC
     `,
   });

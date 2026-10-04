@@ -6,6 +6,9 @@
 //   `onSelect` jumps (shadcn's scrollToMessage). The hot path writes tick width /
 //   opacity straight to the DOM inside one coalesced rAF — no React state per move
 //   — so it stays smooth and never re-renders the heavy timeline.
+//   With `subscribeAudioLevel`, the resting ticks also ripple with sound (the
+//   Mac's audio output and/or the microphone), outward from the middle of the
+//   visible rail; pointer/keyboard magnification always wins over the wave.
 // Layer: Chat transcript shell (presentation)
 // Depends on: pure magnification math in messageTrail.logic.ts (unit-tested).
 
@@ -33,6 +36,9 @@ import {
   computeSigma,
   computeTickStyles,
   computeTrailGeometry,
+  computeAudioTickWidths,
+  createAudioLevelShaper,
+  stepAudioEnvelope,
   type ActiveTrailStore,
   type MessageTrailItem,
   type TickStyle,
@@ -44,6 +50,8 @@ interface MessageTrailProps {
   /** Stable holder for current + visible highlights; only this component re-renders on change. */
   activeStore: ActiveTrailStore;
   onSelect: (messageId: MessageId) => void;
+  /** Source of audio levels (0..1); omitted, the rail ignores sound. */
+  subscribeAudioLevel?: ((listener: (level: number) => void) => () => void) | undefined;
 }
 
 // Rail only renders once the centered transcript column (max 46rem) leaves a left
@@ -75,10 +83,21 @@ const TICK_ANCHOR_OPACITY = 0.9;
 // Only the single tick directly under the pointer/keyboard focus goes full black —
 // its neighbours just grow in size, they don't darken (no opacity falloff).
 const TICK_FOCUS_OPACITY = 1;
+// Audio wave: each tick lags its inner neighbour by this many frames, and the
+// envelope keeps this much of its height per frame once the sound drops.
+const AUDIO_FRAMES_PER_TICK = 3;
+const AUDIO_RELEASE_PER_FRAME = 0.82;
+const AUDIO_HISTORY_FRAMES = 120;
+const AUDIO_SILENCE_LEVEL = 0.002;
 const TOOLTIP_ESTIMATED_H_PX = 56;
 const TOOLTIP_OFFSET_X_PX = 8;
 
-export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps) {
+export function MessageTrail({
+  items,
+  activeStore,
+  onSelect,
+  subscribeAudioLevel,
+}: MessageTrailProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -125,6 +144,12 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
   const viewportTopRef = useRef(0);
   const tooltipIndexRef = useRef(-1);
   const reducedMotionRef = useRef(false);
+  // Audio wave state: latest reported level, smoothed envelope, and its recent
+  // history (newest first) that the travelling wave reads from.
+  const audioTargetRef = useRef(0);
+  const audioEnvelopeRef = useRef(0);
+  const audioHistoryRef = useRef<number[]>([]);
+  const audioRafIdRef = useRef<number | null>(null);
   // Mirror render values into refs so the rAF/handlers stay stable and current.
   // Mirrored in an effect (not during render) so the component stays eligible
   // for React Compiler; the rAF loop and handlers only fire post-commit.
@@ -225,8 +250,72 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
       TICK_ANCHOR_OPACITY,
     );
     applyHighlightFloors(styles);
+    applyAudioWidths(styles);
     writeStyles(styles);
     hideTooltip();
+  };
+
+  // Resting ticks follow the audio wave, centred on the middle of the visible rail.
+  const applyAudioWidths = (styles: TickStyle[]) => {
+    const history = audioHistoryRef.current;
+    const geometryValue = geometryRef.current;
+    const viewport = viewportRef.current;
+    if (history.length === 0 || !geometryValue || !viewport) {
+      return;
+    }
+    const centerIndex = computeFocusedIndex(
+      viewport.scrollTop + viewport.clientHeight / 2,
+      geometryValue,
+    );
+    const widths = computeAudioTickWidths({
+      count: styles.length,
+      centerIndex,
+      history,
+      framesPerTick: AUDIO_FRAMES_PER_TICK,
+      baseW: TICK_BASE_W,
+      maxW: TICK_MAX_W,
+    });
+    for (let i = 0; i < styles.length; i += 1) {
+      const style = styles[i]!;
+      style.width = Math.max(style.width, widths[i] ?? TICK_BASE_W);
+    }
+  };
+
+  // One envelope step per frame; runs only while there is sound left to draw.
+  const renderAudioFrame = () => {
+    audioRafIdRef.current = null;
+    const envelope = stepAudioEnvelope(
+      audioEnvelopeRef.current,
+      audioTargetRef.current,
+      AUDIO_RELEASE_PER_FRAME,
+    );
+    audioEnvelopeRef.current = envelope < AUDIO_SILENCE_LEVEL ? 0 : envelope;
+    const history = audioHistoryRef.current;
+    history.unshift(audioEnvelopeRef.current);
+    if (history.length > AUDIO_HISTORY_FRAMES) {
+      history.length = AUDIO_HISTORY_FRAMES;
+    }
+    const settled = history.every((level) => level === 0);
+    if (settled) {
+      history.length = 0;
+    }
+    if (
+      visibleRef.current &&
+      latestPointerClientYRef.current === null &&
+      focusOverrideIndexRef.current === null
+    ) {
+      applyRest();
+    }
+    if (!settled) {
+      audioRafIdRef.current = requestAnimationFrame(renderAudioFrame);
+    }
+  };
+
+  const cancelAudioFrame = () => {
+    if (audioRafIdRef.current !== null) {
+      cancelAnimationFrame(audioRafIdRef.current);
+      audioRafIdRef.current = null;
+    }
   };
 
   // Position the ticks vertically in content space and reset to rest when idle.
@@ -379,6 +468,38 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
         : false;
   }, []);
+
+  // The audio subscription must not churn with every render (each re-subscribe
+  // can restart the native reader), so it reaches the frame writers via a ref.
+  const audioFrameHandlersRef = useRef({ renderAudioFrame, cancelAudioFrame, applyRest });
+  useEffect(() => {
+    audioFrameHandlersRef.current = { renderAudioFrame, cancelAudioFrame, applyRest };
+  });
+
+  // Audio wave: listen only while the rail is on screen and motion is allowed.
+  useEffect(() => {
+    if (!subscribeAudioLevel || !visible || reducedMotionRef.current) {
+      return;
+    }
+    const shapeLevel = createAudioLevelShaper();
+    const unsubscribe = subscribeAudioLevel((level) => {
+      const target = shapeLevel(level);
+      audioTargetRef.current = target;
+      if (audioRafIdRef.current === null && (target > 0 || audioHistoryRef.current.length > 0)) {
+        audioRafIdRef.current = requestAnimationFrame(
+          audioFrameHandlersRef.current.renderAudioFrame,
+        );
+      }
+    });
+    return () => {
+      unsubscribe();
+      audioFrameHandlersRef.current.cancelAudioFrame();
+      audioTargetRef.current = 0;
+      audioEnvelopeRef.current = 0;
+      audioHistoryRef.current = [];
+      audioFrameHandlersRef.current.applyRest();
+    };
+  }, [subscribeAudioLevel, visible]);
 
   // Going inert (narrow pane / N<=1): stop the loop and clear transient state.
   useEffect(() => {
@@ -593,12 +714,12 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         {/* The sent message: dark, max two lines (matches the projects/threads card title). */}
         <div
           ref={tooltipMessageRef}
-          className="line-clamp-2 text-xs leading-snug font-medium text-foreground"
+          className="line-clamp-2 text-ui leading-snug font-medium text-foreground"
         />
         {/* The turn's first reply: muted gray, max three lines. */}
         <div
           ref={tooltipResponseRef}
-          className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground"
+          className="mt-1 line-clamp-3 text-ui leading-snug text-muted-foreground"
         />
       </div>
     </nav>

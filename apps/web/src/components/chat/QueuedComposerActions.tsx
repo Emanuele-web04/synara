@@ -29,7 +29,7 @@ function QueuedComposerActions({
 }: QueuedComposerActionsProps) {
   return (
     <div className="flex shrink-0 items-center gap-0">
-      <Button variant="subtle" size="chip" onClick={() => void onSteer(queuedTurn)}>
+      <Button variant="ghost" size="chip" onClick={() => void onSteer(queuedTurn)}>
         <SteerIcon />
         <span>Steer</span>
       </Button>

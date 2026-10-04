@@ -183,6 +183,9 @@ export function getComposerTraitSelection(
   };
 }
 
+/** Resolved composer trait state; the single shape every trait surface reads. */
+export type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
+
 // Human label for the currently selected reasoning/thinking trait, shared by the
 // composer trigger and any surface that summarizes a thread's model selection.
 export function resolveComposerTraitStatusLabel(
@@ -246,7 +249,7 @@ export function hasVisibleComposerTraitControls(
 // Persisted option key for the primary effort ladder when the descriptor is missing.
 function fallbackEffortOptionId(provider: ProviderKind): string {
   if (provider === "opencode") return "variant";
-  if (provider === "pi") return "thinkingLevel";
+  if (provider === "pi" || provider === "omp") return "thinkingLevel";
   if (provider === "claudeAgent") return "effort";
   return "reasoningEffort";
 }
@@ -288,6 +291,24 @@ export function planComposerEffortChange(input: {
   }
   const optionId = selection.primarySelectDescriptor?.id ?? fallbackEffortOptionId(provider);
   return { kind: "options", patch: buildProviderOptionPatch(provider, optionId, nextOption.value) };
+}
+
+// Keyboard cycling changes persisted effort only. Prompt-injected levels belong
+// to explicit prompt edits, and an existing Ultrathink prefix keeps its lock.
+export function planComposerEffortCycle(input: {
+  provider: ProviderKind;
+  selection: ComposerTraitSelection;
+  prompt: string;
+}): ComposerEffortChangePlan | null {
+  const { selection } = input;
+  if (selection.ultrathinkPromptControlled) return null;
+  const levels = selection.effortLevels.filter(
+    (level) => !selection.promptInjectedValues.includes(level.value),
+  );
+  if (levels.length < 2) return null;
+  const currentIndex = levels.findIndex((level) => level.value === selection.effort);
+  const nextLevel = levels[(currentIndex + 1) % levels.length];
+  return nextLevel ? planComposerEffortChange({ ...input, value: nextLevel.value }) : null;
 }
 
 // Index of the effort the slider thumb should rest on. While Ultrathink is

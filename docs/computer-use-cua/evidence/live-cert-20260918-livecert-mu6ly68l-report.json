@@ -1,0 +1,25 @@
+{
+  "run": "livecert-mu6ly68l",
+  "date": "2026-09-18T06:59:15.209Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-uBTyX9/host.sock",
+  "elapsedMs": 11634,
+  "rows": [
+    {
+      "name": "hidden-launch-default",
+      "verdict": "fail",
+      "detail": "TypeError: undefined is not an object (evaluating 'JSON.stringify(write).slice')",
+      "evidence": {
+        "error": "TypeError: undefined is not an object (evaluating 'JSON.stringify(write).slice')"
+      },
+      "elapsedMs": 9162
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}

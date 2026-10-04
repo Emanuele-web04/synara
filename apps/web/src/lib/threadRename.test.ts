@@ -12,37 +12,9 @@ vi.mock("../nativeApi", () => ({
   }),
 }));
 
-import {
-  buildDraftThreadRenameCreateInput,
-  dispatchThreadRename,
-  dispatchThreadTitleRegeneration,
-} from "./threadRename";
+import { dispatchThreadRename } from "./threadRename";
 
 describe("dispatchThreadRename", () => {
-  it("maps local draft metadata into the rename promotion input", () => {
-    expect(
-      buildDraftThreadRenameCreateInput({
-        projectId: "project-chat" as never,
-        modelSelection: { provider: "codex", model: "gpt-5" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdAt: "2026-04-18T00:00:00.000Z",
-      }),
-    ).toEqual({
-      projectId: "project-chat",
-      modelSelection: { provider: "codex", model: "gpt-5" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      envMode: "local",
-      branch: null,
-      worktreePath: null,
-      workingDirectory: null,
-      createdAt: "2026-04-18T00:00:00.000Z",
-    });
-  });
-
   it("updates existing server threads", async () => {
     dispatchCommand.mockReset().mockResolvedValue(undefined);
     regenerateThreadTitle.mockReset();
@@ -95,17 +67,5 @@ describe("dispatchThreadRename", () => {
       title: "Inbox cleanup",
       createdAt: "2026-04-18T00:00:00.000Z",
     });
-  });
-
-  it("requests server-side title regeneration for an existing thread", async () => {
-    regenerateThreadTitle.mockReset().mockResolvedValue({
-      status: "renamed",
-      title: "Backend auth",
-    });
-
-    const outcome = await dispatchThreadTitleRegeneration("thread-server" as never);
-
-    expect(outcome).toEqual({ status: "renamed", title: "Backend auth" });
-    expect(regenerateThreadTitle).toHaveBeenCalledWith({ threadId: "thread-server" });
   });
 });

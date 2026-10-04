@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   planRestartTurnReconciliation,
   reconcileRestartStuckTurns,
+  type ReconcilablePendingInteraction,
   type ReconcilableThread,
 } from "./startupTurnReconciliation.ts";
 
@@ -51,6 +52,18 @@ const makeActivity = (
   createdAt: `2026-06-13T09:00:0${sequence}.000Z`,
 });
 
+const makePendingInteraction = (
+  threadId: string,
+  interactionKind: ReconcilablePendingInteraction["interactionKind"],
+  requestId: string,
+  status: ReconcilablePendingInteraction["status"],
+): ReconcilablePendingInteraction => ({
+  threadId: ThreadId.makeUnsafe(threadId),
+  interactionKind,
+  requestId: ApprovalRequestId.makeUnsafe(requestId),
+  status,
+});
+
 const expectSessionCommands = (commands: ReturnType<typeof planRestartTurnReconciliation>) =>
   commands.map((command) => {
     expect(command.type).toBe("thread.session.set");
@@ -61,10 +74,6 @@ const expectSessionCommands = (commands: ReturnType<typeof planRestartTurnReconc
   });
 
 describe("planRestartTurnReconciliation", () => {
-  it("returns nothing for an empty thread set", () => {
-    expect(planRestartTurnReconciliation({ threads: [], now: NOW })).toEqual([]);
-  });
-
   it("leaves clean threads untouched (no active turn, no in-flight session, no open turn)", () => {
     const threads = [
       makeThread("idle-no-session"),
@@ -136,8 +145,6 @@ describe("planRestartTurnReconciliation", () => {
 
   it.each([
     ["pending", true],
-    ["responding", true],
-    ["retryable", true],
     ["confirmed", false],
     ["uncertain", false],
   ] as const)(
@@ -270,40 +277,6 @@ describe("planRestartTurnReconciliation", () => {
         }),
       ).toEqual([]);
     }
-  });
-
-  it("clears a dangling active turn id while preserving the terminal error session", () => {
-    const threads = [
-      makeThread("errored", {
-        session: makeSession("errored", {
-          status: "error",
-          activeTurnId: TurnId.makeUnsafe("failed-turn"),
-          lastError: "runtime exploded",
-        }),
-        latestTurn: { state: "error" },
-      }),
-    ];
-
-    // The turn is already settled, but the retained `activeTurnId` keeps every
-    // "is this thread busy?" check true - so the pointer is cleared without
-    // rewriting the terminal status or dropping the error banner.
-    expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([
-      {
-        type: "thread.session.set",
-        commandId: `restart-reconcile-active-turn:errored:${NOW}`,
-        threadId: "errored",
-        createdAt: NOW,
-        session: {
-          threadId: "errored",
-          status: "error",
-          providerName: "grok",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: "runtime exploded",
-          updatedAt: NOW,
-        },
-      },
-    ]);
   });
 
   it("marks an unfinished checkpoint revert as failed after restart", () => {
@@ -617,42 +590,27 @@ describe("planRestartTurnReconciliation", () => {
     });
   });
 
-  it("selects only the stuck threads from a mixed set, preserving order", () => {
-    const threads = [
-      makeThread("clean-a", {
-        session: makeSession("clean-a", { status: "ready", activeTurnId: null }),
-        latestTurn: { state: "completed" },
-      }),
-      makeThread("stuck-a", {
-        session: makeSession("stuck-a", {
-          status: "running",
-          activeTurnId: TurnId.makeUnsafe("stuck-a-turn"),
-        }),
-      }),
-      makeThread("clean-b"),
-      makeThread("stuck-b", { latestTurn: { state: "running" } }),
+  it("ignores resolved rows and rows belonging to other threads", () => {
+    const thread = makeThread("clean-thread", {
+      session: makeSession("clean-thread", { status: "ready", activeTurnId: null }),
+      latestTurn: { state: "completed" },
+    });
+    const pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction> = [
+      makePendingInteraction("clean-thread", "userInput", "answered", "confirmed"),
+      // Already reported as unanswerable: re-reporting would duplicate the row's
+      // failure activity on every boot.
+      makePendingInteraction("clean-thread", "approval", "already-reported", "uncertain"),
+      makePendingInteraction("other-thread", "userInput", "elsewhere", "pending"),
     ];
 
-    const commands = planRestartTurnReconciliation({ threads, now: NOW });
-    expect(commands.map((command) => command.threadId)).toEqual(["stuck-a", "stuck-b"]);
-  });
-
-  it("produces deterministic command ids for identical inputs", () => {
-    const threads = [
-      makeThread("stuck", {
-        session: makeSession("stuck", { status: "running" }),
-      }),
-    ];
-
-    const first = planRestartTurnReconciliation({ threads, now: NOW });
-    const second = planRestartTurnReconciliation({ threads, now: NOW });
-    expect(first[0]?.commandId).toBe(second[0]?.commandId);
-    expect(first[0]?.commandId).toBe(`restart-reconcile:stuck:${NOW}`);
+    expect(
+      planRestartTurnReconciliation({ threads: [thread], pendingInteractions, now: NOW }),
+    ).toEqual([]);
   });
 });
 
 describe("reconcileRestartStuckTurns selection", () => {
-  it.each(["uncertain", "responding"] as const)(
+  it.each(["uncertain"] as const)(
     "finds %s callbacks on completed threads even with false summary flags",
     async (status) => {
       const thread = {

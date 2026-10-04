@@ -162,7 +162,7 @@ export function AdvancedSettingsPanel(props: {
           description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
           status={
             <>
-              <span className="block break-all font-mono text-[11px] text-foreground">
+              <span className="block break-all font-mono text-ui-sm text-foreground">
                 {keybindingsConfigPath ?? "Resolving keybindings path..."}
               </span>
               {openKeybindingsError ? (
@@ -211,7 +211,9 @@ export function AdvancedSettingsPanel(props: {
                 aria-expanded={showRecoveryTools}
                 onClick={() => setShowRecoveryTools((current) => !current)}
               >
-                <span className="text-xs font-medium text-muted-foreground">What this does</span>
+                <span className="text-ui leading-snug font-medium text-muted-foreground">
+                  What this does
+                </span>
                 <DisclosureChevron
                   open={showRecoveryTools}
                   className="size-4 shrink-0 text-muted-foreground"
@@ -220,7 +222,7 @@ export function AdvancedSettingsPanel(props: {
               <DisclosureRegion
                 open={showRecoveryTools}
                 contentClassName={cn(
-                  "mt-3 px-3 py-3 text-xs text-muted-foreground",
+                  "mt-3 px-3 py-3 text-ui leading-snug text-muted-foreground",
                   SETTINGS_INSET_LIST_CLASS_NAME,
                 )}
               >
@@ -238,7 +240,11 @@ export function AdvancedSettingsPanel(props: {
         <SettingsRow
           title="Version"
           description="Current application version."
-          control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
+          control={
+            <code className="text-ui leading-snug font-medium text-muted-foreground">
+              {APP_VERSION}
+            </code>
+          }
         />
         <SettingsRow
           title="Release history"

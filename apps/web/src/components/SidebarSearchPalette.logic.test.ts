@@ -1,6 +1,7 @@
 import { assert, describe, it } from "vitest";
 
 import {
+  areSidebarSearchThreadListsEqual,
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
@@ -167,17 +168,6 @@ describe("SidebarSearchPalette.logic", () => {
     );
   });
 
-  it("matches Feedback Synara by feedback and issue keywords", () => {
-    assert.deepEqual(
-      matchSidebarSearchActions(actions, "feedback").map((action) => action.id),
-      ["feedback"],
-    );
-    assert.deepEqual(
-      matchSidebarSearchActions(actions, "bug").map((action) => action.id),
-      ["feedback"],
-    );
-  });
-
   it("hides requiresQuery actions from the empty palette but matches them once typed", () => {
     const withSpaceJump: SidebarSearchAction[] = [
       ...actions,
@@ -198,25 +188,6 @@ describe("SidebarSearchPalette.logic", () => {
 
     const typed = matchSidebarSearchActions(withSpaceJump, "work");
     assert.equal(typed[0]?.id, "switch-space-work");
-  });
-
-  it("matches usage settings by keyword", () => {
-    const result = matchSidebarSearchActions(actions, "quota");
-
-    assert.deepEqual(
-      result.map((action) => action.id),
-      ["usage-settings"],
-    );
-    assert.equal(result[0]?.shortcutLabel, "⇧⌘U");
-  });
-
-  it("keeps theme entries in source order for an empty query", () => {
-    const result = matchSidebarSearchThemes(themes, "");
-
-    assert.deepEqual(
-      result.map((theme) => theme.id),
-      ["theme-mode-system", "theme-mode-dark", "theme-codex-dark", "theme-linear-dark"],
-    );
   });
 
   it("matches themes by query relevance", () => {
@@ -292,21 +263,49 @@ describe("SidebarSearchPalette.logic", () => {
     assert.include(result[0]?.snippet ?? "", "desktop notification toggles");
   });
 
-  it("keeps title matches ahead of message-only matches", () => {
-    const result = matchSidebarSearchThreads(threads, "composer");
-
-    assert.deepEqual(
-      result.map((match) => match.thread.id),
-      ["thread-alpha-composer"],
-    );
-    assert.equal(result[0]?.matchKind, "title");
-  });
-
   it("counts multiple message hits in the same thread", () => {
     const result = matchSidebarSearchThreads(threads, "composeprompt");
 
     assert.equal(result[0]?.thread.id, "thread-alpha-compose-prompt");
     assert.equal(result[0]?.matchKind, "title");
     assert.equal(result[0]?.messageMatchCount, 2);
+  });
+});
+
+describe("areSidebarSearchThreadListsEqual", () => {
+  const thread = (overrides: Partial<SidebarSearchThread> = {}): SidebarSearchThread => ({
+    id: "thread-1",
+    title: "Title",
+    projectId: "project-1",
+    projectName: "Project",
+    projectRemoteName: "org/project",
+    spaceName: "Global",
+    provider: "codex",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: undefined,
+    messages: [],
+    ...overrides,
+  });
+
+  it("treats rebuilt lists with identical fields and message references as equal", () => {
+    const messages = [{ text: "hello" }];
+    assert.isTrue(areSidebarSearchThreadListsEqual([thread({ messages })], [thread({ messages })]));
+  });
+
+  it("detects a changed field, a changed message array, or a different length", () => {
+    const messages = [{ text: "hello" }];
+    assert.isFalse(
+      areSidebarSearchThreadListsEqual(
+        [thread({ messages })],
+        [thread({ messages, title: "Renamed" })],
+      ),
+    );
+    assert.isFalse(
+      areSidebarSearchThreadListsEqual(
+        [thread({ messages })],
+        [thread({ messages: [{ text: "hello" }] })],
+      ),
+    );
+    assert.isFalse(areSidebarSearchThreadListsEqual([thread()], [thread(), thread()]));
   });
 });

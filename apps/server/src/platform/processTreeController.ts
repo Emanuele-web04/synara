@@ -13,12 +13,12 @@ const PROCESS_TREE_SCAN_MAX_BUFFER_BYTES = 8_388_608;
 const PROCESS_COMMAND_SCAN_MAX_BUFFER_BYTES = 8_388_608;
 
 export type ProcessChildrenMap = Map<number, Array<CapturedProcess>>;
-export type ProcessCommandMap = Map<number, string>;
+export type ProcessIdentityMap = Map<number, CapturedProcess>;
 
 export interface CapturedProcess {
   readonly pid: number;
   readonly command: string;
-  /** Windows CIM CreationDate, used to reject PID reuse during delayed escalation. */
+  /** POSIX lstart or Windows CIM CreationDate; rejects observed PID reuse. */
   readonly startedAt?: string;
 }
 
@@ -58,8 +58,9 @@ export interface ProcessTreeKiller {
 }
 
 export interface ProcessTreeKillerDependencies {
+  readonly platform: NodeJS.Platform;
   readonly captureChildrenMap: () => ProcessChildrenMap | null;
-  readonly readCurrentCommands: (pids: readonly number[]) => ProcessCommandMap | null;
+  readonly readCurrentProcesses: (pids: readonly number[]) => ProcessIdentityMap | null;
   readonly signalPid: (pid: number, signal: TerminalKillSignal) => Error | null;
   readonly signalTree: (
     rootPid: number,
@@ -74,33 +75,28 @@ export interface PlatformProcessTreeOptions {
   readonly captureWindowsChildren?: () => Promise<ProcessChildrenMap | null>;
 }
 
-export function parseProcessChildrenMap(psOutput: string): ProcessChildrenMap {
+function isSignalablePid(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 1 && pid <= 0x7fffffff;
+}
+
+export function parseProcessChildrenMap(
+  psOutput: string,
+  includeStartTime = false,
+): ProcessChildrenMap {
   const childrenByParentPid: ProcessChildrenMap = new Map();
   for (const line of psOutput.split(/\r?\n/g)) {
     const [pidRaw, ppidRaw, ...commandParts] = line.trim().split(/\s+/g);
     const pid = Number(pidRaw);
     const ppid = Number(ppidRaw);
+    const startedAt = includeStartTime ? commandParts.splice(0, 5).join(" ") : undefined;
     const command = commandParts.join(" ").trim();
     if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue;
     if (command.length === 0) continue;
     const siblings = childrenByParentPid.get(ppid) ?? [];
-    siblings.push({ pid, command });
+    siblings.push({ pid, command, ...(startedAt ? { startedAt } : {}) });
     childrenByParentPid.set(ppid, siblings);
   }
   return childrenByParentPid;
-}
-
-export function parseProcessCommandMap(psOutput: string): ProcessCommandMap {
-  const commandsByPid: ProcessCommandMap = new Map();
-  for (const line of psOutput.split(/\r?\n/g)) {
-    const match = /^\s*(\d+)\s+(.*\S)\s*$/.exec(line);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    const command = match[2]?.trim() ?? "";
-    if (!Number.isInteger(pid) || command.length === 0) continue;
-    commandsByPid.set(pid, command);
-  }
-  return commandsByPid;
 }
 
 export function collectDescendantProcesses(
@@ -128,36 +124,46 @@ export function collectDescendantProcesses(
 
 function captureProcessChildrenMapSync(): ProcessChildrenMap | null {
   try {
-    const result = spawnProcessSync("ps", ["-eo", "pid=,ppid=,command="], {
+    const result = spawnProcessSync("ps", ["-eo", "pid=,ppid=,lstart=,command="], {
+      // lstart uses locale-dependent %c; the parser expects the C locale's five tokens.
+      env: { ...process.env, LC_ALL: "C" },
       encoding: "utf8",
       maxBuffer: PROCESS_TREE_SCAN_MAX_BUFFER_BYTES,
       timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
     });
     if (result.error || result.status !== 0) return null;
-    return parseProcessChildrenMap(result.stdout);
+    return parseProcessChildrenMap(result.stdout, true);
   } catch {
     return null;
   }
 }
 
-function readCurrentCommands(pids: readonly number[]): ProcessCommandMap | null {
-  const uniquePids = [...new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 0))];
+function readCurrentProcesses(pids: readonly number[]): ProcessIdentityMap | null {
+  const uniquePids = [...new Set(pids.filter(isSignalablePid))];
   if (uniquePids.length === 0) return new Map();
   try {
-    const result = spawnProcessSync("ps", ["-p", uniquePids.join(","), "-o", "pid=,command="], {
-      encoding: "utf8",
-      maxBuffer: PROCESS_COMMAND_SCAN_MAX_BUFFER_BYTES,
-      timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
-    });
+    const result = spawnProcessSync(
+      "ps",
+      ["-p", uniquePids.join(","), "-o", "pid=,ppid=,lstart=,command="],
+      {
+        env: { ...process.env, LC_ALL: "C" },
+        encoding: "utf8",
+        maxBuffer: PROCESS_COMMAND_SCAN_MAX_BUFFER_BYTES,
+        timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
+      },
+    );
     if (result.error) return null;
-    if (result.status !== 0) return new Map();
-    return parseProcessCommandMap(result.stdout);
+    // ps exits 1 when none of the requested PIDs exist; other errors are unknown.
+    if (result.status !== 0 && (result.status !== 1 || result.stderr.trim().length > 0))
+      return null;
+    return processesByPid(parseProcessChildrenMap(result.stdout, true));
   } catch {
     return null;
   }
 }
 
 function signalPid(pid: number, signal: TerminalKillSignal): Error | null {
+  if (!isSignalablePid(pid)) return null;
   try {
     globalThis.process.kill(pid, signal);
     return null;
@@ -168,35 +174,38 @@ function signalPid(pid: number, signal: TerminalKillSignal): Error | null {
   }
 }
 
-function shouldSignalCapturedProcess(
-  process: CapturedProcess,
-  signal: TerminalKillSignal,
-  currentCommands: ProcessCommandMap | null,
-): boolean {
-  if (signal !== "SIGKILL") return true;
-  return currentCommands?.get(process.pid) === process.command;
-}
-
 function capturedProcessesForSignal(
   descendants: readonly CapturedProcess[],
   signal: TerminalKillSignal,
-  readCommands: (pids: readonly number[]) => ProcessCommandMap | null,
+  readProcesses: (pids: readonly number[]) => ProcessIdentityMap | null,
   verifiedDescendants: boolean,
 ): CapturedProcess[] {
-  if (verifiedDescendants) return [...descendants];
-  const currentCommands =
-    signal === "SIGKILL" ? readCommands(descendants.map((descendant) => descendant.pid)) : null;
-  return descendants.filter((descendant) =>
-    shouldSignalCapturedProcess(descendant, signal, currentCommands),
-  );
+  const safeDescendants = descendants.filter((descendant) => isSignalablePid(descendant.pid));
+  if (verifiedDescendants || signal !== "SIGKILL") return safeDescendants;
+  const currentProcesses = readProcesses(safeDescendants.map((descendant) => descendant.pid));
+  return safeDescendants.filter((descendant) => {
+    const current = currentProcesses?.get(descendant.pid);
+    return current !== undefined && sameCapturedIdentity(descendant, current);
+  });
+}
+
+/**
+ * Roots a teardown must never collect or signal: pid <= 1 (launchd/init),
+ * out-of-range values, and this process itself. A fake or stale pid reaching
+ * teardown (a test handle claiming pid 1 walked launchd's whole descendant
+ * tree and SIGTERM'd the user session) must fail closed, not kill.
+ */
+function isUnsafeProcessTreeRoot(rootPid: number): boolean {
+  return !isSignalablePid(rootPid) || rootPid === globalThis.process.pid;
 }
 
 export function createProcessTreeKiller(
   dependencies: Partial<ProcessTreeKillerDependencies> = {},
 ): ProcessTreeKiller {
   const deps: ProcessTreeKillerDependencies = {
+    platform: globalThis.process.platform,
     captureChildrenMap: captureProcessChildrenMapSync,
-    readCurrentCommands,
+    readCurrentProcesses,
     signalPid,
     signalTree: treeKill,
     ...dependencies,
@@ -204,10 +213,10 @@ export function createProcessTreeKiller(
 
   return {
     capture: (rootPid) => {
-      if (!Number.isInteger(rootPid) || rootPid <= 0) {
+      if (isUnsafeProcessTreeRoot(rootPid)) {
         return { descendants: [], captureComplete: false };
       }
-      if (globalThis.process.platform === "win32") {
+      if (deps.platform === "win32") {
         // The synchronous terminal compatibility API cannot query CIM safely.
         // Windows teardown owners must use captureProcessTree below.
         return { descendants: [], captureComplete: false };
@@ -221,6 +230,13 @@ export function createProcessTreeKiller(
         childrenByParentPid = deps.captureChildrenMap();
       }
       if (!childrenByParentPid) return { descendants: [], captureComplete: false };
+      // A root absent from the snapshot — neither a child of another process
+      // nor a parent key — is provably not running, and refusing to collect
+      // also closes the stale-pid kill path. Sparse maps may legitimately list
+      // a live root only as a parent key, so parentage alone counts as presence.
+      if (!childrenByParentPid.has(rootPid) && !processesByPid(childrenByParentPid).has(rootPid)) {
+        return { descendants: [], captureComplete: true };
+      }
       return {
         descendants: collectDescendantProcesses(rootPid, childrenByParentPid),
         captureComplete: true,
@@ -233,17 +249,18 @@ export function createProcessTreeKiller(
       if (tree.descendants.length === 0) {
         return { verified: true, survivors: [] };
       }
-      const currentCommands = deps.readCurrentCommands(
+      const currentProcesses = deps.readCurrentProcesses(
         tree.descendants.map((descendant) => descendant.pid),
       );
-      if (currentCommands === null) {
+      if (currentProcesses === null) {
         return { verified: false, survivors: [...tree.descendants] };
       }
       return {
         verified: true,
-        survivors: tree.descendants.filter(
-          (descendant) => currentCommands.get(descendant.pid) === descendant.command,
-        ),
+        survivors: tree.descendants.filter((descendant) => {
+          const current = currentProcesses.get(descendant.pid);
+          return current !== undefined && sameCapturedIdentity(descendant, current);
+        }),
       };
     },
     signal: ({
@@ -254,10 +271,14 @@ export function createProcessTreeKiller(
       includeRootTree = true,
       onError,
     }) => {
+      // Refuse even when a caller supplies its own tree: signalTree (tree-kill)
+      // walks the live process table itself, so an unsafe rootPid would kill
+      // far more than `tree.descendants`.
+      if (isUnsafeProcessTreeRoot(rootPid)) return;
       const capturedProcesses = capturedProcessesForSignal(
         tree.descendants,
         signal,
-        deps.readCurrentCommands,
+        deps.readCurrentProcesses,
         verifiedDescendants,
       );
       for (const descendant of capturedProcesses.toReversed()) {
@@ -265,9 +286,17 @@ export function createProcessTreeKiller(
         if (error) onError(error, { pid: descendant.pid, source: "captured" });
       }
       if (includeRootTree) {
-        deps.signalTree(rootPid, signal, (error) => {
+        if (deps.platform === "win32") {
+          deps.signalTree(rootPid, signal, (error) => {
+            if (error) onError(error, { pid: rootPid, source: "tree-kill" });
+          });
+        } else {
+          // The captured descendants were already signalled above. Signal the
+          // POSIX root directly so teardown cannot leak an unhandled error from
+          // tree-kill's internal `ps`/`pgrep` subprocesses when PATH is sparse.
+          const error = deps.signalPid(rootPid, signal);
           if (error) onError(error, { pid: rootPid, source: "tree-kill" });
-        });
+        }
       }
     },
   };
@@ -282,9 +311,10 @@ function processesByPid(childrenByParentPid: ProcessChildrenMap): Map<number, Ca
 }
 
 function sameCapturedIdentity(expected: CapturedProcess, current: CapturedProcess): boolean {
+  // Start time adds evidence to the existing command check. POSIX lstart has
+  // second resolution: it must not authorize a different command on its own.
   if (expected.command !== current.command) return false;
-  if (expected.startedAt === undefined) return true;
-  return current.startedAt === expected.startedAt;
+  return expected.startedAt === undefined || current.startedAt === expected.startedAt;
 }
 
 /** Capture descendants using the native platform observer. */
@@ -292,7 +322,7 @@ export async function captureProcessTree(
   rootPid: number,
   options: PlatformProcessTreeOptions = {},
 ): Promise<CapturedProcessTree> {
-  if (!Number.isInteger(rootPid) || rootPid <= 0) {
+  if (isUnsafeProcessTreeRoot(rootPid)) {
     return { descendants: [], captureComplete: false };
   }
   const platform = options.platform ?? process.platform;
@@ -314,7 +344,7 @@ export async function isProcessRunning(
   rootPid: number,
   options: PlatformProcessTreeOptions = {},
 ): Promise<boolean> {
-  if (!Number.isInteger(rootPid) || rootPid <= 0) return false;
+  if (!isSignalablePid(rootPid)) return false;
   try {
     if ((options.platform ?? process.platform) === "win32") {
       const snapshot = await (options.captureWindowsChildren ?? captureWindowsProcessChildrenMap)();
@@ -380,6 +410,7 @@ export function signalProcessTree(input: {
   ) => void;
   readonly processTreeKiller?: ProcessTreeKiller;
 }): void {
+  if (!isSignalablePid(input.rootPid)) return;
   (input.processTreeKiller ?? defaultProcessTreeKiller).signal({
     rootPid: input.rootPid,
     signal: input.signal,
@@ -402,7 +433,8 @@ export function signalOwnedChildProcess(
   signal: TerminalKillSignal,
   platform: NodeJS.Platform = process.platform,
 ): void {
-  if (platform === "win32" && child.pid !== undefined) {
+  if (child.pid === undefined || !isSignalablePid(child.pid)) return;
+  if (platform === "win32") {
     signalProcessTree({ rootPid: child.pid, signal });
     return;
   }

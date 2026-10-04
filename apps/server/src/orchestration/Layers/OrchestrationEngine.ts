@@ -7,6 +7,7 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
+import { SIDECHAT_INACTIVITY_EXPIRY_MS, sidechatExpiryMs } from "@synara/shared/sidechatExpiry";
 import {
   Cause,
   Deferred,
@@ -25,6 +26,7 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   toPersistenceSqlError,
   type OrchestrationEventStoreError,
@@ -175,6 +177,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* Effect.serviceOption(ServerSettingsService);
   const deciderWorkspacePaths = {
     homeDir: serverConfig.homeDir,
     chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
@@ -550,7 +553,41 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.handoff.create":
       case "thread.fork.create":
         return loadThreadDetailForDecider(command, commandReadModel, command.sourceThreadId);
+      case "thread.claude-cache.set":
+        return command.hold
+          ? loadThreadDetailForDecider(command, commandReadModel, command.threadId)
+          : Effect.succeed(commandReadModel);
       case "thread.turn.start":
+        if (command.asyncUserInputResponse) {
+          return messageRepository
+            .getByThreadAndMessageId({
+              threadId: command.threadId,
+              messageId: command.asyncUserInputResponse.messageId,
+            })
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new OrchestrationCommandInternalError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    detail: `Failed to load the asynchronous question: ${error.message}`,
+                  }),
+              ),
+              Effect.map((message) => {
+                const thread = commandReadModel.threads.find(
+                  (entry) => entry.id === command.threadId,
+                );
+                if (!thread || Option.isNone(message)) return commandReadModel;
+                return overlayThread(commandReadModel, {
+                  ...thread,
+                  messages: [
+                    ...thread.messages.filter((entry) => entry.id !== message.value.messageId),
+                    orchestrationMessageFromStoredMessage(message.value),
+                  ],
+                });
+              }),
+            );
+        }
         return command.sourceProposedPlan
           ? loadThreadDetailForDecider(
               command,
@@ -802,6 +839,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
       let command: OrchestrationCommand = envelope.command;
       if (command.type === "thread.turn.start") {
+        const pendingImport = yield* sql<{ readonly thread_id: string }>`
+          SELECT thread_id FROM project_import_origins
+          WHERE thread_id = ${command.threadId} AND status = 'pending'
+          LIMIT 1
+        `.pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEngine.pendingProjectImport")));
+        if (pendingImport.length > 0) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "This conversation is still being imported. Finish or retry its import before sending a message.",
+          });
+        }
         const startCommand = command;
         const attachments = yield* Effect.forEach(
           startCommand.message.attachments,
@@ -907,6 +956,36 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
       }
 
+      if (command.type === "thread.claude-cache.set" && command.hold) {
+        // Admission runs in the command worker, so a stop cannot slip between
+        // this durable fence and the atomic review/session events below.
+        const cancellation = yield* Stream.runHead(
+          eventStore.readThreadEventsFromSequence(
+            command.threadId,
+            command.hold.sourceEventSequence,
+            1,
+            commandReadModel.snapshotSequence,
+            [
+              "thread.session-stop-requested",
+              "thread.archived",
+              "thread.deleted",
+              "thread.sidechat-expired",
+              "thread.conversation-rolled-back",
+            ],
+          ),
+        ).pipe(
+          Effect.mapError(() =>
+            makeCommandInternalError(command, "Could not verify Claude cache hold authorization."),
+          ),
+        );
+        if (Option.isSome(cancellation)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Command produced no events.",
+          });
+        }
+      }
+
       let deciderReadModel = yield* buildDeciderReadModel(command);
       if (command.type === "thread.meta.update" && command.goalAchieved === true) {
         // A completed oversized goal must keep its text durably: the persisted
@@ -942,6 +1021,33 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         OrchestrationDispatchError,
         never
       > = Effect.gen(function* () {
+        if (command.type === "thread.sidechat.expire") {
+          // The timer may have fired before a live settings update while this
+          // command waited in the queue. Validate at the persistence owner, since
+          // interrupting the caller cannot withdraw an already-admitted envelope.
+          // Standalone compatibility layers retain their original one-hour default.
+          const expiryMs = Option.isSome(serverSettings)
+            ? sidechatExpiryMs(
+                (yield* serverSettings.value.getSettings.pipe(
+                  Effect.mapError(() =>
+                    makeCommandInternalError(
+                      command,
+                      "Could not verify the side chat expiry setting.",
+                    ),
+                  ),
+                )).sidechatExpiry,
+              )
+            : SIDECHAT_INACTIVITY_EXPIRY_MS;
+          if (
+            expiryMs === null ||
+            Date.now() < Date.parse(command.expectedLastActivityAt) + expiryMs
+          ) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: "Side chat is not due under the current expiry setting.",
+            });
+          }
+        }
         const committedEvents: OrchestrationEvent[] = [];
         const deferredSettledSequences = new Set<number>();
         let nextCommandReadModel = commandReadModel;

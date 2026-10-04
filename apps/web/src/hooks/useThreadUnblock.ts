@@ -19,7 +19,11 @@ import { readNativeApi } from "../nativeApi";
 export function useThreadUnblock(input: {
   readonly threadId: ThreadId | null;
   readonly onUnblocked: (threadId: ThreadId) => void;
-}): { readonly unblockThread: () => void; readonly unblocking: boolean } {
+}): {
+  readonly unblockThread: (targetThreadId?: ThreadId) => void;
+  readonly unblocking: boolean;
+  readonly unblockingThreadId: ThreadId | null;
+} {
   const { threadId, onUnblocked } = input;
   const [unblockingThreadId, setUnblockingThreadId] = useState<ThreadId | null>(null);
   const inFlightThreadIdRef = useRef<ThreadId | null>(null);
@@ -32,35 +36,40 @@ export function useThreadUnblock(input: {
     };
   }, []);
 
-  const unblockThread = useCallback(() => {
-    if (!threadId || inFlightThreadIdRef.current !== null) return;
-    inFlightThreadIdRef.current = threadId;
-    setUnblockingThreadId(threadId);
-    void (async () => {
-      try {
-        const api = readNativeApi();
-        if (!api) throw new Error("Not connected to the Synara server.");
-        const result = await unblockThreadFromClient(api.orchestration, threadId);
-        onUnblocked(threadId);
-        toastManager.add(describeThreadUnblockResult(result));
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not unblock thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An unexpected error occurred while clearing the provider failure.",
-        });
-      } finally {
-        inFlightThreadIdRef.current = null;
-        if (mountedRef.current) setUnblockingThreadId(null);
-      }
-    })();
-  }, [onUnblocked, threadId]);
+  const unblockThread = useCallback(
+    (targetThreadId?: ThreadId) => {
+      const resolvedThreadId = targetThreadId ?? threadId;
+      if (!resolvedThreadId || inFlightThreadIdRef.current !== null) return;
+      inFlightThreadIdRef.current = resolvedThreadId;
+      setUnblockingThreadId(resolvedThreadId);
+      void (async () => {
+        try {
+          const api = readNativeApi();
+          if (!api) throw new Error("Not connected to the Synara server.");
+          const result = await unblockThreadFromClient(api.orchestration, resolvedThreadId);
+          onUnblocked(resolvedThreadId);
+          toastManager.add(describeThreadUnblockResult(result));
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not unblock thread",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An unexpected error occurred while clearing the provider failure.",
+          });
+        } finally {
+          inFlightThreadIdRef.current = null;
+          if (mountedRef.current) setUnblockingThreadId(null);
+        }
+      })();
+    },
+    [onUnblocked, threadId],
+  );
 
   return {
     unblockThread,
     unblocking: threadId !== null && unblockingThreadId === threadId,
+    unblockingThreadId,
   };
 }

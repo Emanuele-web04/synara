@@ -1,49 +1,39 @@
 // FILE: sidebarNavOrdering.ts
-// Purpose: Keeps the primary sidebar nav (New thread, Kanban, Pull requests, Automations)
-//          order and visibility stable across the sidebar and persisted settings.
+// Purpose: Names the primary navigation destinations and resolves the shared Kanban/Tasks slot.
 // Layer: Web settings utility
-// Exports: nav item ids, default order, and normalization helpers.
+// Exports: nav item ids and the Kanban/Tasks slot resolver.
 
-export const SIDEBAR_NAV_ITEM_IDS = ["newThread", "kanban", "pullRequests", "automations"] as const;
+/** Inbox is Beta-only: the rail drops it where INBOX_ON is off. */
+export const SIDEBAR_NAV_ITEM_IDS = [
+  "newThread",
+  "inbox",
+  "kanban",
+  "tasks",
+  "pullRequests",
+  "automations",
+] as const;
 
 export type SidebarNavItemId = (typeof SIDEBAR_NAV_ITEM_IDS)[number];
 
-export const DEFAULT_SIDEBAR_NAV_ORDER: readonly SidebarNavItemId[] = SIDEBAR_NAV_ITEM_IDS;
-
-const SIDEBAR_NAV_ITEM_ID_SET: ReadonlySet<SidebarNavItemId> = new Set(SIDEBAR_NAV_ITEM_IDS);
-
-export function isSidebarNavItemId(value: string): value is SidebarNavItemId {
-  return SIDEBAR_NAV_ITEM_ID_SET.has(value as SidebarNavItemId);
-}
-
-export function normalizeHiddenSidebarNavItems(
-  hiddenItems: ReadonlyArray<string>,
-): SidebarNavItemId[] {
-  const seen = new Set<SidebarNavItemId>();
-  const result: SidebarNavItemId[] = [];
-  for (const candidate of hiddenItems) {
-    if (isSidebarNavItemId(candidate) && !seen.has(candidate)) {
-      seen.add(candidate);
-      result.push(candidate);
+/**
+ * Kanban and Tasks share one slot in the nav and rail (see tasksSurface.ts for which one
+ * shows). Both ids stay valid in persisted settings so neither app loses its layout: the enabled surface takes the position
+ * of whichever of the two comes first in the stored order, and the other is left out.
+ */
+export function resolveTasksSurfaceSlot<Id extends string>(
+  order: readonly Id[],
+  tasksEnabled: boolean,
+): Id[] {
+  const active = (tasksEnabled ? "tasks" : "kanban") as Id;
+  let placed = false;
+  const resolved: Id[] = [];
+  for (const id of order) {
+    if (id !== "kanban" && id !== "tasks") {
+      resolved.push(id);
+    } else if (!placed) {
+      resolved.push(active);
+      placed = true;
     }
   }
-  return result;
-}
-
-export function normalizeSidebarNavOrder(order: ReadonlyArray<string>): SidebarNavItemId[] {
-  const seen = new Set<SidebarNavItemId>();
-  const result: SidebarNavItemId[] = [];
-  for (const candidate of order) {
-    if (isSidebarNavItemId(candidate) && !seen.has(candidate)) {
-      seen.add(candidate);
-      result.push(candidate);
-    }
-  }
-  // Items shipped after the user persisted an order still surface, appended at the end.
-  for (const item of DEFAULT_SIDEBAR_NAV_ORDER) {
-    if (!seen.has(item)) {
-      result.push(item);
-    }
-  }
-  return result;
+  return resolved;
 }

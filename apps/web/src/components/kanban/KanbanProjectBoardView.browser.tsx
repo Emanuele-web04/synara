@@ -10,6 +10,7 @@ vi.mock("~/appSettings", () => ({
     settings: { defaultProvider: "codex", sidebarProjectSortOrder: "manual" },
     setSetting: vi.fn(),
   }),
+  getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
   getProviderStartOptions: () => [],
   resolveAssistantDeliveryMode: () => "default",
 }));
@@ -20,6 +21,11 @@ vi.mock("~/hooks/useProviderStatusRefresh", () => ({
   useRefreshProviderStatusesNow: () => () => undefined,
 }));
 vi.mock("../../lib/kanbanDispatch", () => ({
+  resolveKanbanDraftDispatchTarget: () => ({
+    provider: "codex",
+    instanceId: "codex",
+    modelSelection: { provider: "codex", model: "gpt-5.4" },
+  }),
   dispatchKanbanDraftCardAsGoal: vi.fn().mockResolvedValue({ kind: "dispatched" }),
   kanbanDispatchFailureToast: vi.fn().mockReturnValue({
     type: "error",
@@ -40,6 +46,8 @@ const dispatchAsGoalMock = vi.mocked(dispatchKanbanDraftCardAsGoal);
 // A usable provider status: with no usable status the drop handler toasts
 // "Provider status is still loading" and never reaches the dispatch call.
 const READY_CODEX_STATUS: ServerProviderStatus = {
+  instanceId: "codex",
+  driver: "codex",
   provider: "codex",
   status: "ready",
   available: true,
@@ -57,6 +65,7 @@ function makeCard(id: string, column: KanbanCard["column"], overrides?: Partial<
     projectId: "project-1" as KanbanCard["projectId"],
     column,
     title: `Card ${id}`,
+    providerInstanceId: "codex",
     provider: "codex",
     isTerminal: false,
     branch: null,

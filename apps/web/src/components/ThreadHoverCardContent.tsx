@@ -1,20 +1,25 @@
 // FILE: ThreadHoverCardContent.tsx
 // Purpose: Rich hover-card body shown when hovering a sidebar thread/chat row —
 //          the title with a relative time on the header line, then project,
-//          source folder, git branch, worktree identity, and the chat's current
+//          source folder, git branch, worktree identity, pull request, and the chat's current
 //          model rows when available.
 // Layer: Sidebar UI component
 // Exports: ThreadHoverCardContent
 // Why: Shared by both the pinned and the nested thread-row tooltips so the two
 //      surfaces cannot drift apart.
 
-import type { ReactNode } from "react";
+import type { OrchestrationThreadPullRequest } from "@synara/contracts";
+import type { MouseEvent, ReactNode } from "react";
 
-import { FastModeIcon, GitBranchIcon, WorktreeIcon } from "~/lib/icons";
+import { FastModeIcon, GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
+import type { ProjectAppearance } from "~/lib/projectAppearance";
 import type { ThreadModelSummary } from "~/lib/threadModelSummary";
-import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon } from "./ProviderIcon";
+import {
+  PR_STATE_PRESENTATION_ICONS,
+  resolvePrStatePresentation,
+} from "./pullRequest/pullRequestStatePresentation";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import {
@@ -29,11 +34,15 @@ export type ThreadHoverCardContentProps = {
   projectName: string | null;
   /** Project cwd, used to render the matching folder/favicon glyph. */
   projectCwd: string | null;
+  projectAppearance: ProjectAppearance | null;
   /** Underlying project folder/repo name, shown for worktree-backed chats. */
   sourceProjectName: string | null;
   branch: string | null;
   /** Last path segment of the associated worktree path. */
   worktreeName: string | null;
+  /** The same resolved PR shown on the thread row. */
+  pullRequest: OrchestrationThreadPullRequest | null;
+  onOpenPullRequest: (event: MouseEvent<HTMLElement>, prUrl: string) => void;
   /** Provider/model/effort currently selected for this chat. */
   model: ThreadModelSummary | null;
   /** Current live/actionable state, shown as text so compact row glyphs stay discoverable. */
@@ -74,9 +83,12 @@ export function ThreadHoverCardContent({
   timeLabel,
   projectName,
   projectCwd,
+  projectAppearance,
   sourceProjectName,
   branch,
   worktreeName,
+  pullRequest,
+  onOpenPullRequest,
   model,
   status,
 }: ThreadHoverCardContentProps) {
@@ -85,6 +97,7 @@ export function ThreadHoverCardContent({
     Boolean(sourceProjectName) ||
     Boolean(branch) ||
     Boolean(worktreeName) ||
+    Boolean(pullRequest) ||
     Boolean(model) ||
     Boolean(status);
 
@@ -97,7 +110,7 @@ export function ThreadHoverCardContent({
           {title}
         </span>
         {timeLabel ? (
-          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/55">
+          <span className="shrink-0 text-ui-xs tabular-nums text-muted-foreground/55">
             {timeLabel}
           </span>
         ) : null}
@@ -126,11 +139,12 @@ export function ThreadHoverCardContent({
                     <ProjectSidebarIcon
                       cwd={projectCwd}
                       expanded={false}
+                      appearance={projectAppearance}
                       glyphClassName="size-3.5"
                     />
                   </span>
                 ) : (
-                  <FolderClosed className={META_ICON_CLASS_NAME} aria-hidden />
+                  <FolderIcon className={META_ICON_CLASS_NAME} aria-hidden />
                 )
               }
             >
@@ -138,7 +152,7 @@ export function ThreadHoverCardContent({
             </MetaRow>
           ) : null}
           {sourceProjectName ? (
-            <MetaRow icon={<FolderClosed className={META_ICON_CLASS_NAME} aria-hidden />}>
+            <MetaRow icon={<FolderIcon className={META_ICON_CLASS_NAME} aria-hidden />}>
               {sourceProjectName}
             </MetaRow>
           ) : null}
@@ -152,9 +166,40 @@ export function ThreadHoverCardContent({
               {worktreeName}
             </MetaRow>
           ) : null}
+          {pullRequest ? <PullRequestRow pr={pullRequest} onOpen={onOpenPullRequest} /> : null}
           {model ? <ModelRow model={model} /> : null}
         </div>
       ) : null}
     </div>
+  );
+}
+
+function PullRequestRow({
+  pr,
+  onOpen,
+}: {
+  pr: OrchestrationThreadPullRequest;
+  onOpen: ThreadHoverCardContentProps["onOpenPullRequest"];
+}) {
+  const presentation = resolvePrStatePresentation(pr);
+  const PrIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
+
+  return (
+    <a
+      href={pr.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`#${pr.number} ${presentation.label}: ${pr.title}`}
+      className={`${META_ROW_CLASS_NAME} cursor-pointer outline-hidden hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-1 focus-visible:ring-ring`}
+      onClick={(event) => onOpen(event, pr.url)}
+      onAuxClick={(event) => {
+        if (event.button === 1) onOpen(event, pr.url);
+      }}
+    >
+      <PrIcon aria-hidden className={`size-3.5 shrink-0 ${presentation.colorClass}`} />
+      <span className="min-w-0 truncate">
+        <span className={presentation.colorClass}>#{pr.number}</span> {pr.title}
+      </span>
+    </a>
   );
 }

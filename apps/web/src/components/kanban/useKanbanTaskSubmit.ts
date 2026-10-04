@@ -8,6 +8,7 @@ import type {
   ModelSlug,
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderStartOptions,
   RuntimeMode,
@@ -18,8 +19,9 @@ import { useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
 import { toastManager } from "~/components/ui/toast";
+import type { ProviderInstanceOption } from "~/appSettings";
 import type { DraftThreadEnvMode } from "~/composerDraftStore";
-import { useComposerDraftStore } from "~/composerDraftStore";
+import { providerInstanceModelSelectionKey, useComposerDraftStore } from "~/composerDraftStore";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { createAndSendKanbanTask, createKanbanDraftTask } from "~/lib/kanbanTaskCreate";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
@@ -30,6 +32,7 @@ interface UseKanbanTaskSubmitInput {
   readonly selectedProjectId: ProjectId | null;
   readonly hasSendableContent: boolean;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly selectedModel: ModelSlug | null;
   readonly selectedModelSupportsAutoMode: boolean | undefined;
   readonly taskPreview: string;
@@ -44,6 +47,9 @@ interface UseKanbanTaskSubmitInput {
   readonly defaultProvider: ProviderKind;
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly providerOptionsForDispatch: ProviderStartOptions | undefined;
+  readonly providerInstances: ReadonlyArray<
+    Pick<ProviderInstanceOption, "instanceId" | "provider">
+  >;
   readonly providerStatuses: readonly ServerProviderStatus[];
   readonly isPreparingImages: boolean;
   readonly waitForPendingImages: () => Promise<void>;
@@ -55,6 +61,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode,
     taskPreview,
@@ -68,6 +75,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     isPreparingImages,
     waitForPendingImages,
@@ -104,18 +112,22 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
-    const storedModelSelection = scratchState?.modelSelectionByProvider[selectedProvider];
+    const storedModelSelection =
+      scratchState?.modelSelectionByProvider[
+        providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
+      ];
     const storedModelSupportsAutoMode =
       storedModelSelection?.provider === "claudeAgent"
         ? storedModelSelection.supportsAutoMode
         : undefined;
     const modelSelection = buildModelSelection(
       selectedProvider,
-      selectedModel,
+      storedModelSelection?.model ?? selectedModel,
       storedModelSelection?.options,
       selectedProvider === "claudeAgent"
         ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
         : undefined,
+      { instanceId: selectedProviderInstanceId },
     );
     const taskInput = {
       projectId: selectedProjectId,
@@ -141,6 +153,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // Send now: create + promote + dispatch straight to In Progress.
     const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: modelSelection.provider,
+      instanceId: modelSelection.instanceId ?? selectedProviderInstanceId,
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
@@ -160,6 +173,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
       ...(sendAsGoal ? { sendAsGoal: true as const } : {}),
+      providerInstances,
     })
       .then(({ threadId, result }) => {
         if (result.kind === "dispatched") {

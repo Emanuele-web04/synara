@@ -3,6 +3,10 @@ import {
   encodeMessageTextFallback,
 } from "../../persistence/messageTextChunks.ts";
 import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
+import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
+import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -10,6 +14,7 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -85,6 +90,7 @@ import {
   shouldApplyThreadsProjection,
   THREAD_PROJECTION_EVENT_TYPES,
 } from "../threadShellEvents.ts";
+import { canProjectTurnModelSelectionForSession } from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   hot: "projection.hot",
@@ -159,6 +165,7 @@ const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
 
 const THREAD_MESSAGE_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.message-sent",
+  "thread.async-user-input-answered",
   "thread.reverted",
   "thread.conversation-rolled-back",
 ]);
@@ -181,6 +188,11 @@ const THREAD_SESSION_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]
 ]);
 
 const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.deleted",
+  "thread.claude-cache-set",
+  "thread.archived",
+  "thread.session-stop-requested",
+  "thread.claude-cache-response-requested",
   "thread.turn-start-requested",
   "thread.session-set",
   "thread.turn-diff-completed",
@@ -228,8 +240,11 @@ const withRebuiltThreadShellSummary = Effect.fn(function* (input: {
   readonly projectionThreadProposedPlanRepository: ProjectionThreadProposedPlanRepositoryShape;
   readonly projectionPendingInteractionRepository: ProjectionPendingInteractionRepositoryShape;
 }) {
-  const [latestUserMessageAt, latestPlan, pendingCounts] = yield* Effect.all([
+  const [latestUserMessageAt, latestHumanMessageAt, latestPlan, pendingCounts] = yield* Effect.all([
     input.projectionThreadMessageRepository.getLatestUserMessageAt({
+      threadId: input.thread.threadId,
+    }),
+    input.projectionThreadMessageRepository.getLatestHumanMessageAt({
       threadId: input.thread.threadId,
     }),
     input.projectionThreadProposedPlanRepository.getLatestSummaryByThreadId({
@@ -244,6 +259,7 @@ const withRebuiltThreadShellSummary = Effect.fn(function* (input: {
   return {
     ...input.thread,
     latestUserMessageAt,
+    latestHumanMessageAt,
     pendingApprovalCount: pendingCounts.pendingApprovalCount,
     pendingUserInputCount: pendingCounts.pendingUserInputCount,
     hasActionableProposedPlan:
@@ -540,7 +556,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const project = yield* projectionProjectRepository.getById({
             projectId: event.payload.projectId,
           });
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
@@ -576,6 +592,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
+            sidechatContext: event.payload.sidechatContext,
             sidechatLastActivityAt: event.payload.sidechatLastActivityAt,
             sidechatExpiredAt: event.payload.sidechatExpiredAt,
             lastKnownPr: event.payload.lastKnownPr ?? null,
@@ -588,6 +605,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             goalPausedAt: null,
             goalAchievements: null,
             latestUserMessageAt: null,
+            latestHumanMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
@@ -595,6 +613,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
             settledAt: null,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             deletedAt: null,
           });
           return;
@@ -609,7 +629,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 projectId: currentThread.value.projectId,
               })
             : Option.none();
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           return yield* updateThreadProjection(event.payload.threadId, (thread) => {
             const nextCreateBranchFlowCompleted =
               event.payload.createBranchFlowCompleted !== undefined
@@ -670,6 +690,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
               ...(event.payload.settledAt !== undefined
                 ? { settledAt: event.payload.settledAt }
+                : {}),
+              ...(event.payload.snoozedUntil !== undefined
+                ? { snoozedUntil: event.payload.snoozedUntil }
+                : {}),
+              ...(event.payload.snoozeReminderAt !== undefined
+                ? { snoozeReminderAt: event.payload.snoozeReminderAt }
                 : {}),
               ...(event.payload.parentThreadId !== undefined
                 ? { parentThreadId: event.payload.parentThreadId }
@@ -743,6 +769,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
           }));
 
+        case "thread.claude-cache-set":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            claudeCacheReview: event.payload.review,
+            updatedAt: event.payload.updatedAt,
+          }));
+
         case "thread.runtime-mode-set":
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
@@ -778,22 +811,52 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
-          const [messages, session] = yield* Effect.all([
-            projectionThreadMessageRepository.listByThreadId({
-              threadId: event.payload.threadId,
-            }),
-            projectionThreadSessionRepository.getByThreadId({
-              threadId: event.payload.threadId,
-            }),
-          ]);
+          const session = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const hasLatestTurn = existingRow.value.latestTurnId !== null;
+          const hasSession = Option.isSome(session);
+          // `canAdoptFirstTurnProvider` only consults the transcript on a brand-new
+          // thread (no turn, no session). This projector runs inside the hot
+          // turn-start commit, so an established thread must not pay a full
+          // transcript + text-segment load just to have it discarded.
+          const messages =
+            hasLatestTurn || hasSession
+              ? []
+              : yield* projectionThreadMessageRepository.listByThreadId({
+                  threadId: event.payload.threadId,
+                });
+          // The provider reactor may still reject an instance switch for a
+          // bound thread after this event is projected. Only adopt a selection
+          // routed at another instance on a fresh thread, so a rejected switch
+          // cannot overwrite the thread's working selection.
+          const canAdoptFirstTurnSelection = canAdoptFirstTurnProvider({
+            hasLatestTurn,
+            hasSession,
+            messages,
+          });
+          const requestedModelSelection = event.payload.modelSelection;
+          const requestedInstanceId =
+            requestedModelSelection === undefined
+              ? null
+              : resolveModelSelectionInstanceId(requestedModelSelection);
+          const canAdoptRequestedInstance =
+            requestedModelSelection === undefined ||
+            (requestedInstanceId !== null &&
+              canProjectTurnModelSelectionForSession(
+                Option.getOrNull(session),
+                requestedInstanceId,
+              ) &&
+              (Option.isSome(session) ||
+                requestedInstanceId ===
+                  resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
+                canAdoptFirstTurnSelection));
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
-            requestedModelSelection: event.payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
-              hasLatestTurn: existingRow.value.latestTurnId !== null,
-              hasSession: Option.isSome(session),
-              messages,
-            }),
+            requestedModelSelection: canAdoptRequestedInstance
+              ? requestedModelSelection
+              : undefined,
+            canAdoptRequestedProvider: canAdoptFirstTurnSelection,
           });
           // Automation-dispatched turns run with the automation's modes but must not
           // repaint the thread's persisted modes: on a heartbeat target thread the
@@ -810,7 +873,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   interactionMode: event.payload.interactionMode,
                 }
               : {}),
-            ...(existingRow.value.sidechatSourceThreadId
+            ...(isSidechatThread(existingRow.value)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
             updatedAt: event.payload.createdAt,
@@ -833,6 +896,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             deletedAt: event.payload.deletedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: event.payload.deletedAt,
           }));
         }
@@ -843,6 +908,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             archivedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: event.payload.updatedAt ?? archivedAt,
           }));
         }
@@ -867,9 +934,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (!shouldApplyDeferredThreadShellSummary(event)) {
             return;
           }
+          const humanMessageAt = resolveHumanMessageAt(event.payload);
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             latestUserMessageAt: maxIso(thread.latestUserMessageAt, event.payload.createdAt),
+            latestHumanMessageAt:
+              humanMessageAt === null
+                ? (thread.latestHumanMessageAt ?? null)
+                : maxIso(thread.latestHumanMessageAt ?? null, humanMessageAt),
             updatedAt: event.occurredAt,
           }));
         }
@@ -926,7 +998,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             thread: {
               ...existingRow.value,
               ...(event.type === "thread.session-set" &&
-              existingRow.value.sidechatSourceThreadId &&
+              isSidechatThread(existingRow.value) &&
               !existingRow.value.sidechatExpiredAt
                 ? { sidechatLastActivityAt: event.payload.session.updatedAt }
                 : {}),
@@ -957,6 +1029,23 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.async-user-input-answered": {
+          const existingMessage = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          });
+          if (Option.isSome(existingMessage) && existingMessage.value.asyncUserInput) {
+            yield* projectionThreadMessageRepository.upsert({
+              ...existingMessage.value,
+              asyncUserInput: {
+                ...existingMessage.value.asyncUserInput,
+                response: event.payload.response,
+                responseSequence: event.sequence,
+              },
+            });
+          }
+          return;
+        }
         case "thread.message-sent": {
           if (event.payload.role === "assistant") {
             if (event.payload.streaming) {
@@ -1019,6 +1108,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             ...(event.payload.skills !== undefined ? { skills: event.payload.skills } : {}),
             ...(event.payload.mentions !== undefined ? { mentions: event.payload.mentions } : {}),
+            ...(event.payload.asyncUserInput !== undefined
+              ? { asyncUserInput: event.payload.asyncUserInput }
+              : {}),
             ...(event.payload.dispatchMode !== undefined
               ? { dispatchMode: event.payload.dispatchMode }
               : {}),
@@ -1079,6 +1171,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadMessageRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
+          keptRows = clearRemovedAsyncUserInputResponses(
+            keptRows,
+            new Set(keptRows.map((message) => message.messageId)),
+            event.sequence,
+          );
           yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert);
           // Reinserted retained messages must still reject deltas from before
           // this rollback, even though their chunk rows have been compacted.
@@ -1228,6 +1325,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             }),
             projectionThreadRepository.getById({ threadId: event.payload.threadId }),
           ]);
+          const providerInstanceId =
+            Option.getOrNull(thread)?.modelSelection.instanceId ??
+            Option.getOrNull(currentSession)?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            Option.getOrNull(thread)?.modelSelection.provider ??
+            event.payload.modelSelection?.provider;
           const turnStartSession = deriveTurnStartSession({
             threadId: event.payload.threadId,
             currentSession: Option.getOrNull(currentSession),
@@ -1236,11 +1339,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               Option.getOrNull(currentSession)?.providerName ??
               event.payload.modelSelection?.provider ??
               null,
+            ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
             requestedRuntimeMode: event.payload.runtimeMode,
             requestedAt: event.payload.createdAt,
           });
           if (turnStartSession !== null) {
-            yield* projectionThreadSessionRepository.upsert(turnStartSession);
+            yield* projectionThreadSessionRepository.upsert({
+              ...turnStartSession,
+              lastActivityAt: event.payload.createdAt,
+              lastProgressAt: event.payload.createdAt,
+              providerInstanceId: turnStartSession.providerInstanceId ?? null,
+            });
           }
           return;
         }
@@ -1250,9 +1359,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             status: event.payload.session.status,
             providerName: event.payload.session.providerName,
+            providerInstanceId: event.payload.session.providerInstanceId ?? null,
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,
+            lastActivityAt: event.payload.session.lastActivityAt ?? null,
+            lastProgressAt: event.payload.session.lastProgressAt ?? null,
             updatedAt: event.payload.session.updatedAt,
           });
           return;
@@ -1268,6 +1380,36 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.deleted":
+        case "thread.archived":
+        case "thread.session-stop-requested":
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+        case "thread.claude-cache-set":
+          if (event.payload.review?.status === "compacting") {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          }
+          return;
+        case "thread.claude-cache-response-requested":
+          if (event.payload.decision === "cancel") {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          } else if (event.payload.decision === "continue") {
+            yield* projectionTurnRepository.replacePendingTurnStart({
+              threadId: event.payload.threadId,
+              messageId: event.payload.review.messageId,
+              sourceProposedPlanThreadId: event.payload.review.sourceProposedPlan?.threadId ?? null,
+              sourceProposedPlanId: event.payload.review.sourceProposedPlan?.planId ?? null,
+              requestedAt: event.payload.review.requestedAt ?? event.payload.review.createdAt,
+            });
+          }
+          return;
+
         case "thread.turn-start-requested": {
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,
@@ -1401,24 +1543,33 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             turnId: event.payload.turnId,
           });
           if (Option.isSome(existingTurn)) {
+            const existing = existingTurn.value;
             const existingIsTerminal =
-              existingTurn.value.state === "completed" ||
-              existingTurn.value.state === "error" ||
-              existingTurn.value.state === "interrupted";
-            yield* projectionTurnRepository.upsertByTurnId({
-              ...existingTurn.value,
+              existing.state === "completed" ||
+              existing.state === "error" ||
+              existing.state === "interrupted";
+            const nextTurn = {
+              ...existing,
               assistantMessageId: event.payload.messageId,
-              state:
-                event.payload.streaming && !existingIsTerminal
-                  ? "running"
-                  : existingTurn.value.state,
+              state: event.payload.streaming && !existingIsTerminal ? "running" : existing.state,
               completedAt:
-                event.payload.streaming && !existingIsTerminal
-                  ? null
-                  : existingTurn.value.completedAt,
-              startedAt: existingTurn.value.startedAt ?? event.payload.createdAt,
-              requestedAt: existingTurn.value.requestedAt ?? event.payload.createdAt,
-            });
+                event.payload.streaming && !existingIsTerminal ? null : existing.completedAt,
+              startedAt: existing.startedAt ?? event.payload.createdAt,
+              requestedAt: existing.requestedAt ?? event.payload.createdAt,
+            } satisfies ProjectionTurn;
+            // Every streaming delta of an assistant message replays this event.
+            // After the first delta the row already carries these exact values,
+            // so skip the rewrite instead of issuing a full-row UPDATE per token.
+            if (
+              nextTurn.assistantMessageId === existing.assistantMessageId &&
+              nextTurn.state === existing.state &&
+              nextTurn.completedAt === existing.completedAt &&
+              nextTurn.startedAt === existing.startedAt &&
+              nextTurn.requestedAt === existing.requestedAt
+            ) {
+              return;
+            }
+            yield* projectionTurnRepository.upsertByTurnId(nextTurn);
             return;
           }
           yield* projectionTurnRepository.upsertByTurnId({

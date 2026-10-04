@@ -1,4 +1,5 @@
 import "../index.css";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -7,29 +8,44 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { useState } from "react";
 import { page } from "vitest/browser";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { EditorDirtyRouteGuard } from "./EditorDirtyRouteGuard";
 
-async function mount(saving: boolean) {
-  let settle!: (next: { dirty: boolean; saving: boolean }) => void;
-  const root = createRootRoute({ component: Outlet });
+const { writeFile, notify } = vi.hoisted(() => ({ writeFile: vi.fn(), notify: vi.fn() }));
+vi.mock("~/nativeApi", () => ({ ensureNativeApi: () => ({ projects: { writeFile } }) }));
+vi.mock("./ui/toast", () => ({ toastManager: { add: notify } }));
+import { EditorDirtyRouteGuard } from "./EditorDirtyRouteGuard";
+import { getWorkspaceEditorSession } from "~/lib/workspaceEditorSession";
+
+async function mount() {
+  writeFile.mockReset();
+  notify.mockReset();
+  const client = new QueryClient();
+  const session = getWorkspaceEditorSession(client, "/repo", "file.ts");
+  const unsubscribe = session.subscribe(() => undefined);
+  session.load({
+    relativePath: "file.ts",
+    contents: "original",
+    version: "sha256:initial",
+    encoding: "utf8",
+    lineEnding: "lf",
+    truncated: false,
+  });
+  const root = createRootRoute({
+    component: () => (
+      <>
+        <EditorDirtyRouteGuard />
+        <Outlet />
+      </>
+    ),
+  });
   const editor = createRoute({
     getParentRoute: () => root,
     path: "/editor",
-    component: () => {
-      const [state, setState] = useState({ dirty: true, saving });
-      settle = setState;
-      return (
-        <>
-          <p>Editor buffer</p>
-          <button onClick={() => void router.navigate({ to: "/settings" })}>Next page</button>
-          <EditorDirtyRouteGuard enabled={state.dirty || state.saving} saving={state.saving} />
-        </>
-      );
-    },
+    component: () => (
+      <button onClick={() => void router.navigate({ to: "/settings" })}>Next page</button>
+    ),
   });
   const next = createRoute({
     getParentRoute: () => root,
@@ -40,29 +56,56 @@ async function mount(saving: boolean) {
     routeTree: root.addChildren([editor, next]),
     history: createMemoryHistory({ initialEntries: ["/editor"] }),
   });
-  const view = await render(<RouterProvider router={router} />);
-  await page.getByRole("button", { name: "Next page" }).click();
-  await expect.element(page.getByRole("alertdialog")).toBeVisible();
-  return { router, view, settle: (state: { dirty: boolean; saving: boolean }) => settle(state) };
+  const view = await render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  return {
+    router,
+    session,
+    close: async () => {
+      unsubscribe();
+      await view.unmount();
+      client.clear();
+    },
+  };
 }
 
-it("keeps route navigation blocked when discard is cancelled", async () => {
-  const { router, view } = await mount(false);
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
-  expect(router.state.location.pathname).toBe("/editor");
+it("saves the latest buffer before allowing navigation", async () => {
+  const { router, session, close } = await mount();
+  let finish!: (value: { relativePath: string; version: string }) => void;
+  writeFile
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    )
+    .mockResolvedValue({ relativePath: "file.ts", version: "sha256:last" });
+  session.change("first");
   await page.getByRole("button", { name: "Next page" }).click();
-  await page.getByRole("button", { name: "Discard changes and leave" }).click();
+  await expect.poll(() => writeFile.mock.calls.length).toBe(1);
+  expect(router.state.location.pathname).toBe("/editor");
+  session.change("latest");
+  finish({ relativePath: "file.ts", version: "sha256:first" });
   await expect.poll(() => router.state.location.pathname).toBe("/settings");
-  await view.unmount();
+  expect(writeFile).toHaveBeenLastCalledWith(
+    expect.objectContaining({ contents: "latest", expectedVersion: "sha256:first" }),
+  );
+  expect(session.dirty).toBe(false);
+  await close();
 });
 
-it.each([true, false])("settles a confirmed deferred departure with dirty=%s", async (dirty) => {
-  const { router, view, settle } = await mount(true);
-  await page.getByRole("button", { name: "Discard changes and leave" }).click();
+it("keeps navigation blocked and preserves the draft when saving fails", async () => {
+  const { router, session, close } = await mount();
+  writeFile.mockRejectedValue(new Error("Permission denied"));
+  session.change("mine");
+  await page.getByRole("button", { name: "Next page" }).click();
+  await expect.poll(() => notify.mock.calls.length).toBe(1);
   expect(router.state.location.pathname).toBe("/editor");
-  await settle({ dirty, saving: false });
-  await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
-  await expect.poll(() => router.state.location.pathname).toBe(dirty ? "/editor" : "/settings");
-  await view.unmount();
+  expect(session.getSnapshot().value).toBe("mine");
+  expect(session.getSnapshot().saveError).toBe("Permission denied");
+  await page.getByRole("button", { name: "Next page" }).click();
+  expect(writeFile).toHaveBeenCalledTimes(1);
+  await close();
 });

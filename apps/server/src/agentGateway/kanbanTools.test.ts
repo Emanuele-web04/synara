@@ -30,6 +30,7 @@ const context: ToolContext = {
     turnId: "turn-caller",
   },
   callerThreadId: "thread-caller",
+  callerThreadLabel: "Caller",
   callerSessionKey: "gateway-session:kanban",
   callerProvider: "claudeAgent",
   callerCapabilities: new Set(["thread:read", "thread:write"]),

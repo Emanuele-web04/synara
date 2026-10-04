@@ -1,9 +1,36 @@
 import { EventEmitter } from "node:events";
-import { installVaultCapture, type CaptureContext, type CapturePage } from "betterwright/capture";
+import { randomUUID } from "node:crypto";
+import { installVaultCapture } from "betterwright/capture";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
-import { BrowserVault } from "./browserVault";
+import { BROWSER_VAULT_PROMPT_TTL_MS, BrowserVault } from "./browserVault";
 
-class NativeCapturePage extends EventEmitter implements CapturePage {
+/**
+ * Structural stand-ins for the Playwright surface the capture sensor calls:
+ * context.pages/on("page")/off("page")/newCDPSession and page.isClosed/once("close").
+ * Synara's Electron tabs are not Playwright objects, but the sensor only calls
+ * those members, so the shim satisfies it at runtime.
+ */
+export interface CapturePageShim {
+  readonly id: string;
+  isClosed(): boolean;
+  once(event: "close", listener: () => void): unknown;
+}
+
+export interface CaptureContextShim {
+  pages(): CapturePageShim[];
+  on(event: "page", callback: (page: CapturePageShim) => void): void;
+  off(event: "page", callback: (page: CapturePageShim) => void): void;
+  newCDPSession(page: CapturePageShim): Promise<{
+    send(method: string, parameters?: unknown): Promise<unknown>;
+    on(event: string, callback: (parameters: unknown) => void): void;
+    detach(): Promise<void>;
+  }>;
+}
+
+type CaptureInstallationContext = Parameters<typeof installVaultCapture>[0];
+
+class NativeCapturePage extends EventEmitter implements CapturePageShim {
+  readonly id = randomUUID();
   closed = false;
   lastAgentActivity = 0;
   constructor(readonly runtime: BrowserAutomationVisibleRuntime) {
@@ -21,7 +48,7 @@ class NativeCapturePage extends EventEmitter implements CapturePage {
 /** Sensors run only in managed browser pages, never the application renderer. */
 export class BrowserVaultCapture {
   private readonly pages = new Set<NativeCapturePage>();
-  private readonly pageListeners = new Set<(page: CapturePage) => void>();
+  private readonly pageListeners = new Set<(page: CapturePageShim) => void>();
   private capture: ReturnType<typeof installVaultCapture> | undefined;
   private updating = Promise.resolve();
   private disposed = false;
@@ -65,8 +92,12 @@ export class BrowserVaultCapture {
           this.capture = undefined;
           return;
         }
-        this.capture = installVaultCapture(this.context(), {
-          sessionForPage: (page) => page,
+        // The public API requires a full Playwright context. Our narrower
+        // Electron adapter is exercised against the actual upstream sensor in
+        // browserVaultCapture.runtime.test.ts and the Electron smoke test.
+        const context = this.context();
+        this.capture = installVaultCapture(context as unknown as CaptureInstallationContext, {
+          sessionForPage: (page) => page as unknown as NativeCapturePage,
           vaultCallAtOrigin: async (session, origin, action, payload) => {
             if (!(session instanceof NativeCapturePage) || session.isClosed())
               throw new Error("Browser page is unavailable.");
@@ -92,6 +123,7 @@ export class BrowserVaultCapture {
           trackSecret: (secret) => this.vault.trackSecret(secret),
           isHeaded: () => true,
           lastModelActivity: () => Number.NaN,
+          promptTtlMs: BROWSER_VAULT_PROMPT_TTL_MS,
           shouldCapture: (input) => this.vault.shouldOfferSave(input),
           requestSave: ({ origin, username, mode }) =>
             this.vault.askSave({ origin, username, mode: mode === "update" ? "update" : "save" }),
@@ -103,13 +135,13 @@ export class BrowserVaultCapture {
       .catch(() => this.vault.reportCaptureFailure());
   }
 
-  private context(): CaptureContext {
+  private context(): CaptureContextShim {
     return {
       pages: () => [...this.pages],
-      on: (_event, callback) => {
+      on: (_event: "page", callback: (page: CapturePageShim) => void) => {
         this.pageListeners.add(callback);
       },
-      off: (_event, callback) => {
+      off: (_event: "page", callback: (page: CapturePageShim) => void) => {
         this.pageListeners.delete(callback);
       },
       newCDPSession: async (page) => {
@@ -117,11 +149,13 @@ export class BrowserVaultCapture {
           throw new Error("Browser page is unavailable.");
         const { webContents } = page.runtime;
         if (!webContents.debugger.isAttached()) webContents.debugger.attach("1.3");
-        const info = await webContents.debugger.sendCommand("Target.getTargetInfo");
-        const { sessionId } = await webContents.debugger.sendCommand("Target.attachToTarget", {
+        const info = (await webContents.debugger.sendCommand("Target.getTargetInfo")) as {
+          targetInfo: { targetId: string };
+        };
+        const { sessionId } = (await webContents.debugger.sendCommand("Target.attachToTarget", {
           targetId: info.targetInfo.targetId,
           flatten: true,
-        });
+        })) as { sessionId: string };
         const events = new EventEmitter();
         const onMessage = (
           _event: unknown,
@@ -139,9 +173,10 @@ export class BrowserVaultCapture {
         };
         webContents.debugger.on("message", onMessage);
         return {
-          send: (method, parameters) =>
+          send: (method: string, parameters?: Record<string, unknown>) =>
             webContents.debugger.sendCommand(method, parameters, sessionId),
-          on: (event, callback) => events.on(event, callback),
+          on: (event: string, callback: (parameters: unknown) => void) =>
+            void events.on(event, callback),
           detach: async () => {
             events.removeAllListeners();
             webContents.debugger.removeListener("message", onMessage);

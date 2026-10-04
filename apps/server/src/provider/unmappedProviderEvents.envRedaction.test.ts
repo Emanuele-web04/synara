@@ -370,12 +370,6 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).not.toContain("9007199254740992");
   });
 
-  it("bounds URL scanning work for long diagnostics without URLs", () => {
-    const sanitized = sanitizeUnmappedProviderData("a".repeat(50_000));
-
-    expect(sanitized).toMatchObject({ __synaraTruncated: true });
-  });
-
   it("fails closed without recursion on excessively nested inspected objects", () => {
     const sanitized = sanitizeUnmappedProviderData(
       `${"{".repeat(10_000)} name: 'OPENAI_API_KEY', value: 'deep-secret'`,

@@ -17,12 +17,13 @@ import {
   resolvePreferredSplitForCommand,
   resolveThreadCommandActivation,
 } from "../threadActivation.logic";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 type Navigate = ReturnType<typeof useNavigate>;
 type ThreadTerminalStateById = Parameters<typeof selectThreadTerminalState>[0];
 type SidebarThreadActivationSummary = Pick<
   SidebarThreadSummary,
-  "id" | "projectId" | "sidechatSourceThreadId"
+  "id" | "projectId" | "sidechatSourceThreadId" | "sidechatContext"
 >;
 
 export type ThreadActivationControllerInput = {
@@ -89,8 +90,8 @@ export function activateThreadFromSidebarIntent(
   const preferredSplit =
     preferredSplitCandidate &&
     preferredSplitView &&
-    resolveSplitViewThreadIds(preferredSplitView).some(
-      (paneThreadId) => sidebarThreadSummaryById[paneThreadId]?.sidechatSourceThreadId,
+    resolveSplitViewThreadIds(preferredSplitView).some((paneThreadId) =>
+      isSidechatThread(sidebarThreadSummaryById[paneThreadId] ?? {}),
     )
       ? null
       : preferredSplitCandidate;
@@ -144,6 +145,8 @@ function resolveSidechatDockActivation(
     targetThread: SidebarThreadActivationSummary | undefined;
   },
 ): { threadId: ThreadId; sourceThreadId: ThreadId } | null {
+  // Only a forked sidechat has a source thread whose dock hosts it. A standalone one (asked
+  // about a GitHub item) has no host thread and activates like any other thread.
   if (!options.targetThread?.sidechatSourceThreadId) {
     return null;
   }

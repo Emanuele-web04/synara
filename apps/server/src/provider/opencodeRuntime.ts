@@ -3,8 +3,10 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
+import { createHash } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomBytes } from "node:crypto";
 
 import type {
   ChatAttachment,
@@ -44,13 +46,16 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
-import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
+import { expandHomePath } from "@synara/shared/synaraHome";
+import { buildOpenCodeServerProcessEnv as buildOpenCodeServerLaunchEnv } from "./providerBinaryResolution.ts";
+import { buildProviderProcessEnv } from "./providerProcessEnv.ts";
 import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
 } from "./supervisedProcessTeardown.ts";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
+import { parseOpenCodeReasoningOptions } from "./openCodeReasoningOptions.ts";
 
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
@@ -74,21 +79,35 @@ export interface OpenCodeCompatibleCliSpec {
 export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
   defaultBinaryPath: "opencode",
   displayName: "OpenCode",
-  serverReadyPrefix: "opencode server listening",
+  // Accept both the newer CLI handler's marker and the legacy prefixed marker.
+  serverReadyPrefix: "server listening",
   configContentEnvVar: "OPENCODE_CONFIG_CONTENT",
   dataDirectoryName: "opencode",
   serverAuthUsername: "opencode",
 };
 
+export const KILO_CLI_SPEC: OpenCodeCompatibleCliSpec = {
+  defaultBinaryPath: "kilo",
+  displayName: "Kilo",
+  serverReadyPrefix: "kilo server listening",
+  configContentEnvVar: "KILO_CONFIG_CONTENT",
+  dataDirectoryName: "kilo",
+  serverAuthUsername: "kilo",
+};
+
 export interface OpenCodeServerProcess {
   readonly url: string;
   readonly exitCode: Effect.Effect<number, never>;
+  /** Password assigned to a managed OpenCode server, when HTTP auth is enabled. */
+  readonly serverPassword?: string;
 }
 
 export interface OpenCodeServerConnection {
   readonly url: string;
   readonly exitCode: Effect.Effect<number, never> | null;
   readonly external: boolean;
+  /** Password assigned to a managed OpenCode server, when HTTP auth is enabled. */
+  readonly serverPassword?: string;
 }
 
 interface PooledOpenCodeServer {
@@ -125,6 +144,12 @@ export function openCodeRuntimeErrorDetail(cause: unknown): string {
     }
   }
   return String(cause);
+}
+
+function missingCliHint(cliSpec: OpenCodeCompatibleCliSpec, detail: string): string {
+  return /ENOENT|EACCES/i.test(detail)
+    ? ` The ${cliSpec.displayName} CLI was not found or was not executable on PATH or in the standard install locations; install it (https://opencode.ai) or set an explicit binary path in provider settings.`
+    : "";
 }
 
 export const runOpenCodeSdk = <A>(
@@ -191,6 +216,10 @@ export interface OpenCodeRuntimeShape {
     readonly hostname?: string;
     readonly timeoutMs?: number;
     readonly experimentalWebSockets?: boolean;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
@@ -201,6 +230,10 @@ export interface OpenCodeRuntimeShape {
     readonly hostname?: string;
     readonly timeoutMs?: number;
     readonly experimentalWebSockets?: boolean;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
     /**
      * Makes a managed server private to one owner and closes it immediately
      * when that owner's scope ends. Required before installing per-thread MCP
@@ -213,6 +246,10 @@ export interface OpenCodeRuntimeShape {
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly args: ReadonlyArray<string>;
     readonly cwd?: string;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<OpenCodeCommandResult, OpenCodeRuntimeError>;
   readonly createOpenCodeSdkClient: (input: {
     readonly baseUrl: string;
@@ -227,6 +264,10 @@ export interface OpenCodeRuntimeShape {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly cwd?: string;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<ReadonlyArray<OpenCodeCliModelDescriptor>, OpenCodeRuntimeError>;
   readonly loadOpenCodeCredentialProviderIDs: (
     client: OpencodeClient,
@@ -236,7 +277,11 @@ export interface OpenCodeRuntimeShape {
 
 function parseServerUrlFromOutput(output: string, readyPrefix: string): string | null {
   for (const line of output.split("\n")) {
-    if (!line.startsWith(readyPrefix)) {
+    const isReadyLine =
+      line.startsWith(readyPrefix) ||
+      (readyPrefix === OPENCODE_CLI_SPEC.serverReadyPrefix &&
+        line.startsWith("opencode server listening"));
+    if (!isReadyLine) {
       continue;
     }
     const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
@@ -305,6 +350,10 @@ function pooledOpenCodeServerKey(input: {
   readonly hostname?: string;
   readonly experimentalWebSockets?: boolean;
   readonly poolIsolationKey?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }): string {
   return JSON.stringify({
     binaryPath: input.binaryPath,
@@ -313,7 +362,28 @@ function pooledOpenCodeServerKey(input: {
     port: input.port ?? null,
     experimentalWebSockets: input.experimentalWebSockets === true,
     poolIsolationKey: input.poolIsolationKey ?? null,
+    instanceId: input.instanceId ?? null,
+    homeDir: input.homeDir ?? null,
+    isolationRootDir: input.isolationRootDir ?? null,
+    environment: environmentFingerprint(input.environment),
   });
+}
+
+function environmentFingerprint(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | null {
+  if (environment === undefined) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries(environment)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, hashCacheComponent(value)]),
+  );
+}
+
+function hashCacheComponent(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 export function parseOpenCodeModelSlug(
@@ -528,45 +598,54 @@ function parseOpenCodeCliModelJson(
   const providerID = trimToNull(object.providerID) ?? parsedSlug.providerID;
   const modelID = trimToNull(object.id) ?? parsedSlug.modelID;
   const name = trimToNull(object.name) ?? fallbackOpenCodeModelName(slug, parsedSlug);
-  const variantsObject =
-    object.variants && typeof object.variants === "object" && !Array.isArray(object.variants)
-      ? (object.variants as Record<string, unknown>)
-      : {};
+  const hasNormalizedVariants =
+    object.variants !== null &&
+    typeof object.variants === "object" &&
+    !Array.isArray(object.variants);
+  const variantsObject = hasNormalizedVariants ? (object.variants as Record<string, unknown>) : {};
   const variants = Object.keys(variantsObject)
     .map((variant) => variant.trim())
     .filter((variant) => variant.length > 0)
     .toSorted((left, right) => left.localeCompare(right));
-  const supportedReasoningEfforts = Array.from(
-    new Map(
-      Object.entries(variantsObject).flatMap(([variantKey, variant]) => {
-        const variantObject =
-          variant && typeof variant === "object" && !Array.isArray(variant)
-            ? (variant as Record<string, unknown>)
-            : null;
-        if (!variantObject) {
-          return [];
-        }
+  const rawReasoningOptions =
+    object.reasoning_options !== undefined
+      ? object.reasoning_options
+      : object.reasoningOptions !== undefined
+        ? object.reasoningOptions
+        : object.options && typeof object.options === "object" && !Array.isArray(object.options)
+          ? (object.options as Record<string, unknown>).reasoning_options !== undefined
+            ? (object.options as Record<string, unknown>).reasoning_options
+            : (object.options as Record<string, unknown>).reasoningOptions
+          : undefined;
+  const variantReasoningEfforts = Object.entries(variantsObject).flatMap(
+    ([variantKey, variant]) => {
+      const variantObject =
+        variant && typeof variant === "object" && !Array.isArray(variant)
+          ? (variant as Record<string, unknown>)
+          : null;
+      if (!variantObject) {
+        return [];
+      }
 
-        const reasoningValue = readOpenCodeVariantEffort(variantKey, variantObject);
-        if (!reasoningValue) {
-          return [];
-        }
+      const reasoningValue = readOpenCodeVariantEffort(variantKey, variantObject);
+      if (!reasoningValue) {
+        return [];
+      }
 
-        const label = trimToNull(variantObject.label) ?? undefined;
-        const description = trimToNull(variantObject.description) ?? undefined;
-        return [
-          [
-            reasoningValue,
-            {
-              value: reasoningValue,
-              ...(label ? { label } : {}),
-              ...(description ? { description } : {}),
-            },
-          ] as const,
-        ];
-      }),
-    ).values(),
+      const label = trimToNull(variantObject.label) ?? undefined;
+      const description = trimToNull(variantObject.description) ?? undefined;
+      return [
+        {
+          value: reasoningValue,
+          ...(label ? { label } : {}),
+          ...(description ? { description } : {}),
+        },
+      ];
+    },
   );
+  const supportedReasoningEfforts = hasNormalizedVariants
+    ? Array.from(new Map(variantReasoningEfforts.map((effort) => [effort.value, effort])).values())
+    : parseOpenCodeReasoningOptions(rawReasoningOptions);
   const defaultReasoningEffort =
     trimToNull(object.defaultReasoningEffort) ??
     trimToNull(object.default_reasoning_effort) ??
@@ -671,10 +750,15 @@ function toListModelsCommandError(input: {
   });
 }
 
-function supportsVerboseModelsCommandFailure(stdout: string, stderr: string): boolean {
+export function supportsVerboseModelsCommandFailure(stdout: string, stderr: string): boolean {
   const combined = `${stdout}\n${stderr}`.toLowerCase();
   return (
-    combined.includes("unknown argument: verbose") || combined.includes("unknown option: verbose")
+    combined.includes("unknown argument: verbose") ||
+    combined.includes("unknown option: verbose") ||
+    combined.includes("unknown flag: --verbose") ||
+    combined.includes("unknown option: --verbose") ||
+    combined.includes("unrecognized flag: --verbose") ||
+    combined.includes("unrecognized option: --verbose")
   );
 }
 
@@ -760,13 +844,28 @@ export function buildOpenCodePermissionRules(
 }
 
 export function buildOpenCodeServerProcessEnv(input: {
+  readonly cliSpec?: OpenCodeCompatibleCliSpec;
   readonly experimentalWebSockets?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }): NodeJS.ProcessEnv {
-  return buildProviderChildEnvironment({
-    provider: "opencode",
-    baseEnv: input.baseEnv ?? process.env,
-    overrides: input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {},
+  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
+  const accountIsolatedEnv = buildProviderProcessEnv({
+    driver: cliSpec.configContentEnvVar === KILO_CLI_SPEC.configContentEnvVar ? "kilo" : "opencode",
+    ...(input.baseEnv !== undefined ? { env: input.baseEnv } : {}),
+    ...(input.environment !== undefined ? { environment: input.environment } : {}),
+    ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+    ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+    ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
+  });
+  return buildOpenCodeServerLaunchEnv({
+    baseEnv: accountIsolatedEnv,
+    ...(input.experimentalWebSockets !== undefined
+      ? { experimentalWebSockets: input.experimentalWebSockets }
+      : {}),
   });
 }
 
@@ -824,6 +923,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 export interface OpenCodeRuntimeLiveOptions {
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
   readonly netService?: NetServiceShape;
+  readonly fetchImpl?: (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 }
 
 const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
@@ -838,10 +938,27 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
 
     const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
       Effect.gen(function* () {
-        const childEnv = buildOpenCodeServerProcessEnv({});
+        const childEnv = yield* Effect.try({
+          try: () =>
+            buildOpenCodeServerProcessEnv({
+              ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+              ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+              ...(input.isolationRootDir !== undefined
+                ? { isolationRootDir: input.isolationRootDir }
+                : {}),
+            }),
+          catch: (cause) =>
+            new OpenCodeRuntimeError({
+              operation: "runOpenCodeCommand",
+              detail: `Failed to prepare private account home: ${openCodeRuntimeErrorDetail(cause)}`,
+              cause,
+            }),
+        });
         const child = yield* spawner.spawn(
-          makeEffectProcessCommand(input.binaryPath, input.args, {
-            ...(input.cwd ? { cwd: input.cwd } : {}),
+          makeEffectProcessCommand(expandHomePath(input.binaryPath), input.args, {
+            ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
             env: childEnv,
           }),
         );
@@ -867,13 +984,14 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         } satisfies OpenCodeCommandResult;
       }).pipe(
         Effect.scoped,
-        Effect.mapError((cause) =>
-          ensureRuntimeError(
+        Effect.mapError((cause) => {
+          const detail = openCodeRuntimeErrorDetail(cause);
+          return ensureRuntimeError(
             "runOpenCodeCommand",
-            `Failed to execute '${input.binaryPath} ${input.args.join(" ")}': ${openCodeRuntimeErrorDetail(cause)}`,
+            `Failed to execute '${input.binaryPath} ${input.args.join(" ")}': ${detail}${missingCliHint(input.cliSpec ?? OPENCODE_CLI_SPEC, detail)}`,
             cause,
-          ),
-        ),
+          );
+        }),
       );
 
     const startOpenCodeServerProcess: OpenCodeRuntimeShape["startOpenCodeServerProcess"] = (
@@ -898,16 +1016,41 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ));
         const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
         const args = ["serve", "--hostname", hostname, "--port", String(port)];
-        const childEnv = buildOpenCodeServerProcessEnv({
-          ...(input.experimentalWebSockets !== undefined
-            ? { experimentalWebSockets: input.experimentalWebSockets }
-            : {}),
+        // Protect managed servers that support the environment-based auth contract.
+        // Keep the credential with the process so every SDK client can authenticate.
+        const configuredServerPassword = process.env.OPENCODE_SERVER_PASSWORD;
+        const serverPassword =
+          configuredServerPassword && configuredServerPassword.length > 0
+            ? configuredServerPassword
+            : randomBytes(32).toString("base64url");
+        const childEnv = yield* Effect.try({
+          try: () =>
+            buildOpenCodeServerProcessEnv({
+              cliSpec,
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+              ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+              ...(input.isolationRootDir !== undefined
+                ? { isolationRootDir: input.isolationRootDir }
+                : {}),
+              ...(input.experimentalWebSockets !== undefined
+                ? { experimentalWebSockets: input.experimentalWebSockets }
+                : {}),
+            }),
+          catch: (cause) =>
+            new OpenCodeRuntimeError({
+              operation: "startOpenCodeServerProcess",
+              detail: `Failed to prepare private account home: ${openCodeRuntimeErrorDetail(cause)}`,
+              cause,
+            }),
         });
+        childEnv.OPENCODE_SERVER_USERNAME = cliSpec.serverAuthUsername;
+        childEnv.OPENCODE_SERVER_PASSWORD = serverPassword;
         const child = yield* spawner
           .spawn(
-            makeEffectProcessCommand(input.binaryPath, args, {
+            makeEffectProcessCommand(expandHomePath(input.binaryPath), args, {
               env: childEnv,
-              ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
               detached: false,
               killSignal: "SIGKILL",
               forceKillAfter: "1500 millis",
@@ -915,14 +1058,14 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           )
           .pipe(
             Effect.provideService(Scope.Scope, runtimeScope),
-            Effect.mapError(
-              (cause) =>
-                new OpenCodeRuntimeError({
-                  operation: "startOpenCodeServerProcess",
-                  detail: `Failed to spawn OpenCode server process: ${openCodeRuntimeErrorDetail(cause)}`,
-                  cause,
-                }),
-            ),
+            Effect.mapError((cause) => {
+              const detail = openCodeRuntimeErrorDetail(cause);
+              return new OpenCodeRuntimeError({
+                operation: "startOpenCodeServerProcess",
+                detail: `Failed to spawn OpenCode server process: ${detail}${missingCliHint(cliSpec, detail)}`,
+                cause,
+              });
+            }),
           );
         yield* Scope.addFinalizer(
           runtimeScope,
@@ -1054,8 +1197,48 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           });
         }
 
+        // Synara needs the legacy endpoint family, so probe `provider.list`.
+        // A missing route (404/405) establishes incompatibility, not the CLI
+        // version. Retry other statuses and connection failures separately.
+        const probeUrl = `${readyOption.value.replace(/\/$/, "")}/provider`;
+        const fetchImpl = options?.fetchImpl ?? fetch;
+        let probeStatus: number | null = null;
+        let surfaceConfirmed = false;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt > 0) yield* Effect.sleep(250);
+          const response = yield* Effect.promise(() =>
+            fetchImpl(probeUrl, {
+              headers: {
+                Authorization: `Basic ${Buffer.from(`${cliSpec.serverAuthUsername}:${serverPassword}`, "utf8").toString("base64")}`,
+              },
+              signal: AbortSignal.timeout(5_000),
+            }).then(
+              (result) => result,
+              () => null,
+            ),
+          );
+          if (response?.ok) {
+            surfaceConfirmed = true;
+            break;
+          }
+          if (response !== null && (response.status === 404 || response.status === 405)) {
+            return yield* new OpenCodeRuntimeError({
+              operation: "startOpenCodeServerProcess",
+              detail: `${cliSpec.displayName} server does not serve the legacy surface Synara requires (GET /provider → HTTP ${response.status}). Install a compatible CLI release (https://opencode.ai) or set an explicit binary path in provider settings.`,
+            });
+          }
+          probeStatus = response === null ? null : response.status;
+        }
+        if (!surfaceConfirmed) {
+          return yield* new OpenCodeRuntimeError({
+            operation: "startOpenCodeServerProcess",
+            detail: `${cliSpec.displayName} server did not pass the legacy surface probe after 3 attempts (GET /provider → ${probeStatus === null ? "unreachable" : `HTTP ${probeStatus}`}).${probeStatus === 401 || probeStatus === 403 ? " The server rejected the credentials it was started with; report this as a bug." : ""}`,
+          });
+        }
+
         return {
           url: readyOption.value,
+          serverPassword,
           exitCode: child.exitCode.pipe(
             Effect.map(Number),
             Effect.orElseSucceed(() => 0),
@@ -1153,6 +1336,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       readonly timeoutMs?: number;
       readonly experimentalWebSockets?: boolean;
       readonly poolIsolationKey?: string;
+      readonly environment?: Readonly<Record<string, string>>;
+      readonly instanceId?: string;
+      readonly homeDir?: string;
+      readonly isolationRootDir?: string;
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
@@ -1160,8 +1347,19 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           // lexically can cross a symlink differently or hide a missing directory. Keep the same
           // spelling in both the pool key and spawn options, without adding filesystem work here.
           const hasParentTraversal = input.cwd?.split(/[\\/]/).includes("..");
-          const pooledInput =
-            input.cwd && !hasParentTraversal ? { ...input, cwd: resolvePath(input.cwd) } : input;
+          // node:path never expands `~` the way a shell would — a literal tilde
+          // ENOENTs at spawn and would pool under the wrong key.
+          const pooledInput = {
+            ...input,
+            binaryPath: expandHomePath(input.binaryPath),
+            ...(input.cwd
+              ? {
+                  cwd: hasParentTraversal
+                    ? expandHomePath(input.cwd)
+                    : resolvePath(expandHomePath(input.cwd)),
+                }
+              : {}),
+          };
           const key = pooledOpenCodeServerKey(pooledInput);
           const existing = pooledServers.get(key);
           if (existing) {
@@ -1256,12 +1454,21 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ...(input.poolIsolationKey !== undefined
             ? { poolIsolationKey: input.poolIsolationKey }
             : {}),
+          ...(input.environment !== undefined ? { environment: input.environment } : {}),
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+          ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+          ...(input.isolationRootDir !== undefined
+            ? { isolationRootDir: input.isolationRootDir }
+            : {}),
         });
         yield* Scope.addFinalizer(callerScope, releasePooledServer(pooledServer));
         return {
           url: pooledServer.server.url,
           exitCode: pooledServer.server.exitCode,
           external: false,
+          ...(pooledServer.server.serverPassword
+            ? { serverPassword: pooledServer.server.serverPassword }
+            : {}),
         };
       });
     };
@@ -1355,11 +1562,21 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       readonly cliSpec?: OpenCodeCompatibleCliSpec;
       readonly cwd?: string;
       readonly args: ReadonlyArray<string>;
+      readonly environment?: Readonly<Record<string, string>>;
+      readonly instanceId?: string;
+      readonly homeDir?: string;
+      readonly isolationRootDir?: string;
     }) =>
       runOpenCodeCommand({
         binaryPath: input.binaryPath,
         ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+        ...(input.environment !== undefined ? { environment: input.environment } : {}),
+        ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+        ...(input.isolationRootDir !== undefined
+          ? { isolationRootDir: input.isolationRootDir }
+          : {}),
         args: input.args,
       }).pipe(
         Effect.flatMap((result) =>
@@ -1382,6 +1599,12 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         binaryPath: input.binaryPath,
         ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+        ...(input.environment !== undefined ? { environment: input.environment } : {}),
+        ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+        ...(input.isolationRootDir !== undefined
+          ? { isolationRootDir: input.isolationRootDir }
+          : {}),
         args: ["models", "--verbose"],
       }).pipe(
         Effect.catch((error) => {
@@ -1406,6 +1629,12 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             binaryPath: input.binaryPath,
             ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
             ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+            ...(input.isolationRootDir !== undefined
+              ? { isolationRootDir: input.isolationRootDir }
+              : {}),
             args: ["models"],
           });
         }),

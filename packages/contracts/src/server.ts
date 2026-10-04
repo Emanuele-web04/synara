@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema, SchemaTransformation } from "effect";
 import {
   IsoDateTime,
   NonNegativeInt,
@@ -7,15 +7,65 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
-import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
+import { KeybindingCommand, KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
 import { ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
 export const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
+
+/** Owner-only diagnostic pages reuse the provider diagnostic readers and sanitizer. */
+export const ServerReadThreadDiagnosticsInput = Schema.Struct({
+  source: Schema.Literals(["events", "runtime"]),
+  threadId: ThreadId.check(Schema.isMaxLength(256)),
+  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  eventTypes: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(128))).check(
+      Schema.isMaxLength(64),
+    ),
+  ),
+  turnId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  payloadMode: Schema.optional(Schema.Literals(["none", "summary", "full"])),
+  includeDetails: Schema.optional(Schema.Boolean),
+});
+export type ServerReadThreadDiagnosticsInput = typeof ServerReadThreadDiagnosticsInput.Type;
+
+/**
+ * RPC JSON codecs must describe JSON values explicitly. `Schema.Unknown`
+ * has no JSON representation and encodes successful pages as null.
+ * The existing diagnostic readers own payload redaction and bounded detail.
+ */
+export const ServerReadThreadDiagnosticsResult = Schema.Struct({
+  threadId: ThreadId.check(Schema.isMaxLength(256)),
+  events: Schema.Array(Schema.Json).check(Schema.isMaxLength(200)),
+  coverage: Schema.Union([
+    Schema.Struct({
+      source: Schema.Literal("orchestration_events"),
+      highWaterSequence: NonNegativeInt,
+      durableSourceComplete: Schema.Literal(true),
+      pageHasOlder: Schema.Boolean,
+      coalescingScanTruncated: Schema.optional(Schema.Boolean),
+    }),
+    Schema.Struct({
+      source: Schema.Literal("provider_runtime_events"),
+      highWaterSequence: NonNegativeInt,
+      oldestRetainedSequence: Schema.NullOr(NonNegativeInt),
+      retainedForThread: NonNegativeInt,
+      globalAcceptedEventCap: PositiveInt,
+      sourceComplete: Schema.Literal(false),
+      pageHasOlder: Schema.Boolean,
+    }),
+  ]),
+  nextCursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  requestedLimit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  appliedLimit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+});
+export type ServerReadThreadDiagnosticsResult = typeof ServerReadThreadDiagnosticsResult.Type;
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -46,10 +96,16 @@ export const ServerProviderAuthStatus = Schema.Literals([
 ]);
 export type ServerProviderAuthStatus = typeof ServerProviderAuthStatus.Type;
 
-export const ServerProviderStatus = Schema.Struct({
-  provider: ProviderKind,
+const ServerProviderStatusWire = Schema.Struct({
+  provider: ProviderDriverKind,
+  instanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.optional(Schema.Boolean),
   status: ServerProviderStatusState,
   available: Schema.Boolean,
+  availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
+  unavailableReason: Schema.optional(TrimmedNonEmptyString),
   authStatus: ServerProviderAuthStatus,
   authType: Schema.optional(TrimmedNonEmptyString),
   authLabel: Schema.optional(TrimmedNonEmptyString),
@@ -85,6 +141,67 @@ export const ServerProviderStatus = Schema.Struct({
     }),
   ),
 });
+
+const ServerProviderStatusSource = Schema.Struct({
+  provider: Schema.optionalKey(ProviderDriverKind),
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+  driver: Schema.optionalKey(ProviderDriverKind),
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.optional(Schema.Boolean),
+  status: ServerProviderStatusState,
+  available: Schema.Boolean,
+  availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
+  unavailableReason: Schema.optional(TrimmedNonEmptyString),
+  authStatus: ServerProviderAuthStatus,
+  authType: Schema.optional(TrimmedNonEmptyString),
+  authLabel: Schema.optional(TrimmedNonEmptyString),
+  voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
+  supportsAutoRuntimeMode: Schema.optional(Schema.Boolean),
+  autoRuntimeModeBinaryPath: Schema.optional(TrimmedNonEmptyString),
+  version: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  checkedAt: IsoDateTime,
+  message: Schema.optional(TrimmedNonEmptyString),
+  versionAdvisory: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["unknown", "current", "behind_latest"]),
+      currentVersion: Schema.NullOr(TrimmedNonEmptyString),
+      latestVersion: Schema.NullOr(TrimmedNonEmptyString),
+      latestVersionKnowable: Schema.optional(Schema.Boolean),
+      updateCommand: Schema.NullOr(TrimmedNonEmptyString),
+      canUpdate: Schema.Boolean,
+      checkedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
+  updateState: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["idle", "queued", "running", "succeeded", "failed", "unchanged"]),
+      startedAt: Schema.NullOr(IsoDateTime),
+      finishedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+      output: Schema.NullOr(Schema.String.check(Schema.isMaxLength(10_000))),
+    }),
+  ),
+});
+
+export const ServerProviderStatus = ServerProviderStatusSource.pipe(
+  Schema.decodeTo(
+    ServerProviderStatusWire,
+    SchemaTransformation.transformOrFail({
+      decode: (raw) => {
+        const driver = raw.driver ?? raw.provider;
+        const instanceId = raw.instanceId ?? driver;
+        return Effect.succeed({
+          ...raw,
+          provider: driver,
+          driver,
+          instanceId,
+        } as typeof ServerProviderStatusWire.Encoded);
+      },
+      encode: (value) => Effect.succeed(value as typeof ServerProviderStatusSource.Encoded),
+    }),
+  ),
+);
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
 export type ServerProviderVersionAdvisory = NonNullable<ServerProviderStatus["versionAdvisory"]>;
@@ -97,9 +214,13 @@ export const ServerConfig = Schema.Struct({
   homeDir: Schema.optional(TrimmedNonEmptyString),
   chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   studioWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  groupsWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   worktreesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
+  // The shipped bindings, so the shortcut editor can tell customized commands from
+  // untouched ones and give a new binding its command's default condition.
+  defaultKeybindings: Schema.optional(ResolvedKeybindingsConfig),
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
   availableEditors: Schema.Array(EditorId),
@@ -143,8 +264,56 @@ export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
 export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
 
+export const ServerCodexResetCreditStatus = Schema.Literals([
+  "available",
+  "redeeming",
+  "redeemed",
+  "unknown",
+]);
+export type ServerCodexResetCreditStatus = typeof ServerCodexResetCreditStatus.Type;
+
+export const ServerCodexResetCredit = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  status: Schema.optional(ServerCodexResetCreditStatus),
+  grantedAt: Schema.optional(IsoDateTime),
+  expiresAt: Schema.optional(IsoDateTime),
+  title: Schema.optional(TrimmedNonEmptyString),
+  description: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerCodexResetCredit = typeof ServerCodexResetCredit.Type;
+
+export const ServerCodexResetCredits = Schema.Struct({
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  canUse: Schema.optional(Schema.Boolean),
+  availableCount: NonNegativeInt,
+  credits: Schema.optional(Schema.Array(ServerCodexResetCredit)),
+});
+export type ServerCodexResetCredits = typeof ServerCodexResetCredits.Type;
+
+export const CodexResetCreditOutcome = Schema.Literals([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type CodexResetCreditOutcome = typeof CodexResetCreditOutcome.Type;
+
+export const ServerConsumeCodexResetCreditInput = Schema.Struct({
+  accountId: TrimmedNonEmptyString,
+  idempotencyKey: TrimmedNonEmptyString,
+  creditId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerConsumeCodexResetCreditInput = typeof ServerConsumeCodexResetCreditInput.Type;
+
+export const ServerConsumeCodexResetCreditResult = Schema.Struct({
+  outcome: CodexResetCreditOutcome,
+});
+export type ServerConsumeCodexResetCreditResult = typeof ServerConsumeCodexResetCreditResult.Type;
+
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
+  // Stable provider-account route. Omitted by legacy local/provider-only snapshots.
+  instanceId: Schema.optional(ProviderInstanceId),
   updatedAt: IsoDateTime,
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
@@ -152,6 +321,7 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   status: Schema.optional(ProviderUsageStatus),
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
+  resetCredits: Schema.optional(ServerCodexResetCredits),
   // True when this is a re-served last-good snapshot (e.g. the provider is rate-limiting live
   // fetches) rather than a fresh read; `updatedAt` then still reflects the original fetch time.
   stale: Schema.optional(Schema.Boolean),
@@ -168,7 +338,7 @@ export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProvider
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
 
 // Batch live-usage fetch for supported providers, powering the Settings → Usage section and
-// provider-scoped usage chips. Unfiltered requests return one entry per supported provider
+// provider-scoped usage chips. Unfiltered requests return one entry per enabled supported instance
 // (including needs-auth/error) so the UI can render a row each.
 export const ServerListProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
@@ -262,6 +432,8 @@ export type ServerDiagnosticsResult = typeof ServerDiagnosticsResult.Type;
 
 export const ServerVoicePrewarmInput = Schema.Struct({
   provider: ProviderKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  providerOptions: Schema.optional(ProviderStartOptions),
   cwd: TrimmedNonEmptyString,
   threadId: Schema.optional(ThreadId),
 });
@@ -274,6 +446,8 @@ export type ServerVoicePrewarmResult = typeof ServerVoicePrewarmResult.Type;
 
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  providerOptions: Schema.optional(ProviderStartOptions),
   cwd: TrimmedNonEmptyString,
   threadId: Schema.optional(ThreadId),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
@@ -365,6 +539,37 @@ export const ServerUpsertKeybindingResult = Schema.Struct({
 });
 export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.Type;
 
+export const MAX_KEYBINDING_EDITS = 64;
+
+/**
+ * One step of a shortcut-editor change. `set` adds a binding (replacing exactly
+ * `replacing` when given, leaving the command's other bindings alone), `remove` drops
+ * one binding and leaves the command unassigned when it was the last, and `reset`
+ * restores the shipped bindings for one command or, without `command`, for every
+ * built-in command.
+ */
+export const ServerKeybindingEdit = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("set"),
+    rule: KeybindingRule,
+    replacing: Schema.optional(KeybindingRule),
+  }),
+  Schema.Struct({ type: Schema.Literal("remove"), rule: KeybindingRule }),
+  Schema.Struct({ type: Schema.Literal("reset"), command: Schema.optional(KeybindingCommand) }),
+]);
+export type ServerKeybindingEdit = typeof ServerKeybindingEdit.Type;
+
+export const ServerEditKeybindingsInput = Schema.Struct({
+  edits: Schema.Array(ServerKeybindingEdit).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_KEYBINDING_EDITS),
+  ),
+});
+export type ServerEditKeybindingsInput = typeof ServerEditKeybindingsInput.Type;
+
+export const ServerEditKeybindingsResult = ServerUpsertKeybindingResult;
+export type ServerEditKeybindingsResult = typeof ServerEditKeybindingsResult.Type;
+
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
@@ -386,6 +591,7 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
   homeDir: Schema.optional(TrimmedNonEmptyString),
   chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   studioWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  groupsWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
@@ -443,6 +649,7 @@ export type ServerRefreshProvidersResult = typeof ServerRefreshProvidersResult.T
 
 export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderKind,
+  instanceId: Schema.optional(ProviderInstanceId),
 });
 export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
 
@@ -450,11 +657,13 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
   "ServerProviderUpdateError",
   {
     provider: ProviderKind,
+    instanceId: Schema.optional(ProviderInstanceId),
     reason: TrimmedNonEmptyString,
   },
 ) {
   override get message(): string {
-    return `Provider update failed for ${this.provider}: ${this.reason}`;
+    const target = this.instanceId ? `${this.provider}/${this.instanceId}` : this.provider;
+    return `Provider update failed for ${target}: ${this.reason}`;
   }
 }
 

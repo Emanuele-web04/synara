@@ -13,6 +13,7 @@ import {
 import type { DiffFileEditRequest } from "../../lib/diffEditBaseRev";
 import type { SplitViewPanePanelState } from "../../splitViewStore";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
+import { DelayedLoaderFade } from "./DelayedLoaderFade";
 import { Spinner } from "../ui/spinner";
 import { cn } from "~/lib/utils";
 import { scheduleDeferredChatMount } from "./deferredChatMount";
@@ -93,13 +94,11 @@ export function ChatMountLoader() {
         CHAT_BACKGROUND_CLASS_NAME,
       )}
     >
-      {/* Inline @keyframes so the delayed fade needs no global stylesheet; the
-          delay keeps the common fast mount (a couple of frames) from flashing a
+      {/* The delay keeps the common fast mount (a couple of frames) from flashing a
           spinner — short waits show only the plain chat background. */}
-      <style>{`@keyframes chat-mount-loader-in { from { opacity: 0; } to { opacity: 1; } }`}</style>
-      <div className="opacity-0 [animation:chat-mount-loader-in_200ms_ease-out_150ms_forwards] motion-reduce:animate-none motion-reduce:opacity-100">
+      <DelayedLoaderFade>
         <Spinner className="size-5 text-muted-foreground" />
-      </div>
+      </DelayedLoaderFade>
     </div>
   );
 }
@@ -131,24 +130,21 @@ export function DeferredChatView(props: {
   onMounted?: () => void;
 }) {
   const onMounted = props.onMounted ?? noopChatSurfaceAction;
-  const mountKey = `${props.paneScopeId}:${props.threadId}`;
-  const [readyMountKey, setReadyMountKey] = useState<string | null>(() =>
-    props.deferMount ? null : mountKey,
-  );
-  const canMountChatView = !props.deferMount || readyMountKey === mountKey;
+  // Only defer the initial mount. Switching to another draft must not tear
+  // down an already visible chat (including its tab strip) to replay the loader.
+  const [mountPending, setMountPending] = useState(props.deferMount);
+  if (mountPending && !props.deferMount) {
+    // A saved chat reached while the initial draft is still waiting can mount
+    // immediately, and subsequent drafts must not re-arm that initial delay.
+    setMountPending(false);
+  }
+  const canMountChatView = !mountPending || !props.deferMount;
 
   useEffect(() => {
-    if (!props.deferMount) {
-      return;
-    }
-    // readyMountKey is keyed by mountKey, so a changed mountKey already makes
-    // canMountChatView false (loader) without an eager reset here; the double
-    // rAF then stamps the new key once the paint has settled. Chromium can
-    // suppress animation frames while an Electron window is starting or being
-    // background-throttled, so keep a bounded fallback: a deferred draft must
-    // never remain on the mount loader forever just because frames did not run.
-    return scheduleDeferredChatMount(window, () => setReadyMountKey(mountKey));
-  }, [mountKey, props.deferMount]);
+    if (canMountChatView) return;
+    // Keep the bounded fallback for background-throttled Electron windows.
+    return scheduleDeferredChatMount(window, () => setMountPending(false));
+  }, [canMountChatView]);
 
   useEffect(() => {
     if (canMountChatView) {
@@ -162,7 +158,6 @@ export function DeferredChatView(props: {
 
   return (
     <ChatView
-      key={props.paneScopeId}
       threadId={props.threadId}
       hideHeader={props.hideHeader ?? false}
       paneScopeId={props.paneScopeId}

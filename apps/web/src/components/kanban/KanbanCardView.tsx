@@ -4,8 +4,8 @@
 // Layer: UI component (pure; drag wiring lives in KanbanColumn)
 // Exports: KanbanCardView
 
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { ThreadId } from "@synara/contracts";
-import { GoRepoForked } from "react-icons/go";
 
 import {
   resolveThreadPullRequestFallback,
@@ -58,14 +58,14 @@ export interface KanbanCardViewProps {
 function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
   if (card.isTerminal) {
     return (
-      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
+      <span className="flex shrink-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/80">
         <TerminalIcon className="size-3 shrink-0" aria-hidden />
         Terminal
       </span>
     );
   }
   return (
-    <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
+    <span className="flex shrink-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/80">
       <KanbanStatusIcon column={card.column} className="size-3" />
       {KANBAN_COLUMN_V2_LABELS[card.column]}
     </span>
@@ -197,12 +197,13 @@ function KanbanCardViewComponent({
         // hairline so each card stays visually separated in dark mode.
         "dark:border dark:border-white/[0.05]",
         "hover:bg-card focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-        isOverlay && "bg-card shadow-lg dark:shadow-lg",
+        // A dragged card floats over the board, so it keeps its opaque fill on a glass window.
+        isOverlay ? "bg-card shadow-lg dark:shadow-lg" : GLASS_RAISED_SURFACE_CLASS_NAME,
         isDragSource && "opacity-40",
       )}
     >
       <span className="flex min-w-0 items-start gap-1.5">
-        <span className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-snug font-medium text-foreground/90">
+        <span className="line-clamp-2 min-w-0 flex-1 text-ui-lg leading-snug font-medium text-foreground/90">
           {card.title}
         </span>
         {card.thread?.isPinned ? (
@@ -212,7 +213,7 @@ function KanbanCardViewComponent({
         ) : null}
       </span>
       {showDraftPreview ? (
-        <span className="line-clamp-2 text-xs leading-snug text-muted-foreground">
+        <span className="line-clamp-2 text-ui leading-snug text-muted-foreground">
           {card.draftPrompt}
         </span>
       ) : null}
@@ -227,7 +228,7 @@ function KanbanCardViewComponent({
           />
         )}
         {card.branch ? (
-          <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground/70">
+          <span className="flex min-w-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/70">
             <GitBranchIcon className="size-3 shrink-0" aria-hidden />
             <span className="max-w-32 truncate">{card.branch}</span>
           </span>
@@ -239,7 +240,7 @@ function KanbanCardViewComponent({
         ) : null}
         {isForked ? (
           <span title="Forked thread" className="flex shrink-0 items-center">
-            <GoRepoForked
+            <GitBranchIcon
               className="size-3 text-emerald-600 dark:text-emerald-300/90"
               aria-hidden
             />
@@ -254,12 +255,12 @@ function KanbanCardViewComponent({
             // Optimistically In Progress — the thread's real status (Draft/Completed)
             // would contradict the column until the first runtime signal arrives.
             <>
-              <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-sky-600 dark:text-sky-300/90">
+              <span className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
                 <LoaderIcon className="size-3 shrink-0 animate-spin" aria-hidden />
                 Starting…
               </span>
               {activeWorkElapsed ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
                   Worked for {activeWorkElapsed}
                 </span>
               ) : null}
@@ -271,11 +272,11 @@ function KanbanCardViewComponent({
                 <KanbanCardAttentionPill card={card} pr={pr} />
               ) : null}
               {activeWorkElapsed ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
                   Worked for {activeWorkElapsed}
                 </span>
               ) : card.timestamp ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
                   {formatRelativeTime(card.timestamp)}
                 </span>
               ) : null}

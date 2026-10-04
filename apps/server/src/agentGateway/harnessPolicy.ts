@@ -1,14 +1,17 @@
 import type { ProviderKind } from "@synara/contracts";
 
+import { computerToolInstructions } from "./computerGuidance.ts";
+
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-09-03.1";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-10-02.1";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
   readonly gatewayControlAvailable: boolean;
   readonly automationAuthoring?: "tool-descriptions";
+  readonly enableComputerControl?: boolean | undefined;
 }
 
 /**
@@ -31,8 +34,8 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         "If synara_create_threads fails before returning an operationId, correct the rejected plan and reuse its requestId; no durable task was created.",
         "Use synara_capabilities to select canonical provider, model, and option values. Never guess a model slug or silently substitute a provider or model.",
         "Use synara_capabilities.targetConstruction: Codex options.reasoningEffort and Claude Agent options.effort are not interchangeable.",
-        "When results are requested, call synara_wait_for_threads for the created thread ids, wait for every requested result, then synthesize all outcomes.",
-        "After an operationId, retries keep the same requestId and exact plan. Report terminal failures; no replacement threads without a new user request.",
+        "For requested results, use synara_wait_for_threads and wait for all, then synthesize. Hub coordinator packets allow async reports unless results are requested now.",
+        "After operationId, retry the same requestId and exact plan. Report failures; no replacement threads without a new user request. Hub retries are server-owned.",
         "Synara automations support heartbeat, standalone, and dedicated modes plus interval, once, daily, weekdays, weekly, and cron schedules. Existing everyMinutes heartbeat calls remain supported. Use fastInterval: true only when the user explicitly accepts a sub-minute bounded loop.",
         "Mode controls execution: heartbeat appends to an idle target thread; standalone opens a fresh thread per independent run; dedicated reuses one automation-owned thread so runs build on each other without writing into another thread.",
         "Prefer dedicated for ongoing observation or tracking: standalone runs cannot see prior runs beyond memory, while dedicated keeps one growing thread.",
@@ -44,7 +47,6 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         "Prefer synara_create_automation with suggested: true when the user has not explicitly asked to create an automation. Suggested automations remain disabled until the user accepts their proposal card.",
         "Before synara_update_automation, call synara_view_automation. Resend all mutable fields, including unchanged ones: updates replace, not merge.",
         'Automation-dispatched turns receive an identity/run/memory envelope in the current user message. Only that current turn is automation-dispatched; the status never carries into a later manual follow-up such as "continue", even in the same thread.',
-        "For Kanban coordination use the synara_* board tools: synara_read_kanban_board for the durable board, synara_read_kanban_card to read one card's state cheaply without loading the whole board, synara_create_kanban_task to open a tracked task, synara_create_kanban_draft to park a card in Draft without starting work, synara_update_kanban_card to edit a card's title or prompt, synara_set_kanban_goal to set or clear a card's goal, synara_delete_kanban_card to remove a card, and synara_move_kanban_card to start or finish a card's work. Target columns are derived from live thread state, not stored: move-card dispatches start/settle (interrupt) to the thread rather than editing a column. An Awaiting-you card is waiting on the human (approval or input) and must not be force-moved.",
         'During an automation-dispatched turn, persist durable context with synara_update_automation_memory {"memory": "..."} before finishing; memory is full replacement, DB-backed, and capped at 32 KiB.',
         'Every automation-dispatched turn must finish by calling synara_report_automation_result. Use decision "silent" only for a successful run with nothing requiring user attention; otherwise use "notify" with a concise title and summary. Failures remain visible regardless of this decision or the automation notification policy. Never call this tool for a manual follow-up turn.',
       ]
@@ -60,6 +62,9 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
     'Synara collapses progress and tools under "Worked for...". Final responses must restate every needed scope, plan, decision, result, caveat, instruction, or question. Never request approval using "this", "the above", or another referent available only in collapsed content.',
     "When a structured user-input tool is available for a genuine decision, prefer it and include all decision context in its question or card.",
     ...controlPolicy,
+    ...(capabilities.gatewayControlAvailable && capabilities.enableComputerControl === true
+      ? [computerToolInstructions()]
+      : []),
   ].join("\n");
 }
 
@@ -69,6 +74,7 @@ export const SYNARA_GATEWAY_HARNESS_POLICY = renderSynaraHarnessPolicy({
 
 export interface SynaraHarnessPolicyDeliveryState {
   harnessPolicyDelivered?: boolean | undefined;
+  enableComputerControl?: boolean | undefined;
 }
 
 const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
@@ -81,6 +87,7 @@ const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
   "devin",
   "opencode",
   "pi",
+  "omp",
 ]);
 
 export function providerHasSynaraGatewayControl(input: {
@@ -120,6 +127,7 @@ export function takeSynaraHarnessPolicyForProviderSession(
 ): string | null {
   return takeSynaraHarnessPolicyForSession(state, {
     gatewayControlAvailable: providerHasSynaraGatewayControl(input),
+    enableComputerControl: state.enableComputerControl === true,
   });
 }
 

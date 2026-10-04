@@ -3,17 +3,12 @@
 // Layer: Web orchestration helper
 // Exports: dispatchQueuedComposerTurnHeadless
 
-import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
+import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
 import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
-import {
-  beginTurnDispatchOwnership,
-  clearPendingTurnDispatch,
-  endTurnDispatchOwnership,
-  markPendingTurnDispatch,
-} from "../pendingTurnDispatch";
+import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
 import {
   buildSourceProposedPlanReference,
   findLatestProposedPlan,
@@ -23,7 +18,6 @@ import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import { appendBrowserAnnotationsToPrompt } from "./browserAnnotations";
-import { waitForKanbanDispatchToSettle } from "./kanbanDispatch";
 import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -37,6 +31,8 @@ import {
   filterTerminalContextsWithText,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
 } from "./terminalContext";
+import { runComposerSendOnce } from "./composerSendOwnership";
+import { waitForDraftThreadDispatchToSettle } from "./draftThreadDispatch";
 import { newCommandId, newMessageId } from "./utils";
 
 export async function dispatchQueuedComposerTurnHeadless(input: {
@@ -44,23 +40,29 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   queuedTurn: QueuedComposerTurn;
   dispatchMode: "queue" | "steer";
   assistantDeliveryMode: AssistantDeliveryMode;
+  messageId?: MessageId;
 }): Promise<boolean> {
+  return runComposerSendOnce(input.threadId, async () => {
+    await waitForDraftThreadDispatchToSettle(input.threadId);
+    return dispatchQueuedComposerTurnOnce(input);
+  });
+}
+
+async function dispatchQueuedComposerTurnOnce(
+  input: Parameters<typeof dispatchQueuedComposerTurnHeadless>[0],
+): Promise<boolean> {
   const api = readNativeApi();
   if (!api) {
     return false;
   }
 
   const thread = getThreadFromState(useStore.getState(), input.threadId);
-  if (!thread) {
+  if (!thread || thread.claudeCacheReview != null) {
     return false;
   }
 
-  // Serialize with a racing board dispatch: two starters must never queue two
-  // turns for the same thread. Bounded + fail-open.
-  await waitForKanbanDispatchToSettle(input.threadId);
-
   const createdAt = new Date().toISOString();
-  const messageId = newMessageId();
+  const messageId = input.messageId ?? newMessageId();
   const queuedTurn = input.queuedTurn;
 
   if (queuedTurn.kind === "plan-follow-up") {
@@ -87,7 +89,6 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         : undefined;
 
     markPendingTurnDispatch(input.threadId);
-    beginTurnDispatchOwnership(input.threadId);
     try {
       await persistQueuedTurnThreadSettings({
         api,
@@ -119,11 +120,15 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt,
       });
-      endTurnDispatchOwnership(input.threadId);
       return true;
     } catch {
+      if (
+        getThreadFromState(useStore.getState(), input.threadId)?.claudeCacheReview?.messageId ===
+        messageId
+      ) {
+        return true;
+      }
       clearPendingTurnDispatch(input.threadId);
-      endTurnDispatchOwnership(input.threadId);
       return false;
     }
   }
@@ -175,7 +180,6 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   });
 
   markPendingTurnDispatch(input.threadId);
-  beginTurnDispatchOwnership(input.threadId);
   try {
     await persistQueuedTurnThreadSettings({
       api,
@@ -185,33 +189,41 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
     });
     const stagedTurnAttachments = await turnAttachmentsPromise;
     await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-      api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
-        threadId: input.threadId,
-        message: {
-          messageId,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: turnAttachments,
-          ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
-          ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
-        },
-        modelSelection: queuedTurn.modelSelection,
-        ...(queuedTurn.providerOptionsForDispatch
-          ? { providerOptions: queuedTurn.providerOptionsForDispatch }
-          : {}),
-        assistantDeliveryMode: input.assistantDeliveryMode,
-        dispatchMode: input.dispatchMode,
-        runtimeMode: queuedTurn.runtimeMode,
-        interactionMode: queuedTurn.interactionMode,
-        ...(queuedTurn.sourceProposedPlan
-          ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
-          : {}),
-        createdAt,
-      }),
+      api.orchestration
+        .dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          message: {
+            messageId,
+            role: "user",
+            text: outgoingMessageText,
+            attachments: turnAttachments,
+            ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
+            ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
+          },
+          modelSelection: queuedTurn.modelSelection,
+          ...(queuedTurn.providerOptionsForDispatch
+            ? { providerOptions: queuedTurn.providerOptionsForDispatch }
+            : {}),
+          assistantDeliveryMode: input.assistantDeliveryMode,
+          dispatchMode: input.dispatchMode,
+          runtimeMode: queuedTurn.runtimeMode,
+          interactionMode: queuedTurn.interactionMode,
+          ...(queuedTurn.sourceProposedPlan
+            ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
+            : {}),
+          createdAt,
+        })
+        .catch((error: unknown) => {
+          if (
+            getThreadFromState(useStore.getState(), input.threadId)?.claudeCacheReview
+              ?.messageId !== messageId
+          ) {
+            throw error;
+          }
+        }),
     );
-    endTurnDispatchOwnership(input.threadId);
     return true;
   } catch {
     await turnAttachmentsPromise.then(
@@ -219,7 +231,6 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
       () => undefined,
     );
     clearPendingTurnDispatch(input.threadId);
-    endTurnDispatchOwnership(input.threadId);
     return false;
   }
 }

@@ -5,6 +5,7 @@ import type { ComponentType } from "react";
 
 import type { ProviderKind } from "@synara/contracts";
 import { basenameOfPath } from "../file-icons";
+import type { ProjectAppearance } from "../lib/projectAppearance";
 import type { ThemeMode, ThemeVariant } from "../theme/theme.logic";
 
 export interface SidebarSearchAction {
@@ -42,6 +43,7 @@ export interface SidebarSearchProject {
   remoteName: string;
   folderName: string;
   localName: string | null;
+  appearance?: ProjectAppearance | null;
   cwd: string;
   spaceName: string;
   createdAt?: string | undefined;
@@ -66,6 +68,34 @@ export interface SidebarSearchThread {
   messages: readonly {
     text: string;
   }[];
+}
+
+/** Field-wise equality so a rebuilt search thread list can keep its previous identity. */
+export function areSidebarSearchThreadListsEqual(
+  previous: readonly SidebarSearchThread[],
+  next: readonly SidebarSearchThread[],
+): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < previous.length; index += 1) {
+    const left = previous[index]!;
+    const right = next[index]!;
+    if (
+      left.id !== right.id ||
+      left.title !== right.title ||
+      left.projectId !== right.projectId ||
+      left.projectName !== right.projectName ||
+      left.projectRemoteName !== right.projectRemoteName ||
+      left.spaceName !== right.spaceName ||
+      left.provider !== right.provider ||
+      left.createdAt !== right.createdAt ||
+      left.updatedAt !== right.updatedAt ||
+      left.messages !== right.messages
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export interface SidebarSearchThreadMatch {

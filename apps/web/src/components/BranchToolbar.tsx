@@ -1,3 +1,4 @@
+import { requestCurrentAppSnap } from "../appSnap.logic";
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
@@ -27,7 +28,7 @@ import { useStore } from "../store";
 import {
   createAccountRateLimitThreadsSelector,
   createProjectSelector,
-  createThreadSelector,
+  createThreadShellSettingsSelector,
 } from "../storeSelectors";
 import {
   EnvMode,
@@ -44,7 +45,6 @@ import {
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-  COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -98,7 +98,7 @@ function RuntimeModeMenuItem({
           <span>{presentation.label}</span>
           <span
             className={cn(
-              "runtime-mode-menu-description text-xs font-normal",
+              "runtime-mode-menu-description text-ui leading-snug font-normal",
               accent ? "text-current" : "text-muted-foreground",
             )}
           >
@@ -126,7 +126,9 @@ export interface BranchToolbarProps {
   variant?: BranchSelectorVariant;
   // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
   showBranchSelector?: boolean;
-  // Studio-like containers bind the toolbar to one concrete local folder and
+  // The new-chat landing tray swaps the Local/Worktree picker for its own Worktree checkbox.
+  showEnvironmentPicker?: boolean;
+  // Group-like containers bind the toolbar to one concrete local folder and
   // must not persist project/worktree metadata from branch selector actions.
   fixedLocalWorkspaceCwd?: string | null;
 }
@@ -241,6 +243,12 @@ export function RuntimeUsageControls({
                 icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
+            {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
+              <>
+                <MenuSeparator />
+                <MenuItem onClick={requestCurrentAppSnap}>Share current app</MenuItem>
+              </>
+            ) : null}
           </ComposerPickerMenuPopup>
         </Menu>
       ) : null}
@@ -261,11 +269,13 @@ export default function BranchToolbar({
   onComposerFocusRequest,
   variant: variantProp,
   showBranchSelector: showBranchSelectorProp,
+  showEnvironmentPicker: showEnvironmentPickerProp,
   fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
   const handoffBusy = handoffBusyProp ?? false;
   const variant = variantProp ?? "toolbar";
   const showBranchSelector = showBranchSelectorProp ?? true;
+  const showEnvironmentPicker = showEnvironmentPickerProp ?? true;
   const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
@@ -274,7 +284,12 @@ export default function BranchToolbar({
   const threads = useStore(rateLimitThreadsSelector);
   const { settings } = useAppSettings();
 
-  const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  // Settings and session only, never the transcript: subscribing to the whole thread
+  // re-rendered the toolbar for every streamed token.
+  const serverThread = useStore(
+    useMemo(() => createThreadShellSettingsSelector(threadId), [threadId]),
+  );
+  const serverThreadSession = useStore((state) => state.threadSessionById?.[threadId] ?? null);
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
@@ -291,7 +306,7 @@ export default function BranchToolbar({
     ? (serverThread.workingDirectory ?? null)
     : (draftThread?.workingDirectory ?? null);
   const activeProvider =
-    serverThread?.session?.provider ?? serverThread?.modelSelection.provider ?? null;
+    serverThreadSession?.provider ?? serverThread?.modelSelection.provider ?? null;
   const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
   const branchCwd = usesFixedLocalWorkspace
     ? fixedLocalWorkspaceCwd
@@ -322,7 +337,7 @@ export default function BranchToolbar({
         }
 
         const api = readNativeApi();
-        if (serverThread?.session && api) {
+        if (serverThreadSession && api) {
           void api.orchestration
             .dispatchCommand({
               type: "thread.session.stop",
@@ -372,7 +387,7 @@ export default function BranchToolbar({
       const api = readNativeApi();
       // If the effective cwd is about to change, stop the running session so the
       // next message creates a new one with the correct cwd.
-      if (serverThread?.session && worktreePath !== activeWorktreePath && api) {
+      if (serverThreadSession && worktreePath !== activeWorktreePath && api) {
         void api.orchestration
           .dispatchCommand({
             type: "thread.session.stop",
@@ -419,7 +434,7 @@ export default function BranchToolbar({
       activeThreadId,
       activeThreadBranch,
       activeWorkingDirectory,
-      serverThread?.session,
+      serverThreadSession,
       activeWorktreePath,
       hasServerThread,
       setThreadWorkspaceAction,
@@ -471,7 +486,7 @@ export default function BranchToolbar({
       )}
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
-        {showEnvPicker ? (
+        {!showEnvironmentPicker ? null : showEnvPicker ? (
           <ComposerEnvironmentPicker
             environmentPresentation={environmentPresentation}
             onEnvModeChange={onEnvModeChange}
@@ -504,6 +519,8 @@ export default function BranchToolbar({
                       usageLines={usageSummary.usageLines}
                       notice={usageSummary.usageNotice}
                       isLoading={usageSummary.isLoading}
+                      resetCredits={usageSummary.resetCredits}
+                      resetCreditsSurface="popover"
                       learnMoreHref={usageSummary.learnMoreHref}
                       showTitle={false}
                       showLearnMore={true}
@@ -522,7 +539,7 @@ export default function BranchToolbar({
             />
           </div>
         ) : (
-          <span className="inline-flex items-center gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]">
+          <span className="inline-flex items-center gap-2 px-1.5 text-ui-sm font-normal text-[var(--color-text-foreground-secondary)]">
             <WorktreeGlyph className="size-3.5" />
             {environmentPresentation.shortLabel}
           </span>

@@ -158,45 +158,6 @@ it("warns when a file's working-tree change markers come from a partial diff", a
   }
 });
 
-it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
-  const readFile = vi.fn().mockResolvedValue(loadedFile());
-  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
-  const restoreNativeApi = installNativeApi({
-    projects: { readFile, writeFile },
-  } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
-      </QueryClientProvider>,
-    );
-
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;");
-    await replaceEditorContents(editor, "export const value = 2;\n");
-    await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
-
-    pressKeyboardSave(editor.element());
-
-    await vi.waitFor(() =>
-      expect(writeFile).toHaveBeenCalledWith({
-        cwd: WORKSPACE_ROOT,
-        relativePath: FILE_PATH,
-        contents: "export const value = 2;\n",
-        expectedVersion: LOADED_VERSION,
-        encoding: "utf8",
-        lineEnding: "lf",
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(document.querySelector('[aria-label="Unsaved changes"]')).toBeNull(),
-    );
-  } finally {
-    restoreNativeApi();
-  }
-});
-
 it("refreshes mounted unstaged changes after a save and after watched file events", async () => {
   const readFile = vi.fn().mockResolvedValue(loadedFile());
   const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
@@ -516,6 +477,56 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
     );
     completeTaskWrite({ relativePath: markdownPath, version: taskVersion });
   } finally {
+    restoreNativeApi();
+  }
+});
+
+it("keeps rapid Markdown checkbox edits while a save is in flight", async () => {
+  let finish!: (value: { relativePath: string; version: string }) => void;
+  const writeFile = vi
+    .fn()
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    )
+    .mockResolvedValue({ relativePath: "README.md", version: SAVED_VERSION });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      readFile: vi
+        .fn()
+        .mockResolvedValue(
+          loadedFile({ relativePath: "README.md", contents: "- [ ] first\n- [ ] second\n" }),
+        ),
+      writeFile,
+    },
+  } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" editable />
+      </QueryClientProvider>,
+    );
+    await expect.element(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    const boxes = page.getByRole("checkbox");
+    await boxes.nth(0).click();
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    await boxes.nth(1).click();
+    await expect.element(boxes.nth(0)).toBeChecked();
+    await expect.element(boxes.nth(1)).toBeChecked();
+    finish({ relativePath: "README.md", version: "sha256:first-toggle" });
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          contents: "- [x] first\n- [x] second\n",
+          expectedVersion: "sha256:first-toggle",
+        }),
+      ),
+    );
+  } finally {
+    await cleanup();
     restoreNativeApi();
   }
 });

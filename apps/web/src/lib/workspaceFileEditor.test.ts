@@ -240,27 +240,6 @@ describe("workspaceFileEditorReducer", () => {
     expect(state.saveError).toBe("Disk is full.");
   });
 
-  it("clears a plain write error on dismiss too", () => {
-    const state = reduce(
-      INITIAL_WORKSPACE_FILE_EDITOR_STATE,
-      LOADED,
-      { type: "saveFailed", message: "Disk is full.", conflict: false },
-      { type: "conflictDismissed" },
-    );
-    expect(state.saveError).toBeNull();
-  });
-
-  it("clears the conflict banner on dismiss", () => {
-    const state = reduce(
-      INITIAL_WORKSPACE_FILE_EDITOR_STATE,
-      LOADED,
-      { type: "saveFailed", message: "boom", conflict: true },
-      { type: "conflictDismissed" },
-    );
-    expect(state.conflict).toBe(false);
-    expect(state.saveError).toBeNull();
-  });
-
   it("resets everything when the editor closes", () => {
     const state = reduce(INITIAL_WORKSPACE_FILE_EDITOR_STATE, LOADED, { type: "closed" });
     expect(state).toEqual(INITIAL_WORKSPACE_FILE_EDITOR_STATE);

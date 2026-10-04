@@ -40,6 +40,7 @@ vi.mock("~/appSettings", () => ({
     },
   }),
   resolveAssistantDeliveryMode: () => "buffered" as const,
+  getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
   getProviderStartOptions: () => undefined,
 }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({
@@ -54,6 +55,7 @@ vi.mock("~/lib/threadArchive", () => ({ archiveThreadFromClient: harness.archive
 vi.mock("~/lib/threadRename", () => ({ dispatchThreadRename: vi.fn() }));
 vi.mock("~/threadGoal", () => ({ dispatchThreadGoal: harness.setGoal }));
 vi.mock("~/lib/kanbanDispatch", () => ({
+  resolveKanbanDraftDispatchTarget: () => ({ instanceId: "codex", provider: "codex" }),
   dispatchKanbanDraftCardAsGoal: harness.sendAsGoal,
   kanbanDispatchFailureToast: vi.fn().mockReturnValue({
     type: "error",

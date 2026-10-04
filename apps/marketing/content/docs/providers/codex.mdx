@@ -143,6 +143,10 @@ Restart Synara after updating.
 
 Run `codex login status`, then `codex login` if needed. For a custom model provider, verify its required environment variables and Codex configuration instead.
 
+### Authentication check reports `url is not supported for stdio`
+
+This is a configuration error: the same MCP server has both HTTP and stdio settings. Synara rebuilds its saved, managed gateway entry with only its HTTP settings when checking Codex or starting a session. Your original Codex configuration and other MCP servers remain unchanged. If `codex login status` also fails outside Synara, correct the conflicting transport settings in that Codex configuration.
+
 ### Models or reasoning options differ
 
 Check the selected Codex installation, account, CLI version, and `config.toml`. Synara does not invent model access beyond what the runtime reports.
@@ -151,6 +155,12 @@ Check the selected Codex installation, account, CLI version, and `config.toml`. 
 
 Update the CLI and start a new session. Existing sessions may retain capabilities negotiated when they were created.
 
+## Default model and startup recovery
+
+Synara 0.8.4 uses **GPT-6 Astra** as the default Codex model for a fresh selection. Existing saved model choices remain available. Its supported effort ladder runs from Low through Ultra, with Medium as the default; actual availability still comes from your Codex runtime and account.
+
+After a confirmed startup failure, correct the reported provider problem and retry from the composer. Preserve any existing working-tree changes when restarting a provider session.
+
 ## Official documentation
 
 - [Codex documentation](https://developers.openai.com/codex)
@@ -158,3 +168,13 @@ Update the CLI and start a new session. Existing sessions may retain capabilitie
 - [Codex authentication](https://developers.openai.com/codex/auth)
 
 Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).
+
+## Questions, favorites and banked resets in 0.9.0
+
+Supported Codex sessions can ask non-blocking questions: answer the card while the task continues. Blocking multiple-choice questions can be cancelled. Question behavior depends on the request type; a non-blocking card is not a reason to ignore a required approval.
+
+The model picker uses current Codex discovery and supports starred model-and-effort presets. Unsupported settings are normalized to the provider's available options. Resuming a session avoids requesting duplicate history.
+
+Usage panels show banked reset credits when the account exposes them. **Use reset** asks for confirmation and spends one existing credit only after rechecking the account and limits. A five-hour or weekly limit must have **10% or less remaining**. If a result is unconfirmed, **Retry reset** checks the same attempt rather than starting a new redemption.
+
+[Import local Codex projects](/docs/features/project-import) to bring existing conversations into Synara. [Computer Use beta](/docs/features/computer-use) is available on macOS.

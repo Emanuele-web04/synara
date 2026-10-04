@@ -14,6 +14,7 @@ import {
 } from "@synara/contracts";
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { isProviderKind } from "@synara/shared/providerInstances";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
@@ -154,6 +155,9 @@ const make = Effect.gen(function* () {
   const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
     provider: ProviderRuntimeEvent["provider"],
   ) {
+    if (!isProviderKind(provider)) {
+      return false;
+    }
     const capabilities = yield* providerService
       .getCapabilities(provider)
       .pipe(Effect.catch(() => Effect.succeed(null)));

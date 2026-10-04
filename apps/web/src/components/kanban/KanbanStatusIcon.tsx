@@ -6,6 +6,7 @@
 // Layer: Kanban UI component
 // Exports: KanbanStatusIcon
 
+import { STATUS_GLYPH_CUTOUT_STROKE } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import type { KanbanColumnKey } from "./kanban.logic";
 
@@ -27,7 +28,7 @@ export function KanbanStatusIcon({
         <path
           d="M4.1 7.4 6.15 9.4 9.9 4.9"
           fill="none"
-          stroke="var(--color-background-surface, white)"
+          stroke={STATUS_GLYPH_CUTOUT_STROKE}
           strokeWidth="1.5"
           strokeLinecap="round"
           strokeLinejoin="round"

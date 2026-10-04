@@ -5,12 +5,7 @@
 // Layer: Web chat presentation component
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
-import type {
-  ProjectFileEncoding,
-  ProjectFileChangeEvent,
-  ProjectFileLineEnding,
-  ProjectReadFileResult,
-} from "@synara/contracts";
+import type { ProjectFileChangeEvent, ProjectReadFileResult } from "@synara/contracts";
 import type { FileContents as PierreFileContents } from "@pierre/diffs";
 import {
   Editor as PierreEditor,
@@ -45,6 +40,7 @@ import {
 } from "react";
 
 import { basenameOfPath } from "~/file-icons";
+import { useWorkspaceFileEditorBuffer } from "~/hooks/useWorkspaceFileEditor";
 import { useTheme } from "~/hooks/useTheme";
 import { useProjectFileChangeSubscription } from "~/hooks/useProjectFileChangeSubscription";
 import {
@@ -67,12 +63,11 @@ import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
 import {
   isLocalPreviewGrantUsable,
   projectLocalPreviewGrantQueryOptions,
-  projectQueryKeys,
   projectReadFileQueryOptions,
   refetchFreshProjectFileQuery,
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
-import { invalidateGitQueriesForCwds, refreshGitWorkingTreeDiffsForCwd } from "~/lib/gitReactQuery";
+import { refreshGitAfterFileWrite } from "~/lib/gitReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -541,11 +536,15 @@ export interface WorkspaceFilePreviewProps {
    */
   filePath: string | null;
   /**
-   * Initial markdown render mode per file: the dock opens markdown already
-   * parsed, the editor surface stays source-first. The header toggle still
-   * lets the user flip either way.
+   * Initial markdown render mode per file. Editor and dock file panes default
+   * to rendered Preview; omit (or pass false) for source-first surfaces such
+   * as the Explorer pane. The header toggle still lets the user flip either
+   * way. Use the controlled mode to preserve choices across preview remounts.
    */
   markdownPreviewDefault?: boolean;
+  /** Controlled mode for surfaces that preserve choices across preview remounts. */
+  markdownPreviewEnabled?: boolean;
+  onMarkdownPreviewChange?: (rendered: boolean) => void;
   /** Enables guarded editing for complete, supported files inside the workspace. */
   editable?: boolean;
   /** Keeps the file watcher bounded to a currently visible preview surface. */
@@ -558,51 +557,6 @@ export interface WorkspaceFilePreviewProps {
   onEditFile?: ((filePath: string) => void) | undefined;
 }
 
-type EditableLineEnding = Exclude<ProjectFileLineEnding, "mixed">;
-
-interface EditableFileDocument {
-  key: string;
-  relativePath: string;
-  contents: string;
-  version: string;
-  encoding: ProjectFileEncoding;
-  lineEnding: EditableLineEnding;
-}
-
-interface FileEditBuffer extends EditableFileDocument {
-  savedContents: string;
-  saving: boolean;
-  error: string | null;
-}
-
-function makeFileEditBuffer(document: EditableFileDocument): FileEditBuffer {
-  return {
-    ...document,
-    savedContents: document.contents,
-    saving: false,
-    error: null,
-  };
-}
-
-function resolveFileEditBuffer(
-  current: FileEditBuffer | null,
-  document: EditableFileDocument,
-): FileEditBuffer {
-  if (current?.key !== document.key) {
-    return makeFileEditBuffer(document);
-  }
-  const dirty = current.contents !== current.savedContents;
-  const sourceChanged =
-    current.version !== document.version || current.savedContents !== document.contents;
-  return !dirty && sourceChanged ? makeFileEditBuffer(document) : current;
-}
-
-function readFileSaveError(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : "Could not save this file.";
-}
-
 export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const liveRevalidationEnabled = props.liveRevalidationEnabled ?? true;
   const { resolvedTheme } = useTheme();
@@ -611,7 +565,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
   const taskFileDiskVersionRef = useRef(new Map<string, string>());
-  const [editBuffer, setEditBuffer] = useState<FileEditBuffer | null>(null);
   const {
     filePath: requestedFilePath,
     onAskWhyInChat,
@@ -648,18 +601,19 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const fileNeedsLocalPreviewGrant =
     filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
-  // Per-file override of the markdown-preview default. Deriving (instead of
-  // syncing state in an effect) means switching files applies the default in
-  // the same render, with no stale-value flash, and the override dies with its
-  // file automatically.
-  const [markdownPreviewOverride, setMarkdownPreviewOverride] = useState<{
-    filePath: string | null;
-    rendered: boolean;
-  } | null>(null);
+  // Per-file overrides of the markdown-preview default, keyed like the
+  // relocation request so each file remembers its own view mode for the
+  // surface's lifetime. Deriving (instead of syncing state in an effect)
+  // means switching files applies that file's choice in the same render, with
+  // no stale-value flash.
+  const [markdownPreviewOverrides, setMarkdownPreviewOverrides] = useState<
+    ReadonlyMap<string, boolean>
+  >(() => new Map());
+  const markdownPreviewKey = `${workspaceRoot ?? ""}\0${filePath ?? ""}`;
   const markdownPreviewEnabled =
-    markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
-      ? markdownPreviewOverride.rendered
-      : markdownPreviewDefault;
+    props.markdownPreviewEnabled ??
+    markdownPreviewOverrides.get(markdownPreviewKey) ??
+    markdownPreviewDefault;
   const localPreviewGrantQuery = useQuery(
     projectLocalPreviewGrantQueryOptions({
       path: filePath,
@@ -710,7 +664,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       // (serialized on the shared Git queue); a bare invalidation would leave
       // them stale until the window regains focus. Only active variants are
       // re-read, so an idle workspace costs nothing here.
-      void refreshGitWorkingTreeDiffsForCwd(queryClient, workspaceRoot);
+      void refreshGitAfterFileWrite(queryClient, workspaceRoot);
       if (fileIsImage || fileIsPdf) {
         setBinaryPreviewReloading(true);
         setBinaryPreviewRevision((current) => current + 1);
@@ -798,38 +752,34 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
 
   const fileContents = fileQuery.data?.contents ?? "";
   const showMarkdownPreview = fileIsMarkdown && markdownPreviewEnabled;
-  const editableDocument: EditableFileDocument | null =
+  const editor = useWorkspaceFileEditorBuffer({
+    cwd: workspaceRoot,
+    filePath,
+    enabled: Boolean(props.editable && fileIsWorkspaceRelative),
+    file: fileQuery.data,
+  });
+  const editableDocument =
     props.editable &&
-    workspaceRoot !== null &&
-    filePath !== null &&
     fileIsWorkspaceRelative &&
-    fileQuery.data !== undefined &&
-    !fileQuery.data.truncated &&
-    fileQuery.data.version !== null &&
-    fileQuery.data.encoding !== null &&
-    fileQuery.data.lineEnding !== null &&
-    fileQuery.data.lineEnding !== "mixed" &&
-    !fileQuery.data.symlink
+    workspaceRoot &&
+    fileQuery.data &&
+    editor.readOnlyReason === null
+      ? fileQuery.data
+      : null;
+  const activeEditBuffer =
+    editableDocument && editor.canEdit
       ? {
-          key: `${workspaceRoot}\0${fileQuery.data.relativePath}`,
-          relativePath: fileQuery.data.relativePath,
-          contents: fileQuery.data.contents,
-          version: fileQuery.data.version,
-          encoding: fileQuery.data.encoding,
-          lineEnding: fileQuery.data.lineEnding,
+          key: editor.state.key!,
+          contents: editor.state.value,
+          saving: editor.state.saving,
+          error: editor.state.saveError,
         }
       : null;
-  const activeEditBuffer = editableDocument
-    ? resolveFileEditBuffer(editBuffer, editableDocument)
-    : null;
-  const editBufferDirty =
-    activeEditBuffer !== null && activeEditBuffer.contents !== activeEditBuffer.savedContents;
+  const editBufferDirty = editor.dirty;
   const editBufferExternallyChanged =
     editBufferDirty &&
-    activeEditBuffer !== null &&
-    editableDocument !== null &&
-    (activeEditBuffer.version !== editableDocument.version ||
-      activeEditBuffer.savedContents !== editableDocument.contents);
+    editableDocument != null &&
+    editor.state.format?.expectedVersion !== editableDocument.version;
   const displayedFileContents = activeEditBuffer?.contents ?? fileContents;
   const lineCount =
     displayedFileContents.length === 0 ? 0 : displayedFileContents.split("\n").length;
@@ -838,85 +788,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ? null
       : !fileIsWorkspaceRelative
         ? "Only files inside the project can be edited."
-        : resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data);
-
-  const handleEditBufferChange = (contents: string) => {
-    if (!editableDocument) return;
-    setEditBuffer((current) => ({
-      ...resolveFileEditBuffer(current, editableDocument),
-      contents,
-      error: null,
-    }));
-  };
-
-  const handleEditBufferSave = async () => {
-    if (
-      !workspaceRoot ||
-      !editableDocument ||
-      !activeEditBuffer ||
-      !editBufferDirty ||
-      activeEditBuffer.saving
-    ) {
-      return;
-    }
-    const api = readNativeApi();
-    if (!api) {
-      setEditBuffer((current) => ({
-        ...resolveFileEditBuffer(current, editableDocument),
-        error: "File saving is unavailable.",
-      }));
-      return;
-    }
-
-    const documentKey = activeEditBuffer.key;
-    const contentsToSave = activeEditBuffer.contents;
-    const expectedVersion = activeEditBuffer.version;
-    setEditBuffer((current) => ({
-      ...resolveFileEditBuffer(current, editableDocument),
-      saving: true,
-      error: null,
-    }));
-
-    try {
-      const result = await api.projects.writeFile({
-        cwd: workspaceRoot,
-        relativePath: activeEditBuffer.relativePath,
-        contents: contentsToSave,
-        expectedVersion,
-        encoding: activeEditBuffer.encoding,
-        lineEnding: activeEditBuffer.lineEnding,
-      });
-      const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
-      // A watcher read started before the save must not replace the saved snapshot.
-      await queryClient.cancelQueries({ queryKey: options.queryKey, exact: true });
-      queryClient.setQueryData<ProjectReadFileResult>(options.queryKey, (current) =>
-        current ? { ...current, contents: contentsToSave, version: result.version } : current,
-      );
-      taskFileDiskVersionRef.current.set(`${workspaceRoot}\0${filePath}`, result.version);
-      setEditBuffer((current) =>
-        current?.key === documentKey
-          ? {
-              ...current,
-              savedContents: contentsToSave,
-              version: result.version,
-              saving: false,
-              error: null,
-            }
-          : current,
-      );
-      // The write changed the working tree: refresh status and every mounted
-      // staged/unstaged/diff view for this checkout like the other in-app
-      // editors do. It runs after the buffer settles so a slow Git read never
-      // holds the editor in its saving state, and it cannot fail the save.
-      void invalidateGitQueriesForCwds(queryClient, [workspaceRoot]).catch(() => undefined);
-    } catch (error) {
-      setEditBuffer((current) =>
-        current?.key === documentKey
-          ? { ...current, saving: false, error: readFileSaveError(error) }
-          : current,
-      );
-    }
-  };
+        : editor.readOnlyReason;
+  const handleEditBufferChange = editor.handleChange;
+  const handleEditBufferSave = editor.save;
 
   const handleFileReload = useCallback(() => {
     if (!filePath) return;
@@ -931,28 +805,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     });
   }, [fileIsImage, fileIsPdf, filePath, queryClient, workspaceRoot]);
 
-  const handleEditBufferReload = () => {
-    if (!editableDocument || !filePath) return;
-    const documentKey = editableDocument.key;
-    const queryKey = projectQueryKeys.readFile(workspaceRoot, filePath);
-    void refetchFreshProjectFileQuery(queryClient, {
-      cwd: workspaceRoot,
-      relativePath: filePath,
-    })
-      .then(() => {
-        const queryState = queryClient.getQueryState(queryKey);
-        if (queryState?.error) throw queryState.error;
-        if (queryClient.getQueryData(queryKey) === undefined) {
-          throw new Error("Could not reload this file from disk.");
-        }
-        setEditBuffer((current) => (current?.key === documentKey ? null : current));
-      })
-      .catch((error: unknown) => {
-        setEditBuffer((current) =>
-          current?.key === documentKey ? { ...current, error: readFileSaveError(error) } : current,
-        );
-      });
-  };
+  const handleEditBufferReload = editor.reloadFromDisk;
   // Wait for the file read before asking for the working-tree diff: while the
   // read is pending the editable document is still unresolved, and an editor
   // that turns out to be editable never needs the read-only gutter.
@@ -1048,12 +901,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     ) {
       return;
     }
-    // Capture the narrowed disk metadata in locals: the write below runs in a
-    // deferred closure where TypeScript no longer sees the null guards above.
-    const loadedVersion = current.version;
-    const loadedEncoding = current.encoding;
-    const loadedLineEnding = current.lineEnding;
-    const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
+    const nextContents = toggleMarkdownTaskMarker(
+      editor.canEdit ? editor.state.value : current.contents,
+      sourceLine,
+      checked,
+    );
     if (nextContents === null) {
       return;
     }
@@ -1061,6 +913,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     // so the preview never shows a toggle that was silently dropped.
     const api = readNativeApi();
     if (!api) {
+      return;
+    }
+    if (editor.canEdit) {
+      editor.handleChange(nextContents);
+      editor.save();
       return;
     }
     queryClient.setQueryData(options.queryKey, { ...current, contents: nextContents });
@@ -1108,7 +965,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     void taskWriteQueueRef.current;
   };
   const handleMarkdownPreviewChange = (rendered: boolean) => {
-    setMarkdownPreviewOverride({ filePath, rendered });
+    setMarkdownPreviewOverrides((current) => new Map(current).set(markdownPreviewKey, rendered));
+    props.onMarkdownPreviewChange?.(rendered);
   };
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).
@@ -1121,7 +979,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.encoding !== null &&
     fileQuery.data.lineEnding !== null &&
     fileQuery.data.lineEnding !== "mixed" &&
-    !editBufferDirty;
+    (!editBufferDirty || (editor.canEdit && !editor.state.saveError && !editor.state.conflict));
   const { onEditFile } = props;
   // The editor writes the path back in place, so it is offered only for
   // sources the shared editor rules consider writable (symlinks included).
@@ -1157,7 +1015,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     if (localPreviewGrantQuery.error) {
       return (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
+          <p className="text-left text-ui-sm text-destructive/85">
             {localPreviewGrantQuery.error instanceof Error
               ? localPreviewGrantQuery.error.message
               : "Could not create local file preview grant."}
@@ -1203,7 +1061,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}
         filePath={filePath}
@@ -1216,6 +1074,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         truncated={fileQuery.data?.truncated ?? false}
         onEditFile={editFile}
         dirty={editBufferDirty}
+        saveState={
+          activeEditBuffer
+            ? activeEditBuffer.error
+              ? "Save failed"
+              : activeEditBuffer.saving
+                ? "Saving..."
+                : editBufferDirty
+                  ? "Unsaved changes"
+                  : "Saved"
+            : undefined
+        }
+        onSave={activeEditBuffer ? editor.save : undefined}
         readOnlyReason={readOnlyReason}
         reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
         onReload={workspaceRoot && filePath ? handleFileReload : undefined}
@@ -1223,7 +1093,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       {activeEditBuffer?.error ? (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-3 border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+          className="flex shrink-0 items-center gap-3 border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive"
         >
           <span className="min-w-0 flex-1">{activeEditBuffer.error}</span>
           <button
@@ -1237,7 +1107,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ) : editBufferExternallyChanged ? (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[11px] text-foreground/80"
+          className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-ui-sm text-foreground/80"
         >
           <span className="min-w-0 flex-1">
             This file changed on disk. Your unsaved edits are preserved.
@@ -1255,8 +1125,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           role={fileReadCapacityError ? "status" : "alert"}
           className={
             fileReadCapacityError
-              ? "flex shrink-0 items-center border-b border-border/60 px-3 py-2 text-[11px] text-muted-foreground"
-              : "flex shrink-0 items-center border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+              ? "flex shrink-0 items-center border-b border-border/60 px-3 py-2 text-ui-sm text-muted-foreground"
+              : "flex shrink-0 items-center border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive"
           }
         >
           {fileReadCapacityError
@@ -1298,7 +1168,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         <FilePreviewLoadingState />
       ) : !hasFileContents && fileReadError ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
+          <p className="text-left text-ui-sm text-destructive/85">
             {fileReadError instanceof Error ? fileReadError.message : "Could not read file."}
           </p>
         </PanelStateMessage>

@@ -1,10 +1,15 @@
-import { type ProjectId, ThreadId } from "@synara/contracts";
+import { type ProjectId, type ProviderInstanceId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { startTransition } from "react";
-import { useAppSettings } from "../appSettings";
+import { startTransition, useMemo } from "react";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "../appSettings";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { hasActiveComposerSend } from "../lib/composerSendOwnership";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import {
   hasReconciledServerProviderStatuses,
@@ -16,6 +21,10 @@ import {
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import {
+  applyGroupWorkerRoutingDefaults,
+  resolveGroupContainerThreadDefaults,
+} from "../lib/groupWorkerRouting";
 import {
   findProviderStatus,
   isProviderUsable,
@@ -53,9 +62,17 @@ export interface NewThreadNavigationOptions {
   search?: (previous: Record<string, unknown>) => Record<string, unknown>;
 }
 
+// Coordinator hand-off threads never mint through this hook, so every caller
+// here is a user-initiated surface: a fresh chat draft minted inside a group
+// container seeds from the group's workerRouting via the same helper the
+// Groups new-chat path uses. Stored/route reuse paths keep the user's
+// existing selections.
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings, serverSettings } = useAppSettings();
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const resolveProviderForInstanceId = (instanceId: ProviderInstanceId) =>
+    providerInstances.find((instance) => instance.instanceId === instanceId)?.provider ?? null;
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverCwd = serverConfigQuery.data?.cwd ?? null;
@@ -127,6 +144,7 @@ export function useHandleNewThread() {
       }
       setModelSelection(threadId, {
         provider: options.provider,
+        instanceId: resolveSelectableProviderInstanceId(settings, options.provider),
         model: defaultModel,
       });
     };
@@ -175,12 +193,14 @@ export function useHandleNewThread() {
     const storedDraftThread =
       !shouldForceFreshThread &&
       !wantsTemporaryThread &&
+      !(storedDraftThreadCandidate && hasActiveComposerSend(storedDraftThreadCandidate.threadId)) &&
       storedDraftThreadCandidate?.isTemporary !== true
         ? storedDraftThreadCandidate
         : null;
     const latestActiveDraftThread: DraftThreadState | null =
       !shouldForceFreshThread &&
       !wantsTemporaryThread &&
+      !(focusedThreadId && hasActiveComposerSend(focusedThreadId)) &&
       latestActiveDraftThreadCandidate?.isTemporary !== true
         ? latestActiveDraftThreadCandidate
         : null;
@@ -202,10 +222,15 @@ export function useHandleNewThread() {
       }
 
       const draft = useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
-      const stickyProvider = draft?.activeProvider ?? null;
+      const stickyProviderInstanceId = draft?.activeProvider ?? null;
+      const stickyProvider = stickyProviderInstanceId
+        ? resolveProviderForInstanceId(stickyProviderInstanceId)
+        : null;
       if (
         !stickyProvider ||
-        isProviderUsable(findProviderStatus(providerStatuses, stickyProvider))
+        isProviderUsable(
+          findProviderStatus(providerStatuses, stickyProvider, stickyProviderInstanceId),
+        )
       ) {
         return;
       }
@@ -232,6 +257,7 @@ export function useHandleNewThread() {
           threadModelSelection: null,
           projectModelSelection: projectDefaultModelSelection,
           defaultProvider: fallbackProvider,
+          resolveProviderForInstanceId,
         }),
       );
     };
@@ -252,6 +278,7 @@ export function useHandleNewThread() {
         options: creationOptions,
         projectDefaultModelSelection,
         projectId,
+        resolveProviderForInstanceId,
       });
     // Terminal-first threads need a real orchestration thread immediately so
     // the sidebar can render them as durable rows instead of draft-only routes.
@@ -377,6 +404,10 @@ export function useHandleNewThread() {
         options,
         defaultEnvMode,
       });
+      const containerDefaults = await resolveGroupContainerThreadDefaults({
+        projectId,
+        entryPoint,
+      });
       const committed = await stageDraftNavigation({
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
@@ -386,6 +417,13 @@ export function useHandleNewThread() {
           // Seed the draft from the sticky (last-used) selection so a new chat
           // reopens with the model and options used most recently.
           applyUsableStickyState(threadId);
+          if (containerDefaults) {
+            applyGroupWorkerRoutingDefaults({
+              threadId,
+              defaults: containerDefaults,
+              providerStatuses: providerStatusesReconciled ? providerStatuses : [],
+            });
+          }
           applyProviderOverride(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route

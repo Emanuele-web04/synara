@@ -227,6 +227,8 @@ export class BrowserSessionPolicy {
       title: "Sign in",
       ...(parent ? { parent } : {}),
       webPreferences: {
+        // Apply before Electron creates the child that the browser manager adopts.
+        focusOnNavigation: false,
         partition: BROWSER_SESSION_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,

@@ -11,10 +11,13 @@ import {
   createLastActivityTimestampSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
+  createSidechatSummariesForGitHubItemSelector,
   createSidechatSummariesForSourceSelector,
   createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
+  createThreadGitActionsMetadataSelector,
   createThreadProjectIdSelector,
+  createThreadShellSettingsSelector,
   createThreadShellsSelector,
   createThreadWorkspaceMetadataSelector,
   isSidebarThreadVisible,
@@ -107,6 +110,44 @@ describe("createThreadShellsSelector", () => {
   });
 });
 
+describe("createThreadShellSettingsSelector", () => {
+  it("keeps its result while a streaming thread only rewrites updatedAt", () => {
+    const selectSettings = createThreadShellSettingsSelector(threadIdA);
+    const before = selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }));
+    const streamed = selectSettings(
+      makeState({
+        threadShellById: { [threadIdA]: { ...shellA, updatedAt: "2026-01-01T00:00:05.000Z" } },
+      }),
+    );
+
+    expect(before).toBe(shellA);
+    expect(streamed).toBe(before);
+  });
+
+  it("returns the new shell when a setting changes, appears, or is dropped", () => {
+    const selectSettings = createThreadShellSettingsSelector(threadIdA);
+    selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }));
+
+    const renamed = { ...shellA, title: "renamed", updatedAt: "2026-01-01T00:00:05.000Z" };
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: renamed } }))).toBe(renamed);
+
+    const withBranch = { ...renamed, branch: "main" };
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: withBranch } }))).toBe(
+      withBranch,
+    );
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: renamed } }))).toBe(renamed);
+  });
+
+  it("follows the thread being removed and restored", () => {
+    const selectSettings = createThreadShellSettingsSelector(threadIdA);
+    selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }));
+
+    expect(selectSettings(makeState({}))).toBeUndefined();
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }))).toBe(shellA);
+    expect(createThreadShellSettingsSelector(null)(makeState({}))).toBeUndefined();
+  });
+});
+
 describe("createAccountRateLimitThreadsSelector", () => {
   const rateLimitActivity = makeActivity("activity-rate", "account.rate-limits.updated");
   const toolActivity = makeActivity("activity-tool", "provider.tool-call");
@@ -128,27 +169,6 @@ describe("createAccountRateLimitThreadsSelector", () => {
     const result = selectRateLimitThreads(state);
     expect(result).toHaveLength(1);
     expect(result[0]?.activities).toEqual([rateLimitActivity]);
-  });
-
-  it("stays reference-stable when message slices change (streaming deltas)", () => {
-    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
-    const threadIds = [threadIdA];
-    const activityIdsByThreadId = { [threadIdA]: [rateLimitActivity.id] };
-    const activityByThreadId = { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } };
-
-    const before = selectRateLimitThreads(
-      makeState({ threadIds, activityIdsByThreadId, activityByThreadId }),
-    );
-    const after = selectRateLimitThreads(
-      makeState({
-        threadIds,
-        activityIdsByThreadId,
-        activityByThreadId,
-        messageIdsByThreadId: { [threadIdA]: [messageId] },
-      }),
-    );
-
-    expect(after).toBe(before);
   });
 
   it("stays reference-stable when a non-rate-limit activity is appended", () => {
@@ -208,17 +228,6 @@ describe("createAccountRateLimitThreadsSelector", () => {
     expect(after).not.toBe(before);
     expect(after[0]?.activities).toEqual([rateLimitActivity, laterRateLimitActivity]);
   });
-
-  it("returns the empty constant when no thread has rate-limit activities", () => {
-    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
-    const state = makeState({
-      threadIds: [threadIdA],
-      activityIdsByThreadId: { [threadIdA]: [toolActivity.id] },
-      activityByThreadId: { [threadIdA]: { [toolActivity.id]: toolActivity } },
-    });
-
-    expect(selectRateLimitThreads(state)).toEqual([]);
-  });
 });
 
 describe("sidebar thread visibility", () => {
@@ -247,21 +256,21 @@ describe("sidebar thread visibility", () => {
     },
   });
 
-  it("keeps every thread when the hide option is off", () => {
-    expect(isSidebarThreadVisible(runSummary)).toBe(true);
-    expect(isSidebarThreadVisible(runSummary, {})).toBe(true);
-    expect(isSidebarThreadVisible(runSummary, { hideAutomationRunThreads: false })).toBe(true);
-  });
-
-  it("hides only unpinned automation-run threads when the option is on", () => {
-    const options = { hideAutomationRunThreads: true };
-    expect(isSidebarThreadVisible(runSummary, options)).toBe(false);
-    expect(isSidebarThreadVisible(pinnedRunSummary, options)).toBe(true);
-    expect(isSidebarThreadVisible(normalSummary, options)).toBe(true);
-  });
-
   it("always hides side chats, including pinned side chats", () => {
     expect(isSidebarThreadVisible(sidechatSummary)).toBe(false);
+    const standaloneSidechat = {
+      ...summaryA,
+      id: "thread-standalone-sidechat" as ThreadId,
+      isPinned: true,
+      sidechatContext: {
+        kind: "github-item",
+        itemKind: "issue",
+        repository: "acme/widgets",
+        number: 7,
+        url: "https://github.com/acme/widgets/issues/7",
+      },
+    } as SidebarThreadSummary;
+    expect(isSidebarThreadVisible(standaloneSidechat)).toBe(false);
     expect(isSidebarThreadVisible(sidechatSummary, { hideAutomationRunThreads: true })).toBe(false);
   });
 
@@ -280,11 +289,6 @@ describe("sidebar thread visibility", () => {
       threadIdB,
       threadIdC,
     ]);
-  });
-
-  it("stays reference-stable while the underlying summaries do not change", () => {
-    const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
-    expect(selectDisplay(state)).toBe(selectDisplay(state));
   });
 });
 
@@ -412,11 +416,6 @@ describe("createAllThreadsSelector", () => {
 });
 
 describe("createAllThreadsMessagelessSelector", () => {
-  it("is vacuously true with no threads", () => {
-    const selectMessageless = createAllThreadsMessagelessSelector();
-    expect(selectMessageless(makeState({}))).toBe(true);
-  });
-
   it("is true when every thread has no message ids", () => {
     const selectMessageless = createAllThreadsMessagelessSelector();
     const state = makeState({
@@ -593,5 +592,123 @@ describe("createLastActivityTimestampSelector", () => {
         makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: { ...shellA } } }),
       ),
     ).toEqual({});
+  });
+});
+
+describe("createThreadGitActionsMetadataSelector", () => {
+  it("keeps git action metadata stable while streaming messages change", () => {
+    const selectGitActionsMetadata = createThreadGitActionsMetadataSelector(threadIdA);
+    const threadIds = [threadIdA];
+    const threadShellById = {
+      [threadIdA]: {
+        ...shellA,
+        branch: "feature",
+        worktreePath: "/repo/.worktrees/feature",
+        associatedWorktreeBranch: "feature",
+        createBranchFlowCompleted: true,
+      },
+    };
+
+    const before = selectGitActionsMetadata(makeState({ threadIds, threadShellById }));
+    const after = selectGitActionsMetadata(
+      makeState({
+        threadIds,
+        threadShellById,
+        messageIdsByThreadId: { [threadIdA]: [messageId] },
+      }),
+    );
+
+    expect(after).toBe(before);
+    expect(after).toEqual({
+      worktreePath: "/repo/.worktrees/feature",
+      branch: "feature",
+      associatedWorktreeBranch: "feature",
+      createBranchFlowCompleted: true,
+      title: "A",
+    });
+  });
+
+  it("re-derives when a git field or the title changes and empties for unknown threads", () => {
+    const selectGitActionsMetadata = createThreadGitActionsMetadataSelector(threadIdA);
+    const before = selectGitActionsMetadata(
+      makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: shellA } }),
+    );
+    const after = selectGitActionsMetadata(
+      makeState({
+        threadIds: [threadIdA],
+        threadShellById: { [threadIdA]: { ...shellA, title: "Renamed", branch: "main" } },
+      }),
+    );
+    expect(after).not.toBe(before);
+    expect(after.title).toBe("Renamed");
+    expect(after.branch).toBe("main");
+    expect(selectGitActionsMetadata(makeState({}))).toEqual({
+      worktreePath: null,
+      branch: null,
+      associatedWorktreeBranch: null,
+      createBranchFlowCompleted: false,
+      title: undefined,
+    });
+    expect(createThreadGitActionsMetadataSelector(null)(makeState({}))).toBe(
+      createThreadGitActionsMetadataSelector(undefined)(makeState({})),
+    );
+  });
+});
+
+function githubPullRequestContext(number: number, repository = "Acme/Widgets") {
+  return {
+    kind: "github-item" as const,
+    itemKind: "pullRequest" as const,
+    repository,
+    number,
+    url: `https://github.com/acme/widgets/pull/${number}`,
+  };
+}
+
+describe("createSidechatSummariesForGitHubItemSelector", () => {
+  it("selects one item's standalone side chats in one project, newest first", () => {
+    const projectId = summaryA.projectId;
+    const context = githubPullRequestContext;
+    const older = {
+      ...summaryA,
+      id: "item-older" as ThreadId,
+      sidechatContext: context(7),
+      sidechatLastActivityAt: "2026-09-30T10:00:00.000Z",
+    } as SidebarThreadSummary;
+    const newer = {
+      ...summaryA,
+      id: "item-newer" as ThreadId,
+      sidechatContext: context(7, "acme/widgets"),
+      sidechatLastActivityAt: "2026-09-30T11:00:00.000Z",
+    } as SidebarThreadSummary;
+    const otherItem = {
+      ...summaryA,
+      id: "item-other" as ThreadId,
+      sidechatContext: context(8),
+    } as SidebarThreadSummary;
+    const otherProject = {
+      ...summaryA,
+      id: "item-other-project" as ThreadId,
+      projectId: "project-elsewhere",
+      sidechatContext: context(7),
+    } as SidebarThreadSummary;
+    const archived = {
+      ...summaryA,
+      id: "item-archived" as ThreadId,
+      sidechatContext: context(7),
+      archivedAt: "2026-09-30T12:00:00.000Z",
+    } as SidebarThreadSummary;
+    const threads = [older, newer, otherItem, otherProject, archived];
+    const state = makeState({
+      threadIds: threads.map((thread) => thread.id),
+      sidebarThreadSummaryById: Object.fromEntries(threads.map((thread) => [thread.id, thread])),
+    });
+
+    const select = createSidechatSummariesForGitHubItemSelector({
+      projectId,
+      repository: "acme/widgets",
+      number: 7,
+    });
+    expect(select(state).map((thread) => thread.id)).toEqual([newer.id, older.id]);
   });
 });

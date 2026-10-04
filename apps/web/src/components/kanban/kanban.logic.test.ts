@@ -74,6 +74,7 @@ function makeSidebarThreadSummary(
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
     ...overrides,
   };
 }
@@ -268,6 +269,7 @@ describe("buildKanbanBoard", () => {
           [localId]: {
             prompt: "  Fix the flaky reconnect test  ",
             hasAttachments: false,
+            providerInstanceId: "claudeAgent",
             provider: "claudeAgent",
           },
         },
@@ -300,6 +302,7 @@ describe("buildKanbanBoard", () => {
           [threadId]: {
             prompt: "Follow up on the review notes",
             hasAttachments: false,
+            providerInstanceId: "cursor",
             provider: "cursor",
           },
         },
@@ -352,7 +355,12 @@ describe("buildKanbanBoard", () => {
           }),
         ],
         composerDraftByThreadId: {
-          "thread-orphan": { prompt: "orphan", hasAttachments: false, provider: null },
+          "thread-orphan": {
+            prompt: "orphan",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
         },
       }),
     );
@@ -377,7 +385,12 @@ describe("buildKanbanBoard", () => {
       makeBoardInput({
         draftThreads: [makeDraftThread(threadId)],
         composerDraftByThreadId: {
-          [threadId]: { prompt: "", hasAttachments: true, provider: "cursor" },
+          [threadId]: {
+            prompt: "",
+            hasAttachments: true,
+            providerInstanceId: "cursor",
+            provider: "cursor",
+          },
         },
       }),
     );
@@ -401,9 +414,19 @@ describe("buildKanbanBoard", () => {
           makeDraftThread(newest, { createdAt: "2026-03-09T12:00:00.000Z" }),
         ],
         composerDraftByThreadId: {
-          [first]: { prompt: "a", hasAttachments: false, provider: null },
-          [second]: { prompt: "b", hasAttachments: false, provider: null },
-          [newest]: { prompt: "c", hasAttachments: false, provider: null },
+          [first]: { prompt: "a", hasAttachments: false, providerInstanceId: null, provider: null },
+          [second]: {
+            prompt: "b",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
+          [newest]: {
+            prompt: "c",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
         },
         draftOrderByProjectId: {
           "project-1": [kanbanDraftCardId(first), kanbanDraftCardId(second)],
@@ -425,6 +448,7 @@ describe("buildKanbanBoard optimistic dispatch", () => {
   ): KanbanOptimisticDispatchSnapshot => ({
     projectId: PROJECT_1,
     title: "Fix the flaky reconnect test",
+    providerInstanceId: "cursor",
     provider: "cursor",
     baselineTurnId: null,
     droppedAtMs: Date.parse("2026-03-09T12:00:00.000Z"),
@@ -449,7 +473,12 @@ describe("buildKanbanBoard optimistic dispatch", () => {
       input: (threadId: ThreadId): Partial<BuildKanbanBoardInput> => ({
         threads: [makeSidebarThreadSummary({ id: threadId, latestTurn: makeLatestTurn() })],
         composerDraftByThreadId: {
-          [threadId]: { prompt: "Follow up", hasAttachments: false, provider: null },
+          [threadId]: {
+            prompt: "Follow up",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
         },
       }),
       suppressed: ["draft", "done"],
@@ -578,101 +607,128 @@ describe("buildKanbanBoard optimistic dispatch", () => {
 describe("resolveOptimisticDispatchOutcome", () => {
   const DROPPED_AT_MS = Date.parse("2026-03-09T12:00:00.000Z");
   const entry = (baselineTurnId: string | null) => ({ baselineTurnId, droppedAtMs: DROPPED_AT_MS });
-  const outcome = (baselineTurnId: string | null, overrides: Partial<SidebarThreadSummary>) =>
-    resolveOptimisticDispatchOutcome(entry(baselineTurnId), makeSidebarThreadSummary(overrides));
 
-  it.each([
-    {
-      name: "a turn other than the baseline appears",
-      baseline: null as string | null,
-      thread: { latestTurn: makeLatestTurn() },
-      outcome: "settled",
-    },
-    {
-      name: "the baseline turn was replaced",
-      baseline: "turn-1",
-      thread: { latestTurn: makeLatestTurn({ turnId: "turn-2" as never }) },
-      outcome: "settled",
-    },
-    {
-      name: "the session runs before a new turn registers",
-      baseline: null,
-      thread: { session: makeSession({ status: "running", orchestrationStatus: "running" }) },
-      outcome: "settled",
-    },
-    {
-      name: "the connecting pre-init window is still live",
-      baseline: null,
-      thread: { session: makeSession({ status: "connecting" }) },
-      outcome: "pending",
-    },
-    {
-      name: "the dispatch-time baseline still matches",
-      baseline: null,
-      thread: {},
-      outcome: "pending",
-    },
-    {
-      name: "the baseline turn has not changed",
-      baseline: "turn-1",
-      thread: { latestTurn: makeLatestTurn() },
-      outcome: "pending",
-    },
-  ] as const)("settles to $outcome when $name", ({ baseline, thread, outcome: expected }) => {
-    expect(outcome(baseline, thread as Partial<SidebarThreadSummary>)).toBe(expected);
+  it("settles when a turn other than the baseline appears", () => {
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({ latestTurn: makeLatestTurn() }),
+      ),
+    ).toBe("settled");
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry("turn-1"),
+        makeSidebarThreadSummary({ latestTurn: makeLatestTurn({ turnId: "turn-2" as never }) }),
+      ),
+    ).toBe("settled");
   });
 
-  // Manual stop or silent provider shutdown mid-init fails the dispatch; a
-  // terminal state from before the drop must not revert a fresh dispatch.
-  it.each([
-    {
-      status: "error",
-      orchestrationStatus: "error",
-      at: "2026-03-09T12:00:00.000Z",
-      expected: "failed",
-    },
-    {
-      status: "error",
-      orchestrationStatus: "error",
-      at: "2026-03-09T12:00:03.000Z",
-      expected: "failed",
-    },
-    {
-      status: "closed",
-      orchestrationStatus: "stopped",
-      at: "2026-03-09T12:00:02.000Z",
-      expected: "failed",
-    },
-    {
-      status: "closed",
-      orchestrationStatus: "stopped",
-      at: "2026-03-09T11:00:00.000Z",
-      expected: "pending",
-    },
-    {
-      status: "error",
-      orchestrationStatus: "error",
-      at: "2026-03-09T11:59:00.000Z",
-      expected: "pending",
-    },
-  ] as const)(
-    "resolves a $status session ending at $at to $expected",
-    ({ status, orchestrationStatus, at, expected }) => {
-      expect(
-        outcome(null, {
-          session: makeSession({ status, orchestrationStatus, updatedAt: at }),
+  it("settles when the session is running even before a new turn registers", () => {
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({
+          session: makeSession({ status: "running", orchestrationStatus: "running" }),
         }),
-      ).toBe(expected);
-    },
-  );
+      ),
+    ).toBe("settled");
+  });
+
+  it("keeps watching through the connecting pre-init window", () => {
+    // The early "starting" status must not settle the entry: provider init can
+    // still fail, and the failure toast depends on the entry being alive.
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({ session: makeSession({ status: "connecting" }) }),
+      ),
+    ).toBe("pending");
+  });
+
+  it("stays pending while the thread still matches the dispatch-time baseline", () => {
+    expect(resolveOptimisticDispatchOutcome(entry(null), makeSidebarThreadSummary())).toBe(
+      "pending",
+    );
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry("turn-1"),
+        makeSidebarThreadSummary({ latestTurn: makeLatestTurn() }),
+      ),
+    ).toBe("pending");
+  });
+
+  it("fails when the session errors at or after the drop without a turn", () => {
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({
+          session: makeSession({
+            status: "error",
+            orchestrationStatus: "error",
+            updatedAt: "2026-03-09T12:00:00.000Z",
+          }),
+        }),
+      ),
+    ).toBe("failed");
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({
+          session: makeSession({
+            status: "error",
+            orchestrationStatus: "error",
+            updatedAt: "2026-03-09T12:00:03.000Z",
+          }),
+        }),
+      ),
+    ).toBe("failed");
+  });
+
+  it("fails when the session closes after the drop without a turn", () => {
+    // Manual stop or silent provider shutdown mid-init: the dispatch never ran.
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({
+          session: makeSession({
+            status: "closed",
+            orchestrationStatus: "stopped",
+            updatedAt: "2026-03-09T12:00:02.000Z",
+          }),
+        }),
+      ),
+    ).toBe("failed");
+  });
+
+  it("ignores a stale error from before the drop", () => {
+    expect(
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({
+          session: makeSession({
+            status: "error",
+            orchestrationStatus: "error",
+            updatedAt: "2026-03-09T11:59:00.000Z",
+          }),
+        }),
+      ),
+    ).toBe("pending");
+  });
 
   it("prefers settled over failed when the turn ran before erroring", () => {
     // The turn existed (even if it errored): real runtime state owns the card.
     expect(
-      outcome(null, {
-        latestTurn: makeLatestTurn({ state: "error" }),
-        session: makeSession({ status: "error", orchestrationStatus: "error" }),
-      }),
+      resolveOptimisticDispatchOutcome(
+        entry(null),
+        makeSidebarThreadSummary({
+          latestTurn: makeLatestTurn({ state: "error" }),
+          session: makeSession({
+            status: "error",
+            orchestrationStatus: "error",
+            updatedAt: "2026-03-09T12:00:01.000Z",
+          }),
+        }),
+      ),
     ).toBe("settled");
   });
 });
@@ -680,6 +736,7 @@ describe("resolveOptimisticDispatchOutcome", () => {
 const makeComposerSnapshot = (prompt: string) => ({
   prompt,
   hasAttachments: false,
+  providerInstanceId: null,
   provider: null,
 });
 
@@ -695,6 +752,7 @@ const makeDraftSource = (
   fileComments: [],
   pastedTexts: [],
   activeProvider: null,
+  modelSelectionByProvider: {},
   ...overrides,
 });
 
@@ -783,6 +841,7 @@ describe("orderDraftCards", () => {
     projectId: PROJECT_1,
     column: "draft",
     title: cardId,
+    providerInstanceId: null,
     provider: null,
     isTerminal: false,
     branch: null,
@@ -844,6 +903,7 @@ describe("resolveDraftDropAction", () => {
     projectId: PROJECT_1,
     column: "draft",
     title: "Draft",
+    providerInstanceId: null,
     provider: null,
     isTerminal: false,
     branch: null,
@@ -894,6 +954,7 @@ describe("overviewVisibleKanbanCards", () => {
     projectId: PROJECT_1,
     column,
     title: cardId,
+    providerInstanceId: null,
     provider: null,
     isTerminal: false,
     branch: null,
@@ -1105,6 +1166,7 @@ describe("buildKanbanBoard v2 mode", () => {
     const optimistic = (threadId: ThreadId): KanbanOptimisticDispatchSnapshot => ({
       projectId: PROJECT_1,
       title: "Dispatched",
+      providerInstanceId: "cursor",
       provider: "cursor",
       baselineTurnId: null,
       droppedAtMs: FROZEN_NOW_MS,
@@ -1114,7 +1176,12 @@ describe("buildKanbanBoard v2 mode", () => {
         threads: [reviewThread, makeSidebarThreadSummary({ id: dispatchedId })],
         draftThreads: [makeDraftThread(draftId)],
         composerDraftByThreadId: {
-          [draftId]: { prompt: "WIP", hasAttachments: false, provider: "claudeAgent" },
+          [draftId]: {
+            prompt: "WIP",
+            hasAttachments: false,
+            providerInstanceId: "claudeAgent",
+            provider: "claudeAgent",
+          },
         },
         optimisticDispatchByThreadId: {
           [dispatchedId]: optimistic(dispatchedId),

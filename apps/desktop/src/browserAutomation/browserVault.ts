@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -14,6 +15,8 @@ import {
 } from "betterwright";
 import { Schema } from "effect";
 import { VaultKeyProtection, type VaultKeyStore } from "./vaultKeyProtection";
+
+export const BROWSER_VAULT_PROMPT_TTL_MS = 120_000;
 
 const Source = Schema.Literals(["user", "agent"]);
 const Preferences = Schema.Struct({
@@ -32,7 +35,8 @@ interface PageOrigin {
 export class BrowserVault {
   private readonly vault: LocalCredentialVault;
   private readonly ready: Promise<void>;
-  private readonly keys: VaultKeyProtection;
+  private keyProtection: VaultKeyProtection | undefined;
+  private disposed = false;
   private settings: BrowserVaultSettings = { agentUse: true, offerSave: false, autosave: false };
   private readonly sources = new Map<string, Source>();
   private readonly listeners = new Set<() => void>();
@@ -45,11 +49,23 @@ export class BrowserVault {
 
   constructor(
     private readonly home: string,
-    keyStore?: VaultKeyStore,
+    private readonly keyStore?: VaultKeyStore,
   ) {
-    this.keys = new VaultKeyProtection(join(home, "vault"), keyStore);
+    if (
+      ["key-protection.json", "vault.key", "vault.enc"].some((name) =>
+        existsSync(join(home, "vault", name)),
+      )
+    ) {
+      this.keyProtection = new VaultKeyProtection(join(home, "vault"), keyStore);
+    }
     this.vault = createLocalCredentialVault({ home, keyProvider: () => this.keys.provide() });
     this.ready = this.load();
+  }
+
+  private get keys(): VaultKeyProtection {
+    if (this.disposed) throw new Error("Vault closed.");
+    // Opening an empty app must not prompt for Keychain access before saving is enabled.
+    return (this.keyProtection ??= new VaultKeyProtection(join(this.home, "vault"), this.keyStore));
   }
 
   private async load(): Promise<void> {
@@ -105,7 +121,11 @@ export class BrowserVault {
 
   async snapshot(): Promise<BrowserVaultSnapshot> {
     await this.ready;
-    const protection = await this.keys.status();
+    const protection = (await this.keyProtection?.status()) ?? {
+      configured: false,
+      locked: true,
+      osProtected: false,
+    };
     const { credentials, pendingCredentials } = protection.locked
       ? { credentials: [], pendingCredentials: [] }
       : await this.vault.ownerList({ category: "login" });
@@ -173,6 +193,7 @@ export class BrowserVault {
     if (settings.autosave && !settings.offerSave)
       throw new Error("Enable password saving before autosave.");
     await this.persist(settings);
+    if (settings.offerSave) await this.keys.status();
     if (!settings.offerSave) this.dismissPrompts();
     this.changed();
     return this.snapshot();
@@ -306,7 +327,10 @@ export class BrowserVault {
     if (this.pending.size >= 8) return "dismiss";
     const id = randomUUID();
     return new Promise((resolve) => {
-      const timer = setTimeout(() => this.respond({ id, save: false }), 120_000);
+      const timer = setTimeout(
+        () => this.respond({ id, save: false }),
+        BROWSER_VAULT_PROMPT_TTL_MS,
+      );
       this.pending.set(id, {
         prompt: { ...input, id },
         resolve: (choice) => {
@@ -331,7 +355,8 @@ export class BrowserVault {
   }
 
   dispose(): void {
-    this.keys.dispose();
+    this.disposed = true;
+    this.keyProtection?.dispose();
     this.dismissPrompts();
     this.listeners.clear();
   }

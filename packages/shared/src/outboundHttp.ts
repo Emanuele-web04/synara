@@ -313,6 +313,8 @@ async function resolvePinnedAddress(
  * Custom `http`/`https` lookup that always returns the already-pinned address.
  * Modern Node/Bun Happy Eyeballs pass `{ all: true }` and expect the array
  * callback form; the legacy single-address form alone crashes those runtimes.
+ * Defer completion like native DNS so TLS construction and error listeners
+ * finish before a connection can fail (for example, with EADDRNOTAVAIL).
  */
 export function invokePinnedDnsLookup(
   pinned: { readonly address: string; readonly family: 4 | 6 },
@@ -325,11 +327,13 @@ export function invokePinnedDnsLookup(
     family?: number,
   ) => void,
 ): void {
-  if (options?.all) {
-    callback(null, [{ address: pinned.address, family: pinned.family }]);
-    return;
-  }
-  callback(null, pinned.address, pinned.family);
+  queueMicrotask(() => {
+    if (options?.all) {
+      callback(null, [{ address: pinned.address, family: pinned.family }]);
+      return;
+    }
+    callback(null, pinned.address, pinned.family);
+  });
 }
 
 async function requestHop(input: {

@@ -3,6 +3,7 @@
 // Layer: Shared platform runtime
 
 import {
+  execSync as nodeExecSync,
   execFile as nodeExecFile,
   spawn as nodeSpawn,
   spawnSync as nodeSpawnSync,
@@ -10,6 +11,7 @@ import {
   type ChildProcessWithoutNullStreams,
   type ExecFileException,
   type ExecFileOptionsWithStringEncoding,
+  type ExecSyncOptionsWithStringEncoding,
   type SpawnOptions,
   type SpawnSyncOptionsWithBufferEncoding,
   type SpawnSyncOptionsWithStringEncoding,
@@ -17,6 +19,10 @@ import {
 } from "node:child_process";
 
 import { prepareProcess, type ProcessLaunchInput, type ProcessLaunchPlan } from "./platformProcess";
+import { resolveWindowsComSpec } from "./platformEnvironment";
+
+import { trackProcessSpawn } from "./processSpawnOutcome";
+export { didProcessFailToSpawn } from "./processSpawnOutcome";
 
 type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "requireExecutable">;
 
@@ -49,6 +55,12 @@ export type RuntimeExecFileOptions = Omit<
   "shell" | "windowsHide" | "windowsVerbatimArguments"
 > &
   ProcessPlanningOptions;
+
+export type RuntimeExecShellSyncOptions = Omit<
+  ExecSyncOptionsWithStringEncoding,
+  "shell" | "windowsHide"
+> &
+  Pick<ProcessLaunchInput, "platform">;
 
 type PipeStdio = "pipe" | readonly ["pipe", "pipe", "pipe"];
 type PlanningOptions =
@@ -101,19 +113,21 @@ export function spawnProcess(
   options: RuntimeSpawnOptions = {},
 ): ChildProcess {
   const plan = planFromOptions(command, args, options);
-  return nodeSpawn(plan.command, plan.args, {
-    ...runtimeOptions(options),
-    ...(options.ownProcessGroup
-      ? {
-          detached:
-            plan.executionBackend === "native" &&
-            (options.platform ?? process.platform) !== "win32",
-        }
-      : {}),
-    shell: false,
-    windowsHide: plan.windowsHide,
-    windowsVerbatimArguments: plan.windowsVerbatimArguments,
-  });
+  return trackProcessSpawn(
+    nodeSpawn(plan.command, plan.args, {
+      ...runtimeOptions(options),
+      ...(options.ownProcessGroup
+        ? {
+            detached:
+              plan.executionBackend === "native" &&
+              (options.platform ?? process.platform) !== "win32",
+          }
+        : {}),
+      shell: false,
+      windowsHide: plan.windowsHide,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    }),
+  );
 }
 
 /** Spawn an already planned command. Used by infrastructure that logs the plan first. */
@@ -129,19 +143,21 @@ export function spawnPlannedProcess(
   plan: ProcessLaunchPlan,
   options: RuntimeSpawnOptions = {},
 ): ChildProcess {
-  return nodeSpawn(plan.command, plan.args, {
-    ...runtimeOptions(options),
-    ...(options.ownProcessGroup
-      ? {
-          detached:
-            plan.executionBackend === "native" &&
-            (options.platform ?? process.platform) !== "win32",
-        }
-      : {}),
-    shell: false,
-    windowsHide: plan.windowsHide,
-    windowsVerbatimArguments: plan.windowsVerbatimArguments,
-  });
+  return trackProcessSpawn(
+    nodeSpawn(plan.command, plan.args, {
+      ...runtimeOptions(options),
+      ...(options.ownProcessGroup
+        ? {
+            detached:
+              plan.executionBackend === "native" &&
+              (options.platform ?? process.platform) !== "win32",
+          }
+        : {}),
+      shell: false,
+      windowsHide: plan.windowsHide,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    }),
+  );
 }
 
 /** Synchronous counterpart used by bounded discovery and compatibility probes. */
@@ -169,6 +185,23 @@ export function spawnProcessSync(
   }) as SpawnSyncReturns<string> | SpawnSyncReturns<Buffer>;
 }
 
+/**
+ * Runs an explicitly configured shell snippet while keeping host shell and
+ * window policy inside the shared process boundary.
+ */
+export function execShellCommandSync(
+  command: string,
+  options: RuntimeExecShellSyncOptions,
+): string {
+  const { platform = process.platform, ...nodeOptions } = options;
+  const env = nodeOptions.env ?? process.env;
+  return nodeExecSync(command, {
+    ...nodeOptions,
+    shell: platform === "win32" ? resolveWindowsComSpec(env) : "/bin/sh",
+    windowsHide: platform === "win32",
+  });
+}
+
 /** Callback-compatible execFile for SDK hooks that require that interface. */
 export function execProcessFile(
   command: string,
@@ -177,15 +210,17 @@ export function execProcessFile(
   callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
 ): ChildProcess {
   const plan = planFromOptions(command, args, options);
-  return nodeExecFile(
-    plan.command,
-    plan.args,
-    {
-      ...runtimeOptions(options),
-      shell: false,
-      windowsHide: plan.windowsHide,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    },
-    callback,
+  return trackProcessSpawn(
+    nodeExecFile(
+      plan.command,
+      plan.args,
+      {
+        ...runtimeOptions(options),
+        shell: false,
+        windowsHide: plan.windowsHide,
+        windowsVerbatimArguments: plan.windowsVerbatimArguments,
+      },
+      callback,
+    ),
   );
 }

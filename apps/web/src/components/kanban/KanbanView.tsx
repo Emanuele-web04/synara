@@ -8,43 +8,17 @@ import type { ProjectId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
-import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { RouteInsetSurface } from "../RouteInsetSurface";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
 import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
-import { splitShortcutLabel } from "~/keybindings";
-import { ArrowLeftIcon, PlusIcon } from "~/lib/icons";
-import { cn, isMacNavigatorPlatform } from "~/lib/utils";
+import { ArrowLeftIcon } from "~/lib/icons";
+import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
 
-// Kanban-scoped "Create task" shortcut: ⌘⌥T on macOS, Ctrl+Alt+T elsewhere —
-// matching the app's mod convention (meta on mac, ctrl otherwise) and the ⌘⌥
-// "create new X" family. Matched on event.code so it survives Alt remapping the
-// produced character on some layouts.
-const NEW_TASK_SHORTCUT_LABEL = isMacNavigatorPlatform() ? "⌥⌘T" : "Ctrl+Alt+T";
-const NEW_TASK_SHORTCUT_PARTS = splitShortcutLabel(NEW_TASK_SHORTCUT_LABEL);
-
-function isNewTaskShortcut(event: KeyboardEvent): boolean {
-  if (event.code !== "KeyT" || event.repeat || event.shiftKey || !event.altKey) {
-    return false;
-  }
-  return isMacNavigatorPlatform()
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
-}
 import { useStore } from "../../store";
-import {
-  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-} from "../chat/chatHeaderControls";
-import { CHAT_BACKGROUND_CLASS_NAME } from "../chat/composerPickerStyles";
+import { NewTaskButton } from "../tasks/NewTaskButton";
+import { TasksViewSwitch } from "../tasks/TasksViewSwitch";
+import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
 import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
@@ -57,9 +31,6 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
   const navigate = useNavigate();
   const board = useKanbanBoard();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const desktopTopBarWindowControlsGutterClassName =
-    useDesktopTopBarWindowControlsGutterClassName();
   const kanbanViewMode = useKanbanUiStore((state) => state.kanbanViewMode);
   const setKanbanViewMode = useKanbanUiStore((state) => state.setKanbanViewMode);
 
@@ -179,91 +150,32 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
 
   return (
     <RouteInsetSurface>
-      <div
-        className={cn(
-          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-          CHAT_BACKGROUND_CLASS_NAME,
-        )}
-      >
-        <header
-          className={cn(
-            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-            "drag-region",
-            desktopTopBarTrafficLightGutterClassName,
-            desktopTopBarWindowControlsGutterClassName,
-          )}
-        >
-          <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
-            <SidebarHeaderNavigationControls />
-            <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-              {projectBoard ? (
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={handleBackToOverview}
-                  aria-label="Back to all projects"
-                >
-                  <ArrowLeftIcon className="size-3.5" />
-                </Button>
-              ) : null}
-              <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground">
-                {projectBoard ? projectBoard.projectName : "Kanban"}
-              </h2>
-              <span className="shrink-0 text-xs text-muted-foreground/70">
-                {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
-              </span>
-              <div
-                role="radiogroup"
-                aria-label="Kanban view"
-                className="ml-auto flex shrink-0 items-center gap-1 rounded-lg p-0.5 ring-1 ring-inset ring-border/60"
+      <RouteSurface>
+        <RouteSurfaceHeader>
+          <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
+            {projectBoard ? (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                onClick={handleBackToOverview}
+                aria-label="Back to all projects"
               >
-                {(["classic", "v2"] as const).map((mode) => {
-                  const isActive = kanbanViewMode === mode;
-                  return (
-                    <Button
-                      key={mode}
-                      role="radio"
-                      aria-checked={isActive}
-                      size="xs"
-                      variant={isActive ? "secondary" : "ghost"}
-                      className={cn("h-6 px-2 text-[11px]", !isActive && "text-muted-foreground")}
-                      onClick={() => setKanbanViewMode(mode)}
-                    >
-                      {mode === "v2" ? "Attention" : "Classic"}
-                    </Button>
-                  );
-                })}
-              </div>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="sm"
-                      variant="chrome"
-                      className="ml-auto shrink-0 gap-1.5"
-                      disabled={newTaskProjectOptions.length === 0}
-                      onClick={handleNewTaskInProjectBoard}
-                    >
-                      <PlusIcon className="size-3.5" />
-                      New task
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="bottom">
-                  <span className="flex items-center gap-2">
-                    New task
-                    <KbdGroup>
-                      {NEW_TASK_SHORTCUT_PARTS.map((part) => (
-                        <Kbd key={part}>{part}</Kbd>
-                      ))}
-                    </KbdGroup>
-                  </span>
-                </TooltipPopup>
-              </Tooltip>
-            </div>
+                <ArrowLeftIcon className="size-3.5" />
+              </Button>
+            ) : null}
+            <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
+              {projectBoard ? projectBoard.projectName : "Kanban"}
+            </h2>
+            <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+              {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+            </span>
+            {projectBoard ? null : <TasksViewSwitch current="kanban" />}
+            <NewTaskButton
+              disabled={newTaskProjectOptions.length === 0}
+              onClick={handleNewTaskInProjectBoard}
+            />
           </div>
-        </header>
+        </RouteSurfaceHeader>
 
         <div className="min-h-0 min-w-0 flex-1 pt-3">
           {projectBoard ? (
@@ -289,7 +201,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
             />
           )}
         </div>
-      </div>
+      </RouteSurface>
 
       {newTaskDialog ? (
         <KanbanNewTaskDialog

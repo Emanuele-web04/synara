@@ -18,7 +18,11 @@ import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { selectRepresentativeTerminalVisualIdentity } from "~/terminalVisualIdentity";
 
-import { DOCK_HEADER_ICON_BUTTON_CLASS, SurfaceTabChip } from "../chat/chatHeaderControls";
+import {
+  DOCK_HEADER_ICON_BUTTON_CLASS,
+  SurfaceTabChip,
+  SurfaceTabStrip,
+} from "../chat/chatHeaderControls";
 import type { ResolvedTerminalGroupLayout } from "./TerminalLayout";
 import TerminalActivityIndicator from "./TerminalActivityIndicator";
 import TerminalIdentityIcon from "./TerminalIdentityIcon";
@@ -73,8 +77,8 @@ export function TerminalWorkspaceTabBar(props: {
 }) {
   const canCloseGroups = props.terminalGroups.length > 1;
   return (
-    <div className="flex min-h-9 min-w-0 items-center gap-1 bg-[var(--color-background-surface)] px-1.5 py-1">
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex min-h-9 min-w-0 items-center gap-1 app-content-surface px-1.5 py-1">
+      <SurfaceTabStrip className="flex-1" activeKey={props.activeGroupId}>
         {props.terminalGroups.map((terminalGroup) => {
           const isActive = terminalGroup.id === props.activeGroupId;
           const visualIdentity = selectRepresentativeTerminalVisualIdentity({
@@ -107,7 +111,7 @@ export function TerminalWorkspaceTabBar(props: {
               }
               trailing={
                 terminalGroup.terminalIds.length > 1 ? (
-                  <span className="shrink-0 text-[10px] text-current/55">
+                  <span className="shrink-0 text-ui-xs text-current/55">
                     {terminalGroup.terminalIds.length}
                   </span>
                 ) : null
@@ -118,7 +122,7 @@ export function TerminalWorkspaceTabBar(props: {
             />
           );
         })}
-      </div>
+      </SurfaceTabStrip>
       <div className="flex shrink-0 items-center">
         <TerminalChromeActions actions={props.actions} variant="workspace" />
       </div>
@@ -139,7 +143,7 @@ export function TerminalSidebar(props: {
   onCloseTerminal: (terminalId: string) => void;
 }) {
   return (
-    <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-[var(--color-background-surface)]">
+    <aside className="flex w-36 min-w-36 flex-col border border-border/70 app-content-surface">
       <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
         <TerminalChromeActions actions={props.actions} variant="sidebar" />
       </div>
@@ -157,7 +161,7 @@ export function TerminalSidebar(props: {
               {props.showGroupHeaders && (
                 <button
                   type="button"
-                  className={`flex w-full items-center px-1 py-0.5 text-[10px] ${
+                  className={`flex w-full items-center px-1 py-0.5 text-ui-xs ${
                     isGroupActive
                       ? "bg-[var(--sidebar-accent-active)] text-foreground"
                       : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
@@ -183,14 +187,14 @@ export function TerminalSidebar(props: {
                   return (
                     <div
                       key={terminalId}
-                      className={`group flex items-center gap-1 px-1 py-0.5 text-[11px] ${
+                      className={`group flex items-center gap-1 px-1 py-0.5 text-ui-sm ${
                         isActive
                           ? "bg-[var(--sidebar-accent-active)] text-foreground"
                           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                       }`}
                     >
                       {props.showGroupHeaders && (
-                        <span className="text-[10px] text-muted-foreground/80">└</span>
+                        <span className="text-ui-xs text-muted-foreground/80">└</span>
                       )}
                       <button
                         type="button"
@@ -216,7 +220,7 @@ export function TerminalSidebar(props: {
                             render={
                               <button
                                 type="button"
-                                className="inline-flex size-3.5 items-center justify-center rounded text-xs font-medium leading-none text-muted-foreground opacity-0 transition hover:bg-[var(--sidebar-accent)] hover:text-foreground group-hover:opacity-100"
+                                className="inline-flex size-3.5 items-center justify-center rounded text-ui font-medium leading-none text-muted-foreground opacity-0 transition hover:bg-[var(--sidebar-accent)] hover:text-foreground group-hover:opacity-100"
                                 onClick={() => props.onCloseTerminal(terminalId)}
                                 aria-label={closeTerminalLabel}
                               />

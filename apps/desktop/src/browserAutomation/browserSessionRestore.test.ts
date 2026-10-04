@@ -57,6 +57,53 @@ afterEach(async () => {
 });
 
 describe("imported browser session restoration", () => {
+  it("does not access OS keys on an empty startup or unused shutdown", async () => {
+    const directory = await home();
+    const osStore = { ...store, available: vi.fn(store.available), encrypt: vi.fn(store.encrypt) };
+    const source = backend([]);
+    const restore = new BrowserSessionRestore(directory, source, osStore);
+    await restore.initialize();
+    await restore.shutdown();
+    await expect(restore.rememberImport(["example.test"])).rejects.toThrow(
+      "Secure browser session storage is unavailable",
+    );
+    expect(osStore.available).not.toHaveBeenCalled();
+    expect(osStore.encrypt).not.toHaveBeenCalled();
+    expect(existsSync(join(directory, "key-protection.json"))).toBe(false);
+    expect(existsSync(join(directory, "sessions.enc"))).toBe(false);
+    expect(source.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("creates one protected key on concurrent first imports", async () => {
+    const directory = await home();
+    const osStore = { ...store, encrypt: vi.fn(store.encrypt) };
+    const restore = new BrowserSessionRestore(directory, backend(), osStore);
+    await restore.initialize();
+    await Promise.all([
+      restore.rememberImport(["example.test"]),
+      restore.rememberImport(["example.test"]),
+    ]);
+    expect(osStore.encrypt).toHaveBeenCalledOnce();
+    expect(
+      (await readFile(join(directory, "sessions.enc"))).includes(Buffer.from(cookie.value)),
+    ).toBe(false);
+    await restore.shutdown();
+  });
+
+  it("refuses corrupt key data when the first import initializes storage", async () => {
+    const directory = await home();
+    const path = join(directory, "key-protection.json");
+    await writeFile(path, "corrupt-envelope");
+    const restore = new BrowserSessionRestore(directory, backend(), store);
+    await restore.initialize();
+    await expect(restore.rememberImport(["example.test"])).rejects.toThrow(
+      "Secure browser session storage is unavailable",
+    );
+    expect(await readFile(path, "utf8")).toBe("corrupt-envelope");
+    expect(existsSync(join(directory, "sessions.enc"))).toBe(false);
+    await restore.shutdown();
+  });
+
   it("restores encrypted session cookies after clean shutdown without fabricating expiry", async () => {
     const directory = await home();
     const first = new BrowserSessionRestore(directory, backend(), store);
@@ -203,7 +250,7 @@ describe("imported browser session restoration", () => {
       ...store,
       available: async () => false,
     });
-    await expect(first.initialize()).rejects.toThrow();
+    await first.initialize();
     await expect(first.rememberImport(["example.test"])).rejects.toThrow(
       "Secure browser session storage is unavailable",
     );

@@ -10,6 +10,7 @@ import {
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
   type AuthSessionId,
+  type ComputerEvent,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -40,6 +41,7 @@ import {
   type WsConnectionSessionsShape,
 } from "./wsConnectionSessions";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
+import { ComputerEventInterests } from "./computer/computerEventInterests";
 
 const PingRpc = Rpc.make("test.ping", {
   payload: Schema.Struct({ label: Schema.String }),
@@ -729,31 +731,6 @@ describe("websocket permessage-deflate negotiation", () => {
     }
   });
 
-  it("closes a fragmented compressed message whose decompressed aggregate crosses the ceiling", async () => {
-    const server = await startTestServer();
-    try {
-      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
-      expect(connected.socket.extensions).toContain("permessage-deflate");
-      const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "204");
-      const splitAt = Math.floor(frame.length / 2);
-      const close = waitForCloseInfo(connected.socket);
-
-      await sendFragment(connected.socket, frame.slice(0, splitAt), {
-        fin: false,
-        compress: true,
-      });
-      void sendFragment(connected.socket, frame.slice(splitAt), {
-        fin: true,
-        compress: true,
-      }).catch(() => {});
-
-      await expect(close).resolves.toMatchObject({ code: 1009 });
-      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
-    } finally {
-      await server.close();
-    }
-  });
-
   it("negotiates compression when the client offers it and serves RPC over the compressed socket", async () => {
     const server = await startTestServer();
     try {
@@ -803,6 +780,31 @@ describe("websocket permessage-deflate negotiation", () => {
       await server.close();
     }
   });
+
+  it("closes a fragmented compressed message whose decompressed aggregate crosses the ceiling", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
+      expect(connected.socket.extensions).toContain("permessage-deflate");
+      const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "204");
+      const splitAt = Math.floor(frame.length / 2);
+      const close = waitForCloseInfo(connected.socket);
+
+      await sendFragment(connected.socket, frame.slice(0, splitAt), {
+        fin: false,
+        compress: true,
+      });
+      void sendFragment(connected.socket, frame.slice(splitAt), {
+        fin: true,
+        compress: true,
+      }).catch(() => {});
+
+      await expect(close).resolves.toMatchObject({ code: 1009 });
+      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 describe("websocketRpcRouteLayer connection lifecycle", () => {
@@ -826,9 +828,20 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
         attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
       });
 
+      // A client may read Computer state without ever subscribing to its
+      // event stream. The socket scope must still release the remembered view.
+      const interests = new ComputerEventInterests(server.connectionSessions.onClose);
+      const event = {
+        type: "computer.thread-state",
+        state: { threadId: "state-only-view" },
+      } as ComputerEvent;
+      interests.watch(sessionKey, "state-only-view");
+      expect(interests.accepts(sessionKey, event)).toBe(true);
+
       socket.close();
       await waitForClose(socket);
       await waitForObserved(() => server.connectionSessions.lookup(sessionKey) === undefined);
+      expect(interests.accepts(sessionKey, event)).toBe(false);
     } finally {
       await server.close();
     }

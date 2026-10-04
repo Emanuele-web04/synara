@@ -6,6 +6,7 @@ import {
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ThreadId,
@@ -297,6 +298,10 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === WS_METHODS.automationList) {
     return { definitions: [], runs: [] };
   }
+  // The sidebar reads to-dos on Beta hosts; the `{}` fallback would fail to decode.
+  if (tag === WS_METHODS.todoList) {
+    return { todos: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     return {
       isRepo: true,
@@ -371,11 +376,13 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
         method === WS_METHODS.subscribeAutomationEvents ||
+        method === WS_METHODS.subscribeTodoEvents ||
         // Left open like the rest: these are infinite subscriptions, and the
         // default below answers with an Exit, which a stream RPC reads as the
         // socket dying and answers with a full reconnect. That loops forever
         // and starves the RPCs these tests are actually asserting on.
-        method === DEVICE_WS_METHODS.subscribeEvents
+        method === DEVICE_WS_METHODS.subscribeEvents ||
+        method === COMPUTER_WS_METHODS.subscribeEvents
       ) {
         return;
       }
@@ -587,6 +594,7 @@ describe("EventRouter scoped orchestration sync", () => {
       homeDir: null,
       chatWorkspaceRoot: null,
       studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
     });
     subscribeShellRequestCount = 0;
     subscribeThreadRequestCountById.clear();
@@ -2421,100 +2429,4 @@ describe("EventRouter scoped orchestration sync", () => {
       await mounted.cleanup();
     }
   });
-
-  // Perf probe (VITE_SYNARA_PERF=1): how many full thread-detail snapshot reconciles a
-  // running thread with a bursty stream triggers over a fixed window. Multiply by the
-  // number of subscribed running threads for the steady-state load.
-  it.skipIf(import.meta.env.VITE_SYNARA_PERF !== "1")(
-    "perf: bursty running thread projection reconcile count",
-    async () => {
-      const runningTurnId = TurnId.makeUnsafe("turn-perf-running");
-      fixture = {
-        ...fixture,
-        snapshot: createSnapshot({
-          latestTurn: {
-            turnId: runningTurnId,
-            state: "running",
-            requestedAt: "2026-03-04T12:00:04.000Z",
-            startedAt: "2026-03-04T12:00:04.500Z",
-            completedAt: null,
-            assistantMessageId: null,
-          },
-          session: {
-            threadId: THREAD_ID,
-            status: "running",
-            providerName: "opencode",
-            runtimeMode: "full-access",
-            activeTurnId: runningTurnId,
-            lastError: null,
-            updatedAt: "2026-03-04T12:00:04.500Z",
-          },
-          updatedAt: "2026-03-04T12:00:04.500Z",
-        }),
-      };
-      const WINDOW_MS = 45_000;
-      const BURST_PERIOD_MS = 6_000;
-      const DELTAS_PER_BURST = 5;
-      const mounted = await mountApp();
-      try {
-        getThreadDetailSnapshotRequestCount = 0;
-        replayRequestCursors = [];
-        const startedAt = performance.now();
-        let sequence = 100;
-        const messageId = MessageId.makeUnsafe("msg-perf-stream");
-        while (performance.now() - startedAt < WINDOW_MS) {
-          for (let index = 0; index < DELTAS_PER_BURST; index += 1) {
-            const createdAt = new Date().toISOString();
-            sequence += 1;
-            const streamedEvent = {
-              sequence,
-              eventId: EventId.makeUnsafe(`event-perf-${sequence}`),
-              aggregateKind: "thread",
-              aggregateId: THREAD_ID,
-              occurredAt: createdAt,
-              commandId: null,
-              causationEventId: null,
-              correlationId: null,
-              metadata: {},
-              type: "thread.message-sent",
-              payload: {
-                threadId: THREAD_ID,
-                messageId,
-                role: "assistant",
-                text: "streamed chunk ",
-                turnId: runningTurnId,
-                source: "native",
-                streaming: true,
-                createdAt,
-                updatedAt: createdAt,
-              },
-            } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-            // The journal holds every streamed event, so a replay poll returns exactly
-            // what the live stream has not yet delivered (nothing, in steady state).
-            replayEvents = [...replayEvents, streamedEvent];
-            // The projection cursor advances with the journal, so a reconcile snapshot
-            // taken after this event carries a fence at or past the client cursor.
-            fixture = { ...fixture, snapshot: { ...fixture.snapshot, snapshotSequence: sequence } };
-            sendThreadEventPush(streamedEvent);
-            await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
-          }
-          await new Promise<void>((resolve) =>
-            window.setTimeout(resolve, BURST_PERIOD_MS - DELTAS_PER_BURST * 100),
-          );
-        }
-        const report = {
-          windowMs: WINDOW_MS,
-          burstPeriodMs: BURST_PERIOD_MS,
-          threadDetailSnapshotRequests: getThreadDetailSnapshotRequestCount,
-          replayRequests: replayRequestCursors.length,
-        };
-        console.log(`[perf] ${JSON.stringify(report)}`);
-        document.title = `perf:${JSON.stringify(report)}`;
-      } finally {
-        fixture = buildFixture();
-        await mounted.cleanup();
-      }
-    },
-    120_000,
-  );
 });

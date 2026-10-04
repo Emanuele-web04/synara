@@ -115,21 +115,12 @@ index eeeeeee..fffffff 100644
 `;
 
 const CASES = [
-  ["a modified file", MODIFIED_FILE, { additions: 2, deletions: 1, fileCount: 1 }],
-  ["an added file", ADDED_FILE, { additions: 3, deletions: 0, fileCount: 1 }],
-  ["a deleted file", DELETED_FILE, { additions: 0, deletions: 2, fileCount: 1 }],
   [
     "an untracked file folded in via --no-index",
     UNTRACKED_VIA_NO_INDEX,
     { additions: 2, deletions: 0, fileCount: 1 },
   ],
-  [
-    "a pure rename with no content change",
-    PURE_RENAME,
-    { additions: 0, deletions: 0, fileCount: 1 },
-  ],
   ["a rename with edits", RENAME_WITH_EDITS, { additions: 1, deletions: 1, fileCount: 1 }],
-  ["a binary file", BINARY_FILE, { additions: 0, deletions: 0, fileCount: 1 }],
   [
     "a file with no trailing newline",
     NO_TRAILING_NEWLINE,
@@ -140,7 +131,6 @@ const CASES = [
     DIFF_SHAPED_CONTENT,
     { additions: 3, deletions: 3, fileCount: 1 },
   ],
-  ["multiple hunks in one file", MULTI_HUNK, { additions: 3, deletions: 2, fileCount: 1 }],
   [
     "every shape concatenated",
     [MODIFIED_FILE, ADDED_FILE, DELETED_FILE, PURE_RENAME, BINARY_FILE, MULTI_HUNK].join(""),

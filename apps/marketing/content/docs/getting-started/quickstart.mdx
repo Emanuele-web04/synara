@@ -10,6 +10,12 @@ This guide takes you through Synara's basic loop: open a repository, give one co
   on macOS and Ctrl on Windows or Linux.
 </Callout>
 
+## First-run setup
+
+A fresh installation without projects opens an interactive welcome flow: feature tour, provider setup, theme selection, first project, and completion. Provider rows distinguish **Connected**, **Needs sign-in**, **Not installed**, and **Disabled**. Use the offered connection controls to complete setup, then verify the provider with a bounded task. Providers without an authentication probe can be shown as connected when their executable is detected; a real turn confirms account access.
+
+Existing installations with projects do not need to repeat first-run setup.
+
 <Steps>
 <Step>
 
@@ -26,7 +32,7 @@ Start with a repository whose current changes are already committed or intention
 
 Press `mod+n` or use the new-task control.
 
-For this first task, use the local checkout and run only one agent against the repository. Use a [Git worktree](/docs/workflows/worktrees) when you begin running multiple tasks or want stronger isolation.
+Synara remembers each project's most recently chosen **Local** or **Worktree** mode for later chats. Review that choice when creating a task. For this first task, use the local checkout and run only one agent against the repository. Use a [Git worktree](/docs/workflows/worktrees) when you begin running multiple tasks or want stronger isolation.
 
 </Step>
 <Step>

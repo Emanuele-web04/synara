@@ -277,7 +277,7 @@ describe("agent gateway MCP injection", () => {
     ]);
   });
 
-  it("falls back to the stdio proxy when http is not advertised", () => {
+  it("falls back to a Node-mode stdio proxy when http is not advertised", () => {
     const servers = buildAcpSynaraMcpServers({
       connection,
       initializeResult: {},
@@ -291,6 +291,7 @@ describe("agent gateway MCP injection", () => {
         env: [
           { name: "SYNARA_AGENT_GATEWAY_URL", value: connection.url },
           { name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: connection.bearerToken },
+          { name: "ELECTRON_RUN_AS_NODE", value: "1" },
         ],
       },
     ]);

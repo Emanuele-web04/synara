@@ -13,6 +13,7 @@ import { createSidechatThread } from "./sidechatCreation";
 import type { NewThreadOptions } from "./threadBootstrap";
 import { randomUUID } from "./utils";
 import type { TranscriptAssistantSelection } from "../components/chat/chatSelectionActions";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 function requireSelection(selection: TranscriptAssistantSelection) {
   const attachment = createAssistantSelectionAttachment(selection);
@@ -23,11 +24,12 @@ function requireSelection(selection: TranscriptAssistantSelection) {
 export async function addSelectionToSide(
   input: Pick<
     Parameters<typeof createSidechatThread>[0],
-    "project" | "sourceThread" | "selectedModelSelection"
+    "project" | "sourceThread" | "selectedModelSelection" | "runtimeMode"
   > & { selection: TranscriptAssistantSelection },
 ): Promise<void> {
   const attachment = requireSelection(input.selection);
-  if (input.sourceThread.sidechatSourceThreadId || input.sourceThread.sidechatExpiredAt) {
+  // No sidechat of a sidechat, forked or standalone.
+  if (isSidechatThread(input.sourceThread) || input.sourceThread.sidechatExpiredAt) {
     throw new Error("Open a main chat before starting Side.");
   }
   await createSidechatThread({
@@ -35,6 +37,7 @@ export async function addSelectionToSide(
     project: input.project,
     sourceThread: input.sourceThread,
     selectedModelSelection: input.selectedModelSelection,
+    ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
     openSidechat: (threadId) => {
       // Seed the reference before mounting the Side composer, including during a slow sync.
       useComposerDraftStore.getState().addAssistantSelection(threadId, attachment);

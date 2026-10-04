@@ -70,8 +70,8 @@ import {
 } from "./chat/workspaceExplorer";
 import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
 import { WorkspaceFileDiffEditorPane } from "./chat/WorkspaceFileDiffEditorPane";
-import { WorkspaceFileEditorDiscardDialog } from "./chat/WorkspaceFileEditorChrome";
-import { EditorDirtyRouteGuard } from "./EditorDirtyRouteGuard";
+import { useQueryClient } from "@tanstack/react-query";
+import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { WorkspaceFileEditorPane } from "./chat/WorkspaceFileEditorPane";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 
@@ -227,14 +227,14 @@ function DiffFileRow(props: {
         <div className="flex min-w-0 items-baseline gap-1.5 overflow-hidden">
           <span className="shrink-0 truncate font-medium">{name}</span>
           {dir ? (
-            <span className="min-w-0 truncate text-[11px] text-muted-foreground/55">{dir}</span>
+            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
           ) : null}
         </div>
       </div>
       <DiffStat
         additions={stat.additions}
         deletions={stat.deletions}
-        className="shrink-0 text-[10px] tabular-nums"
+        className="shrink-0 text-ui-xs tabular-nums"
       />
     </button>
   );
@@ -284,12 +284,12 @@ function DiffFilesSidebar(props: {
     <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/65 px-3">
         <DiffIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/86">
+        <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/86">
           Changed files
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {props.files.length > 0 ? (
-            <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground tabular-nums">
+            <span className="rounded-full bg-muted px-1.5 text-ui-xs font-medium text-muted-foreground tabular-nums">
               {props.files.length}
             </span>
           ) : null}
@@ -301,7 +301,7 @@ function DiffFilesSidebar(props: {
           <DiffStat
             additions={totals.additions}
             deletions={totals.deletions}
-            className="text-[11px] tabular-nums"
+            className="text-ui-sm tabular-nums"
           />
         </div>
       ) : null}
@@ -408,52 +408,30 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   // query lives here so it survives toggling between sidebar panes.
   const [searchPaneActive, setSearchPaneActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // The file preview unmounts in Diff/Edit mode. Keep explicit Markdown choices
+  // in the editor shell, scoped to the workspace and file for this session.
+  const [markdownPreviewModes, setMarkdownPreviewModes] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
+  const markdownPreviewKey = `${props.workspaceRoot ?? ""}\0${props.selectedFilePath ?? ""}`;
+  const handleMarkdownPreviewChange = (rendered: boolean) => {
+    setMarkdownPreviewModes((current) => new Map(current).set(markdownPreviewKey, rendered));
+  };
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
   const centerFamily = editorCenterModeFamily(centerMode);
-  const [editDirty, setEditDirty] = useState(false);
-  const [editSaving, setEditSaving] = useState(false);
-  const [pendingLeaveEdit, setPendingLeaveEdit] = useState<{ run: () => void } | null>(null);
-  // An exit requested during an in-flight save waits for it: the write cannot
-  // be cancelled, so "discard" must not be offered until the outcome is known.
-  const [leaveAfterSave, setLeaveAfterSave] = useState<{ run: () => void } | null>(null);
-  // A confirmed in-editor exit runs only once the dirty flag has cleared and
-  // the route-level guard has unmounted; running it synchronously would let
-  // the still-registered guard intercept the already-confirmed navigation.
-  const [confirmedLeaveEdit, setConfirmedLeaveEdit] = useState<{ run: () => void } | null>(null);
-  const inEditMode = centerMode === "fileEdit" || centerMode === "diffEdit";
-  useEffect(() => {
-    if (confirmedLeaveEdit === null || editDirty) {
-      return;
-    }
-    setConfirmedLeaveEdit(null);
-    confirmedLeaveEdit.run();
-  }, [confirmedLeaveEdit, editDirty]);
-  useEffect(() => {
-    if (leaveAfterSave === null || editSaving) {
-      return;
-    }
-    setLeaveAfterSave(null);
-    if (editDirty) {
-      setPendingLeaveEdit(leaveAfterSave);
-      return;
-    }
-    leaveAfterSave.run();
-  }, [editDirty, editSaving, leaveAfterSave]);
+
+  const queryClient = useQueryClient();
+  const leaveRequestRef = useRef(0);
   const guardLeavingEdit = useCallback(
     (run: () => void) => {
-      if (inEditMode && editSaving) {
-        setLeaveAfterSave({ run });
-        return;
-      }
-      if (inEditMode && editDirty) {
-        setPendingLeaveEdit({ run });
-        return;
-      }
-      run();
+      const request = ++leaveRequestRef.current;
+      void flushWorkspaceEditors(queryClient, props.workspaceRoot).then((saved) => {
+        if (saved && request === leaveRequestRef.current) run();
+      });
     },
-    [editDirty, editSaving, inEditMode],
+    [queryClient, props.workspaceRoot],
   );
   useImperativeHandle(props.leaveGuardRef, () => ({ guardLeavingEdit }), [guardLeavingEdit]);
   const activityBarSelection = (item: EditorActivityBarItem) => ({
@@ -615,10 +593,10 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           className={cn("flex min-w-0 flex-1 items-center gap-1.5", trafficLightGutterClassName)}
         >
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="truncate text-[13px] font-medium text-foreground">
+            <span className="truncate text-ui-lg font-medium text-foreground">
               {props.projectName ?? "Workspace"}
             </span>
-            <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
+            <span className="hidden truncate text-ui-sm text-muted-foreground/70 sm:inline">
               {props.workspaceRoot ?? "No workspace"}
             </span>
           </div>
@@ -721,8 +699,6 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   filePath={props.editFilePath}
                   resolvedTheme={editorResolvedTheme}
                   onClose={props.onCloseEdit}
-                  onDirtyChange={setEditDirty}
-                  onSavingChange={setEditSaving}
                 />
               </div>
             ) : props.centerMode === "diffEdit" && props.editFilePath !== null ? (
@@ -734,8 +710,6 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   baseRev={props.editDiffBaseRev ?? { rev: "HEAD" }}
                   resolvedTheme={editorResolvedTheme}
                   onClose={props.onCloseEdit}
-                  onDirtyChange={setEditDirty}
-                  onSavingChange={setEditSaving}
                 />
               </div>
             ) : props.centerMode === "file" ? (
@@ -743,6 +717,8 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                 <WorkspaceFilePreview
                   workspaceRoot={props.workspaceRoot}
                   filePath={props.selectedFilePath}
+                  markdownPreviewEnabled={markdownPreviewModes.get(markdownPreviewKey) ?? true}
+                  onMarkdownPreviewChange={handleMarkdownPreviewChange}
                   onReferenceInChat={props.onReferenceInChat}
                   onAskWhyInChat={props.onAskWhyInChat}
                   onCommentInChat={props.onCommentInChat}
@@ -794,28 +770,6 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           </aside>
         </div>
       </div>
-      <WorkspaceFileEditorDiscardDialog
-        open={pendingLeaveEdit !== null}
-        title="Discard unsaved changes?"
-        description="Leaving this file drops the changes you have not saved yet."
-        confirmLabel="Discard changes"
-        onOpenChange={(open) => {
-          if (!open) {
-            setPendingLeaveEdit(null);
-          }
-        }}
-        onConfirm={() => {
-          setPendingLeaveEdit(null);
-          setEditDirty(false);
-          setConfirmedLeaveEdit(pendingLeaveEdit);
-        }}
-      />
-      {/* Stays mounted for the whole edit session: a confirmed exit deferred
-          behind a save must still reach proceed() after the save clears the
-          dirty flag, which would otherwise unmount the guard first. */}
-      {inEditMode ? (
-        <EditorDirtyRouteGuard enabled={editDirty || editSaving} saving={editSaving} />
-      ) : null}
     </div>
   );
 }

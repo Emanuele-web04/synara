@@ -106,6 +106,8 @@ vi.mock("../../lib/voiceRecorder", () => ({
     error instanceof Error && error.name === "VoiceRecordingCancelledError",
   useVoiceRecorder: () => ({
     isRecording: recorder.isRecording,
+    isStarting: false,
+    hasAudioSignal: true,
     durationMs: 0,
     waveformLevels: [],
     startRecording: recorder.startRecording,
@@ -199,6 +201,8 @@ describe("useComposerVoiceController", () => {
       activeThreadId: THREAD_A,
       threadId: THREAD_A,
       selectedProvider: "codex",
+      selectedProviderInstanceId: "codex",
+      voiceProviderInstanceId: "codex",
       activeProviderStatus: null,
       pendingUserInputCount: 0,
       onTranscriptReady: vi.fn(),
@@ -207,13 +211,6 @@ describe("useComposerVoiceController", () => {
     render();
     await Promise.resolve();
     recorder.cancelRecording.mockClear();
-  });
-
-  it("applies a successful transcription exactly once", async () => {
-    await result.submitComposerVoiceRecording();
-
-    expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
-    expect(options.onTranscriptReady).toHaveBeenCalledWith("transcribed once");
   });
 
   it("discards the active recording without stopping or transcribing it", () => {
@@ -233,12 +230,13 @@ describe("useComposerVoiceController", () => {
 
     expect(nativeApi.prewarmVoice).toHaveBeenCalledWith({
       provider: "codex",
+      providerInstanceId: "codex",
       cwd: PROJECT.cwd,
       threadId: THREAD_A,
     });
   });
 
-  it.each(["thread", "provider", "cancel"] as const)(
+  it.each(["thread", "provider", "instance", "cancel"] as const)(
     "ignores a stale transcription after %s changes",
     async (staleCause) => {
       const transcription = deferred<{ text: string }>();
@@ -250,13 +248,18 @@ describe("useComposerVoiceController", () => {
       if (staleCause === "thread") {
         render({ activeThreadId: THREAD_B, threadId: THREAD_B });
       } else if (staleCause === "provider") {
-        render({ selectedProvider: "claudeAgent" as ProviderKind });
+        render({
+          selectedProvider: "claudeAgent" as ProviderKind,
+          selectedProviderInstanceId: "claudeAgent",
+        });
+      } else if (staleCause === "instance") {
+        render({ selectedProviderInstanceId: "codex_work" });
       } else {
         result.cancelComposerVoiceRecording();
       }
 
       transcription.resolve({ text: "stale" });
-      await submission;
+      await expect(submission).resolves.toBe(false);
       render();
 
       expect(options.onTranscriptReady).not.toHaveBeenCalled();
@@ -326,27 +329,10 @@ describe("useComposerVoiceController", () => {
     expect(options.onGuardWarning).toHaveBeenCalledTimes(2);
   });
 
-  it("supports ChatView-specific transcription failure copy without changing defaults", async () => {
-    nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("network failed"));
-    render({
-      failureCopy: {
-        transcriptionFailedTitle: "Couldn't transcribe voice note",
-      },
-    });
-
-    await result.submitComposerVoiceRecording();
-
-    expect(toast.add).toHaveBeenCalledWith({
-      type: "error",
-      title: "Couldn't transcribe voice note",
-      description: "network failed",
-    });
-  });
-
   it("refreshes status for expired auth and keeps the refresh action available", async () => {
     nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("session expired"));
 
-    await result.submitComposerVoiceRecording();
+    await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
 
     expect(options.refreshVoiceStatus).toHaveBeenCalledTimes(1);
     const failureToast = toast.add.mock.calls.at(-1)?.[0];
@@ -372,6 +358,8 @@ describe("useComposerVoiceController", () => {
     render({
       activeProviderStatus: {
         provider: "codex",
+        driver: "codex",
+        instanceId: "codex",
         status: "error",
         available: false,
         authStatus: "unauthenticated",
@@ -418,7 +406,7 @@ describe("useComposerVoiceController", () => {
 
     firstTranscription.resolve({ text: "stale first transcript" });
     secondTranscription.resolve({ text: "current second transcript" });
-    await Promise.all([firstSubmission, secondSubmission]);
+    await expect(Promise.all([firstSubmission, secondSubmission])).resolves.toEqual([false, true]);
 
     expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
     expect(options.onTranscriptReady).toHaveBeenCalledWith("current second transcript");

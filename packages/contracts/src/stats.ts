@@ -9,6 +9,7 @@
 import { Schema } from "effect";
 import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind } from "./orchestration";
+import { ProviderInstanceId } from "./providerInstance";
 
 // ── Input ────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export type ProfileHeatmapCell = typeof ProfileHeatmapCell.Type;
 
 export const ProfileProviderUsage = Schema.Struct({
   provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
   model: TrimmedNonEmptyString,
   turnCount: NonNegativeInt,
   percent: Schema.Number,
@@ -48,6 +50,7 @@ export type ProfileProviderUsage = typeof ProfileProviderUsage.Type;
 // so switching models mid-thread keeps each model's share accurate.
 export const ProfileTokenModelUsage = Schema.Struct({
   provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
   model: TrimmedNonEmptyString,
   tokens: NonNegativeInt,
   percent: Schema.Number,
@@ -173,3 +176,77 @@ export type ProfileTokenStats = typeof ProfileTokenStats.Type;
 
 export const StatsGetProfileTokenStatsResult = ProfileTokenStats;
 export type StatsGetProfileTokenStatsResult = typeof StatsGetProfileTokenStatsResult.Type;
+
+// ── Recap (Inbox) ────────────────────────────────────────────────────
+
+// A recap of one time window, split into slots (the Inbox asks for a working
+// day by hour and groups the hours into morning, afternoon, and evening). The
+// client computes the window and slot boundaries in its own local time, so the
+// server only compares absolute instants and never has to guess a timezone or
+// daylight-saving rule. 24 boundaries cover a 25-hour day at a DST change.
+export const STATS_RECAP_MAX_SLOT_BOUNDARIES = 24;
+export const STATS_RECAP_MAX_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+export const StatsGetRecapInput = Schema.Struct({
+  from: IsoDateTime,
+  to: IsoDateTime,
+  // Ascending instants strictly inside (from, to) that split the window into slots.
+  slotBoundaries: Schema.Array(IsoDateTime).check(
+    Schema.isMaxLength(STATS_RECAP_MAX_SLOT_BOUNDARIES),
+  ),
+});
+export type StatsGetRecapInput = typeof StatsGetRecapInput.Type;
+
+// Tokens processed (cache reads and writes included), split by who dispatched
+// the turn. Profile stats count only `user`; the recap shows all work done.
+export const StatsRecapTokens = Schema.Struct({
+  user: NonNegativeInt,
+  automation: NonNegativeInt,
+  agent: NonNegativeInt,
+});
+export type StatsRecapTokens = typeof StatsRecapTokens.Type;
+
+export const StatsRecapSlot = Schema.Struct({
+  from: IsoDateTime,
+  to: IsoDateTime,
+  // Native prompts the user sent, and the chats they were sent in.
+  prompts: NonNegativeInt,
+  chats: NonNegativeInt,
+  // Turns requested in the slot, of any origin, and how many ended in error.
+  turns: NonNegativeInt,
+  failedTurns: NonNegativeInt,
+  // Agent run time inside the slot, summed across chats that ran in parallel.
+  agentWorkMs: NonNegativeInt,
+  tokens: StatsRecapTokens,
+});
+export type StatsRecapSlot = typeof StatsRecapSlot.Type;
+
+// Real projects only: per-chat and Studio container projects never rank.
+export const StatsRecapProject = Schema.Struct({
+  projectId: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  prompts: NonNegativeInt,
+  chats: NonNegativeInt,
+  tokens: NonNegativeInt,
+});
+export type StatsRecapProject = typeof StatsRecapProject.Type;
+
+export const StatsRecapModel = Schema.Struct({
+  provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  model: TrimmedNonEmptyString,
+  turns: NonNegativeInt,
+  tokens: NonNegativeInt,
+});
+export type StatsRecapModel = typeof StatsRecapModel.Type;
+
+export const StatsGetRecapResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  totals: StatsRecapSlot,
+  slots: Schema.Array(StatsRecapSlot),
+  // Top five each, most active first.
+  projects: Schema.Array(StatsRecapProject),
+  models: Schema.Array(StatsRecapModel),
+  // Providers with turns in the window whose adapters report no token usage.
+  unavailableProviders: Schema.Array(ProviderKind),
+});
+export type StatsGetRecapResult = typeof StatsGetRecapResult.Type;

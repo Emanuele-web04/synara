@@ -1,4 +1,4 @@
-import { EditProvider, type CreateEditor } from "@pierre/diffs/react";
+import { EditProvider, Virtualizer, type CreateEditor } from "@pierre/diffs/react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { PanelStateMessage } from "../chat/PanelStateMessage";
@@ -35,10 +35,10 @@ export function CodeEditBoundary(props: { children: ReactNode }) {
   if (loadFailed) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
-        <p className="text-[12px] text-muted-foreground">Could not load the editor.</p>
+        <p className="text-ui text-muted-foreground">Could not load the editor.</p>
         <button
           type="button"
-          className="rounded-md border border-border px-2.5 py-1 text-[11px] text-foreground hover:bg-[var(--color-background-elevated-secondary)]"
+          className="rounded-md border border-border px-2.5 py-1 text-ui-sm text-foreground hover:bg-[var(--color-background-elevated-secondary)]"
           onClick={() => setAttempt((previous) => previous + 1)}
         >
           Retry
@@ -54,5 +54,10 @@ export function CodeEditBoundary(props: { children: ReactNode }) {
       </PanelStateMessage>
     );
   }
-  return <EditProvider createEditor={createEditor}>{props.children}</EditProvider>;
+  // Limit the DOM rebuilt by line insertions to rows near the viewport.
+  return (
+    <Virtualizer className="min-h-0 flex-1 overflow-auto">
+      <EditProvider createEditor={createEditor}>{props.children}</EditProvider>
+    </Virtualizer>
+  );
 }

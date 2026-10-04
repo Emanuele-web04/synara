@@ -285,6 +285,8 @@ export function buildAcpSynaraMcpServers(input: {
       env: [
         { name: SYNARA_AGENT_GATEWAY_URL_ENV, value: input.connection.url },
         { name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: input.connection.bearerToken },
+        // Provider environments strip this flag; the desktop proxy still needs Node mode.
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
       ],
     },
   ];

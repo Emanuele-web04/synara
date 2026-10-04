@@ -4,6 +4,8 @@
 
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { isAutomationRunThread } from "@synara/shared/automationMode";
+import { isSidechatThread, sidechatContextMatchesGitHubItem } from "@synara/shared/sidechatThread";
+import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 
 import type { AppState } from "./storeState";
 import { ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS } from "./lib/rateLimits";
@@ -231,6 +233,40 @@ export function createAllThreadsMessagelessSelector(): (state: AppState) => bool
   };
 }
 
+/** A thread's shell without `updatedAt`, the one field every streamed delta rewrites. */
+export type ThreadShellSettings = Omit<ThreadShell, "updatedAt">;
+
+function threadShellSettingsEqual(left: ThreadShell, right: ThreadShell): boolean {
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    if (key !== "updatedAt" && left[key as keyof ThreadShell] !== right[key as keyof ThreadShell]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** One thread's shell for subscribers that act on its settings (project, model, modes,
+ *  workspace) and must not re-render while it streams: the result keeps its identity until
+ *  a field other than `updatedAt` changes. */
+export function createThreadShellSettingsSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => ThreadShellSettings | undefined {
+  let previousSource: ThreadShell | undefined;
+  let previousResult: ThreadShell | undefined;
+
+  return (state) => {
+    const source = threadId ? state.threadShellById?.[threadId] : undefined;
+    if (source === previousSource) {
+      return previousResult;
+    }
+    previousSource = source;
+    if (!source || !previousResult || !threadShellSettingsEqual(source, previousResult)) {
+      previousResult = source;
+    }
+    return previousResult;
+  };
+}
+
 export function createThreadProjectIdSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => ProjectId | null {
@@ -275,6 +311,65 @@ export function createThreadWorkspaceMetadataSelector(
       envMode === undefined && worktreePath === null && workingDirectory === null
         ? EMPTY_THREAD_WORKSPACE_METADATA
         : { envMode, worktreePath, workingDirectory };
+    return previousResult;
+  };
+}
+
+export interface ThreadGitActionsMetadata {
+  readonly worktreePath: string | null;
+  readonly branch: string | null;
+  readonly associatedWorktreeBranch: string | null | undefined;
+  readonly createBranchFlowCompleted: boolean;
+  readonly title: string | undefined;
+}
+
+const EMPTY_THREAD_GIT_ACTIONS_METADATA: ThreadGitActionsMetadata = {
+  worktreePath: null,
+  branch: null,
+  associatedWorktreeBranch: null,
+  createBranchFlowCompleted: false,
+  title: undefined,
+};
+
+/** Shell-only git-action inputs (worktree, branch, title) that stay reference-stable
+ *  while a turn streams. The git actions control is always mounted on the chat
+ *  surface and only reads these fields; subscribing it to the full derived Thread
+ *  re-rendered it on every message/activity delta. */
+export function createThreadGitActionsMetadataSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => ThreadGitActionsMetadata {
+  let previousResult = EMPTY_THREAD_GIT_ACTIONS_METADATA;
+
+  return (state) => {
+    if (!threadId) {
+      return EMPTY_THREAD_GIT_ACTIONS_METADATA;
+    }
+    const source = state.threadShellById?.[threadId];
+    if (!source) {
+      previousResult = EMPTY_THREAD_GIT_ACTIONS_METADATA;
+      return previousResult;
+    }
+    const worktreePath = source.worktreePath ?? null;
+    const branch = source.branch ?? null;
+    const associatedWorktreeBranch = source.associatedWorktreeBranch;
+    const createBranchFlowCompleted = source.createBranchFlowCompleted ?? false;
+    const title = source.title;
+    if (
+      previousResult.worktreePath === worktreePath &&
+      previousResult.branch === branch &&
+      previousResult.associatedWorktreeBranch === associatedWorktreeBranch &&
+      previousResult.createBranchFlowCompleted === createBranchFlowCompleted &&
+      previousResult.title === title
+    ) {
+      return previousResult;
+    }
+    previousResult = {
+      worktreePath,
+      branch,
+      associatedWorktreeBranch,
+      createBranchFlowCompleted,
+      title,
+    };
     return previousResult;
   };
 }
@@ -402,7 +497,7 @@ export function createComposerThreadMentionSourcesSelector(): (
 
     const nextSources = (threadIds ?? []).flatMap((threadId) => {
       const thread = summaryById[threadId];
-      return thread && !thread.sidechatSourceThreadId
+      return thread && !isSidechatThread(thread)
         ? [
             {
               id: thread.id,
@@ -445,6 +540,22 @@ export function createComposerThreadMentionSourcesSelector(): (
 export interface SidebarThreadVisibilityOptions {
   /** Drop the per-run threads standalone automations create (pinned ones stay). */
   readonly hideAutomationRunThreads?: boolean;
+  /** Explicit access for Snoozed sections and user-initiated search. */
+  readonly includeSnoozed?: boolean;
+}
+
+/** A snoozed task also hides its subagent subtree, including pinned children. */
+export function collectSnoozedThreadIds(
+  threads: readonly Pick<SidebarThreadSummary, "id" | "parentThreadId" | "snoozedUntil">[],
+): ReadonlySet<ThreadId> {
+  const snoozed = threads.filter((thread) => thread.snoozedUntil != null);
+  const ids = new Set(snoozed.map((thread) => thread.id));
+  for (const thread of snoozed) {
+    for (const descendant of collectSubagentDescendants(threads, thread.id)) {
+      ids.add(descendant.id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -456,14 +567,17 @@ export function isSidebarThreadVisible(
   thread: SidebarThreadSummary,
   options?: SidebarThreadVisibilityOptions,
 ): boolean {
-  if (thread.sidechatSourceThreadId) return false;
+  // Sidechats live in their host's dock (a thread's, or the inbox's for standalone ones).
+  if (isSidechatThread(thread)) return false;
+  if (thread.snoozedUntil != null && !options?.includeSnoozed) return false;
   if (!options?.hideAutomationRunThreads) return true;
   if (thread.isPinned) return true;
   return !isAutomationRunThread(thread);
 }
 
-export function createSidechatSummariesForSourceSelector(
-  sourceThreadId: ThreadId,
+// Newest activity first, so index 0 is the sidechat a host reopens.
+function createSortedSidechatSummariesSelector(
+  matches: (thread: SidebarThreadSummary) => boolean,
 ): (state: AppState) => readonly SidebarThreadSummary[] {
   const selectSidebarSummaries = createSidebarThreadSummariesSelector();
   let previousSummaries: readonly SidebarThreadSummary[] | undefined;
@@ -474,9 +588,7 @@ export function createSidechatSummariesForSourceSelector(
     if (summaries === previousSummaries) return previousSidechats;
     previousSummaries = summaries;
     const nextSidechats = summaries
-      .filter(
-        (thread) => thread.sidechatSourceThreadId === sourceThreadId && thread.archivedAt == null,
-      )
+      .filter((thread) => thread.archivedAt == null && matches(thread))
       .toSorted(
         (left, right) =>
           Date.parse(right.sidechatLastActivityAt ?? right.updatedAt ?? right.createdAt) -
@@ -491,6 +603,27 @@ export function createSidechatSummariesForSourceSelector(
     previousSidechats = nextSidechats;
     return previousSidechats;
   };
+}
+
+export function createSidechatSummariesForSourceSelector(
+  sourceThreadId: ThreadId,
+): (state: AppState) => readonly SidebarThreadSummary[] {
+  return createSortedSidechatSummariesSelector(
+    (thread) => thread.sidechatSourceThreadId === sourceThreadId,
+  );
+}
+
+/** Sidechats for one GitHub item; Ask can scope reuse to its chosen project. */
+export function createSidechatSummariesForGitHubItemSelector(item: {
+  readonly projectId?: ProjectId;
+  readonly repository: string;
+  readonly number: number;
+}): (state: AppState) => readonly SidebarThreadSummary[] {
+  return createSortedSidechatSummariesSelector(
+    (thread) =>
+      (item.projectId === undefined || thread.projectId === item.projectId) &&
+      sidechatContextMatchesGitHubItem(thread.sidechatContext, item),
+  );
 }
 
 export function createSidebarDisplayThreadsSelector(
@@ -535,8 +668,14 @@ export function createSidebarTreeThreadsSelector(
     }
 
     previousSummaries = sidebarSummaries;
+    const snoozedThreadIds = options?.includeSnoozed
+      ? null
+      : collectSnoozedThreadIds(sidebarSummaries);
     previousTreeSummaries = sidebarSummaries.filter(
-      (thread) => thread.archivedAt == null && isSidebarThreadVisible(thread, options),
+      (thread) =>
+        thread.archivedAt == null &&
+        !snoozedThreadIds?.has(thread.id) &&
+        isSidebarThreadVisible(thread, options),
     );
     return previousTreeSummaries;
   };

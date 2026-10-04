@@ -10,11 +10,22 @@ import {
   buildAutomationCompletionEvaluationPrompt,
   buildAutomationIntentPrompt,
   buildPrContentPrompt,
+  buildProjectDigestPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
 } from "./textGenerationShared.ts";
 
 describe("textGenerationShared", () => {
+  it("tells project digest generation not to ask for a goal", () => {
+    const { prompt } = buildProjectDigestPrompt({
+      activity: "Opened worker: Sample repo layout",
+      coverage: "summarized=1 pending=0",
+      pinnedFocus: "",
+    });
+    expect(prompt).toContain("do not mention goals or tell the user to start a goal");
+    expect(prompt).toContain("summarize current work and workers, not setup status");
+  });
+
   it("accepts out-of-range automation completion confidence for downstream clamping", async () => {
     const { outputSchemaJson } = buildAutomationCompletionEvaluationPrompt({
       automationName: "Watch PR",

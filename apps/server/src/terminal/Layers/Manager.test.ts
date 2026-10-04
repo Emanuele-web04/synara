@@ -23,6 +23,7 @@ import {
   TerminalManagerRuntime,
   type TerminalSubprocessActivity,
 } from "./Manager";
+import type { ManagedTerminalProfile } from "../managedTerminalWrappers";
 import type { ProcessTreeKiller } from "../processTreeKiller";
 import type { ProcessChildrenSnapshotObserver } from "../windowsProcessSnapshot";
 import { Effect, Encoding } from "effect";
@@ -237,6 +238,10 @@ describe("TerminalManager", () => {
       maxRetainedInactiveSessions?: number;
       ptyAdapter?: FakePtyAdapter;
       prepareLogs?: (logsDir: string) => void;
+      managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
+      providerAuthResolver?: (
+        instanceId: string,
+      ) => Promise<import("../providerAuthentication").ProviderAuthenticationLaunch>;
     } = {},
   ) {
     const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-terminal-"));
@@ -260,9 +265,76 @@ describe("TerminalManager", () => {
       ...(options.maxRetainedInactiveSessions
         ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
         : {}),
+      ...(options.providerAuthResolver
+        ? { providerAuthResolver: options.providerAuthResolver }
+        : {}),
+      ...(options.managedProfileResolver
+        ? { managedProfileResolver: options.managedProfileResolver }
+        : {}),
     });
     return { logsDir, ptyAdapter, manager };
   }
+
+  it("closes an authentication attempt cancelled while its account is still being prepared", async () => {
+    let finish!: (launch: import("../providerAuthentication").ProviderAuthenticationLaunch) => void;
+    const resolver = vi.fn(
+      () =>
+        new Promise<import("../providerAuthentication").ProviderAuthenticationLaunch>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { manager, ptyAdapter, logsDir } = makeManager(5000, {
+      providerAuthResolver: resolver,
+      processTreeKiller: { capture: () => ({ descendants: [] }), signal: () => {} },
+    });
+    try {
+      const opening = manager.open(openInput({ providerAuthInstanceId: "codex_work" }));
+      await waitFor(() => resolver.mock.calls.length === 1);
+      const closing = manager.close({
+        threadId: "thread-1",
+        terminalId: "default",
+        deleteHistory: true,
+      });
+      finish({ command: process.execPath, args: ["login"], env: { HOME: logsDir }, cwd: logsDir });
+      await opening;
+      await closing;
+      expect(ptyAdapter.processes[0]?.killed).toBe(true);
+      expect(ptyAdapter.processes[0]?.killSignals).toContain("SIGTERM");
+      await expect(
+        manager.write({ threadId: "thread-1", data: "must-not-reach-closed-login" }),
+      ).rejects.toThrow(/Unknown terminal/);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not restart failed authentication or switch its account during reattach", async () => {
+    const resolver = vi.fn(async () => {
+      throw new Error("Account CLI missing");
+    });
+    const { manager, ptyAdapter } = makeManager(5000, { providerAuthResolver: resolver });
+    try {
+      const input = openInput({ providerAuthInstanceId: "codex_work" });
+      expect((await manager.open(input)).status).toBe("error");
+      expect((await manager.open(input)).status).toBe("error");
+      expect(resolver).toHaveBeenCalledOnce();
+      expect(ptyAdapter.spawnInputs).toHaveLength(0);
+      await expect(
+        manager.open({ ...input, providerAuthInstanceId: "codex_other" }),
+      ).rejects.toThrow(/cannot switch/);
+      await expect(
+        manager.restart({
+          threadId: "thread-1",
+          terminalId: "default",
+          cwd: process.cwd(),
+          cols: 80,
+          rows: 24,
+        }),
+      ).rejects.toThrow(/new sign-in attempt/);
+    } finally {
+      await manager.dispose();
+    }
+  });
 
   it("spawns lazily and reuses running terminal per thread", async () => {
     const { manager, ptyAdapter } = makeManager();
@@ -292,6 +364,38 @@ describe("TerminalManager", () => {
 
     manager.dispose();
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refreshes provider shims when Codex and Claude are both absent",
+    async () => {
+      const emptyBinDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-empty-bin-"));
+      tempDirs.push(emptyBinDir);
+      const originalPath = process.env.PATH;
+      process.env.PATH = emptyBinDir;
+      const managedProfileResolver = vi.fn(async () => [
+        {
+          commandName: "pi-work",
+          targetPath: "/bin/sh",
+          environment: { PI_CODING_AGENT_DIR: "/profiles/pi-work" },
+          isolateEnvironment: true,
+        },
+      ]);
+      try {
+        const { logsDir, manager, ptyAdapter } = makeManager(5, { managedProfileResolver });
+
+        await manager.open(openInput());
+
+        expect(managedProfileResolver).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(path.join(logsDir, "_managed-bin", "pi-work"))).toBe(true);
+        expect(ptyAdapter.spawnInputs[0]?.env.PATH?.split(path.delimiter)[0]).toBe(
+          path.join(logsDir, "_managed-bin"),
+        );
+        manager.dispose();
+      } finally {
+        process.env.PATH = originalPath;
+      }
+    },
+  );
 
   it("forwards write and resize to active pty process", async () => {
     const { manager, ptyAdapter } = makeManager();
@@ -1081,25 +1185,6 @@ describe("TerminalManager", () => {
     process.emitData("before ");
     process.emitData("\u001b(B");
     process.emitData("after\n");
-
-    await manager.close({ threadId: "thread-1" });
-
-    const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("before \u001b(Bafter\n");
-
-    manager.dispose();
-  });
-
-  it("preserves chunk-split ESC sequences with intermediate bytes without leaking final bytes", async () => {
-    const { manager, ptyAdapter } = makeManager();
-    await manager.open(openInput());
-    const process = ptyAdapter.processes[0];
-    expect(process).toBeDefined();
-    if (!process) return;
-
-    process.emitData("before ");
-    process.emitData("\u001b(");
-    process.emitData("Bafter\n");
 
     await manager.close({ threadId: "thread-1" });
 

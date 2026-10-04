@@ -13,7 +13,7 @@ export function NeedsReviewFilter() {
   const needsReviewEnabled = useKanbanUiStore((state) => state.kanbanNeedsReviewFilter);
   const setNeedsReviewEnabled = useKanbanUiStore((state) => state.setKanbanNeedsReviewFilter);
   return (
-    <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground/80">
+    <label className="flex cursor-pointer items-center gap-1.5 text-ui-xs text-muted-foreground/80">
       <Checkbox
         checked={needsReviewEnabled}
         onCheckedChange={(checked) => setNeedsReviewEnabled(checked === true)}

@@ -26,6 +26,7 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
+  buildProjectDigestPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
@@ -258,6 +259,22 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         (generated, input) => ({
           recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
         }),
+      );
+    }),
+    generateProjectDigest: Effect.fn("DroidTextGeneration.generateProjectDigest")(function* (
+      input: OperationInputOf<"generateProjectDigest">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateProjectDigest",
+        input,
+        (input) =>
+          buildProjectDigestPrompt({
+            ...(input.previousSummary ? { previousSummary: input.previousSummary } : {}),
+            activity: input.activity,
+            coverage: input.coverage,
+            pinnedFocus: input.pinnedFocus,
+          }),
+        (generated) => generated,
       );
     }),
     generateAutomationIntent: Effect.fn("DroidTextGeneration.generateAutomationIntent")(function* (

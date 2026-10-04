@@ -6,23 +6,17 @@ import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { buildKanbanComposerDraftSnapshot } from "../components/kanban/kanban.logic";
 import { createPastedTextDraft } from "./composerPastedText";
 import {
-  beginTurnDispatchOwnership,
   clearPendingTurnDispatch,
-  endTurnDispatchOwnership,
   hasPendingTurnDispatch,
-  hasTurnDispatchOwnership,
   markPendingTurnDispatch,
 } from "../pendingTurnDispatch";
+import { runComposerSendOnce } from "./composerSendOwnership";
+import { waitForDraftThreadDispatchToSettle } from "./draftThreadDispatch";
 import * as composerImageBlobStore from "./composerImageBlobStore";
 import { createEmptyThreadDraft } from "../composerDraftDomain";
 import type { PersistedComposerImageAttachment } from "../composerDraftStore";
 import type { SidebarThreadSummary } from "../types";
-import {
-  dispatchKanbanDraftThread,
-  dispatchKanbanDraftThreadAsGoal,
-  isKanbanDispatchInFlight,
-  waitForKanbanDispatchToSettle,
-} from "./kanbanDispatch";
+import { dispatchKanbanDraftThread, dispatchKanbanDraftThreadAsGoal } from "./kanbanDispatch";
 
 const nativeApiMocks = vi.hoisted(() => ({
   dispatchCommand: vi.fn(async (..._args: unknown[]) => undefined),
@@ -150,7 +144,15 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
     // Simulate the chat send holding the dispatch guard: it arms the watchdog
     // marker and claims dispatch ownership for the turn-start RPC window.
     markPendingTurnDispatch(threadId);
-    beginTurnDispatchOwnership(threadId);
+    let releaseChat!: () => void;
+    const chatSend = runComposerSendOnce(
+      threadId,
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseChat = () => resolve(true);
+        }),
+    );
+    await Promise.resolve();
     try {
       const deferred = await dispatchKanbanDraftThread({
         threadId,
@@ -169,7 +171,8 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(prompt);
     } finally {
       clearPendingTurnDispatch(threadId);
-      endTurnDispatchOwnership(threadId);
+      releaseChat();
+      await chatSend;
     }
 
     const retry = await dispatchKanbanDraftThread({
@@ -214,11 +217,10 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       ).toHaveLength(1);
     } finally {
       clearPendingTurnDispatch(threadId);
-      endTurnDispatchOwnership(threadId);
     }
   });
 
-  it("waitForKanbanDispatchToSettle waits out a board dispatch, then proceeds", async () => {
+  it("waitForDraftThreadDispatchToSettle waits out a board dispatch, then proceeds", async () => {
     const threadId = ThreadId.makeUnsafe("thread-settle-wait");
     const projectId = ProjectId.makeUnsafe("project-settle");
     useComposerDraftStore.getState().setPrompt(threadId, "Board dispatch settles first");
@@ -243,10 +245,9 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       defaultProvider: "codex",
       assistantDeliveryMode: "buffered",
     });
-    expect(isKanbanDispatchInFlight(threadId)).toBe(true);
 
     let waiterDone = false;
-    const waiter = waitForKanbanDispatchToSettle(threadId, 1_000).then((settled) => {
+    const waiter = waitForDraftThreadDispatchToSettle(threadId).then((settled) => {
       waiterDone = true;
       return settled;
     });
@@ -258,59 +259,12 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
     await boardPromise;
     const settled = await waiter;
     expect(waiterDone).toBe(true);
-    expect(isKanbanDispatchInFlight(threadId)).toBe(false);
     // The waiter learns the board outcome so it can abort instead of sending a
     // duplicate turn.
     expect(settled).toEqual({ kind: "dispatched" });
   });
 
-  it("waitForKanbanDispatchToSettle joins a slow board dispatch past the poll deadline", async () => {
-    const threadId = ThreadId.makeUnsafe("thread-settle-join");
-    const projectId = ProjectId.makeUnsafe("project-settle-join");
-    useComposerDraftStore
-      .getState()
-      .setPrompt(threadId, "Slow board dispatch is joined, not bypassed");
-    const thread = { id: threadId, projectId } as unknown as SidebarThreadSummary;
-
-    let releaseTurnStart: () => void = () => undefined;
-    const turnGate = new Promise<void>((resolve) => {
-      releaseTurnStart = resolve;
-    });
-    nativeApiMocks.dispatchCommand.mockImplementation(async (...args: unknown[]) => {
-      const [command] = args;
-      if (commandType(command) === "thread.turn.start") {
-        await turnGate;
-      }
-      return undefined;
-    });
-
-    const boardPromise = dispatchKanbanDraftThread({
-      threadId,
-      projectId,
-      thread,
-      defaultProvider: "codex",
-      assistantDeliveryMode: "buffered",
-    });
-    expect(isKanbanDispatchInFlight(threadId)).toBe(true);
-
-    let waiterDone = false;
-    const waiter = waitForKanbanDispatchToSettle(threadId, 60).then((settled) => {
-      waiterDone = true;
-      return settled;
-    });
-    // Well past the 60ms poll bound, the dispatch is still on the wire — the
-    // waiter must keep waiting on it instead of failing open into a duplicate.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(waiterDone).toBe(false);
-    expect(isKanbanDispatchInFlight(threadId)).toBe(true);
-
-    releaseTurnStart();
-    await boardPromise;
-    await expect(waiter).resolves.toEqual({ kind: "dispatched" });
-    expect(isKanbanDispatchInFlight(threadId)).toBe(false);
-  });
-
-  it("waitForKanbanDispatchToSettle returns the settled board failure", async () => {
+  it("waitForDraftThreadDispatchToSettle returns the settled board failure", async () => {
     const threadId = ThreadId.makeUnsafe("thread-settle-fail");
     const projectId = ProjectId.makeUnsafe("project-settle-fail");
     useComposerDraftStore.getState().setPrompt(threadId, "Failing board dispatch settles the wait");
@@ -331,17 +285,15 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       defaultProvider: "codex",
       assistantDeliveryMode: "buffered",
     });
-    expect(isKanbanDispatchInFlight(threadId)).toBe(true);
 
     // The rejected dispatch resolves as its error result — never a rejection —
     // so the waiting chat send learns the board did not dispatch and proceeds.
     const [boardResult, settled] = await Promise.all([
       boardPromise,
-      waitForKanbanDispatchToSettle(threadId, 1_000),
+      waitForDraftThreadDispatchToSettle(threadId),
     ]);
     expect(boardResult.kind).toBe("error");
     expect(settled).toEqual(boardResult);
-    expect(isKanbanDispatchInFlight(threadId)).toBe(false);
   });
 
   it("keeps the pending-turn marker armed after a successful board dispatch", async () => {
@@ -361,9 +313,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
     // stream ack or the age cap, mirroring the composer-send path.
     expect(hasPendingTurnDispatch(threadId)).toBe(true);
     // Exclusion ended when the turn RPC settled: a later drop is a follow-up.
-    expect(hasTurnDispatchOwnership(threadId)).toBe(false);
     clearPendingTurnDispatch(threadId);
-    endTurnDispatchOwnership(threadId);
   });
 });
 

@@ -29,10 +29,10 @@ export function ComposerBranchMismatchBanner({
         className="size-4.5 shrink-0 text-[var(--color-text-foreground-secondary)]"
       />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[length:var(--app-font-size-ui,12px)] leading-5 font-medium text-foreground/95">
+        <p className="truncate text-ui leading-5 font-medium text-foreground/95">
           Sending a message will move this thread to the current branch
         </p>
-        <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[length:var(--app-font-size-ui-sm,11px)] leading-5">
+        <div className="mt-0.5 flex min-w-0 items-center gap-2 text-ui-sm leading-5">
           <code
             className="max-w-[40%] truncate text-muted-foreground/80"
             title={`Thread branch: ${threadBranch}`}

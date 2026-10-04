@@ -34,7 +34,10 @@ export function ComposerExpiredUserInputNotice({
     onRestore(prompt);
   };
   return (
-    <div className="mb-2 rounded-xl border border-border px-4 py-3 text-sm" role="status">
+    <div
+      className="mb-2 rounded-xl border border-border px-4 py-3 text-ui leading-snug"
+      role="status"
+    >
       <p>These questions have expired. Restore your answers to review and send as a new message.</p>
       <div className="mt-2 flex gap-3">
         <button type="button" className="font-medium underline" onClick={restore}>

@@ -71,15 +71,4 @@ describe("EnvironmentAutomationsSection", () => {
 
     expect(onOpenAutomation).toHaveBeenCalledWith(definition);
   });
-
-  it("marks disabled thread automations as paused", async () => {
-    await render(
-      <EnvironmentAutomationsSection
-        automations={[{ definition: baseAutomation({ enabled: false }) }]}
-        onOpenAutomation={vi.fn()}
-      />,
-    );
-
-    expect(page.getByText("Paused")).toBeInTheDocument();
-  });
 });

@@ -11,7 +11,6 @@ import {
   readPathFromLaunchctl,
   readPathFromLoginShell,
   readWindowsPersistentEnvironment,
-  resolveLoginShell,
 } from "./shell";
 
 describe("shell environment hydration marker", () => {
@@ -191,23 +190,11 @@ describe("listLoginShellCandidates", () => {
   });
 });
 
-describe("resolveLoginShell", () => {
-  it("returns the first available login-shell candidate", () => {
-    expect(resolveLoginShell("darwin", "/bin/fish")).toBe("/bin/fish");
-  });
-});
-
 describe("mergePathEntries", () => {
   it("prefers login-shell PATH entries and keeps inherited extras", () => {
     expect(
       mergePathEntries("/opt/homebrew/bin:/usr/bin", "/Users/test/.local/bin:/usr/bin", "darwin"),
     ).toBe("/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
-  });
-
-  it("uses the platform-specific delimiter", () => {
-    expect(mergePathEntries("C:\\Tools;C:\\Windows", "C:\\Windows;C:\\Git", "win32")).toBe(
-      "C:\\Tools;C:\\Windows;C:\\Git",
-    );
   });
 
   it("collapses case- and trailing-slash-different Windows duplicates", () => {

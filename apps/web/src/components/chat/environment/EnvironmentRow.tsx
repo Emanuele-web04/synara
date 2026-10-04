@@ -27,7 +27,7 @@ import {
  */
 export const ENVIRONMENT_ROW_CLASS_NAME = cn(
   "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left",
-  "text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground)]",
+  "text-ui font-normal text-[var(--color-text-foreground)]",
   "outline-none",
   ELEVATED_HOVER_SURFACE_CLASS_NAME,
   "focus-visible:bg-[var(--color-background-elevated-secondary)]",

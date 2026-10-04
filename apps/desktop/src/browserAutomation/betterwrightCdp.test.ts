@@ -459,6 +459,26 @@ describe("Betterwright target boundary", () => {
     expect(f.debuggerApi.detach).not.toHaveBeenCalled();
   });
 
+  it("accepts the worker download-guard deny as a no-op but refuses allow", async () => {
+    const f = fixture();
+    await f.target.receive({ id: 1, method: "Target.attachToBrowserTarget" });
+    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+    await f.target.receive({
+      id: 2,
+      sessionId,
+      method: "Browser.setDownloadBehavior",
+      params: { behavior: "deny", downloadPath: "/tmp/worker-downloads" },
+    });
+    expect(f.messages.at(-1)).toMatchObject({ result: {} });
+    expect(f.debuggerApi.sendCommand).not.toHaveBeenCalled();
+    for (const params of [{ behavior: "allow" }, { behavior: "default" }, {}]) {
+      await f.target.receive({ id: 3, sessionId, method: "Browser.setDownloadBehavior", params });
+      expect(f.messages.at(-1)).toHaveProperty("error");
+    }
+    expect(f.debuggerApi.sendCommand).not.toHaveBeenCalled();
+    await f.target.dispose();
+  });
+
   it("bounds cookie reads to the current page", async () => {
     const f = fixture();
     await f.target.receive({ id: 1, method: "Storage.getCookies" });

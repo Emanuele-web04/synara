@@ -4,6 +4,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DROID_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
+  OMP_THINKING_LEVEL_OPTIONS,
   PI_THINKING_LEVEL_OPTIONS,
   type ModelSelection,
   type ProviderKind,
@@ -11,7 +12,8 @@ import {
   type ProviderModelDescriptor,
   type ServerProviderAuthStatus,
 } from "@synara/contracts";
-import { getClaudeContextWindowSuffix } from "@synara/shared/model";
+import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
+import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -73,6 +75,7 @@ export interface AgentGatewayTargetOptionGuidance {
   readonly optionsByModel: Readonly<Record<string, ReadonlyArray<AgentGatewayTargetOptionRule>>>;
   readonly exampleTarget: {
     readonly provider: ProviderKind;
+    readonly instanceId: string;
     readonly model: string;
     readonly options: Readonly<Record<string, AgentGatewayTargetOptionValue>>;
   } | null;
@@ -213,6 +216,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "thinkingLevel",
     options: { thinkingLevel: providerOptionRule("string", PI_THINKING_LEVEL_OPTIONS) },
   }),
+  omp: defineProviderOptionConfig<"omp">({
+    primaryOptionKey: "thinkingLevel",
+    options: { thinkingLevel: providerOptionRule("string", OMP_THINKING_LEVEL_OPTIONS) },
+  }),
   antigravity: defineProviderOptionConfig<"antigravity">({
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
@@ -258,7 +265,7 @@ function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptio
 }
 
 function providerDefaultModel(provider: ProviderKind): string | null {
-  return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
+  return provider === "pi" || provider === "omp" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
 export function loadAgentGatewayProviderCatalog(input: {
@@ -464,6 +471,7 @@ export function agentGatewayTargetOptionGuidance(
       catalog.available && exampleModel
         ? {
             provider: catalog.provider,
+            instanceId: defaultInstanceIdForProvider(catalog.provider),
             model: exampleModel,
             options: exampleOptionsForRules(primaryOptionKey, exampleRules),
           }
@@ -668,13 +676,38 @@ export function resolveAgentGatewayTarget(input: {
         ),
       );
     }
-    const descriptor = catalog.models.find((model) => model.slug === input.target.model);
+    const exactDescriptor = catalog.models.find((model) => model.slug === input.target.model);
+    // The Claude picker can show a concrete resolved id for a newly discovered
+    // alias. Discovery still advertises the alias as its slug, so validate that
+    // id against a single non-default descriptor carrying it. Prefer an exact
+    // resolved id before ignoring its context qualifier.
+    const resolvedClaudeDescriptors =
+      !exactDescriptor && input.target.provider === "claudeAgent"
+        ? catalog.models.filter((model) => model.slug !== "default" && model.resolvedModel)
+        : [];
+    const exactResolved = resolvedClaudeDescriptors.filter(
+      (model) => model.resolvedModel === input.target.model,
+    );
+    const unqualifiedResolved =
+      getClaudeContextWindowSuffix(input.target.model) === null
+        ? resolvedClaudeDescriptors.filter(
+            (model) =>
+              model.resolvedModel &&
+              stripClaudeContextWindowSuffix(model.resolvedModel) === input.target.model,
+          )
+        : [];
+    const resolvedMatches = exactResolved.length > 0 ? exactResolved : unqualifiedResolved;
+    const descriptor =
+      exactDescriptor ?? (resolvedMatches.length === 1 ? resolvedMatches[0] : undefined);
     // Capability claims come from discovery, never the agent's target input. Keep
     // unknown distinct from false so Auto-mode validation can still fail closed.
     const target: ModelSelection =
       input.target.provider === "claudeAgent"
         ? {
             provider: input.target.provider,
+            ...(input.target.instanceId !== undefined
+              ? { instanceId: input.target.instanceId }
+              : {}),
             model: input.target.model,
             ...(input.target.options !== undefined ? { options: input.target.options } : {}),
             ...(descriptor?.supportsAutoMode !== undefined
@@ -737,7 +770,8 @@ export function resolveAgentGatewayTarget(input: {
       input.target.provider === "claudeAgent" &&
       (input.target.options?.autoCompactWindow !== undefined ||
         input.target.options?.contextWindow !== undefined) &&
-      descriptor?.resolvedModel
+      descriptor?.resolvedModel &&
+      stripClaudeContextWindowSuffix(descriptor.resolvedModel) !== input.target.model
     ) {
       const suffix =
         getClaudeContextWindowSuffix(input.target.model) === "1m" &&

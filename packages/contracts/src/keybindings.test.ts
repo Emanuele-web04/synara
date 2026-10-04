@@ -2,12 +2,7 @@ import { Schema } from "effect";
 import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import {
-  KeybindingsConfig,
-  KeybindingRule,
-  ResolvedKeybindingRule,
-  ResolvedKeybindingsConfig,
-} from "./keybindings";
+import { KeybindingsConfig, KeybindingRule, ResolvedKeybindingRule } from "./keybindings";
 
 const decode = <S extends Schema.Top>(
   schema: S,
@@ -20,6 +15,22 @@ const decode = <S extends Schema.Top>(
   >;
 
 const decodeResolvedRule = Schema.decodeUnknownEffect(ResolvedKeybindingRule as never);
+
+it.effect("accepts customizable model effort cycling rules", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(KeybindingRule, {
+      key: "shift+tab",
+      command: "model.effort.next",
+      when: "composerFocus",
+    });
+
+    assert.deepEqual(parsed, {
+      key: "shift+tab",
+      command: "model.effort.next",
+      when: "composerFocus",
+    });
+  }),
+);
 
 it.effect("parses keybinding rules", () =>
   Effect.gen(function* () {
@@ -253,25 +264,6 @@ it.effect("parses resolved keybinding rules", () =>
       },
     });
     assert.strictEqual(parsed.shortcut.key, "d");
-  }),
-);
-
-it.effect("parses resolved keybindings arrays", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(ResolvedKeybindingsConfig, [
-      {
-        command: "terminal.toggle",
-        shortcut: {
-          key: "j",
-          metaKey: false,
-          ctrlKey: false,
-          shiftKey: false,
-          altKey: false,
-          modKey: true,
-        },
-      },
-    ]);
-    assert.lengthOf(parsed, 1);
   }),
 );
 

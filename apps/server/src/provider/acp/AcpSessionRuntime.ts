@@ -29,6 +29,7 @@ import { makeAcpNotificationDispatcher } from "./AcpNotificationDispatcher.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -50,7 +51,11 @@ const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
 const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
 const ACP_LOAD_REPLAY_QUIET_MS = 350;
 const ACP_LOAD_REPLAY_HARD_TIMEOUT_MS = 30_000;
-export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
+// Matches JSONRPC_STDIO_MAX_FRAME_BYTES (16 MB): agents echo inline tool
+// results (e.g. screenshots) back through session/update frames, and 8 MB
+// rejected legitimate captures while the shared stdio transport already
+// tolerates twice that.
+export const ACP_MAX_INCOMING_FRAME_BYTES = 16 * 1024 * 1024;
 
 const ACP_MAX_PENDING_NOTIFICATIONS_TOTAL = 2_048;
 const ACP_MAX_PENDING_NOTIFICATIONS_PER_SESSION = 512;
@@ -292,6 +297,38 @@ export interface AcpSpawnInput {
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
+  readonly providerEnvironment?: {
+    readonly driver: ProviderProcessEnvDriver;
+    readonly instanceId?: string | undefined;
+    readonly environment?: Readonly<Record<string, string>> | undefined;
+    readonly homeDir?: string | undefined;
+    readonly isolationRootDir?: string | undefined;
+  };
+}
+
+export function buildAcpSpawnProcessEnv(
+  spawn: AcpSpawnInput,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const overlay = spawn.env
+    ? Object.fromEntries(
+        Object.entries(spawn.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      )
+    : undefined;
+  const accountIsolatedEnv = spawn.providerEnvironment
+    ? buildProviderProcessEnv({
+        ...spawn.providerEnvironment,
+        env,
+        platform,
+        ...(overlay !== undefined ? { overlay } : {}),
+      })
+    : spawn.env
+      ? { ...env, ...overlay }
+      : env;
+  return buildProviderChildEnvironment({ provider: "acp", baseEnv: accountIsolatedEnv });
 }
 
 /**
@@ -1447,9 +1484,9 @@ const makeAcpSessionRuntime = (
     // A supplied environment is an exact capability set prepared by the
     // provider boundary. Merging process.env here would silently restore
     // stripped control-plane credentials and launcher capabilities.
-    const env = buildProviderChildEnvironment({
-      provider: "acp",
-      baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
+    const env = yield* Effect.try({
+      try: () => buildAcpSpawnProcessEnv(options.spawn),
+      catch: (cause) => new AcpErrors.AcpSpawnError({ command: options.spawn.command, cause }),
     });
     const child = yield* spawner
       .spawn(
@@ -2500,11 +2537,8 @@ function shouldEmitToolCallUpdate(
   return previous.detail !== next.detail;
 }
 
-export const assistantItemId = (
-  sessionId: string,
-  runtimeInstanceId: string,
-  segmentIndex: number,
-) => `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
+const assistantItemId = (sessionId: string, runtimeInstanceId: string, segmentIndex: number) =>
+  `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
   getSessionEpoch,

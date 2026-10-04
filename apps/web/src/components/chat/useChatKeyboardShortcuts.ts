@@ -1,12 +1,13 @@
 import {
   ThreadId,
   type ModelSlug,
+  type ProviderInstanceId,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useEffect } from "react";
-import { readFavoriteModelSlugs } from "~/lib/modelFavorites";
+import { readStarredModelSlugs } from "~/lib/starredModels";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { isElectron } from "../../env";
@@ -24,6 +25,8 @@ import { useChatTerminalController } from "./useChatTerminalController";
 import { useChatWorkLog } from "./useChatWorkLog";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
+import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
+import { MODEL_PICKER_POPUP_ATTRIBUTE } from "./ComposerModelPicker.logic";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -41,6 +44,7 @@ function canHandleComposerPickerShortcut(
   if (eventTargetsComposer(event, composerForm)) return true;
   const target = event.target;
   return (
+    (target instanceof Element && target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null) ||
     target === document.body ||
     target === document.documentElement ||
     document.activeElement === document.body ||
@@ -60,6 +64,7 @@ interface ChatKeyboardShortcutsInput {
   onBackgroundAllForegroundSubagentStripItems: () => Promise<void>;
   isVoiceRecording: ReturnType<typeof useComposerVoiceController>["isVoiceRecording"];
   isVoiceTranscribing: ReturnType<typeof useComposerVoiceController>["isVoiceTranscribing"];
+  onVoiceRecordingEnter: () => void;
   isComposerApprovalState: boolean;
   terminalState: ReturnType<typeof useChatTerminalController>["terminalState"];
   terminalWorkspaceOpen: ReturnType<typeof useChatTerminalController>["terminalWorkspaceOpen"];
@@ -77,10 +82,19 @@ interface ChatKeyboardShortcutsInput {
   handleModelPickerOpenChange: (open: boolean) => void;
   scheduleComposerFocus: () => void;
   modelOptionsByProvider: ReturnType<typeof useChatProviderModels>["modelOptionsByProvider"];
+  modelOptionsByProviderInstance: ReturnType<
+    typeof useChatProviderModels
+  >["modelOptionsByProviderInstance"];
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
   selectedModel: string;
-  onProviderModelSelect: (provider: ProviderKind, model: ModelSlug) => Promise<void>;
+  onProviderModelSelect: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    selectionOptions?: ComposerModelSelectionOptions,
+  ) => Promise<void>;
   handleTraitsPickerOpenChange: (open: boolean) => void;
+  cycleEffort: () => boolean;
   toggleTerminalVisibility: ReturnType<
     typeof useChatTerminalController
   >["toggleTerminalVisibility"];
@@ -124,6 +138,7 @@ export function useChatKeyboardShortcuts({
   onBackgroundAllForegroundSubagentStripItems,
   isVoiceRecording,
   isVoiceTranscribing,
+  onVoiceRecordingEnter,
   isComposerApprovalState,
   terminalState,
   terminalWorkspaceOpen,
@@ -137,10 +152,13 @@ export function useChatKeyboardShortcuts({
   handleModelPickerOpenChange,
   scheduleComposerFocus,
   modelOptionsByProvider,
+  modelOptionsByProviderInstance,
   selectedProvider,
+  selectedProviderInstanceId,
   selectedModel,
   onProviderModelSelect,
   handleTraitsPickerOpenChange,
+  cycleEffort,
   toggleTerminalVisibility,
   setTerminalOpen,
   splitTerminalRight,
@@ -206,6 +224,25 @@ export function useChatKeyboardShortcuts({
         void onBackgroundAllForegroundSubagentStripItems();
         return;
       }
+      // Plain Enter while dictating finishes the voice note instead of sending
+      // the typed draft around a still-running recording (or re-clicking a
+      // focused recorder button). The caller decides whether to also send.
+      if (
+        isVoiceRecording &&
+        event.key === "Enter" &&
+        !event.isComposing &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !isTerminalFocused() &&
+        canHandleComposerPickerShortcut(event, composerFormRef.current)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onVoiceRecordingEnter();
+        return;
+      }
       const composerPickerShortcutActive =
         !isTerminalFocused() &&
         !isVoiceRecording &&
@@ -213,6 +250,10 @@ export function useChatKeyboardShortcuts({
         !isComposerApprovalState &&
         canHandleComposerPickerShortcut(event, composerFormRef.current);
       const shortcutContext = {
+        composerFocus:
+          eventTargetsComposer(event, composerFormRef.current) ||
+          (event.target instanceof Element &&
+            event.target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null),
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
         terminalWorkspaceOpen,
@@ -225,6 +266,22 @@ export function useChatKeyboardShortcuts({
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "model.effort.next") {
+        if (
+          !shortcutContext.composerFocus ||
+          isTerminalFocused() ||
+          isVoiceRecording ||
+          isVoiceTranscribing ||
+          isComposerApprovalState ||
+          event.isComposing
+        )
+          return;
+        if (!cycleEffort()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       if (command === "composer.focus.toggle") {
         if (isComposerApprovalState || isVoiceRecording || isVoiceTranscribing) return;
@@ -265,15 +322,20 @@ export function useChatKeyboardShortcuts({
         event.preventDefault();
         event.stopPropagation();
         const direction = command === "model.next" ? "next" : "previous";
-        const providerOptions = modelOptionsByProvider[selectedProvider] ?? [];
+        const providerOptions =
+          modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+          modelOptionsByProvider[selectedProvider] ??
+          [];
         const nextSlug = resolveCycledModelSlug({
           currentModel: selectedModel,
           options: providerOptions,
-          favoriteSlugs: readFavoriteModelSlugs(selectedProvider),
+          favoriteSlugs: readStarredModelSlugs(selectedProvider, selectedProviderInstanceId),
           direction,
         });
         if (!nextSlug) return;
-        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug);
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug, {
+          instanceId: selectedProviderInstanceId,
+        });
         return;
       }
 
@@ -489,10 +551,12 @@ export function useChatKeyboardShortcuts({
     hasLiveTurn,
     handleModelPickerOpenChange,
     handleTraitsPickerOpenChange,
+    cycleEffort,
     shouldRenderChatPaneContent,
     isComposerApprovalState,
     isVoiceRecording,
     isVoiceTranscribing,
+    onVoiceRecordingEnter,
     setTerminalWorkspaceTab,
     surfaceMode,
     scheduleComposerFocus,
@@ -500,8 +564,10 @@ export function useChatKeyboardShortcuts({
     toggleTerminalVisibility,
     activeThread,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     onProviderModelSelect,
     copyThreadIdToClipboard,
   ]);

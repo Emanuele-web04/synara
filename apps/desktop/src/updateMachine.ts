@@ -5,6 +5,7 @@ import { getCanRetryAfterDownloadFailure, nextStatusAfterDownloadFailure } from 
 export function createInitialDesktopUpdateState(
   currentVersion: string,
   runtimeInfo: DesktopRuntimeInfo,
+  flavor: "production" | "beta" | "canary" | "cua" = "production",
 ): DesktopUpdateState {
   return {
     enabled: false,
@@ -21,6 +22,7 @@ export function createInitialDesktopUpdateState(
     errorContext: null,
     canRetry: false,
     installFailureCount: 0,
+    flavor,
     releaseUrl: null,
   };
 }
@@ -150,6 +152,12 @@ export function reduceDesktopUpdateStateOnDownloadComplete(
     canRetry: true,
     installFailureCount: state.availableVersion === version ? state.installFailureCount : 0,
   };
+}
+
+export function reduceDesktopUpdateStateOnInstallStart(
+  state: DesktopUpdateState,
+): DesktopUpdateState {
+  return { ...state, message: null, errorContext: null, canRetry: false };
 }
 
 export function reduceDesktopUpdateStateOnInstallFailure(

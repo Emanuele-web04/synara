@@ -1511,11 +1511,12 @@ export const makeGitManager = Effect.gen(function* () {
   });
 
   const resolvePullRequest: GitManagerShape["resolvePullRequest"] = Effect.fnUntraced(
-    function* (input) {
+    function* (input, options) {
       const pullRequest = yield* gitHubCli
         .getPullRequest({
           cwd: input.cwd,
           reference: normalizePullRequestReference(input.reference),
+          background: options?.background ?? false,
         })
         .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
@@ -1585,28 +1586,6 @@ export const makeGitManager = Effect.gen(function* () {
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
 
-      if (input.mode === "local") {
-        yield* gitHubCli.checkoutPullRequest({
-          cwd: input.cwd,
-          reference: normalizedReference,
-          force: true,
-        });
-        const details = yield* gitCore.statusDetails(input.cwd);
-        yield* configurePullRequestHeadUpstream(
-          input.cwd,
-          {
-            ...pullRequest,
-            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-          },
-          details.branch ?? pullRequest.headBranch,
-        );
-        return {
-          pullRequest,
-          branch: details.branch ?? pullRequest.headBranch,
-          worktreePath: null,
-        };
-      }
-
       const ensureExistingWorktreeUpstream = (worktreePath: string) =>
         Effect.gen(function* () {
           const details = yield* gitCore.statusDetails(worktreePath);
@@ -1628,28 +1607,47 @@ export const makeGitManager = Effect.gen(function* () {
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
 
       const findLocalHeadBranch = (cwd: string) =>
-        gitCore.listBranches({ cwd }).pipe(
-          Effect.map((result) => {
-            const localBranch = result.branches.find(
-              (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
-            );
-            if (localBranch) {
-              return localBranch;
+        Effect.gen(function* () {
+          const result = yield* gitCore.listBranches({ cwd });
+          const localBranch = result.branches.find(
+            (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
+          );
+          if (localBranch) {
+            return localBranch;
+          }
+          if (localPullRequestBranch === pullRequest.headBranch) {
+            return null;
+          }
+          const candidate =
+            result.branches.find(
+              (branch) =>
+                !branch.isRemote &&
+                branch.name === pullRequest.headBranch &&
+                branch.worktreePath !== null &&
+                canonicalizeExistingPath(branch.worktreePath) !== rootWorktreePath,
+            ) ?? null;
+          if (!candidate) return null;
+          const remoteName = yield* readConfigValueNullable(cwd, `branch.${candidate.name}.remote`);
+          const remote = yield* resolveRemoteRepositoryContext(cwd, remoteName);
+          const expectedRepository = normalizeOptionalRepositoryNameWithOwner(
+            resolveHeadRepositoryNameWithOwner(pullRequestWithRemoteInfo),
+          );
+          const actualRepository = normalizeOptionalRepositoryNameWithOwner(
+            remote.repositoryNameWithOwner,
+          );
+          // A shared branch name does not identify a fork. Preserve unset-upstream
+          // recovery, but never retarget a worktree that belongs to a known other fork.
+          if (expectedRepository && actualRepository && expectedRepository !== actualRepository) {
+            if (input.mode === "local") {
+              return yield* gitManagerError(
+                "preparePullRequestThread",
+                "This branch is checked out in a worktree for a different GitHub repository. Use Worktree to prepare this pull request separately.",
+              );
             }
-            if (localPullRequestBranch === pullRequest.headBranch) {
-              return null;
-            }
-            return (
-              result.branches.find(
-                (branch) =>
-                  !branch.isRemote &&
-                  branch.name === pullRequest.headBranch &&
-                  branch.worktreePath !== null &&
-                  canonicalizeExistingPath(branch.worktreePath) !== rootWorktreePath,
-              ) ?? null
-            );
-          }),
-        );
+            return null;
+          }
+          return candidate;
+        });
 
       const existingBranchBeforeFetch = yield* findLocalHeadBranch(input.cwd);
       const existingBranchBeforeFetchPath = existingBranchBeforeFetch?.worktreePath
@@ -1662,10 +1660,30 @@ export const makeGitManager = Effect.gen(function* () {
         yield* ensureExistingWorktreeUpstream(existingBranchBeforeFetch.worktreePath);
         return {
           pullRequest,
-          branch: localPullRequestBranch,
+          branch: existingBranchBeforeFetch.name,
           worktreePath: existingBranchBeforeFetch.worktreePath,
         };
       }
+
+      if (input.mode === "local") {
+        yield* gitHubCli.checkoutPullRequest({
+          cwd: input.cwd,
+          reference: normalizedReference,
+          force: true,
+        });
+        const details = yield* gitCore.statusDetails(input.cwd);
+        yield* configurePullRequestHeadUpstream(
+          input.cwd,
+          pullRequestWithRemoteInfo,
+          details.branch ?? pullRequest.headBranch,
+        );
+        return {
+          pullRequest,
+          branch: details.branch ?? pullRequest.headBranch,
+          worktreePath: null,
+        };
+      }
+
       if (existingBranchBeforeFetchPath === rootWorktreePath) {
         return yield* gitManagerError(
           "preparePullRequestThread",
@@ -2716,7 +2734,8 @@ The local stash entry was kept for recovery.`,
             : null;
 
         let branchStep: { status: "created" | "skipped_not_requested"; name?: string };
-        let commitMessageForStep = input.commitMessage;
+        let commitMessageForStep =
+          input.commitMessage?.trim() || (wantsPr ? input.prTitle?.trim() : undefined);
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
         if (input.featureBranch) {
@@ -2729,7 +2748,7 @@ The local stash entry was kept for recovery.`,
           const result = yield* runFeatureBranchStep(
             input.cwd,
             initialStatus.branch,
-            input.commitMessage,
+            commitMessageForStep,
             input.filePaths,
             textGenerationParams,
             {

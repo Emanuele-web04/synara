@@ -7,6 +7,7 @@ import { cn } from "./utils";
 import { CentralIcon, type CentralIconVariant } from "./central-icons";
 import {
   IconAlertCircle,
+  IconAlertOctagon,
   IconAlertTriangle,
   IconArchive,
   IconArrowBackUp,
@@ -18,6 +19,7 @@ import {
   IconArrowUpRight,
   IconBolt,
   IconBrain,
+  IconBulb,
   IconBug,
   IconCamera,
   IconCheck,
@@ -29,13 +31,10 @@ import {
   IconColumns2,
   IconDots,
   IconDownload,
-  IconExternalLink,
   IconEye,
   IconFile,
   IconFlag,
   IconFlask2,
-  IconFolder,
-  IconFolderOpen,
   IconHistory,
   IconInfoCircle,
   IconLayoutDistributeHorizontal,
@@ -45,6 +44,7 @@ import {
   IconMaximize,
   IconMinimize,
   IconMinus,
+  IconDeviceDesktop,
   IconDeviceLaptop,
   IconDeviceMobileRotated,
   IconPlugOff,
@@ -99,22 +99,20 @@ export const AppsIcon: LucideIcon = (props) => (
 // Composer stacked-panel glyphs (subagent strip / workflow run card).
 export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wall");
 export const ContextCompactionIcon: LucideIcon = centralIconWrapper("arrows-hide");
-export const PanelExpandIcon: LucideIcon = centralIconWrapper("expand-45");
-export const PanelCollapseIcon: LucideIcon = centralIconWrapper("minimize-45");
 export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");
 export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
-export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
-export const HANDOFF_ICON_NAME = "arrow-left-right";
-export const HandoffIcon: LucideIcon = centralIconWrapper(HANDOFF_ICON_NAME);
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
+// Command palette (⌘K) action glyphs: one Central outline set so the rows read as a family.
+export const ImportThreadIcon: LucideIcon = centralIconWrapper("import");
+export const UsageGaugeIcon: LucideIcon = centralIconWrapper("gauge");
+export const BugReportIcon: LucideIcon = centralIconWrapper("bug");
+export const UserIcon: LucideIcon = centralIconWrapper("user");
 /** The "+" affordance behind every add/create action (Add project, activity header). */
 export const AddPlusIcon: LucideIcon = centralIconWrapper("plus-medium");
 /** 2x3 dot grip for drag-to-reorder handles (provider rows, sidebar nav customize). */
 export const DragHandleIcon: LucideIcon = centralIconWrapper("dot-grid-2x3");
-/** Sliders glyph for "customize this surface" entries. */
-export const CustomizeIcon: LucideIcon = centralIconWrapper("settings-slider-three");
 export const EraserIcon: LucideIcon = centralIconWrapper("eraser");
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
@@ -127,9 +125,9 @@ export const SortIcon: LucideIcon = centralIconWrapper("arrow-top-bottom");
 // subagent menus, agent-activity headers) renders one identical icon. Use
 // BotIcon in React; AGENT_ROBOT_ICON_NAME for imperative DOM via
 // createCentralIconElement.
-export const AGENT_ROBOT_ICON_NAME = "robot";
+export const AGENT_ROBOT_ICON_NAME = "robot-3";
 export const BotIcon: LucideIcon = centralIconWrapper(AGENT_ROBOT_ICON_NAME);
-export const BookIcon: LucideIcon = centralIconWrapper("book-simple");
+export const BookOpenIcon: LucideIcon = centralIconWrapper("newspaper-2");
 export const BugIcon = adaptIcon(IconBug);
 export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
@@ -139,6 +137,7 @@ export const ChevronRightIcon = adaptIcon(IconChevronRight);
 export const ChevronUpIcon = adaptIcon(IconChevronUp);
 export const ChevronsUpDownIcon = adaptIcon(IconSelector);
 export const CircleAlertIcon = adaptIcon(IconAlertCircle);
+export const OctagonAlertIcon = adaptIcon(IconAlertOctagon);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
 // User-input rows: a question-mark circle while the agent waits for an answer,
 // and an up-arrow circle once the answer is submitted. Sourced from the Central
@@ -148,19 +147,24 @@ export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
 export const ChangesIcon = centralIconWrapper("changes");
+/** The one "Keybindings" glyph: the Help menu row, the feature tour, and (by basename) the
+ *  Settings nav entry, so the three always match. */
+export const KEYBINDINGS_ICON_NAME = "shortcut";
+export const KeyboardIcon: LucideIcon = centralIconWrapper(KEYBINDINGS_ICON_NAME);
 export const COPY_ICON_NAME = "square-behind-square-6";
 export const CopyIcon = centralIconWrapper(COPY_ICON_NAME);
+export const LightbulbIcon = adaptIcon(IconBulb);
 export const LinkIcon = centralIconWrapper("chain-link-3");
+// Pull request menu glyphs: a text page for "View PR", the Central GitHub mark for the
+// inline "Open in GitHub" button, and a plus bubble for "Add to chat".
+export const PageTextIcon: LucideIcon = centralIconWrapper("page-text");
+export const GitHubMarkIcon: LucideIcon = centralIconWrapper("github");
+export const ChatBubblePlusIcon: LucideIcon = centralIconWrapper("bubble-plus");
 export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
-// The clock doubles as the automation glyph everywhere it appears (meta chip,
-// Automations nav, slash command, created card, environment section), so it is
-// sourced from the Central icon set rather than the Tabler stroke icon.
 export const BELL_ICON_NAME = "notes";
 export const BellIcon: LucideIcon = centralIconWrapper(BELL_ICON_NAME);
-export const ClockIcon = centralIconWrapper("clock");
 export const EllipsisIcon = adaptIcon(IconDots);
-export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);
 // Markdown Source/Preview toggle glyphs, sourced from the Central set so the
 // file-preview header controls share one visual language with the rest of the
@@ -174,33 +178,22 @@ export const BrainIcon = adaptIcon(IconBrain);
 export const FileIcon = adaptIcon(IconFile);
 export const FlagIcon = adaptIcon(IconFlag);
 export const FlaskConicalIcon = adaptIcon(IconFlask2);
-export const FolderIcon = adaptIcon(IconFolder);
-export const FolderOpenIcon = adaptIcon(IconFolderOpen);
-// Stacked "folders" glyph used as the single representation of a file tree /
-// explorer surface (right-dock explorer, editor Files activity, diff file-tree
-// toggle). Central "reversed" outline asset so it matches the rest of the chrome.
-export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
-export const GiftIcon: LucideIcon = centralIconWrapper("gift-2");
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
-export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
-// Forking a thread reuses the branch glyph: the Central "fork" asset reads as a
-// second, unrelated icon next to it, so fork and branch share one visual.
-export const GitForkIcon: LucideIcon = GitBranchIcon;
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
-export const GitMergedSimpleIcon: LucideIcon = centralIconWrapper("merged-simple");
 export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );
-export const GitPullRequestIcon = centralIconWrapper("pull-request");
-// Pull-request state glyphs from the same three-node Central family as "pull-request",
-// so draft/closed/merged read as variations of one icon rather than four styles.
-export const GitPullRequestDraftIcon: LucideIcon = centralIconWrapper("draft");
-export const GitPullRequestClosedIcon: LucideIcon = centralIconWrapper("request-closed");
-export const GitMergeConflictIcon: LucideIcon = centralIconWrapper("merge-conflict");
+// Issue state glyphs, GitHub's shapes from the same Central outline set: a ring with a dot
+// (open), a checked ring (closed as completed), and a struck ring (closed as not planned).
+export const IssueOpenedIcon: LucideIcon = centralIconWrapper("record");
+export const IssueClosedIcon: LucideIcon = centralIconWrapper("circle-check");
+export const IssueNotPlannedIcon: LucideIcon = centralIconWrapper("circle-ban-sign");
 // Three descending-width lines — the app's one "filter controls" glyph (pull
 // request list filters, and anywhere else that opens a filter popover).
 export const FilterIcon: LucideIcon = centralIconWrapper("filter-2");
+// GitHub labels (the code review label filter).
+export const TagIcon: LucideIcon = centralIconWrapper("tag");
 // Two-person glyph for "reviewers"/"people" rows (pull request meta grid).
 export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 // One globe for the whole app (browser rows, web search, favicon fallback,
@@ -229,9 +222,13 @@ export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 // terminal, skill cube) it sits beside, instead of the Tabler wrench it used to be.
 export const HammerIcon: LucideIcon = centralIconWrapper("hammer");
 export const HistoryIcon = adaptIcon(IconHistory);
+/** Hand a to-do to an agent. */
+export const DelegateIcon: LucideIcon = centralIconWrapper("sparkles-two");
+export const CalendarIcon: LucideIcon = centralIconWrapper("calendar-1");
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
-export const KeyboardIcon: LucideIcon = centralIconWrapper("keyboard");
+/** Take-control affordance for the computer dock pane. */
+export const CursorClickIcon: LucideIcon = centralIconWrapper("cursor-click");
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);
 export const Loader2Icon = adaptIcon(IconLoader2);
@@ -244,7 +241,6 @@ export const MinusIcon = adaptIcon(IconMinus);
 export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
 // Canonical side-chat glyph — every sidechat surface (right dock pane, environment
 // panel rows, tabs) must use this one so the feature reads consistently.
-export const SidechatIcon: LucideIcon = centralIconWrapper("chat-bubble-7");
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
 export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
 export const PanelRightCloseIcon = centralIconWrapper("sidebar-simple-right-wide");
@@ -281,6 +277,7 @@ export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
+export const MonitorIcon = adaptIcon(IconDeviceDesktop);
 export const StopIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const StopFilledIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const SquareSplitHorizontal: LucideIcon = (props) => (
@@ -295,10 +292,6 @@ const TemporaryThreadGlyph = centralIconWrapper("bubble-annotation-5");
 export const TemporaryThreadIcon: LucideIcon = ({ className, ...props }) => (
   <TemporaryThreadGlyph className={cn("size-3.5 shrink-0", className)} {...props} />
 );
-export const TERMINAL_ICON_NAME = "console";
-export const TerminalIcon = centralIconWrapper(TERMINAL_ICON_NAME);
-export const TerminalSquare = centralIconWrapper("console");
-export const TerminalSquareIcon = centralIconWrapper("console");
 export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
@@ -308,7 +301,6 @@ export const Undo2Icon = adaptIcon(IconArrowBackUp);
 // the Central reversed counter-clockwise arrow, never a Tabler/Lucide rotate glyph.
 export const ResetIcon: LucideIcon = centralIconWrapper("arrow-rotate-counter-clockwise");
 export const Redo2Icon = adaptIcon(IconArrowForwardUp);
-export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);
 // Single source for the fast-mode glyph. Every fast-mode affordance (composer
@@ -317,3 +309,60 @@ export const ZapIcon = adaptIcon(IconBolt);
 export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
+
+// Sidebar and panel toggles, expand/collapse, top-bar add, handoff, Hubs, the rail's update
+// button, the one closed / one open folder every project and path row shares, add-folder, and the
+// stacked-folders glyph used as the single representation of a file tree / explorer surface
+// (right-dock explorer, editor Files activity, diff file-tree toggle), Home, Inbox, Code review,
+// Tasks, Worktrees (the split glyph turned to point right), Editor view, Computer use (a mirrored
+// pointer), the one terminal glyph, open-outside-the-app, and the schedule clock that doubles as the automation glyph everywhere it appears (meta chip,
+// Automations nav, slash command, created card, environment section) (Hugeicons, inlined).
+export {
+  AppleReminderIcon as TasksIcon,
+  ArrowDataTransferHorizontalIcon as HandoffIcon,
+  CheckmarkSquare02Icon as CheckboxCheckedIcon,
+  Navigation03Icon as ComputerUseIcon,
+  ClockHour7Icon as ClockIcon,
+  CollapseIcon as PanelCollapseIcon,
+  DashboardCircleIcon as HubIcon,
+  DashboardCircleSolidIcon as HubActiveIcon,
+  Download01Icon as UpdateDownloadIcon,
+  ExpandIcon as PanelExpandIcon,
+  Folder02Icon as FolderOpenIcon,
+  FolderAddIcon,
+  FolderClosedIcon as FolderIcon,
+  BookOpen01Icon as BookIcon,
+  GiftIcon,
+  MessageEdit01Icon as FeedbackIcon,
+  SlidersHorizontalIcon as CustomizeIcon,
+  FolderLibraryIcon as FoldersIcon,
+  GitMergeConflictIcon,
+  GitPullRequestArrowIcon as GitPullRequestIcon,
+  GitPullRequestClosedIcon,
+  GitPullRequestCreateArrowIcon as CreatePullRequestIcon,
+  GitPullRequestDraftIcon,
+  // Forking a thread reuses the branch glyph, so fork and branch share one visual.
+  WorkflowCircle05Icon as GitBranchIcon,
+  WorkflowCircle05Icon as GitForkIcon,
+  SidechatIcon,
+  SourceCodeSquareIcon as EditorViewIcon,
+  GitCompareArrowsIcon as CodeReviewIcon,
+  Home07Icon as HomeIcon,
+  InboxIcon,
+  Camera01Icon,
+  CornerDownRightIcon as SteerIcon,
+  Key01Icon,
+  MoreHorizontalIcon,
+  LinkSquare02Icon as ExternalLinkIcon,
+  LayoutAlignLeftIcon,
+  LayoutAlignRightIcon,
+  LayoutLeftIcon,
+  LayoutRightIcon,
+  PanelTopOpenIcon,
+  PlusSignIcon,
+  SquareIcon as CheckboxUncheckedIcon,
+  SplitIcon as WorktreeIcon,
+  SquareTerminalIcon as TerminalIcon,
+  // Merged pull requests (the PR-state glyph); merge *actions* keep GitMergeIcon.
+  WorkflowCircle06Icon as GitMergedSimpleIcon,
+} from "./hugeicons";

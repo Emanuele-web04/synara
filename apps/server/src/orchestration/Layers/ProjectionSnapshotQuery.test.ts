@@ -8,6 +8,7 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
+  type PendingClaudeCacheReview,
 } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
@@ -17,6 +18,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -26,10 +28,84 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.makeUnsafe(value);
 
 const projectionSnapshotLayer = it.layer(
-  OrchestrationProjectionSnapshotQueryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+  OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+  ),
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("rehydrates pending cache decisions in snapshots and thread detail after restart", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-09-16T10:00:00.000Z";
+      const threadId = asThreadId("cache-review-thread");
+      const review: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: asMessageId("cache-review-message"),
+        sourceEventSequence: 42,
+        assessment: {
+          observedAt: now,
+          contextTokens: 850_000,
+          state: "likely-expired",
+          source: "local-estimate",
+        },
+        status: "uncertain",
+        error: "Delivery needs reconciliation.",
+        createdAt: now,
+      };
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES ('cache-review-project', 'Cache review', '/tmp/cache-review', '[]', ${now}, ${now})
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json,
+          claude_cache_review_json, created_at, updated_at
+        ) VALUES (
+          ${threadId}, 'cache-review-project', 'Pending cache review',
+          '{"provider":"claudeAgent","model":"claude-opus-4-6"}',
+          ${JSON.stringify(review)}, ${now}, ${now}
+        ), (
+          'legacy-cache-review-thread', 'cache-review-project', 'Existing thread',
+          '{"provider":"claudeAgent","model":"claude-opus-4-6"}', NULL, ${now}, ${now}
+        )
+      `;
+
+      for (const snapshot of [
+        yield* query.getSnapshot(),
+        yield* query.getShellSnapshot(),
+        yield* query.getCommandReadModel(),
+      ]) {
+        assert.deepStrictEqual(
+          snapshot.threads.find((thread) => thread.id === threadId)?.claudeCacheReview,
+          review,
+        );
+        assert.isUndefined(
+          snapshot.threads.find((thread) => thread.id === "legacy-cache-review-thread")
+            ?.claudeCacheReview,
+        );
+      }
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* query.getThreadDetailById(threadId))?.claudeCacheReview,
+        review,
+      );
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* query.getThreadShellById(threadId))?.claudeCacheReview,
+        review,
+      );
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* query.getThreadDetailForExportById(threadId))?.claudeCacheReview,
+        review,
+      );
+    }),
+  );
+
   it.effect(
     "selects the latest turn per thread with stable ties and preserves historical update time",
     () =>
@@ -446,6 +522,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           workspaceRoot: "/tmp/project-1",
           defaultModelSelection: {
             provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           scripts: [
@@ -470,6 +547,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title: "Thread 1",
           modelSelection: {
             provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: "default",
@@ -494,10 +572,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           subagentRole: null,
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
+          sidechatContext: null,
           sidechatLastActivityAt: null,
           sidechatExpiredAt: null,
           lastKnownPr: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
+          latestHumanMessageAt: null,
           // A present empty pending-interaction projection is authoritative;
           // historical activity rows alone must not resurrect stale prompts.
           hasPendingApprovals: false,
@@ -519,6 +599,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-02-24T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          snoozedUntil: null,
+          snoozeReminderAt: null,
           deletedAt: null,
           handoff: null,
           messages: [
@@ -611,6 +693,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             providerName: "codex",
             runtimeMode: "approval-required",
             activeTurnId: asTurnId("turn-1"),
+            lastActivityAt: null,
+            lastProgressAt: null,
             lastError: null,
             updatedAt: "2026-02-24T00:00:07.000Z",
           },
@@ -1078,6 +1162,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
+      const humanAt = "2026-02-24T00:00:00.000Z";
+      yield* sql`UPDATE projection_threads SET latest_human_message_at = ${humanAt} WHERE thread_id = ${threadId}`;
       for (let index = 0; index < messageCount; index += 1) {
         const createdAt = new Date(Date.UTC(2026, 1, 24, 0, 0, index)).toISOString();
         yield* sql`
@@ -1095,7 +1181,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             ${`message-${index}`},
             'thread-export-message-cap',
             NULL,
-            'assistant',
+            ${index === 0 ? "user" : "assistant"},
             ${`message ${index}`},
             0,
             ${createdAt},
@@ -1134,6 +1220,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.isTrue(Option.isSome(exportDetail));
       const cappedMessages = Option.isSome(cappedDetail) ? cappedDetail.value.messages : [];
       const exportMessages = Option.isSome(exportDetail) ? exportDetail.value.messages : [];
+      assert.equal(Option.getOrThrow(cappedDetail).latestHumanMessageAt, humanAt);
+      assert.equal(Option.getOrThrow(exportDetail).latestHumanMessageAt, humanAt);
+      assert.equal(bulk.threads[0]?.latestHumanMessageAt, humanAt);
       assert.equal(cappedMessages.length, 2_000);
       assert.equal(cappedMessages[0]?.text, "message 5");
       assert.equal(cappedMessages.at(-1)?.text, "message 2004");
@@ -1393,11 +1482,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       const expectedProjectSelection = {
         provider: "codex",
+        instanceId: "codex",
         model: "imported-project-model",
         options: { reasoningEffort: "medium" },
       } as const;
       const expectedThreadSelection = {
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.5",
         options: { reasoningEffort: "medium" },
       } as const;
@@ -1913,6 +2004,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title: "Shell Thread",
           modelSelection: {
             provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: "default",
@@ -1937,6 +2029,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           subagentRole: null,
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
+          sidechatContext: null,
           sidechatLastActivityAt: null,
           sidechatExpiredAt: null,
           lastKnownPr: null,
@@ -1952,6 +2045,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             assistantMessageId: null,
           },
           latestUserMessageAt: "2026-03-03T00:00:02.500Z",
+          latestHumanMessageAt: null,
           hasPendingApprovals: true,
           hasPendingUserInput: true,
           hasActionableProposedPlan: true,
@@ -1959,6 +2053,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-03-03T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          snoozedUntil: null,
+          snoozeReminderAt: null,
           handoff: null,
           session: {
             threadId: ThreadId.makeUnsafe("thread-shell"),
@@ -1966,6 +2062,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             providerName: "codex",
             runtimeMode: "full-access",
             activeTurnId: null,
+            lastActivityAt: null,
+            lastProgressAt: null,
             lastError: null,
             updatedAt: "2026-03-03T00:00:04.000Z",
           },
@@ -1979,6 +2077,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (threadShell._tag === "Some") {
         assert.deepEqual(threadShell.value, shellSnapshot.threads[0]);
       }
+
+      // Regression: the batched session lookup must select provider_instance_id
+      // so threads with a session row decode (Hub work reconcile relies on it).
+      const shellsByIds = yield* snapshotQuery.getThreadShellsByIds([
+        ThreadId.makeUnsafe("thread-shell"),
+      ]);
+      assert.deepEqual(shellsByIds, shellSnapshot.threads);
     }),
   );
 

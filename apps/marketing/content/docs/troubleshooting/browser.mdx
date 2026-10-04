@@ -5,6 +5,8 @@ description: Recover from unavailable runtimes, stale snapshots, ambiguous actio
 
 The Synara browser is a shared Chromium surface scoped to the owning task. Browser failures are safest to handle with an observe–act–observe loop: inspect the current page, perform one bounded action, then inspect the resulting state.
 
+Tabs and browser tool access belong to the task. Cookies and signed-in sessions are shared across Synara browser tabs and agent workflows; see [Browser logins & sessions](/docs/features/browser-sessions).
+
 ## Browser is unavailable
 
 Start with `browser_status` when the provider has browser tools.
@@ -29,6 +31,10 @@ Use `browser_tabs` to inspect tabs in the task scope, then `browser_open` to cre
 - Use `show:false` when background work is appropriate and the page does not require human interaction
 
 Do not guess a tab ID from another task.
+
+## Page is clipped or leaves empty space
+
+An agent can use `browser_resize` to test a fixed page size. Resizing or reopening the browser panel, or switching between its floating and expanded views, restores the page to the panel's available space without reloading it. Moving a panel without changing its size preserves the requested viewport.
 
 ## Snapshot reference is stale
 
@@ -201,3 +207,28 @@ Close a crashed tab only after preserving evidence. `browser_close` is permanent
 - [ ] The final user-visible result was verified
 
 Continue with [Browser verification](/docs/workflows/browser-verification) for the normal workflow or [Diagnostics](/docs/troubleshooting/diagnostics) when the browser host and task state disagree.
+
+## Cookie import failed
+
+Use the message shown in **Saved logins → Import browser cookies** to choose the next step:
+
+| Message or outcome                                | Next step                                                                                                                                                         |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Safari access denied on macOS                     | Enable the correct Synara app in Full Disk Access, quit and reopen it, then retry. Reopen **Settings → General → Safari import setup** to locate the running app. |
+| Another browser’s cookie data is denied           | Review file access and any OS key-store prompt. Direct sign-in remains available.                                                                                 |
+| Reader timed out                                  | Close the source browser, then retry.                                                                                                                             |
+| Selected profile is unavailable                   | Select another available profile or open the source browser first.                                                                                                |
+| Native reader unavailable                         | Reinstall Synara with its optional native dependencies, or sign in directly.                                                                                      |
+| Cookie data could not be parsed or decoded        | This is a cookie-format failure, not a confirmed permission denial. Use another available profile or sign in directly.                                            |
+| Cookies could not be decrypted                    | Review the OS key-store prompt, or sign in directly.                                                                                                              |
+| Destination changed                               | Select the intended tab and reopen the import flow before retrying.                                                                                               |
+| Import succeeded with skipped cookies or warnings | Verify signed-in state; the site may require direct sign-in.                                                                                                      |
+| Cookies imported but secure storage failed        | Current browser sessions may already have changed. Inspect the page before retrying; future-launch persistence was not established.                               |
+
+An acquisition or generic reader failure does not establish that macOS permission is denied. Check the selected profile and reported failure instead of treating every error as a Full Disk Access problem.
+
+## Saved logins are locked or saving is unavailable
+
+Open **Saved logins** and use **Unlock**, or **Set master password** if setup is required. Password saving needs **Offer to save passwords** enabled and an unlocked vault. If the dialog reports that password saving is unavailable, reopen the browser and retry. If master-password verification fails, wait briefly and retry; the interface cannot reset a forgotten master password.
+
+Turning on **Allow agents to find saved accounts** does not enable agent password filling or generation. Those operations are unavailable in v0.8.4.

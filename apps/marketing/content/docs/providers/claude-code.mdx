@@ -148,9 +148,27 @@ Update Claude Code, confirm the account exposes the expected model, and refresh 
 
 Compare the selected model, permission mode, project settings, local instructions, and executable path. A different Claude installation or configuration source can produce different behavior.
 
+## Usage history and context compaction
+
+Synara 0.8.4 corrects repeated Claude response accounting and distinguishes current context usage from accumulated processed tokens. Profile Stats counts verified completed model totals without adding cache or thinking tokens twice, and avoids counting mirrored subagents a second time.
+
+Older unverifiable processed totals are hidden rather than presented as accurate. Historical recovery is partial: missing raw results and already-purged aggregates cannot be reconstructed, so older charts can show less usage or incomplete history after the update. This is an accounting correction, not evidence that your subscription usage or bill decreased.
+
+A compaction icon indicates active context compaction. Wait for compaction to finish before treating a quiet transcript as a stalled response. Pending questions and drafted answers have recovery handling; see [Tasks and runtime](/docs/troubleshooting/tasks-and-runtime#recover-expired-questions).
+
 ## Official documentation
 
 - [Set up Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started)
 - [Claude Code CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
 
 Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).
+
+## Cache review, context and Artifacts in 0.9.0
+
+The task UI preserves Claude's observed cache reads, cache creation and uncached input. Local transcript diagnostics also report cache usage. These are observations and lifetime estimates, not guaranteed future cache hits or an independent billing statement. Missing telemetry remains unknown.
+
+Before an expensive cache resumption, Synara can hold the message for review. Choose **Continue with full context**, **Compact, then send**, or **Cancel this send**. Compaction itself processes history once; it is not free. Synara uses Claude's native compaction and waits for completion before releasing the held message. The review survives reconnection, and compaction progress or failure stays visible. Context-budget changes are applied safely and the UI reports the runtime budget in use.
+
+To publish Claude Artifacts with `/design` or `/slides`, enable **Artifacts, /design and /slides** in Settings → Providers → Claude, then start a new session. This integration is off by default and requires a compatible Claude Code version and eligible claude.ai account. Synara explains when the session cannot use it; enabling the toggle does not grant account eligibility.
+
+You can also [import local Claude projects and conversations](/docs/features/project-import) and try [Computer Use beta on macOS](/docs/features/computer-use).

@@ -27,6 +27,7 @@ import {
 } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
@@ -99,7 +100,7 @@ const make = Effect.gen(function* () {
       .getProjectShellById(thread.projectId)
       .pipe(Effect.catch(() => Effect.succeed(Option.none())));
     const project = Option.getOrUndefined(projectOption);
-    if (!project || project.kind !== "studio") {
+    if (!project || !isGroupContainerKind(project.kind)) {
       return null;
     }
     const cwd = resolveThreadWorkspaceCwd({ thread, projects: [project] });

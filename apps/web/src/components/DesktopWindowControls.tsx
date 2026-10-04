@@ -7,6 +7,8 @@ import { isElectron } from "~/env";
 import { Maximize2, Minimize2, MinusIcon, XIcon } from "~/lib/icons";
 import { cn, getNavigatorPlatform, isWindowsPlatform } from "~/lib/utils";
 
+import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+
 const DEFAULT_WINDOW_STATE: DesktopWindowState = {
   isMaximized: false,
   isFullscreen: false,
@@ -20,8 +22,8 @@ const GLYPH_MAXIMIZE = "\uE922";
 const GLYPH_RESTORE = "\uE923";
 const GLYPH_CLOSE = "\uE8BB";
 
-// Match the native Windows caption-button footprint: 46px wide, full title-bar
-// height, flat (no radius/border), glyph centered. These are deliberately plain
+// Match the native Windows caption-button footprint: 46px wide, full top-bar
+// height (CHAT_SURFACE_HEADER_HEIGHT_CLASS), flat (no radius/border), glyph centered. These are deliberately plain
 // <button>s rather than the app's Button/Tooltip primitives — those inject a
 // rounded "chrome" variant, conflicting size overrides, and a base-ui trigger that
 // intercepts the click — so the chrome stays pixel-native and onClick routes
@@ -81,7 +83,13 @@ export function DesktopWindowControls({ className }: { className?: string }) {
   const { isMaximized } = windowState;
 
   return (
-    <div className={cn("flex h-[46px] items-stretch [-webkit-app-region:no-drag]", className)}>
+    <div
+      className={cn(
+        "flex items-stretch [-webkit-app-region:no-drag]",
+        CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+        className,
+      )}
+    >
       <button
         type="button"
         aria-label="Minimize"
