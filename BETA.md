@@ -284,8 +284,9 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `groups` (Hubs), `tasks` (Tasks), and `inbox` (Inbox),
-all gated off in Stable. Oh My Pi, the rail sidebar layout, and message trail
+The list currently contains `groups` (Hubs), `tasks` (Tasks), `inbox` (Inbox),
+and `pull-request-auto-fix` (Auto-fix CI), all gated off in Stable.
+Oh My Pi, the rail sidebar layout, and message trail
 sound are available in both Stable and Beta.
 
 On Stable, Hubs are inert rather than hidden data: the server refuses the hub
@@ -305,6 +306,11 @@ A Beta client connected to a server that refuses Tasks returns to Kanban.
 `inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
 web hides its rail and sidebar entries and redirects the route, and a saved rail or
 sidebar order that mentions it is ignored there.
+
+`pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull
+request's menu. The server watches checks for an enabled PR and can ask its
+linked agent chat to address failures. Stable refuses the corresponding APIs
+and does not run the watcher. This does not enable automatic merging.
 
 Message trail sound is opt-in under **Settings → Chat → Message trail sound**
 on macOS desktop in both Stable and Beta. It follows system audio (macOS 14.2+),
