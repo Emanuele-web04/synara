@@ -3,7 +3,13 @@
 // Layer: Route UI logic helpers.
 // Exports: thread title fallback, deep-link bootstrap replay handling, and panel toggle helpers.
 
-import type { ProjectId, ThreadEnvironmentMode, ThreadId, TurnId } from "@synara/contracts";
+import type {
+  ProjectId,
+  ThreadEnvironmentMode,
+  ThreadId,
+  ThreadSidechatContext,
+  TurnId,
+} from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
 import type { ChatRightPanel, DiffRouteSearch } from "../diffRouteSearch";
@@ -23,12 +29,6 @@ export interface ChatPanelStatePatch {
 export interface RoutePanelBootstrapResult {
   nextAppliedSearchKey: string | null;
   panelPatch: ChatPanelStatePatch | null;
-}
-
-export interface SplitPaneMaximizeDecision {
-  splitViewIdToRemove: string;
-  threadId: ThreadId;
-  panelState: ChatPanelStateSnapshot | null;
 }
 
 export type SplitPaneCloseDecision =
@@ -176,29 +176,13 @@ export function resolveToggledChatPanelPatch(
   };
 }
 
-// Expanding a split pane exits split mode entirely; the selected chat becomes the single surface.
-export function resolveSplitPaneMaximizeDecision(input: {
-  splitViewId: string;
-  focusedThreadId: ThreadId | null | undefined;
-  focusedPanelState: ChatPanelStateSnapshot | null | undefined;
-}): SplitPaneMaximizeDecision | null {
-  if (!input.focusedThreadId) {
-    return null;
-  }
-
-  return {
-    splitViewIdToRemove: input.splitViewId,
-    threadId: input.focusedThreadId,
-    panelState: input.focusedPanelState ?? null,
-  };
-}
-
 // Closing a sidechat is a return-to-source action; generic pane closes can still fall back normally.
 export function resolveSplitPaneCloseDecision(input: {
   splitViewId: string;
   sourceThreadId: ThreadId;
   closingThreadId: ThreadId | null | undefined;
   closingSidechatSourceThreadId: ThreadId | null | undefined;
+  closingSidechatContext?: ThreadSidechatContext | null | undefined;
   nextFocusedThreadId: ThreadId | null | undefined;
   nextLeafCount: number;
 }): SplitPaneCloseDecision {
@@ -210,7 +194,11 @@ export function resolveSplitPaneCloseDecision(input: {
     };
   }
 
-  if (input.closingThreadId && input.closingThreadId !== input.sourceThreadId) {
+  if (
+    input.closingSidechatContext &&
+    input.closingThreadId &&
+    input.closingThreadId !== input.sourceThreadId
+  ) {
     return {
       kind: "single-thread",
       threadId: input.sourceThreadId,

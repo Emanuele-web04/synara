@@ -328,6 +328,12 @@ scaling beyond one task.
 - `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
   default numbers in the classic and Activity views.
 
+Every split chat has an **X** in its header to close it. Closing an ordinary pane keeps
+the remaining chats and preserves focus on a surviving chat. Closing a forked Side
+returns to its source; a standalone Side in a non-source pane returns to the split’s
+source. Split headers keep the diff panel toggle without showing change totals,
+and omit expand and replace controls.
+
 Check the [keyboard reference](https://www.trysynara.com/docs/reference/keyboard-shortcuts) for the
 complete current list.
 
