@@ -7,8 +7,8 @@
 // Depends on: open-thread tab hooks/store, the shared SurfaceContentTabs, and the sidebar's
 //             thread context menu.
 
-import type { ProjectId, ThreadId } from "@synara/contracts";
-import { useState } from "react";
+import type { ProjectId, ResolvedKeybindingsConfig, ThreadId } from "@synara/contracts";
+import { useEffect, useState } from "react";
 
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import {
@@ -18,7 +18,10 @@ import {
   useRecordOpenThreadTab,
 } from "~/hooks/useOpenThreadTabs";
 import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
+import { useStableCallback } from "~/hooks/useStableCallback";
+import { resolveShortcutCommand } from "~/keybindings";
 import { TerminalIcon } from "~/lib/icons";
+import { isTerminalFocused } from "~/lib/terminalFocus";
 import { showThreadContextMenu } from "~/lib/threadContextMenu";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -33,6 +36,7 @@ import {
 import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 
 import { ProviderIcon } from "../ProviderIcon";
+import { getNextVisibleSidebarThreadId } from "../Sidebar.logic";
 import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
 import { toastManager } from "../ui/toast";
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
@@ -46,9 +50,10 @@ const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; label: st
 
 export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
+  keybindings: ResolvedKeybindingsConfig;
   onRenameActiveThread: () => void;
 }) {
-  const { activeThreadId } = props;
+  const { activeThreadId, keybindings } = props;
   useRecordOpenThreadTab(activeThreadId);
   const tabs = useOpenThreadTabs({ activeThreadId });
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
@@ -69,6 +74,28 @@ export function OpenThreadTabStrip(props: {
     hasTab: (threadId) => tabs.some((tab) => tab.threadId === threadId),
     activate: activateThreadTab,
   });
+
+  // Previous/next tab, wrapping at either end like a browser. Steps from the tab painted
+  // as active, so a quick run of presses walks the strip before each thread renders.
+  const onKeyDown = useStableCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.repeat) return;
+    const command = resolveShortcutCommand(event, keybindings, {
+      context: { terminalFocus: isTerminalFocused() },
+    });
+    if (command !== "threadTab.next" && command !== "threadTab.previous") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextThreadId = getNextVisibleSidebarThreadId({
+      visibleThreadIds: tabs.map((tab) => tab.threadId),
+      activeThreadId: shownThreadId,
+      direction: command === "threadTab.previous" ? "backward" : "forward",
+    });
+    if (nextThreadId && nextThreadId !== shownThreadId) selectTab(nextThreadId);
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onKeyDown]);
 
   const closeTab = (threadId: ThreadId, projectId: ProjectId) => {
     cancelTabSelection();

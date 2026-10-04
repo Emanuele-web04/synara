@@ -226,6 +226,14 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+c", command: "thread.copyId", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+  // Open thread tabs, browser-style: Cmd+Ctrl+Left/Right on macOS (Cmd+Shift+Left/Right
+  // selects to the line edge in the composer, Cmd+Option+Arrow switches spaces, and
+  // xterm never sees a Cmd-chord), and
+  // Ctrl+PageUp/PageDown elsewhere, where Ctrl+Alt+Left/Right switches desktop workspaces.
+  { key: "mod+ctrl+arrowright", command: "threadTab.next", when: "isMac" },
+  { key: "mod+ctrl+arrowleft", command: "threadTab.previous", when: "isMac" },
+  { key: "ctrl+pagedown", command: "threadTab.next", when: "!terminalFocus && !isMac" },
+  { key: "ctrl+pageup", command: "threadTab.previous", when: "!terminalFocus && !isMac" },
   { key: "meta+ctrl+p", command: "git.commitAndPush", when: "!terminalFocus && isMac" },
   { key: "ctrl+alt+p", command: "git.commitAndPush", when: "!terminalFocus && !isMac" },
   { key: "mod+o", command: "editor.openFavorite" },
@@ -693,13 +701,23 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
   };
 }
 
-// Update exact old recent-view defaults so existing configs gain terminal-focus support
-// (drop the `!terminalFocus` guard). Per-rule because it never changes the key, so it
-// cannot collide with a sibling entry.
+// Update exact earlier shipped defaults while preserving custom keys and conditions.
 function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
   readonly rule: KeybindingRule;
   readonly migrated: boolean;
 } {
+  // The initial Mac tab defaults collided with space navigation. Rewrite only their
+  // exact shipped shape; custom keys and custom guards keep their precedence.
+  const tabArrow =
+    rule.command === "threadTab.next"
+      ? "arrowright"
+      : rule.command === "threadTab.previous"
+        ? "arrowleft"
+        : null;
+  if (tabArrow && rule.key === `mod+alt+${tabArrow}` && rule.when === "isMac") {
+    return { rule: { ...rule, key: `mod+ctrl+${tabArrow}` }, migrated: true };
+  }
+
   const recentViewShortcut = RECENT_VIEW_SHORTCUT_BY_COMMAND[rule.command];
   if (
     recentViewShortcut === undefined ||

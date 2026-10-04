@@ -225,6 +225,27 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("p", { ctrlKey: true, altKey: true, modKey: false }),
     whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
   },
+  // Open thread tabs, browser-style; see the server defaults for why the chords differ.
+  {
+    command: "threadTab.next",
+    shortcut: commandShortcut("arrowright", { ctrlKey: true }),
+    whenAst: whenIdentifier("isMac"),
+  },
+  {
+    command: "threadTab.previous",
+    shortcut: commandShortcut("arrowleft", { ctrlKey: true }),
+    whenAst: whenIdentifier("isMac"),
+  },
+  {
+    command: "threadTab.next",
+    shortcut: commandShortcut("pagedown", { ctrlKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "threadTab.previous",
+    shortcut: commandShortcut("pageup", { ctrlKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
+  },
   // Numbered space jumps target the switcher's visual tab order (mod+alt+1 = Void).
   // Same guard as the creation chords: Cmd+Alt never reaches the PTY on macOS, while
   // Ctrl+Alt+digit doubles as AltGr input on Linux/Windows and must yield to terminals.
@@ -632,6 +653,8 @@ function formatShortcutKeyLabel(key: string): string {
   if (key === "arrowdown") return "Down";
   if (key === "arrowleft") return "Left";
   if (key === "arrowright") return "Right";
+  if (key === "pageup") return "PgUp";
+  if (key === "pagedown") return "PgDn";
   return key.slice(0, 1).toUpperCase() + key.slice(1);
 }
 

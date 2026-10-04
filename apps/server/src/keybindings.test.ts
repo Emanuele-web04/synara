@@ -181,6 +181,28 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("keeps the shipped thread tab chords distinct from space navigation", () =>
+    Effect.gen(function* () {
+      const keybindings = yield* Keybindings;
+      const snapshot = yield* keybindings.loadConfigState;
+      for (const direction of ["previous", "next"] as const) {
+        const tabRules = snapshot.keybindings.filter(
+          (rule) => rule.command === `threadTab.${direction}`,
+        );
+        const spaceRules = snapshot.keybindings.filter(
+          (rule) => rule.command === `space.${direction}`,
+        );
+        assert.lengthOf(tabRules, 2);
+        assert.lengthOf(spaceRules, 1);
+        for (const tabRule of tabRules) {
+          for (const spaceRule of spaceRules) {
+            assert.notDeepEqual(tabRule.shortcut, spaceRule.shortcut);
+          }
+        }
+      }
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("bootstraps default keybindings when config file is missing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -425,6 +447,47 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.isTrue(
         persisted.some(
           (entry) => entry.key === "mod+shift+p" && entry.command === "sidebar.search",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("migrates colliding Mac tab defaults while preserving custom tab and space rules", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      const rules: KeybindingRule[] = [
+        { key: "mod+alt+arrowleft", command: "threadTab.previous", when: "isMac" },
+        { key: "mod+alt+arrowright", command: "threadTab.next", when: "isMac" },
+        { key: "mod+alt+arrowleft", command: "space.previous", when: "!terminalFocus" },
+        { key: "mod+alt+arrowright", command: "space.next", when: "!terminalFocus" },
+        { key: "mod+shift+g", command: "threadTab.next", when: "!terminalFocus" },
+        { key: "mod+alt+arrowleft", command: "threadTab.previous", when: "!terminalFocus" },
+      ];
+      yield* writeKeybindingsConfig(keybindingsConfigPath, rules);
+      const keybindings = yield* Keybindings;
+      const snapshot = yield* keybindings.loadConfigState;
+      const expected: KeybindingRule[] = rules.map((rule, index) =>
+        index < 2
+          ? { ...rule, key: index === 0 ? "mod+ctrl+arrowleft" : "mod+ctrl+arrowright" }
+          : rule,
+      );
+      assert.deepEqual(
+        snapshot.keybindings.filter((rule) => rule.command.startsWith("threadTab.")),
+        compileResolvedKeybindingsConfig(
+          expected.filter((rule) => rule.command.startsWith("threadTab.")),
+        ),
+      );
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      for (const rule of expected) assert.deepInclude(persisted, rule);
+      assert.isFalse(
+        persisted.some((rule) =>
+          rules
+            .slice(0, 2)
+            .some(
+              (old) =>
+                old.command === rule.command && old.key === rule.key && old.when === rule.when,
+            ),
         ),
       );
     }).pipe(Effect.provide(makeKeybindingsLayer())),
@@ -891,6 +954,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const { keybindingsConfigPath } = yield* ServerConfig;
       yield* writeKeybindingsConfig(keybindingsConfigPath, [
         { key: "mod+j", command: "script.custom-action.run" },
+        { key: "mod+ctrl+arrowright", command: "script.custom-tabs.run", when: "isMac" },
       ]);
 
       yield* Effect.gen(function* () {
@@ -901,6 +965,14 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
       assert.isFalse(persisted.some((entry) => entry.command === "terminal.toggle"));
       assert.isTrue(persisted.some((entry) => entry.command === "script.custom-action.run"));
+      assert.isFalse(
+        persisted.some((entry) => entry.command === "threadTab.next" && entry.when === "isMac"),
+      );
+      assert.deepInclude(persisted, {
+        key: "mod+ctrl+arrowright",
+        command: "script.custom-tabs.run",
+        when: "isMac",
+      });
 
       assert.isTrue(
         messages.some((message) =>
@@ -1633,6 +1705,10 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         const snapshot = yield* keybindings.loadConfigState;
         assert.isTrue(snapshot.keybindings.some((rule) => rule.command === "sidebar.toggle"));
         assert.isTrue(snapshot.keybindings.some((rule) => rule.command === "chat.new"));
+        assert.deepEqual(
+          snapshot.keybindings.filter((rule) => !rule.command.startsWith("script.")),
+          compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS),
+        );
         assert.isAtMost(snapshot.keybindings.length, MAX_RESOLVED_KEYBINDINGS_COUNT);
         yield* Schema.decodeUnknownEffect(ResolvedKeybindingsConfig)(snapshot.keybindings);
         assert.deepEqual(

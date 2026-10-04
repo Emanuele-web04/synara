@@ -81,6 +81,8 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "thread.copyId",
   "chat.visible.next",
   "chat.visible.previous",
+  "threadTab.next",
+  "threadTab.previous",
   "editor.openFavorite",
   "editor.file.save",
   "git.commitAndPush",
@@ -195,9 +197,10 @@ export const ResolvedKeybindingRule = Schema.Struct({
 export type ResolvedKeybindingRule = typeof ResolvedKeybindingRule.Type;
 
 // Runtime snapshots include missing shipped defaults alongside the persisted rules.
-// Reserve the built-in inventory's space without lowering the 256-rule user budget.
+// Reserve the built-in inventory's space without lowering the 256-rule user budget; a
+// command may ship one rule per platform (macOS and the rest), so allow two each.
 export const MAX_RESOLVED_KEYBINDINGS_COUNT =
-  MAX_KEYBINDINGS_COUNT + STATIC_KEYBINDING_COMMANDS.length;
+  MAX_KEYBINDINGS_COUNT + 2 * STATIC_KEYBINDING_COMMANDS.length;
 
 export const ResolvedKeybindingsConfig = Schema.Array(ResolvedKeybindingRule).check(
   Schema.isMaxLength(MAX_RESOLVED_KEYBINDINGS_COUNT),

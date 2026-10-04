@@ -628,6 +628,34 @@ describe("space jump shortcuts", () => {
   });
 });
 
+describe("thread tab shortcuts", () => {
+  const resolve = (
+    overrides: Partial<ShortcutEventLike>,
+    platform: string,
+    terminalFocus = false,
+  ) => resolveShortcutCommand(event(overrides), [], { platform, context: { terminalFocus } });
+
+  it("uses Cmd+Ctrl+Arrow on macOS, including from a focused terminal", () => {
+    const right = { key: "ArrowRight", metaKey: true, ctrlKey: true };
+    assert.strictEqual(resolve(right, "MacIntel"), "threadTab.next");
+    assert.strictEqual(resolve(right, "MacIntel", true), "threadTab.next");
+    assert.strictEqual(
+      resolve({ key: "ArrowLeft", metaKey: true, ctrlKey: true }, "MacIntel"),
+      "threadTab.previous",
+    );
+    // Cmd+Shift+Arrow stays text selection in the composer.
+    assert.isNull(resolve({ key: "ArrowRight", metaKey: true, shiftKey: true }, "MacIntel"));
+  });
+
+  it("uses Ctrl+PageUp/PageDown elsewhere and yields them to a focused terminal", () => {
+    assert.strictEqual(resolve({ key: "PageDown", ctrlKey: true }, "Linux"), "threadTab.next");
+    assert.strictEqual(resolve({ key: "PageUp", ctrlKey: true }, "Win32"), "threadTab.previous");
+    assert.isNull(resolve({ key: "PageDown", ctrlKey: true }, "Linux", true));
+    // Ctrl+Alt+Arrow switches desktop workspaces on Linux.
+    assert.isNull(resolve({ key: "ArrowRight", ctrlKey: true, altKey: true }, "Linux"));
+  });
+});
+
 describe("workspace terminal tab shortcuts", () => {
   it("resolves the active workspace close shortcut only while the terminal workspace is open", () => {
     assert.strictEqual(

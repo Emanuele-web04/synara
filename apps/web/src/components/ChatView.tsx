@@ -6294,6 +6294,7 @@ export default function ChatView({
                 threadTabs: (
                   <OpenThreadTabStrip
                     activeThreadId={activeThread.id}
+                    keybindings={keybindings}
                     onRenameActiveThread={() => setRenameDialogOpen(true)}
                   />
                 ),

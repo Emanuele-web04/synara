@@ -279,6 +279,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Cycle to the next thread that is currently visible in the sidebar.",
   },
   {
+    command: "threadTab.previous",
+    label: "Previous tab",
+    description: "Switch to the open thread tab on the left of the active one.",
+  },
+  {
+    command: "threadTab.next",
+    label: "Next tab",
+    description: "Switch to the open thread tab on the right of the active one.",
+  },
+  {
     command: "editor.openFavorite",
     label: "Open in favorite editor",
     description: "Send the current thread or workspace target to your preferred editor.",
