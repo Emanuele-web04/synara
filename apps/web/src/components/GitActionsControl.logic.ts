@@ -33,7 +33,7 @@ export function buildGitActionFailureToast(input: {
 }
 
 /** Every glyph a git affordance can render — see `gitActionGlyphs.tsx` for the map. */
-export type GitGlyphName = GitActionIconName | "sync" | "branch";
+export type GitGlyphName = GitActionIconName | "sync" | "branch" | "view_pr";
 
 export type GitDialogAction = "commit" | "push" | "commit_push" | "create_pr";
 
@@ -642,7 +642,7 @@ export function resolveCommitDialogActions(input: {
     {
       id: "create_pr",
       label: prExecution.kind === "open_pr" ? "View PR" : "Create PR",
-      icon: "pr",
+      icon: prExecution.kind === "open_pr" ? "view_pr" : "pr",
       action: "create_pr",
       featureBranch: false,
       disabled: prExecution.kind === "unavailable",

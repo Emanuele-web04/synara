@@ -39,7 +39,7 @@ import {
   COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
   COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
 } from "./composerPickerStyles";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { ShortcutKbd } from "../ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   groupProviderModelOptions,
@@ -1049,7 +1049,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
                 <span>Change model</span>
                 <ShortcutKbd
                   shortcutLabel={props.shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
+                  className="h-4 min-w-4 text-ui-2xs"
                 />
               </span>
             </TooltipPopup>

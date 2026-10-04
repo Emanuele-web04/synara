@@ -19,7 +19,7 @@ import {
   Plus,
   SquareSplitHorizontal,
   SquareSplitVertical,
-  TerminalSquareIcon,
+  TerminalIcon,
   Trash2,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -197,7 +197,7 @@ export default function TerminalViewportPane({
                   label="Move to its own terminal tab"
                   onClick={moveActiveTerminalToGroup}
                 >
-                  <TerminalSquareIcon className="size-3.5" />
+                  <TerminalIcon className="size-3.5" />
                 </PaneActionButton>
               ) : null}
               {onSplitTerminalRight ? (

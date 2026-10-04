@@ -27,7 +27,6 @@ import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
-import { FolderClosed } from "~/components/FolderClosed";
 import GitActionsControl from "~/components/GitActionsControl";
 import { DiffStat } from "~/components/ui/diff-stat";
 import { IconButton } from "~/components/ui/icon-button";
@@ -35,7 +34,7 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
+import { ChangesIcon, ExternalLinkIcon, GitHubIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
@@ -314,13 +313,13 @@ export function EnvironmentPanel({
 
       {showGroupFolderRow && groupFolderPath ? (
         <EnvironmentRow
-          icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          icon={<FolderIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
             <span className="truncate" title={groupFolderPath}>
               {basenameOfPath(groupFolderPath) || groupFolderPath}
             </span>
           }
-          trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
             revealFolderInShell({ path: groupFolderPath, onRevealed: onClose });
           }}
@@ -443,7 +442,7 @@ export function EnvironmentPanel({
           <EnvironmentRow
             icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
-            trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             onClick={() => {
               onOpenGithubRepository(githubRepository.url);
               onClose();

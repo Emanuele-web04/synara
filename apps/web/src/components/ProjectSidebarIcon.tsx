@@ -15,7 +15,7 @@ import {
 } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
-import { FolderClosed, FolderOpen } from "./FolderClosed";
+import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 
 const projectFaviconPresence = new Map<string, boolean>();
 
@@ -69,7 +69,7 @@ export function ProjectSidebarIcon({
     );
   }
   if (presentation === "favicon" && appearance?.kind === "icon" && appearance.color) {
-    const FolderGlyph = expanded ? FolderOpen : FolderClosed;
+    const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
     return <FolderGlyph className={glyphClassName} style={colorStyle(appearance.color)} />;
   }
   return (
@@ -104,7 +104,7 @@ function ProjectFolderIcon({
     return cached === undefined ? null : { src: faviconSrc, present: cached };
   });
   const hasFavicon = probe !== null && probe.src === faviconSrc && probe.present;
-  const FolderGlyph = expanded ? FolderOpen : FolderClosed;
+  const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
 
   // Probe with Image() so Electron/file-origin behaves like the actual visible
   // <img>. Runs even on a module-cache hit (the browser cache makes the reload

@@ -8,11 +8,13 @@ import {
   ArchiveIcon,
   BookIcon,
   BotIcon,
-  ChatBubbleIcon,
   CircleQuestionIcon,
   ClockIcon,
+  CodeReviewIcon,
   CopyIcon,
   CustomizeIcon,
+  FeedbackIcon,
+  GitBranchIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
   GiftIcon,
@@ -46,9 +48,6 @@ import {
   subscribeComposerSends,
 } from "~/lib/composerSendOwnership";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch } from "react-icons/fi";
-import { IoIosGitCompare } from "react-icons/io";
-import { GoRepoForked } from "react-icons/go";
 import {
   useCallback,
   useEffect,
@@ -352,7 +351,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-import { KbdGroup } from "./ui/kbd";
+import { ShortcutKbd } from "./ui/kbd";
 import {
   Menu,
   MenuGroup,
@@ -768,7 +767,9 @@ function resolveThreadRowMetaChips(input: {
     chips.push({
       id: "handoff",
       tooltip: handoffBadgeLabel,
-      icon: <SidebarGlyph icon={FiGitBranch} variant="meta" className="text-muted-foreground/55" />,
+      icon: (
+        <SidebarGlyph icon={GitBranchIcon} variant="meta" className="text-muted-foreground/55" />
+      ),
     });
   }
 
@@ -778,7 +779,7 @@ function resolveThreadRowMetaChips(input: {
       tooltip: "Forked thread",
       icon: (
         <SidebarGlyph
-          icon={GoRepoForked}
+          icon={GitBranchIcon}
           variant="meta"
           className="text-emerald-600 dark:text-emerald-300/90"
         />
@@ -988,7 +989,7 @@ function SidebarHelpMenu({
               <span>Keybindings</span>
             </MenuItem>
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
-              <SidebarContextMenuIcon icon={ChatBubbleIcon} />
+              <SidebarContextMenuIcon icon={FeedbackIcon} />
               <span>Send feedback</span>
             </MenuItem>
             <MenuItem
@@ -3408,7 +3409,7 @@ export default function Sidebar() {
                       {
                         id: "snooze-cancel",
                         label: "Return now",
-                        icon: "clock",
+                        icon: THREAD_CONTEXT_MENU_ICONS.snooze,
                         separatorBefore: true,
                       },
                     ]
@@ -3417,16 +3418,20 @@ export default function Sidebar() {
                   {
                     id: "snooze",
                     label: threadSummary?.snoozedUntil != null ? "Reschedule" : "Snooze",
-                    icon: "clock",
+                    icon: THREAD_CONTEXT_MENU_ICONS.snooze,
                     separatorBefore: threadSummary?.snoozedUntil == null,
                   },
                   [
                     ...SNOOZE_PRESETS.map((preset) => ({
                       id: preset.id,
                       label: preset.label,
-                      icon: "clock",
+                      icon: THREAD_CONTEXT_MENU_ICONS.snooze,
                     })),
-                    { id: "snooze-custom", label: "Pick date & time…", icon: "clock" },
+                    {
+                      id: "snooze-custom",
+                      label: "Pick date & time…",
+                      icon: THREAD_CONTEXT_MENU_ICONS.snooze,
+                    },
                   ],
                 ),
               ]
@@ -4317,7 +4322,7 @@ export default function Sidebar() {
         },
       },
       pullRequests: {
-        icon: IoIosGitCompare,
+        icon: CodeReviewIcon,
         label: "Code review",
         active: isOnPullRequests,
         badge: pullRequestsReviewBadge,
@@ -5017,9 +5022,10 @@ export default function Sidebar() {
           </div>
         ) : null}
         {input.threadJumpLabel ? (
-          <KbdGroup
+          <ShortcutKbd
             shortcutLabel={input.threadJumpLabel}
-            className={cn(THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME, "shrink")}
+            title={input.threadJumpLabel}
+            groupClassName={cn(THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME, "shrink")}
           />
         ) : null}
         {trailingStatus ? (
@@ -5508,7 +5514,7 @@ export default function Sidebar() {
     return (
       <>
         <SidebarIconButton
-          icon={IoIosGitCompare}
+          icon={CodeReviewIcon}
           label={`Open code review for ${project.name}`}
           tooltip="Code review"
           tooltipSide="top"

@@ -2439,20 +2439,19 @@ describe("ChatView transcript geometry (full app)", () => {
               }),
             );
             await waitForLayout();
-            const hints = [
-              ...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd-group"]'),
-            ].filter((hint) => hint.closest("[data-thread-item]"));
+            const hints = [...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd"]')].filter(
+              (hint) => hint.closest("[data-thread-item]"),
+            );
             expect(hints.length).toBe(activityViewEnabled ? 5 : 6);
             if (!activityViewEnabled) expect(sidebar.textContent).toContain("Atlas");
-            if (customShortcut) expect(hints[0]!.textContent).toContain("CtrlAltShiftMeta");
+            if (customShortcut) expect(hints[0]!.textContent).toContain("Ctrl+Alt+Shift+Meta");
             for (const hint of hints) {
               const row = hint.closest<HTMLElement>("[data-thread-item]")!;
               expect(row).toBeTruthy();
               const hintRect = hint.getBoundingClientRect();
               expect(hintRect.right).toBeLessThanOrEqual(row.getBoundingClientRect().right);
-              expect(
-                hint.querySelector("kbd:last-child")!.getBoundingClientRect().width,
-              ).toBeGreaterThanOrEqual(20);
+              // The chord is one capsule now; it must keep at least a key's width.
+              expect(hintRect.width).toBeGreaterThanOrEqual(20);
               for (const chip of row.querySelectorAll<HTMLElement>(".sidebar-icon-chip")) {
                 const rect = chip.getBoundingClientRect();
                 if (rect.top < hintRect.bottom && rect.bottom > hintRect.top) {
@@ -2519,7 +2518,7 @@ describe("ChatView transcript geometry (full app)", () => {
             }
             window.dispatchEvent(new KeyboardEvent("keyup", { key: mod, bubbles: true }));
             await waitForLayout();
-            expect(sidebar.querySelector('[data-thread-item] [data-slot="kbd-group"]')).toBeNull();
+            expect(sidebar.querySelector('[data-thread-item] [data-slot="kbd"]')).toBeNull();
           }
         }
       } finally {

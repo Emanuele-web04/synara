@@ -6,7 +6,6 @@
 
 import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { ThreadId } from "@synara/contracts";
-import { GoRepoForked } from "react-icons/go";
 
 import {
   resolveThreadPullRequestFallback,
@@ -187,7 +186,7 @@ function KanbanCardViewComponent({
         ) : null}
         {isForked ? (
           <span title="Forked thread" className="flex shrink-0 items-center">
-            <GoRepoForked
+            <GitBranchIcon
               className="size-3 text-emerald-600 dark:text-emerald-300/90"
               aria-hidden
             />

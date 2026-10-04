@@ -3,6 +3,7 @@ import type { BrowserVaultSettings, BrowserVaultSnapshot } from "@synara/contrac
 import { CentralIcon } from "~/lib/central-icons";
 import { readNativeApi } from "~/nativeApi";
 import { Button } from "./ui/button";
+import { IconButton } from "./ui/icon-button";
 import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "./ui/dialog";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { Switch } from "./ui/switch";
@@ -18,12 +19,10 @@ export function BrowserVaultButton({
 }) {
   if (!readNativeApi()?.browser.vault) return null;
   return (
-    <Button
-      type="button"
+    <IconButton
       variant="ghost"
       size="icon-sm"
-      className="size-7"
-      aria-label="Saved logins"
+      label="Saved logins"
       title="Saved logins"
       onClick={() =>
         window.dispatchEvent(
@@ -32,7 +31,7 @@ export function BrowserVaultButton({
       }
     >
       <CentralIcon name="key-1" className="size-3.5" />
-    </Button>
+    </IconButton>
   );
 }
 

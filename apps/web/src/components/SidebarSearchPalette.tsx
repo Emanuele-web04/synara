@@ -11,7 +11,6 @@ import {
   DeviceLaptopIcon,
   DownloadIcon,
   FolderAddIcon,
-  FolderOpenFrontIcon,
   ImportThreadIcon,
   MoonIcon,
   NewThreadIcon,
@@ -19,6 +18,8 @@ import {
   SidechatIcon,
   SunIcon,
   UsageGaugeIcon,
+  FolderIcon,
+  FolderOpenIcon,
 } from "~/lib/icons";
 import {
   type FilesystemBrowseResult,
@@ -31,12 +32,11 @@ import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomple
 import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { readNativeApi } from "~/nativeApi";
 import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
-import { Kbd, KbdGroup } from "./ui/kbd";
+import { ShortcutKbd } from "./ui/kbd";
 import {
   appendBrowsePathSegment,
   canNavigateUp,
@@ -87,7 +87,7 @@ const PALETTE_ITEM_CLASS =
 const PALETTE_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
 const PALETTE_TEXT_CLASS = "min-w-0 flex-1 truncate text-ui";
 const PALETTE_META_CLASS = "max-w-[45%] shrink-0 truncate text-ui-meta text-muted-foreground/70";
-const PALETTE_KBD_CLASS = "h-[17px] min-w-0 rounded-md px-1.5 text-ui-xs text-muted-foreground/80";
+const PALETTE_KBD_CLASS = "h-[17px] min-w-0 text-ui-xs";
 const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground/79";
 
 // Actions that live under the "Settings" heading when the palette is idle.
@@ -662,7 +662,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         )}
         <span className={PALETTE_TEXT_CLASS}>{action.label}</span>
         {action.shortcutLabel ? (
-          <Kbd className={PALETTE_KBD_CLASS}>{action.shortcutLabel}</Kbd>
+          <ShortcutKbd shortcutLabel={action.shortcutLabel} className={PALETTE_KBD_CLASS} />
         ) : null}
         {action.id === "import-projects" ? (
           <ChevronRightIcon className={PALETTE_ICON_CLASS} />
@@ -915,11 +915,12 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     }
                   >
                     <span>{browseSubmitLabel}</span>
-                    <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
-                      <Kbd>
-                        {hasHighlightedFolderItem ? `${submitModifierLabel} Enter` : "Enter"}
-                      </Kbd>
-                    </KbdGroup>
+                    <ShortcutKbd
+                      shortcutLabel={
+                        hasHighlightedFolderItem ? `${submitModifierLabel} Enter` : "Enter"
+                      }
+                      groupClassName="-me-0.5"
+                    />
                   </Button>
                 ) : null}
               </div>
@@ -952,7 +953,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         }}
                         onClick={() => setQuery(appendBrowsePathSegment(query, entry.name))}
                       >
-                        <FolderClosed className={PALETTE_ICON_CLASS} />
+                        <FolderIcon className={PALETTE_ICON_CLASS} />
                         <span className={PALETTE_TEXT_CLASS}>{entry.name}</span>
                       </CommandItem>
                     ))}
@@ -1085,7 +1086,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                             />
                           </span>
                         ) : (
-                          <FolderOpenFrontIcon className={PALETTE_ICON_CLASS} />
+                          <FolderOpenIcon className={PALETTE_ICON_CLASS} />
                         )}
                         <span className={PALETTE_TEXT_CLASS}>
                           {project.name || "Untitled project"}

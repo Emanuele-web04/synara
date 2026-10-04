@@ -131,6 +131,7 @@ export function SettingsSidebarNav(props: {
     <div className="px-1.5 py-1.5">
       <div className="mb-3 px-1">
         <SearchInput
+          shape="capsule"
           value={query}
           spellCheck={false}
           autoCorrect="off"

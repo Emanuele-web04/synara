@@ -20,7 +20,7 @@ import type { Space } from "../types";
 import { useVoidSpace } from "../voidSpaceStore";
 import { cn } from "~/lib/utils";
 
-import { FolderClosed } from "./FolderClosed";
+import { FolderAddIcon, FolderIcon } from "~/lib/icons";
 import {
   CreateGitHubProjectFields,
   PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME,
@@ -368,7 +368,7 @@ export function CreateProjectDialog(props: {
             <>
               <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
                 <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
-                  <FolderClosed className="size-4 text-muted-foreground/70" aria-hidden="true" />
+                  <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden="true" />
                 </InputGroupAddon>
                 <InputGroupInput
                   id={pathInputId}
@@ -407,7 +407,7 @@ export function CreateProjectDialog(props: {
                     )}
                     onClick={() => void handleBrowse()}
                   >
-                    <CentralIcon name="folder-add-left" className="size-4.5" aria-hidden="true" />
+                    <FolderAddIcon className="size-4.5" aria-hidden="true" />
                     {isPickingFolder ? (
                       "Opening the folder picker…"
                     ) : pickedFolderName ? (

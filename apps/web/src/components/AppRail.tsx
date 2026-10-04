@@ -17,7 +17,16 @@ import { createPortal } from "react-dom";
 
 import type { RailItemId } from "~/appRail.logic";
 import { createCentralIconComponent } from "~/lib/central-icons";
-import { HubActiveIcon, HubIcon } from "~/lib/icons";
+import {
+  ClockIcon,
+  CodeReviewIcon,
+  FoldersIcon,
+  HomeIcon,
+  HubActiveIcon,
+  HubIcon,
+  InboxIcon,
+  TasksIcon,
+} from "~/lib/icons";
 import { projectAppearanceKey, type ProjectAppearance } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
 import {
@@ -72,23 +81,41 @@ export function railProjectGlyphs(
   return glyphs;
 }
 
-/** Central glyphs matching the Codex rail for the fixed rail items. */
-const RAIL_ITEM_GLYPH_NAMES: Record<Exclude<RailItemId, "studio">, string> = {
-  home: "home-roof-door",
-  inbox: "inbox-empty",
-  spaces: "folders",
+/** A rail item whose glyph has no solid twin: the same icon at rest and while active. */
+const sameGlyphs = (glyph: RailGlyph): AppRailGlyphs => ({ idle: glyph, active: glyph });
+
+/** Hugeicons rail items. Only Hubs ship a solid active glyph; the rest match at rest and active. */
+type HugeiconRailItemId =
+  | "home"
+  | "inbox"
+  | "pullRequests"
+  | "automations"
+  | "tasks"
+  | "spaces"
+  | "studio";
+const RAIL_HUGEICON_GLYPHS: Record<HugeiconRailItemId, AppRailGlyphs> = {
+  home: sameGlyphs(HomeIcon),
+  inbox: sameGlyphs(InboxIcon),
+  pullRequests: sameGlyphs(CodeReviewIcon),
+  automations: sameGlyphs(ClockIcon),
+  tasks: sameGlyphs(TasksIcon),
+  spaces: sameGlyphs(FoldersIcon),
+  // Hubs (stored id "studio"): Hugeicons circles, with their own solid active glyph.
+  studio: { idle: HubIcon, active: HubActiveIcon },
+};
+
+/** Central glyphs matching the Codex rail for the remaining fixed rail items. */
+const RAIL_ITEM_GLYPH_NAMES: Record<Exclude<RailItemId, HugeiconRailItemId>, string> = {
   kanban: "columns-3-wide",
-  tasks: "todos",
-  pullRequests: "pull-request",
-  automations: "clock",
   settings: "settings-gear-4",
 };
 
-/** Hubs (stored id "studio"): Hugeicons circles, with their own solid active glyph. */
-const HUB_RAIL_GLYPHS: AppRailGlyphs = { idle: HubIcon, active: HubActiveIcon };
+function isHugeiconRailItem(id: RailItemId): id is HugeiconRailItemId {
+  return id in RAIL_HUGEICON_GLYPHS;
+}
 
 export function railItemGlyphs(id: RailItemId): AppRailGlyphs {
-  if (id === "studio") return HUB_RAIL_GLYPHS;
+  if (isHugeiconRailItem(id)) return RAIL_HUGEICON_GLYPHS[id];
   return railCentralGlyphs(RAIL_ITEM_GLYPH_NAMES[id]);
 }
 

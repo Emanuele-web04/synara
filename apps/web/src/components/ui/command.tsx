@@ -4,6 +4,7 @@ import { Dialog as CommandDialogPrimitive } from "@base-ui/react/dialog";
 import { SearchIcon } from "~/lib/icons";
 import type * as React from "react";
 import { cn } from "~/lib/utils";
+import { ShortcutKbd } from "./kbd";
 import {
   Autocomplete,
   AutocompleteCollection,
@@ -197,7 +198,17 @@ function CommandSeparator({
   );
 }
 
-function CommandShortcut({ className, ...props }: React.ComponentProps<"kbd">) {
+function CommandShortcut({ className, children, ...props }: React.ComponentProps<"kbd">) {
+  if (typeof children === "string") {
+    return (
+      <ShortcutKbd
+        shortcutLabel={children}
+        data-slot="command-shortcut"
+        groupClassName={cn("ms-auto", className)}
+        {...props}
+      />
+    );
+  }
   return (
     <kbd
       className={cn(
@@ -206,7 +217,9 @@ function CommandShortcut({ className, ...props }: React.ComponentProps<"kbd">) {
       )}
       data-slot="command-shortcut"
       {...props}
-    />
+    >
+      {children}
+    </kbd>
   );
 }
 

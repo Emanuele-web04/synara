@@ -5,6 +5,7 @@
 // Layer: UI shared component/helper
 // Exports: MentionChipIcon, createMentionChipIconElement
 
+import { renderToStaticMarkup } from "react-dom/server";
 import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
 import {
   findThreadProviderMentionReferenceForToken,
@@ -13,9 +14,8 @@ import {
   type MentionChipKind,
 } from "~/lib/composerMentions";
 import { CentralIcon, createCentralIconElement } from "~/lib/central-icons";
-import { MessageCircleIcon, PluginIcon } from "~/lib/icons";
+import { MessageCircleIcon, PluginIcon, FolderIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
-import { FolderClosed } from "../FolderClosed";
 import type { ProviderMentionReference } from "@synara/contracts";
 import { threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 import { useStore } from "~/store";
@@ -24,12 +24,16 @@ import { ProviderIcon } from "../ProviderIcon";
 
 export type { MentionChipKind };
 
-function composerMentionChipCentralIconName(path: string, kind: MentionChipKind = "path"): string {
+// Folders are not a Central asset (null): they render the shared Hugeicons folder.
+function composerMentionChipCentralIconName(
+  path: string,
+  kind: MentionChipKind = "path",
+): string | null {
   if (kind === "plugin" || path.startsWith("plugin://")) {
     return "puzzle";
   }
   if (inferEntryKindFromPath(path) === "directory") {
-    return "folder-2";
+    return null;
   }
   return getFileIconName(path);
 }
@@ -76,7 +80,7 @@ export const MentionChipIcon = function MentionChipIcon(props: {
   }
   const kind = inferEntryKindFromPath(props.path);
   if (kind === "directory") {
-    return <FolderClosed className={className} />;
+    return <FolderIcon className={className} />;
   }
   // Masked Central glyph painted with `bg-current`, so the file icon inherits the
   // chip's text color (it shares the filename's color) instead of a per-filetype
@@ -92,6 +96,12 @@ export function createMentionChipIconElement(
   className: string = COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME,
 ): HTMLElement {
   const iconName = composerMentionChipCentralIconName(path, kind);
+  if (iconName === null) {
+    const host = document.createElement("span");
+    host.ariaHidden = "true";
+    host.innerHTML = renderToStaticMarkup(<FolderIcon aria-hidden="true" className={className} />);
+    return host;
+  }
   return (
     createCentralIconElement(iconName, className) ??
     createCentralIconElement("code-brackets", className) ??

@@ -73,6 +73,7 @@ import {
   LoaderCircleIcon,
   RefreshCwIcon,
   TemporaryThreadIcon,
+  FolderIcon,
 } from "~/lib/icons";
 import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
 import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
@@ -269,7 +270,6 @@ import {
 } from "./ChatView.logic";
 import { createThreadLineageSelector, localSubagentThreadId } from "./ChatView.selectors";
 import { ComposerPromptEditor } from "./ComposerPromptEditor";
-import { FolderClosed } from "./FolderClosed";
 import PlanSidebar from "./PlanSidebar";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
@@ -5425,7 +5425,7 @@ export default function ChatView({
           COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
         )}
       >
-        <FolderClosed className="size-3.5 shrink-0" />
+        <FolderIcon className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
     ) : null;

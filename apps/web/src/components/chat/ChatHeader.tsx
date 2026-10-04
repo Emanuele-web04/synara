@@ -14,7 +14,6 @@ import {
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import React, { useEffect, useRef, useState } from "react";
-import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
@@ -31,6 +30,7 @@ import {
   TerminalIcon,
   WorkflowIcon,
   XIcon,
+  GitBranchIcon,
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import {
@@ -528,7 +528,7 @@ export function ChatHeader({
         provider={provider}
         tone="header"
         className={className}
-        fallback={<FiGitBranch className={className} />}
+        fallback={<GitBranchIcon className={className} />}
       />
     );
   };

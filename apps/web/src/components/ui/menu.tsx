@@ -17,6 +17,7 @@ import {
   CHECKBOX_INDICATOR_CLASS_NAME,
   CheckboxCheckGlyph,
 } from "./checkbox";
+import { ShortcutKbd } from "./kbd";
 import { SWITCH_THUMB_CLASS_NAME, SWITCH_TRACK_CLASS_NAME } from "./switch";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
@@ -370,7 +371,17 @@ function MenuSeparator({ className, ...props }: MenuPrimitive.Separator.Props) {
   );
 }
 
-function MenuShortcut({ className, ...props }: React.ComponentProps<"kbd">) {
+function MenuShortcut({ className, children, ...props }: React.ComponentProps<"kbd">) {
+  if (typeof children === "string") {
+    return (
+      <ShortcutKbd
+        shortcutLabel={children}
+        data-slot="menu-shortcut"
+        groupClassName={cn("ms-auto", className)}
+        {...props}
+      />
+    );
+  }
   return (
     <kbd
       className={cn(
@@ -379,7 +390,9 @@ function MenuShortcut({ className, ...props }: React.ComponentProps<"kbd">) {
       )}
       data-slot="menu-shortcut"
       {...props}
-    />
+    >
+      {children}
+    </kbd>
   );
 }
 

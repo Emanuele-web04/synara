@@ -16,35 +16,67 @@ function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
   );
 }
 
-function KbdGroup({
-  className,
-  shortcutLabel,
-  children,
-  ...props
-}: React.ComponentProps<"kbd"> & { shortcutLabel?: string | null }) {
-  const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : null;
+function KbdGroup({ className, ...props }: React.ComponentProps<"kbd">) {
   return (
     <kbd
-      className={cn("inline-flex items-center gap-1", shortcutLabel && "min-w-0", className)}
+      className={cn("inline-flex items-center gap-1", className)}
       data-slot="kbd-group"
-      aria-label={shortcutLabel ?? undefined}
-      title={shortcutLabel ?? undefined}
       {...props}
+    />
+  );
+}
+
+/**
+ * A shortcut chord in one capsule: the look of the Settings keybinding list. Every place that
+ * shows a keybinding (sidebar hints, menus, palettes, tooltips, dialogs) renders it through
+ * here, so the style cannot drift. Size and tone overrides go in `className`.
+ */
+function ShortcutKbd({
+  shortcutLabel,
+  className,
+  groupClassName,
+  ...props
+}: Omit<React.ComponentProps<"kbd">, "children"> & {
+  shortcutLabel: string;
+  groupClassName?: string;
+}) {
+  const parts = splitShortcutLabel(shortcutLabel);
+  // Symbol labels ("⇧⌘K") get a hair of space between keys so a word key ("⇧⌘Right") stays
+  // legible, and truncate from the modifiers while the key stays visible. Anything the split
+  // does not reproduce exactly ("Ctrl+Shift+K", or a chord on the plus key) already reads as
+  // one chord and is shown as written.
+  const symbols = parts.join("") === shortcutLabel;
+  return (
+    <Kbd
+      aria-label={shortcutLabel}
+      {...props}
+      className={cn(
+        "h-5 gap-0.5 rounded-full bg-foreground/5 px-2 text-foreground/80 dark:bg-foreground/12",
+        groupClassName,
+        className,
+      )}
     >
-      {shortcutParts
-        ? shortcutParts.map((part, index) => (
-            <Kbd key={part} className={index === shortcutParts.length - 1 ? "shrink-0" : "min-w-0"}>
-              <span className="truncate">{part}</span>
-            </Kbd>
-          ))
-        : children}
-    </kbd>
+      {symbols ? (
+        parts.map((part, index) => (
+          <span key={part} className={index === parts.length - 1 ? "shrink-0" : "min-w-0 truncate"}>
+            {part}
+          </span>
+        ))
+      ) : (
+        <span className="truncate">{shortcutLabel}</span>
+      )}
+    </Kbd>
   );
 }
 
 /** The "submit this dialog" chord, spelled for the host platform. */
 function SubmitShortcutKbd({ className }: { className?: string }) {
-  return <Kbd className={className}>{isMacNavigatorPlatform() ? "⌘↵" : "Ctrl ↵"}</Kbd>;
+  return (
+    <ShortcutKbd
+      shortcutLabel={isMacNavigatorPlatform() ? "⌘↵" : "Ctrl ↵"}
+      {...(className ? { className } : {})}
+    />
+  );
 }
 
-export { Kbd, KbdGroup, SubmitShortcutKbd };
+export { Kbd, KbdGroup, ShortcutKbd, SubmitShortcutKbd };

@@ -5,7 +5,6 @@
 
 import type { ComponentType } from "react";
 
-import { splitShortcutLabel } from "~/keybindings";
 import { cn } from "~/lib/utils";
 import {
   SIDEBAR_HEADER_ROW_CLASS_NAME,
@@ -16,7 +15,7 @@ import {
 import type { SidebarActionBadge } from "./Sidebar.logic";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
-import { Kbd, KbdGroup } from "./ui/kbd";
+import { ShortcutKbd } from "./ui/kbd";
 import { SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar";
 
 export function SidebarPrimaryAction({
@@ -48,7 +47,6 @@ export function SidebarPrimaryAction({
   // the parameter list makes React Compiler bail out on the whole component.
   const active = activeProp ?? false;
   const disabled = disabledProp ?? false;
-  const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
 
   return (
     <SidebarMenuItem>
@@ -85,13 +83,9 @@ export function SidebarPrimaryAction({
           >
             {badge.text}
           </span>
-        ) : shortcutParts.length > 0 ? (
+        ) : shortcutLabel ? (
           <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
-            <KbdGroup>
-              {shortcutParts.map((part) => (
-                <Kbd key={part}>{part}</Kbd>
-              ))}
-            </KbdGroup>
+            <ShortcutKbd shortcutLabel={shortcutLabel} />
           </span>
         ) : null}
       </SidebarMenuButton>

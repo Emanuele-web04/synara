@@ -15,7 +15,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
 import { SearchInput } from "~/components/ui/search-input";
-import { ShortcutKbd } from "~/components/ui/shortcut-kbd";
+import { ShortcutKbd } from "~/components/ui/kbd";
 import { toastManager } from "~/components/ui/toast";
 import { showConfirmDialogFallback } from "~/confirmDialogFallback";
 import {
@@ -231,7 +231,7 @@ function ShortcutRow({
         {row.bindings.length > 0 ? (
           row.bindings.map((binding, index) => (
             <div key={binding.id} className="flex min-h-6 flex-wrap items-center gap-0.5">
-              <ShortcutKbd joined shortcutLabel={binding.label} groupClassName="mr-1.5 shrink-0" />
+              <ShortcutKbd shortcutLabel={binding.label} groupClassName="mr-1.5 shrink-0" />
               <IconButton
                 label={`Change the shortcut ${binding.label} for ${row.label}`}
                 tooltip="Change shortcut"

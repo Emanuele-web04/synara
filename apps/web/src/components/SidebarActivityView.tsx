@@ -27,6 +27,7 @@ import {
   SortIcon,
   Undo2Icon,
   WorktreeIcon,
+  FolderIcon,
 } from "~/lib/icons";
 import { beginThreadDrag, endThreadDrag } from "~/lib/threadDrag";
 import { cn } from "~/lib/utils";
@@ -43,7 +44,6 @@ import { resolveThreadPullRequestFallback } from "../hooks/useThreadPullRequests
 import { useThreadIdsWithPendingDraft } from "../composerDraftStore";
 import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
-import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon } from "./ProviderIcon";
 import { SnoozeCountdown } from "./SnoozeCountdown";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
@@ -88,7 +88,7 @@ import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
-import { KbdGroup } from "./ui/kbd";
+import { ShortcutKbd } from "./ui/kbd";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
@@ -245,9 +245,10 @@ export function ActivityThreadRow({
             ) : null}
             {hasPendingDraft ? <SidebarDraftGlyph /> : null}
             {threadJumpLabel ? (
-              <KbdGroup
+              <ShortcutKbd
                 shortcutLabel={threadJumpLabel}
-                className={sidebarHoverRevealHideClassName("activity-row")}
+                title={threadJumpLabel}
+                groupClassName={sidebarHoverRevealHideClassName("activity-row")}
               />
             ) : null}
           </span>
@@ -261,7 +262,7 @@ export function ActivityThreadRow({
                 presentation="favicon"
               />
             ) : (
-              <FolderClosed
+              <FolderIcon
                 className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
                 aria-hidden
               />

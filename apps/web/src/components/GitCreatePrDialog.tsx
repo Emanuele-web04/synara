@@ -23,7 +23,7 @@ import {
   GitDialogHeading,
   GitDialogShell,
 } from "./GitDialogChrome";
-import { ArrowUpRightIcon, GitPullRequestDraftIcon, GitPullRequestIcon } from "~/lib/icons";
+import { CreatePullRequestIcon, ExternalLinkIcon, GitPullRequestDraftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 export interface GitCreatePrDialogSubmission {
@@ -147,14 +147,14 @@ export function GitCreatePrDialog({
         <GitDialogActionRow
           highlighted
           disabled={!canCreate}
-          icon={<GitPullRequestIcon />}
+          icon={<CreatePullRequestIcon />}
           label="Create PR"
           trailing={<SubmitShortcutKbd />}
           onClick={() => submit(false)}
         />
         <GitDialogActionRow
           disabled={!canOpenInBrowser}
-          icon={<ArrowUpRightIcon />}
+          icon={<ExternalLinkIcon />}
           label="Open PR in browser"
           onClick={() => onOpenInBrowser({ preparation: browserPreparation, includeLocalChanges })}
         />

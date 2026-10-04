@@ -1430,7 +1430,9 @@ describe("MessagesTimeline", () => {
         />,
       );
       expect(markup).toContain('data-tool-icon="computer"');
-      expect(markup).toContain("central-icons-reversed/cursor-1.svg");
+      // The computer-use pointer is the mirrored Hugeicons navigation glyph.
+      expect(markup).toContain('data-slot="hugeicon"');
+      expect(markup).toContain('transform="translate(24 0) scale(-1 1)"');
       expect(markup).toContain(
         toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
       );

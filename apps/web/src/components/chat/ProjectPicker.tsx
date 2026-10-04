@@ -18,13 +18,12 @@ import {
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
-import { PlusIcon, XIcon } from "~/lib/icons";
+import { PlusIcon, XIcon, FolderIcon } from "~/lib/icons";
 import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
 import { useVoidSpace } from "~/voidSpaceStore";
 import { cn } from "~/lib/utils";
-import { FolderClosed } from "../FolderClosed";
 import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 import { SpaceIcon } from "../SpaceIcon";
 import { PickerPanelShell } from "./PickerPanelShell";
@@ -518,7 +517,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               />
             </span>
           ) : (
-            <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
+            <FolderIcon className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
           )}
           <span className="min-w-0 truncate">{folder.primaryLabel}</span>
           {folder.secondaryLabel ? (
@@ -570,7 +569,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                   isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
                 }
                 icon={
-                  <FolderClosed
+                  <FolderIcon
                     className={cn(
                       "size-3.5 transition-opacity duration-150 ease-out motion-reduce:transition-none",
                       canResetFromTrigger && "group-hover/project-picker-trigger:opacity-0",
@@ -721,7 +720,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                     )}
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
+                      <FolderIcon className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
                       <span className="truncate">{entry.name}</span>
                     </div>
                   </ComboboxItem>

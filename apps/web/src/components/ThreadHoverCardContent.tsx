@@ -11,10 +11,9 @@
 import type { OrchestrationThreadPullRequest } from "@synara/contracts";
 import type { MouseEvent, ReactNode } from "react";
 
-import { FastModeIcon, GitBranchIcon, WorktreeIcon } from "~/lib/icons";
+import { FastModeIcon, GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import type { ThreadModelSummary } from "~/lib/threadModelSummary";
-import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon } from "./ProviderIcon";
 import {
@@ -145,7 +144,7 @@ export function ThreadHoverCardContent({
                     />
                   </span>
                 ) : (
-                  <FolderClosed className={META_ICON_CLASS_NAME} aria-hidden />
+                  <FolderIcon className={META_ICON_CLASS_NAME} aria-hidden />
                 )
               }
             >
@@ -153,7 +152,7 @@ export function ThreadHoverCardContent({
             </MetaRow>
           ) : null}
           {sourceProjectName ? (
-            <MetaRow icon={<FolderClosed className={META_ICON_CLASS_NAME} aria-hidden />}>
+            <MetaRow icon={<FolderIcon className={META_ICON_CLASS_NAME} aria-hidden />}>
               {sourceProjectName}
             </MetaRow>
           ) : null}

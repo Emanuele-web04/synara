@@ -57,13 +57,13 @@ export function DiffPanelShell(props: {
 export function DiffPanelHeaderSkeleton() {
   return (
     <div className="flex h-full w-full items-center gap-2">
-      <Skeleton className="h-8 w-28 shrink-0 rounded-lg" />
+      <Skeleton className="h-8 w-28 shrink-0 rounded-full" />
       <Skeleton className="h-4 w-14 shrink-0 rounded-full" />
       <div className="ml-auto flex items-center gap-1.5">
-        <Skeleton className="size-7 rounded-md" />
-        <Skeleton className="size-7 rounded-md" />
-        <Skeleton className="h-7 w-16 rounded-md" />
-        <Skeleton className="h-8 w-20 rounded-lg" />
+        <Skeleton className="size-7 rounded-full" />
+        <Skeleton className="size-7 rounded-full" />
+        <Skeleton className="h-7 w-16 rounded-full" />
+        <Skeleton className="h-8 w-20 rounded-full" />
       </div>
     </div>
   );
