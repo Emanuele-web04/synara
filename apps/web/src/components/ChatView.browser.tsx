@@ -2866,6 +2866,93 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["surviving", "closing"] as const)(
+    "closes a source pane into a survivor that anchors its own split (%s pane focused)",
+    async (focused) => {
+      const snapshot = withHomeChatProject(
+        addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = {
+            ...nextFixture.welcome,
+            homeDir: "/Users/tester",
+            chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          };
+        },
+      });
+      try {
+        // The survivor already anchors its own split, so it cannot take over this one.
+        const survivorSplitId = useSplitViewStore.getState().createFromThread({
+          sourceThreadId: THREAD_ID,
+          ownerProjectId: PROJECT_ID,
+        });
+        const splitViewId = useSplitViewStore.getState().createFromDrop({
+          sourceThreadId: OTHER_THREAD_ID,
+          ownerProjectId: PROJECT_ID,
+          droppedThreadId: THREAD_ID,
+          direction: "horizontal",
+          side: "second",
+        });
+        await mounted.router.navigate({
+          to: "/$threadId",
+          params: { threadId: THREAD_ID },
+          search: () => ({ splitViewId }),
+        });
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
+        );
+        await waitForLayout();
+        const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+        const editorForThread = (threadId: ThreadId) => {
+          const scope = splitViewPaneScopeId(
+            splitViewId,
+            resolveSplitViewPaneIdForThread(split, threadId)!,
+          );
+          return document.querySelector<HTMLElement>(
+            `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+          )!;
+        };
+        const survivingEditor = editorForThread(THREAD_ID);
+        const closingEditor = editorForThread(OTHER_THREAD_ID);
+        // The dropped pane (the survivor) starts focused, so only the closing variant needs to
+        // move focus. Pane focus follows mousedown, so that variant clicks the closing editor.
+        if (focused === "closing") {
+          await userEvent.click(closingEditor);
+        }
+        await vi.waitFor(() => {
+          const focusedThreadId = focused === "surviving" ? THREAD_ID : OTHER_THREAD_ID;
+          const current = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+          expect(current.focusedPaneId).toBe(
+            resolveSplitViewPaneIdForThread(current, focusedThreadId),
+          );
+          expect(mounted.router.state.location.pathname).toBe(`/${focusedThreadId}`);
+        });
+        await userEvent.click(
+          closingEditor
+            .closest('[data-slot="sidebar-inset"]')!
+            .querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
+        );
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+          expect(mounted.router.state.location.search.splitViewId).toBeUndefined();
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(1);
+          expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeUndefined();
+        });
+        await waitForLayout();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+        expect(document.querySelector('[contenteditable="true"]')).toBe(survivingEditor);
+        expect(useSplitViewStore.getState().splitViewIdBySourceThreadId[THREAD_ID]).toBe(
+          survivorSplitId,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("keeps the surviving non-route chat mounted when a split collapses", async () => {
     const snapshot = addThreadToSnapshot(
       createSnapshotWithLongAssistantResponse(),
