@@ -13,6 +13,96 @@ import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
+  it("omits routine approval resolutions between tool lifecycle updates", () => {
+    const activities = [
+      makeActivity({
+        id: "command-start",
+        sequence: 1,
+        kind: "tool.started",
+        summary: "Running checks",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
+      }),
+      ...Array.from({ length: 12 }, (_, index) =>
+        makeActivity({
+          id: `approval-${index}`,
+          sequence: index + 2,
+          kind: "approval.resolved",
+          summary: "Approval resolved",
+          tone: "approval",
+          payload: { requestId: `req-${index}`, requestType: "command_execution_approval" },
+        }),
+      ),
+      makeActivity({
+        id: "command-completed",
+        sequence: 14,
+        kind: "tool.completed",
+        summary: "Checks passed",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
+      }),
+    ];
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toMatchObject([
+      { id: "command-start", label: "Checks passed", activityKind: "tool.completed" },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(deriveTimelineEntries([], [], entries)).toHaveLength(1);
+    expect(activities.filter((activity) => activity.kind === "approval.resolved")).toHaveLength(12);
+  });
+
+  it("keeps pending approvals, questions and errors alongside quiet resolutions", () => {
+    const activities = [
+      makeActivity({
+        id: "approval-pending",
+        sequence: 1,
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: { requestId: "req-pending", requestKind: "command", detail: "bun run lint" },
+      }),
+      makeActivity({
+        id: "question-pending",
+        sequence: 2,
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: { requestId: "question-pending" },
+      }),
+      makeActivity({
+        id: "approval-quiet",
+        sequence: 3,
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        tone: "info",
+        payload: { requestId: "req-other", decision: "accept" },
+      }),
+      makeActivity({
+        id: "approval-error",
+        sequence: 4,
+        kind: "approval.resolved",
+        summary: "Approval failed",
+        tone: "error",
+      }),
+      makeActivity({
+        id: "turn-error",
+        sequence: 5,
+        kind: "turn.completed",
+        summary: "Turn failed",
+        tone: "error",
+      }),
+    ];
+    expect(deriveWorkLogEntries(activities, undefined).map((entry) => entry.id)).toEqual([
+      "approval-pending",
+      "question-pending",
+      "approval-error",
+      "turn-error",
+    ]);
+  });
+
   it.each([false, true])(
     "keeps the latest authentication state visible between turns (finished: %s)",
     (finished) => {

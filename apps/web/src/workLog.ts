@@ -392,6 +392,7 @@ export function deriveWorkLogEntries(
         activity.kind !== "task.completed",
     )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
+    .filter((activity) => !isQuietApprovalResolutionActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
       (activity) =>
@@ -569,6 +570,16 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
   }
   // Provider lifecycle rows close internal state; assistant/result text is rendered from messages.
   return activity.tone !== "error";
+}
+
+function isQuietApprovalResolutionActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "approval.resolved" || activity.tone === "error") {
+    return false;
+  }
+  // Resolution events still settle pending requests in the store. They are not
+  // transcript work, except for explicit Computer/Device consent outcomes.
+  const scope = asRecord(activity.payload)?.approvalScope;
+  return scope !== "computer-task" && scope !== "computer-foreground" && scope !== "device-task";
 }
 
 function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {

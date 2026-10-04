@@ -297,6 +297,7 @@ import { GroupSettingsDialog } from "./chat/group/GroupSettingsDialog";
 import { SidebarGroupsSurface } from "./SidebarGroupsSurface";
 import {
   activateThreadWhenHydrated,
+  isGroupThreadRoute,
   resolveGroupChatTargetProjectId,
 } from "./SidebarGroupsSurface.logic";
 
@@ -2022,16 +2023,15 @@ export default function Sidebar() {
   const activeRouteProject = activeRouteProjectId
     ? (projectById.get(activeRouteProjectId) ?? null)
     : null;
-  // Same predicate the Groups collectors use — trusting `kind` alone here would let a drifted
-  // group-kind row (root outside the configured Groups root) activate the Groups segment while
-  // every Groups list excludes it, stranding the active thread in neither segment.
+  // Use the list's validated containers and member index: a hub worker's projectId
+  // points at its execution repo, which must not move its chat out of Hubs.
   const isOnGroups =
     isOnGroupsRoute ||
-    isGroupContainerProject(activeRouteProject, {
-      homeDir,
-      chatWorkspaceRoot,
-      studioWorkspaceRoot,
-      groupsWorkspaceRoot,
+    isGroupThreadRoute({
+      threadId: routeThreadId,
+      projectId: activeRouteProjectId,
+      groupProjectIds: groupProjectIdSet,
+      summariesByProjectId,
     });
   useEffect(() => {
     reconcileRailShell({
