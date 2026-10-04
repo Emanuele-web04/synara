@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BetaDiagnostics,
@@ -255,6 +255,88 @@ describe("BetaDiagnostics error tracking", () => {
           .split("\n")
       : []
     ).map((line) => JSON.parse(line));
+
+  it("keeps only bounded, recent allowlisted actions and redacts before adding crash context", () => {
+    const root = makeRoot();
+    let now = new Date("2026-10-04T20:00:00Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.0-beta.1",
+      platform: "linux",
+      arch: "x64",
+      now: () => now,
+    });
+    diag.recordActivity({
+      activity: "chat.send",
+      phase: "started",
+      prompt: "private prompt",
+      threadId: "private-thread",
+    });
+    diag.recordActivity({ activity: "private action name", phase: "started" });
+    expect(readQueue(root)).toEqual([]);
+    diag.track("app.renderer-crash", {
+      kind: "crash",
+      processType: "renderer",
+      reason: "crashed",
+      logTail:
+        "-----BEGIN PRIVATE KEY-----\n" +
+        "SyntheticKeyPart+/12\n".repeat(2000) +
+        "-----END PRIVATE KEY-----\nexitCode=5",
+    });
+    const first = readQueue(root)[0].payload.logTail;
+    expect(first).toContain("chat.send started");
+    expect(first).toContain("exitCode=5");
+    expect(first).not.toMatch(/private prompt|private-thread|private action name|SyntheticKeyPart/);
+    expect(first.length).toBeLessThanOrEqual(16 * 1024);
+    now = new Date(now.getTime() + 11 * 60_000);
+    for (let i = 0; i < 30; i++) {
+      diag.recordActivity({ activity: "project.import", phase: i % 2 ? "failed" : "started" });
+    }
+    diag.trackError("renderer", new Error("import failed"));
+    const stack = readQueue(root)[1].payload.stack;
+    expect(stack).not.toContain("chat.send");
+    expect(stack.match(/project.import/g)).toHaveLength(24);
+    expect(stack).toContain("import failed");
+    now = new Date(now.getTime() + 11 * 60_000);
+    diag.trackError("renderer", new Error("later failure"));
+    expect(readQueue(root)[2].payload.stack).not.toContain("Beta diagnostic context");
+  });
+
+  it("samples bounded numeric memory history and stops its timer on disposal", async () => {
+    vi.useFakeTimers();
+    const root = makeRoot();
+    let value = 1;
+    const sampleMemory = vi.fn(() => ({
+      mainRssMb: value++,
+      rendererRssMb: 20,
+      gpuRssMb: 30,
+      utilityRssMb: 40,
+      privateName: "never send",
+    }));
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.0-beta.1",
+      platform: "linux",
+      arch: "x64",
+      sampleMemory,
+    });
+    try {
+      diag.start();
+      vi.advanceTimersByTime(90_000);
+      diag.trackError("main", new Error("memory context"));
+      const stack = readQueue(root)[0].payload.stack;
+      expect(stack.match(/memory MiB/g)).toHaveLength(4);
+      expect(stack).toContain("main=4 renderer=20 gpu=30 utility=40");
+      expect(stack).not.toContain("never send");
+      await diag.dispose(0);
+      const calls = sampleMemory.mock.calls.length;
+      vi.advanceTimersByTime(90_000);
+      expect(sampleMemory).toHaveBeenCalledTimes(calls);
+    } finally {
+      await diag.dispose(0);
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["check", "download", "install"] as const)(
     "reports %s failures once per attempt even when the updater keeps a retryable status",

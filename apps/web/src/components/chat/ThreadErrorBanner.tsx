@@ -45,7 +45,7 @@ export function ThreadErrorBanner({
               size="xs"
               variant="destructive-outline"
               disabled={unblocking}
-              onClick={onUnblock}
+              onClick={() => onUnblock?.()}
             >
               {unblocking ? "Unblocking…" : "Unblock thread"}
             </Button>

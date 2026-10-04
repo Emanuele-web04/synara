@@ -295,6 +295,42 @@ afterEach(() => {
 });
 
 describe("WsTransport", () => {
+  it("records the outcome of a Beta import without changing its result or rejection", async () => {
+    const recordActivity = vi.fn();
+    Object.assign(window, { desktopBridge: { betaDiagnostics: { recordActivity } } });
+    const { transport, internals } = makeBareTransport();
+    const failure = new Error("import rejected");
+    let reject = false;
+    Object.assign(internals, {
+      getClient: async () => ({
+        [ORCHESTRATION_WS_METHODS.importProject]: () =>
+          reject ? Effect.fail(failure) : Effect.succeed({ imported: 3 }),
+      }),
+      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+    });
+    const params = { path: "/private/project", prompt: "never collect", id: "private-id" };
+    await expect(
+      transport.request(ORCHESTRATION_WS_METHODS.importProject, params),
+    ).resolves.toEqual({ imported: 3 });
+    reject = true;
+    await expect(transport.request(ORCHESTRATION_WS_METHODS.importProject, params)).rejects.toThrow(
+      "import rejected",
+    );
+    expect(recordActivity.mock.calls).toEqual([
+      [{ activity: "project.import", phase: "started" }],
+      [{ activity: "project.import", phase: "succeeded" }],
+      [{ activity: "project.import", phase: "started" }],
+      [{ activity: "project.import", phase: "failed" }],
+    ]);
+    recordActivity.mockImplementation(() => {
+      throw new Error("broken diagnostics bridge");
+    });
+    reject = false;
+    await expect(
+      transport.request(ORCHESTRATION_WS_METHODS.importProject, params),
+    ).resolves.toEqual({ imported: 3 });
+  });
+
   it.each(["caller", "transport"])(
     "keeps an unacknowledged send pending through settlement failures until %s cancellation",
     async (cancelSource) => {

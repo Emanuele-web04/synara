@@ -332,6 +332,7 @@ describe("ChatTranscriptPane", () => {
       await expect.element(unblockButton).toBeInTheDocument();
       await unblockButton.click();
       expect(onUnblockThread).toHaveBeenCalledTimes(1);
+      expect(onUnblockThread).toHaveBeenCalledWith();
 
       const dismissButton = page.getByRole("button", { name: "Dismiss error" });
       await expect.element(dismissButton).toBeInTheDocument();

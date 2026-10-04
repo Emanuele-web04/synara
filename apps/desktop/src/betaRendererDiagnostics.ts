@@ -17,7 +17,13 @@ export function attachBetaRendererDiagnostics(
   const ownsEvent = (event: IpcMainEvent): boolean =>
     event.sender === webContents && event.senderFrame === webContents.mainFrame;
   const onReady = (event: IpcMainEvent): void => {
-    if (ownsEvent(event)) capturesUnhandledErrors = true;
+    if (ownsEvent(event)) {
+      capturesUnhandledErrors = true;
+      diagnostics.recordActivity({ activity: "renderer.ready", phase: "succeeded" });
+    }
+  };
+  const onActivity = (event: IpcMainEvent, payload: unknown): void => {
+    if (ownsEvent(event)) diagnostics.recordActivity(payload);
   };
   const onError = (event: IpcMainEvent, payload: unknown): void => {
     if (!ownsEvent(event) || payload === null || typeof payload !== "object") return;
@@ -37,9 +43,11 @@ export function attachBetaRendererDiagnostics(
   };
   ipcMain.on(channels.rendererReady, onReady);
   ipcMain.on(channels.reportError, onError);
+  ipcMain.on(channels.recordActivity, onActivity);
   webContents.on("destroyed", () => {
     ipcMain.removeListener(channels.rendererReady, onReady);
     ipcMain.removeListener(channels.reportError, onError);
+    ipcMain.removeListener(channels.recordActivity, onActivity);
   });
   webContents.on("did-start-navigation", (details) => {
     if (details.isMainFrame && !details.isSameDocument) capturesUnhandledErrors = false;

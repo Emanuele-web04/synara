@@ -99,7 +99,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
-    manager.setWindow({ contentView: parent } as never);
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
     try {
       const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
       const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
@@ -139,7 +139,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
-    manager.setWindow({ contentView: parent } as never);
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
     try {
       const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
       const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
@@ -192,6 +192,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     }
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     try {
@@ -279,6 +280,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       .mockReturnValueOnce(view(contents));
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const state = manager.open({ threadId: THREAD_ID });
@@ -320,6 +322,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const state = manager.open({ threadId: THREAD_ID });
@@ -352,6 +355,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     });
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const state = manager.open({ threadId: THREAD_ID });
@@ -397,6 +401,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
     const nativeManager = new DesktopBrowserManager();
     nativeManager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     nativeManager.open({ threadId: THREAD_ID });
@@ -470,6 +475,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
           setBorderRadius: vi.fn(),
         });
         manager.setWindow({
+          isDestroyed: () => false,
           contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
         } as never);
       }
@@ -515,6 +521,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -567,6 +574,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -612,6 +620,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       webContentsViewConstructor.mockReturnValueOnce(nativeView);
       const manager = new DesktopBrowserManager();
       const hostWindow = {
+        isDestroyed: () => false,
         webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
         contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
       };
@@ -656,6 +665,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("creates a native background runtime after the renderer guest detaches", async () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -690,6 +700,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("keeps the adopted renderer guest when agent tools claim the tab", async () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -824,6 +835,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("routes automation only after the adopted renderer guest is the visible panel surface", () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -1740,7 +1752,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
-    manager.setWindow({ contentView: parent } as never);
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
     const blank = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
     const tabId = blank.activeTabId!;
     manager.prepareAutomationNavigation({
@@ -1784,6 +1796,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     });
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });

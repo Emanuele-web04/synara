@@ -42,6 +42,28 @@ message keeps the original port so it can still help diagnosis.
 Crash events exclude clean process exits and known app shutdowns, including
 backend processes deliberately stopped for an updater handoff. An unexpected
 `killed` process remains reportable; a signal alone does not prove shutdown.
+Renderer crash log tails include the triggering reason and exit code. A closed
+launcher stdout/stderr pipe is handled on that stream without quitting the app
+or reporting an uncaught exception; other stream errors still propagate.
+
+Beta also keeps a small action history in main-process memory: the last 24
+allowlisted activity entries within 10 minutes, with timestamps and
+started/succeeded/failed phases. Categories cover sending/stopping/opening chats,
+unblocking, creating/importing projects, workspace searches/reads/changes,
+browser opening/navigation/resizing, window resizing, and RPC reconnect interruptions.
+They describe observed operations, including background requests, not guaranteed
+user clicks. Browser actions record their start; RPC actions also record their outcome.
+No RPC arguments, prompts, identifiers, project names, file paths, URLs, DOM text,
+or arbitrary action labels are included. Resize activity is throttled.
+
+Every 30 seconds Beta samples aggregate Electron working-set memory (MiB) for
+main, renderer, GPU, and utility processes, retaining four samples. This does
+not measure the separate backend's Node heap. Recent activity and memory samples
+are attached to existing error stacks and crash log tails within their existing
+size limits and pass through the shared redactor. Actions and memory samples do
+not create their own uploads or disk records; Stable exposes no collection bridge
+and starts no sampler. Context can help correlate failures with preceding work,
+but is not a proof of causation and cannot reconstruct older reports.
 
 `update.check` records the start of a check, not a successful result. Its
 `outcome: "ok"` means the attempt started. Failures emit `update.error` with the

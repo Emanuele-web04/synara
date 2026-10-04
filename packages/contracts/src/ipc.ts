@@ -877,11 +877,39 @@ export interface DesktopRendererError {
   readonly stack?: string | undefined;
 }
 
+/** Fixed categories only: never carry RPC arguments, DOM text, paths, or IDs. */
+export const DesktopDiagnosticActivity = Schema.Literals([
+  "chat.send",
+  "chat.stop",
+  "chat.open",
+  "chat.unblock",
+  "workspace.change",
+  "project.create",
+  "project.import",
+  "project.import.preview",
+  "project.import.catalog",
+  "workspace.search",
+  "workspace.read",
+  "browser.open",
+  "browser.navigate",
+  "browser.resize",
+  "window.resize",
+  "transport.reconnect",
+  "renderer.ready",
+]);
+export type DesktopDiagnosticActivity = typeof DesktopDiagnosticActivity.Type;
+export const DesktopDiagnosticBreadcrumb = Schema.Struct({
+  activity: DesktopDiagnosticActivity,
+  phase: Schema.Literals(["started", "succeeded", "failed"]),
+});
+export type DesktopDiagnosticBreadcrumb = typeof DesktopDiagnosticBreadcrumb.Type;
+
 export interface DesktopBridge {
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;
     reportError: (error: DesktopRendererError) => void;
+    recordActivity?: (breadcrumb: DesktopDiagnosticBreadcrumb) => void;
   };
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;

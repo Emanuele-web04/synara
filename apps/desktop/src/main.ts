@@ -300,7 +300,7 @@ import {
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
 } from "./desktopUserDataProfile";
-import { isBrokenPipeError } from "./desktopProcessErrors";
+import { handleDesktopStdioError, isBrokenPipeError } from "./desktopProcessErrors";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
   readCustomTitleBarPreference,
@@ -438,6 +438,27 @@ const betaDiagnostics =
         appVersion: app.getVersion(),
         platform: process.platform,
         arch: process.arch,
+        sampleMemory: () => {
+          const counters = { mainRssMb: 0, rendererRssMb: 0, gpuRssMb: 0, utilityRssMb: 0 };
+          for (const metric of app.getAppMetrics()) {
+            const mib = metric.memory.workingSetSize / 1024;
+            switch (metric.type) {
+              case "Browser":
+                counters.mainRssMb += mib;
+                break;
+              case "Tab":
+                counters.rendererRssMb += mib;
+                break;
+              case "GPU":
+                counters.gpuRssMb += mib;
+                break;
+              case "Utility":
+                counters.utilityRssMb += mib;
+                break;
+            }
+          }
+          return counters;
+        },
       })
     : null;
 
@@ -462,6 +483,11 @@ const trackBetaDiagnostics = (
 ): void => {
   betaDiagnostics?.track(event, payload);
 };
+
+// Handle launcher pipe failures at their source. The file log remains available
+// after stdout/stderr closes; unrelated stream/process errors still propagate.
+process.stdout.on("error", handleDesktopStdioError);
+process.stderr.on("error", handleDesktopStdioError);
 
 // Monitor-only: observes uncaught exceptions for diagnostics without changing
 // Node's exit behavior — the POSIX EPIPE filter and the default crash path
@@ -5743,6 +5769,9 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
+    const description = `reason=${details.reason} exitCode=${details.exitCode}`;
+    writeDesktopLogHeader(`renderer process gone ${description}`);
+    safeConsoleError(`[desktop] renderer process gone (${description})`);
     // A renderer that dies while hosting the quit-confirmation ask can never
     // answer it — declining would abandon a requested quit and (worse) show
     // the recovery prompt below, leaving a dead-UI app alive forever. Allow
@@ -5762,9 +5791,6 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
           ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
           : undefined,
       });
-    const description = `reason=${details.reason} exitCode=${details.exitCode}`;
-    writeDesktopLogHeader(`renderer process gone ${description}`);
-    safeConsoleError(`[desktop] renderer process gone (${description})`);
 
     const response = rendererCrashPolicy.respondToCrash({
       reason: details.reason,
