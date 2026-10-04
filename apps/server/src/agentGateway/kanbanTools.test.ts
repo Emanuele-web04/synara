@@ -392,7 +392,17 @@ describe("synara_create_kanban_task", () => {
 
   it("forwards the spec to runCreateThreads and returns threadId + card", async () => {
     const { tools, created } = makeTools({
-      threads: [makeSessionShell("thread-created")],
+      threads: [
+        makeSessionShell("thread-created"),
+        makeThreadShell("thread-caller", "project-a", {
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "sonnet-5",
+            instanceId: "claude-work",
+            options: { effort: "high" },
+          },
+        }),
+      ],
       runCreateThreads: () => createOk(["thread-created"]),
     });
 
@@ -414,7 +424,12 @@ describe("synara_create_kanban_task", () => {
     ).threads[0]!;
     expect(spec.title).toBe("Fix bug");
     expect(spec.prompt).toBe("Fix bug");
-    expect(spec.target.provider).toBe("claudeAgent");
+    expect(spec.target).toEqual({
+      provider: "claudeAgent",
+      model: "sonnet-5",
+      instanceId: "claude-work",
+      options: { effort: "high" },
+    });
     expect(result.threadId).toBe("thread-created");
     expect(result.card.column).toBe("done");
   });

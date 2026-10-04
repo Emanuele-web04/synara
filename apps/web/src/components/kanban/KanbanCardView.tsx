@@ -126,7 +126,7 @@ function KanbanCardAttentionPill({
     ? "text-red-600 dark:text-red-300/90"
     : "text-amber-600 dark:text-amber-300/90";
   const pillClassName = cn(
-    "shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1 ring-inset",
+    "shrink-0 rounded-full px-2 py-0.5 text-ui-xs font-medium ring-1 ring-inset",
     "bg-red-500/[0.07] ring-red-500/30",
     tone,
   );

@@ -268,6 +268,16 @@ export function useChatTurnExecution({
           (staged) => staged.cleanup(),
           () => undefined,
         );
+        // Submission already armed local UI state and added an optimistic row.
+        // The shared draft dispatch owns the real message; release this attempt.
+        sendInFlightRef.current = false;
+        worktreeSetupResolutionRef.current = null;
+        resetLocalDispatch();
+        if (activeThreadIdRef.current === threadIdForSend) {
+          setOptimisticUserMessages((messages) =>
+            messages.filter((message) => message.id !== messageIdForSend),
+          );
+        }
         return false;
       }
       let createdServerThreadForLocalDraft = false;

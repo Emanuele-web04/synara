@@ -737,7 +737,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 target: buildModelSelection(
                   context.callerProvider,
                   model,
-                  callerShell.modelSelection.model,
+                  callerShell.modelSelection,
                 ),
                 projectId: String(callerShell.projectId),
               };
@@ -1076,7 +1076,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 modelSelection: buildModelSelection(
                   context.callerProvider,
                   model,
-                  callerShell.modelSelection.model,
+                  callerShell.modelSelection,
                 ),
                 runtimeMode:
                   callerShell.runtimeMode === "full-access" ? "full-access" : "approval-required",

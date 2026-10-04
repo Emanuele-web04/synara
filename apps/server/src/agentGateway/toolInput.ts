@@ -172,21 +172,27 @@ export function readModelSelectionArg(
 export function buildModelSelection(
   provider: ProviderKind,
   model: string | undefined,
-  fallbackModel?: string,
+  fallbackSelection?: ModelSelection,
 ): ModelSelection {
   // Explicit argument wins, then the caller's own thread model, and only then
   // the provider default — an agent on a non-default model must not silently
   // spawn work on that provider's default model.
+  const inherited = fallbackSelection?.provider === provider ? fallbackSelection : undefined;
   const effectiveModel =
     model ??
-    fallbackModel ??
+    inherited?.model ??
     (provider === "pi" || provider === "omp" ? undefined : DEFAULT_MODEL_BY_PROVIDER[provider]);
   if (!effectiveModel) {
     throw new ToolInputError(
       `Provider "${provider}" has no default model; pass an explicit "model" argument.`,
     );
   }
-  return { provider, model: effectiveModel } as ModelSelection;
+  return {
+    ...inherited,
+    provider,
+    model: effectiveModel,
+    ...(model !== undefined && model !== inherited?.model ? { options: undefined } : {}),
+  } as ModelSelection;
 }
 
 export function decodeCreateThreadsInput(value: unknown) {
