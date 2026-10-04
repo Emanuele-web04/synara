@@ -8,7 +8,7 @@
 // Why: Shared by both the pinned and the nested thread-row tooltips so the two
 //      surfaces cannot drift apart.
 
-import type { OrchestrationThreadPullRequest } from "@synara/contracts";
+import type { OrchestrationThreadPullRequest, ProjectId } from "@synara/contracts";
 import type { MouseEvent, ReactNode } from "react";
 
 import { FastModeIcon, GitBranchIcon, WorktreeIcon } from "~/lib/icons";
@@ -33,8 +33,8 @@ export type ThreadHoverCardContentProps = {
   /** Pre-formatted relative time (e.g. "2h"); omitted when unavailable. */
   timeLabel: string | null;
   projectName: string | null;
-  /** Project cwd, used to render the matching folder/favicon glyph. */
-  projectCwd: string | null;
+  /** Saved project identity used to resolve its folder/favicon glyph. */
+  projectId: ProjectId | null;
   projectAppearance: ProjectAppearance | null;
   /** Underlying project folder/repo name, shown for worktree-backed chats. */
   sourceProjectName: string | null;
@@ -83,7 +83,7 @@ export function ThreadHoverCardContent({
   title,
   timeLabel,
   projectName,
-  projectCwd,
+  projectId,
   projectAppearance,
   sourceProjectName,
   branch,
@@ -135,10 +135,10 @@ export function ThreadHoverCardContent({
           {projectName ? (
             <MetaRow
               icon={
-                projectCwd ? (
+                projectId ? (
                   <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground/75">
                     <ProjectSidebarIcon
-                      cwd={projectCwd}
+                      projectId={projectId}
                       expanded={false}
                       appearance={projectAppearance}
                       glyphClassName="size-3.5"

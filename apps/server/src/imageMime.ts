@@ -1,4 +1,24 @@
+import path from "node:path";
 import Mime from "@effect/platform-node/Mime";
+
+const PROJECT_ICON_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  ".avif": "image/avif",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+};
+
+/** Restrict project assets to the supported image formats when resolving and serving. */
+export function getProjectIconContentType(filePath: string): string | null {
+  const extension = path.extname(filePath).toLowerCase();
+  return Object.hasOwn(PROJECT_ICON_CONTENT_TYPES, extension)
+    ? PROJECT_ICON_CONTENT_TYPES[extension]!
+    : null;
+}
 
 export const IMAGE_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   "image/avif": ".avif",
