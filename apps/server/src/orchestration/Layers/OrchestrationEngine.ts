@@ -76,7 +76,7 @@ import {
   materializeThreadGoalFile,
   pruneThreadGoalFiles,
   readMaterializedThreadGoalText,
-  threadGoalFileName,
+  threadGoalFileNameFromReference,
   threadGoalFileReference,
 } from "../threadGoalMaterialization.ts";
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
@@ -769,7 +769,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const receiptExit = yield* Effect.exit(
         commandReceiptRepository.getByCommandId({ commandId: envelope.command.commandId }),
       );
-      const receipt = receiptExit._tag === "Success" ? receiptExit.value : Option.none();
+      // A failed lookup cannot establish non-commit. Leave the candidate for
+      // a later authoritative prune rather than deleting an accepted objective.
+      if (receiptExit._tag === "Failure") return;
+      const receipt = receiptExit.value;
       if (Option.isSome(receipt) && receipt.value.status === "accepted") {
         return;
       }
@@ -905,7 +908,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         };
       }
 
-      let materializedGoalFileName: string | undefined;
       if (command.type === "thread.meta.update" && isOversizedThreadGoal(command.goal)) {
         // A goal is re-injected into every provider turn — a huge inline goal
         // would bloat each prompt. Materialize it to a per-command file and
@@ -932,7 +934,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               "Could not materialize the oversized thread goal to a file.",
             ),
         });
-        materializedGoalFileName = threadGoalFileName(goalCommand.commandId);
         materializedGoalFilePath = goalFilePath;
         command = { ...goalCommand, goal: threadGoalFileReference(goalFilePath) };
       }
@@ -1174,9 +1175,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         command.type === "thread.delete"
           ? command.threadId
           : command.type === "thread.meta.update" &&
-              (materializedGoalFileName !== undefined ||
-                command.goal !== undefined ||
-                command.goalAchieved === true)
+              (command.goal !== undefined || command.goalAchieved === true)
             ? command.threadId
             : null;
       if (goalFilesDropThreadId !== null) {
@@ -1185,7 +1184,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             pruneThreadGoalFiles({
               stateDir: serverConfig.stateDir,
               threadId: goalFilesDropThreadId,
-              keepFileName: materializedGoalFileName,
+              // Retain the committed goal's reference, including an unchanged
+              // reference saved by Edit goal; achievement/inline goals have none.
+              keepFileName:
+                threadGoalFileNameFromReference({
+                  stateDir: serverConfig.stateDir,
+                  threadId: goalFilesDropThreadId,
+                  goal:
+                    committedCommand.nextCommandReadModel.threads.find(
+                      (thread) => thread.id === goalFilesDropThreadId,
+                    )?.goal ?? "",
+                }) ?? undefined,
             }),
           catch: (error) => error,
         }).pipe(

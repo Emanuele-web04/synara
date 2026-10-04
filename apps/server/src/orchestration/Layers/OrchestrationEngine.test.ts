@@ -14,6 +14,7 @@ import {
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Effect, Layer, ManagedRuntime, Option, Stream } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
@@ -25,6 +26,7 @@ import {
   type OrchestrationEventStoreShape,
 } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { pruneThreadGoalFiles } from "../threadGoalMaterialization.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -138,8 +140,8 @@ async function createOrchestrationSystem() {
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provide(OrchestrationEventStoreLive),
-    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -150,8 +152,14 @@ async function createOrchestrationSystem() {
     Effect.service(ManagedAttachmentRepository),
   );
   const serverConfig = await runtime.runPromise(Effect.service(ServerConfig));
+  const sql = await runtime.runPromise(Effect.service(SqlClient.SqlClient));
+  const receiptRepository = await runtime.runPromise(
+    Effect.service(OrchestrationCommandReceiptRepository),
+  );
   return {
     engine,
+    sql,
+    receiptRepository,
     managedAttachmentRepository,
     stateDir: serverConfig.stateDir,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
@@ -896,6 +904,18 @@ describe("OrchestrationEngine", () => {
     expect(goalFilePath).toContain("thread-goals");
     await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
 
+    // Edit goal exposes this exact reference. Saving it unchanged must retain
+    // the objective even though the reference itself fits the inline budget.
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-materialize-save-reference"),
+        threadId,
+        goal: thread!.goal!,
+      }),
+    );
+    await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
+
     // A second oversized goal gets its own file — the previous file is pruned
     // once the new reference commits, so the live file can never be clobbered.
     const supersedingGoal = `Replacement objective. ${"r".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
@@ -982,13 +1002,16 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("title changed");
 
-    const goalDir = path.join(stateDir, "thread-goals", "thread-goal-reject");
-    const leftover = await fs.readdir(goalDir).catch(() => [] as string[]);
+    const goalRoot = path.join(stateDir, "thread-goals");
+    const directories = await fs.readdir(goalRoot).catch(() => [] as string[]);
+    const leftover = (
+      await Promise.all(directories.map((dir) => fs.readdir(path.join(goalRoot, dir))))
+    ).flat();
     expect(leftover).toEqual([]);
     expect(
       (await system.run(engine.getReadModel())).threads.find((entry) => entry.id === threadId)
         ?.goal,
-    ).not.toBe(`Read this file: ${goalDir}/goal-cmd-goal-reject.md`);
+    ).toBeUndefined();
 
     await system.dispose();
   });
@@ -1064,20 +1087,92 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("keeps the committed goal file when a sanitized-colliding command is rejected", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const createdAt = now();
-    const threadId = ThreadId.makeUnsafe("thread-goal-collision");
-    const projectId = asProjectId("project-goal-collision");
+  it.each([
+    ["goal:file", "goal_file"],
+    ["cmd-A", "cmd-a"],
+  ])(
+    "keeps the committed goal file when %s is followed by rejected %s",
+    async (acceptedId, rejectedId) => {
+      const system = await createOrchestrationSystem();
+      const { engine } = system;
+      const createdAt = now();
+      const threadId = ThreadId.makeUnsafe("thread-goal-collision");
+      const projectId = asProjectId("project-goal-collision");
 
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-goal-collision"),
+          projectId,
+          title: "Goal Collision Project",
+          workspaceRoot: "/tmp/project-goal-collision",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-goal-collision-create"),
+          threadId,
+          projectId,
+          title: "goal-collision",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+
+      // Rejected candidates must not alias a committed file through either
+      // punctuation encoding or filesystem case folding.
+      const committedGoal = `Committed objective. ${"c".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+      await system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe(acceptedId),
+          threadId,
+          goal: committedGoal,
+        }),
+      );
+      const committedThread = (await system.run(engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      const committedPath = committedThread?.goal?.replace("Read this file: ", "");
+      await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
+
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(rejectedId),
+            threadId,
+            goal: `Rejected objective. ${"r".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`,
+            expectedTitleSequence: 9_999,
+          }),
+        ),
+      ).rejects.toThrow("title changed");
+
+      await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
+      await system.dispose();
+    },
+  );
+
+  it("retains an accepted goal file when interruption leaves its receipt unreadable", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine, sql, receiptRepository } = system;
+    const threadId = ThreadId.makeUnsafe("thread-goal-uncertain");
+    const projectId = asProjectId("project-goal-uncertain");
+    const createdAt = now();
     await system.run(
       engine.dispatch({
         type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-goal-collision"),
+        commandId: CommandId.makeUnsafe("cmd-goal-uncertain-project"),
         projectId,
-        title: "Goal Collision Project",
-        workspaceRoot: "/tmp/project-goal-collision",
+        title: "Uncertain goal",
+        workspaceRoot: "/tmp/goal-uncertain",
         defaultModelSelection: null,
         createdAt,
       }),
@@ -1085,10 +1180,10 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-goal-collision-create"),
+        commandId: CommandId.makeUnsafe("cmd-goal-uncertain-thread"),
         threadId,
         projectId,
-        title: "goal-collision",
+        title: "Uncertain goal",
         modelSelection: { provider: "codex", model: "gpt-5-codex" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -1097,39 +1192,53 @@ describe("OrchestrationEngine", () => {
         createdAt,
       }),
     );
-
-    // Command ids `goal:file` and `goal_file` sanitize to the same segment
-    // under a lossy mapping — a rejected candidate must never share (and thus
-    // delete) the committed update's path.
-    const committedGoal = `Committed objective. ${"c".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
-    await system.run(
-      engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("goal:file"),
-        threadId,
-        goal: committedGoal,
-      }),
-    );
-    const committedThread = (await system.run(engine.getReadModel())).threads.find(
-      (entry) => entry.id === threadId,
-    );
-    const committedPath = committedThread?.goal?.replace("Read this file: ", "");
-    await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
-
-    await expect(
-      system.run(
-        engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("goal_file"),
-          threadId,
-          goal: `Rejected objective. ${"r".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`,
-          expectedTitleSequence: 9_999,
-        }),
-      ),
-    ).rejects.toThrow("title changed");
-
-    await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
-    await system.dispose();
+    const commandId = CommandId.makeUnsafe("cmd-goal-uncertain-set");
+    const goal = `Accepted objective. ${"g".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    const originalTransaction = sql.withTransaction;
+    const originalLookup = receiptRepository.getByCommandId;
+    // Run the real SQLite commit, then interrupt before the engine records its
+    // local commit flag. Only the cleanup lookup fails; receipt storage is real.
+    const transaction = vi
+      .spyOn(sql, "withTransaction")
+      .mockImplementationOnce((effect) =>
+        originalTransaction(effect).pipe(Effect.andThen(Effect.interrupt)),
+      );
+    const lookup = vi
+      .spyOn(receiptRepository, "getByCommandId")
+      .mockImplementationOnce(originalLookup)
+      .mockImplementationOnce(() =>
+        Effect.fail(
+          new PersistenceSqlError({
+            operation: "test.cleanupReceipt",
+            detail: "temporary receipt read failure",
+            cause: new Error("temporary receipt read failure"),
+          }),
+        ),
+      );
+    try {
+      const pending = system.run(
+        engine
+          .dispatch({ type: "thread.meta.update", commandId, threadId, goal })
+          .pipe(Effect.timeoutOption("2 seconds")),
+      );
+      await pending;
+      const receipt = await system.run(originalLookup({ commandId }));
+      expect(Option.isSome(receipt) && receipt.value.status).toBe("accepted");
+      const events = Array.from(await system.run(Stream.runCollect(engine.readEvents(0))));
+      const persisted = events.find(
+        (event) => event.commandId === commandId && event.type === "thread.meta-updated",
+      );
+      if (persisted?.type !== "thread.meta-updated")
+        throw new Error("Accepted goal event missing.");
+      expect(persisted.payload.goal).toMatch(/^Read this file: /);
+      await expect(
+        fs.readFile(persisted.payload.goal!.replace("Read this file: ", ""), "utf8"),
+      ).resolves.toBe(goal);
+    } finally {
+      transaction.mockRestore();
+      lookup.mockRestore();
+      await system.dispose();
+    }
   });
 
   it("records the full oversized goal text in the achievement when the goal completes", async () => {

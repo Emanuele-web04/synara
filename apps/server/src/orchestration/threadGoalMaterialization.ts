@@ -19,20 +19,10 @@ export function isOversizedThreadGoal(goal: string | undefined): goal is string 
   return typeof goal === "string" && goal.length > THREAD_GOAL_INLINE_MAX_CHARS;
 }
 
-// Thread/command ids are server-minted identifier strings; sanitize anyway
-// because they flow straight into a filesystem path. Sanitization must stay
-// injective — a lossy `:`→`_` mapping would let `a:b` and `a_b` share a goal
-// path, so a rejected update could overwrite (or a cleanup delete) another
-// id's live file. Lossy encodings get a content-hash suffix; clean segments
-// pass through unchanged.
-const safePathSegment = (value: string): string => {
-  const sanitized = value.replace(/[^a-zA-Z0-9_-]/g, "_");
-  if (sanitized === value) {
-    return sanitized;
-  }
-  const suffix = createHash("sha256").update(value).digest("hex").slice(0, 12);
-  return `${sanitized}-${suffix}`;
-};
+// IDs are case-sensitive arbitrary contract strings, while Windows and common
+// macOS volumes fold filename case. Hash every ID into a bounded lowercase
+// segment, including already-clean IDs, so encoded and literal IDs cannot alias.
+const safePathSegment = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 /**
  * One immutable file per accepted-update candidate. A shared `goal.md` would
@@ -113,17 +103,17 @@ export async function discardMaterializedThreadGoalFile(filePath: string): Promi
 }
 
 /**
- * Resolves a persisted goal's "read this file" reference back to its full text,
- * or null when the goal is not a materialized reference for this thread (or the
- * file is unreadable). The path must resolve inside this thread's own goal
+ * Recognizes the filename of a persisted goal reference owned by this thread,
+ * or returns null when the goal is not such a reference.
+ * The path must resolve inside this thread's own goal
  * directory — anything else is an ordinary goal string that happens to start
  * with the prefix, not a ref we wrote.
  */
-export async function readMaterializedThreadGoalText(input: {
+export function threadGoalFileNameFromReference(input: {
   readonly stateDir: string;
   readonly threadId: string;
   readonly goal: string;
-}): Promise<string | null> {
+}): string | null {
   if (!input.goal.startsWith(THREAD_GOAL_FILE_REF_PREFIX)) {
     return null;
   }
@@ -131,8 +121,20 @@ export async function readMaterializedThreadGoalText(input: {
   const goalDir = threadGoalDirPath(input.stateDir, input.threadId);
   const resolved = path.resolve(refPath);
   const name = path.basename(resolved);
-  if (path.dirname(resolved) !== path.resolve(goalDir) || !/^goal-[a-zA-Z0-9_-]+\.md$/.test(name)) {
-    return null;
-  }
-  return fs.readFile(resolved, "utf8").catch(() => null);
+  return path.dirname(resolved) === path.resolve(goalDir) && /^goal-[a-zA-Z0-9_-]+\.md$/.test(name)
+    ? name
+    : null;
+}
+
+export async function readMaterializedThreadGoalText(input: {
+  readonly stateDir: string;
+  readonly threadId: string;
+  readonly goal: string;
+}): Promise<string | null> {
+  const name = threadGoalFileNameFromReference(input);
+  return name === null
+    ? null
+    : fs
+        .readFile(path.join(threadGoalDirPath(input.stateDir, input.threadId), name), "utf8")
+        .catch(() => null);
 }
