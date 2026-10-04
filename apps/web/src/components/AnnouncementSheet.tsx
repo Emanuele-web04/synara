@@ -10,9 +10,10 @@
 // reads translucent over the desktop, since the Electron window itself is
 // transparent under macOS vibrancy.
 
-import { useRef, type ReactNode } from "react";
+import { useRef, type ReactNode, type KeyboardEventHandler } from "react";
 
 import { useAnnouncementSheetSlot } from "./announcementSheetSlot";
+import { cn } from "~/lib/utils";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -27,6 +28,13 @@ const ACTION_BUTTON_CLASS_NAME = "rounded-[10px] text-ui-lg sm:text-ui-lg";
 
 export function AnnouncementSheet(props: {
   open: boolean;
+  presentation?: "sheet" | "tour";
+  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  // Footer start (e.g. a pager) and the slot between dismiss and confirm (e.g. Back).
+  navigation?: ReactNode;
+  navigationEnd?: ReactNode;
+  handOffOnConfirm?: boolean;
+  allowAfterHandOff?: boolean;
   // Decorative hero rendered above the title; the sheet owns the spacing below it.
   hero: ReactNode;
   title: ReactNode;
@@ -47,7 +55,7 @@ export function AnnouncementSheet(props: {
   // Announcements probe independently at startup; only the slot holder is shown so two
   // sheets never stack. The other opens once this one is dismissed, but not after a
   // confirm, whose follow-on flow it would cover.
-  const { open, handOff } = useAnnouncementSheetSlot(props.open);
+  const { open, handOff } = useAnnouncementSheetSlot(props.open, props.allowAfterHandOff);
   return (
     <Dialog
       open={open}
@@ -59,17 +67,31 @@ export function AnnouncementSheet(props: {
       <DialogPopup
         showCloseButton={false}
         initialFocus={sheetRef}
+        onKeyDown={props.onKeyDown}
+        data-feature-tour={props.presentation === "tour" ? "" : undefined}
         className="max-w-[420px] rounded-[20px]"
       >
         {/* Take initial focus here rather than on the first button: the sheet opens
             unprompted at startup, and a ring on the dismiss button points at the wrong
             action. Tab still reaches both buttons and rings them normally. */}
-        <div ref={sheetRef} tabIndex={-1} className="flex flex-col p-5 outline-none">
-          <div aria-hidden className="mb-8 flex h-16 items-center">
+        <div
+          ref={sheetRef}
+          tabIndex={-1}
+          className="flex min-h-0 flex-col overflow-y-auto p-5 outline-none"
+        >
+          <div
+            aria-hidden
+            className={cn(
+              "mb-8 flex h-16 items-center",
+              props.presentation === "tour" && "mb-6 h-auto shrink-0",
+            )}
+          >
             {props.hero}
           </div>
 
-          <DialogHeader className="gap-2 p-0">
+          <DialogHeader
+            className={cn("gap-2 p-0", props.presentation === "tour" && "min-h-[90px] shrink-0")}
+          >
             <DialogTitle className="text-[19px] leading-tight">{props.title}</DialogTitle>
             <DialogDescription className="text-ui-lg leading-normal">
               {props.description}
@@ -78,7 +100,13 @@ export function AnnouncementSheet(props: {
 
           {props.details}
 
-          <DialogFooter className="gap-2 p-0 pt-3">
+          <DialogFooter
+            className={cn(
+              "shrink-0 gap-2 p-0 pt-3",
+              props.presentation === "tour" && "flex-row flex-wrap items-center justify-end",
+            )}
+          >
+            {props.navigation}
             {props.dismissLabel !== undefined ? (
               <Button
                 variant="ghost"
@@ -88,10 +116,11 @@ export function AnnouncementSheet(props: {
                 {props.dismissLabel}
               </Button>
             ) : null}
+            {props.navigationEnd}
             <Button
               className={ACTION_BUTTON_CLASS_NAME}
               onClick={() => {
-                handOff();
+                if (props.handOffOnConfirm !== false) handOff();
                 props.onConfirm();
               }}
             >

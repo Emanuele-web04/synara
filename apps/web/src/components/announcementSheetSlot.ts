@@ -16,7 +16,7 @@ interface AnnouncementSheetSlotStore {
   owner: string | null;
   /** True once a sheet was confirmed; no further sheet opens during this launch. */
   handedOff: boolean;
-  claim: (id: string) => void;
+  claim: (id: string, allowAfterHandOff?: boolean) => void;
   release: (id: string) => void;
   handOff: () => void;
 }
@@ -24,13 +24,19 @@ interface AnnouncementSheetSlotStore {
 export const useAnnouncementSheetSlotStore = create<AnnouncementSheetSlotStore>((set) => ({
   owner: null,
   handedOff: false,
-  claim: (id) => set((state) => (state.owner === null && !state.handedOff ? { owner: id } : state)),
+  claim: (id, allowAfterHandOff = false) =>
+    set((state) =>
+      state.owner === null && (!state.handedOff || allowAfterHandOff) ? { owner: id } : state,
+    ),
   release: (id) => set((state) => (state.owner === id ? { owner: null } : state)),
   handOff: () => set({ handedOff: true }),
 }));
 
 /** `open` is true while this sheet wants to open and holds the slot. */
-export function useAnnouncementSheetSlot(wantsOpen: boolean): {
+export function useAnnouncementSheetSlot(
+  wantsOpen: boolean,
+  allowAfterHandOff = false,
+): {
   open: boolean;
   handOff: () => void;
 } {
@@ -42,9 +48,9 @@ export function useAnnouncementSheetSlot(wantsOpen: boolean): {
 
   // Re-runs when the owner changes, so a waiting sheet claims the slot once it frees.
   useEffect(() => {
-    if (wantsOpen) claim(id);
+    if (wantsOpen) claim(id, allowAfterHandOff);
     else release(id);
-  }, [claim, id, owner, release, wantsOpen]);
+  }, [allowAfterHandOff, claim, id, owner, release, wantsOpen]);
   useEffect(() => () => release(id), [id, release]);
 
   return { open: wantsOpen && owner === id, handOff };

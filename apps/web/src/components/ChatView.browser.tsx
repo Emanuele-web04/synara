@@ -1,3 +1,4 @@
+import { FEATURE_TOUR_STORAGE_KEY } from "../featureTour/store";
 import {
   buildStalePendingRequestFailureDetail,
   pendingRequestInstanceKey,
@@ -93,7 +94,7 @@ import {
 } from "../test/effectRpcWebSocketMock";
 import { makeDomainEvent } from "../storeTestFixtures";
 import {
-  acknowledgeProjectImportAnnouncementForTest,
+  acknowledgeStartupAnnouncementsForTest,
   createBrowserTestServerConfig,
   createBrowserTestServerSettings,
   createFullscreenTestHost,
@@ -2253,7 +2254,7 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
     localStorage.clear();
-    acknowledgeProjectImportAnnouncementForTest(createBaseServerConfig());
+    acknowledgeStartupAnnouncementsForTest(createBaseServerConfig());
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useThreadDispatchStore.setState({ threads: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
@@ -2736,6 +2737,38 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("offers unseen startup highlights once on a configured installation and keeps chat usable after dismissal", async () => {
+    localStorage.removeItem(FEATURE_TOUR_STORAGE_KEY);
+    const snapshot = createSnapshotWithLongAssistantResponse();
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      await expect
+        .element(page.getByRole("dialog", { name: "A new home for your work" }))
+        .toBeVisible();
+      expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
+      await page.getByRole("button", { name: "Skip tour" }).click();
+      expect(JSON.parse(localStorage.getItem(FEATURE_TOUR_STORAGE_KEY) ?? "[]")).toEqual([
+        createBaseServerConfig().worktreesDir,
+      ]);
+    } finally {
+      await mounted.cleanup();
+    }
+    const remounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(document.querySelector("[data-feature-tour]")).toBeNull();
+      await page.getByTestId("composer-editor").click();
+      await remounted.router.navigate({ to: "/settings", search: { section: "advanced" } });
+      await page.getByRole("button", { name: "Replay feature tour" }).click();
+      await expect
+        .element(page.getByRole("dialog", { name: "A new home for your work" }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Skip tour" }).click();
+    } finally {
+      await remounted.cleanup();
+    }
+  });
 
   // #1374: real route, dock and Lexical composers; only the server boundary is
   // simulated. The main agent must keep running while the panel toggles.

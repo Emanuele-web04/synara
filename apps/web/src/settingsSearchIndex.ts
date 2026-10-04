@@ -576,6 +576,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Current application version. about",
   },
   {
+    id: "advanced:feature-tour",
+    section: "advanced",
+    title: "What’s new since 0.9.2",
+    keywords:
+      "Replay feature tour redesigned workspace provider accounts Code review slider updates",
+  },
+  {
     id: "advanced:release-history",
     section: "advanced",
     title: "Release history",

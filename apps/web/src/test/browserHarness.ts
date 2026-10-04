@@ -4,6 +4,7 @@ import {
   type ServerSettingsView,
 } from "@synara/contracts";
 
+import { FEATURE_TOUR_STORAGE_KEY } from "../featureTour/store";
 import { PROJECT_IMPORT_ANNOUNCEMENT_STORAGE_KEY } from "../projectImport/useProjectImportAnnouncement";
 
 export function createBrowserTestServerConfig(checkedAt: string): ServerConfig {
@@ -39,11 +40,12 @@ export function createBrowserTestServerSettings(completedAt: string): ServerSett
 }
 
 /**
- * Marks the one-time project import announcement as seen for this fixture's installation,
+ * Marks startup announcements as seen for this established fixture's installation,
  * so its sheet does not cover the surface under test; the announcement has its own coverage.
  * Call after any `localStorage.clear()`.
  */
-export function acknowledgeProjectImportAnnouncementForTest(config: ServerConfig): void {
+export function acknowledgeStartupAnnouncementsForTest(config: ServerConfig): void {
+  localStorage.setItem(FEATURE_TOUR_STORAGE_KEY, JSON.stringify([config.worktreesDir]));
   localStorage.setItem(
     PROJECT_IMPORT_ANNOUNCEMENT_STORAGE_KEY,
     JSON.stringify([config.worktreesDir]),

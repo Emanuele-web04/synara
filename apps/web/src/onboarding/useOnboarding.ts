@@ -10,6 +10,11 @@ import { Schema } from "effect";
 import { useEffect, useRef, useState } from "react";
 
 import { useAppSettings } from "../appSettings";
+import {
+  EMPTY_FEATURE_TOUR_SEEN,
+  FEATURE_TOUR_STORAGE_KEY,
+  FeatureTourSeenSchema,
+} from "../featureTour/store";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { serverConfigQueryOptions, serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import { isOrdinarySpaceProject } from "../lib/spaces";
@@ -45,6 +50,11 @@ export function useOnboarding(): UseOnboardingResult {
     ONBOARDING_STORAGE_KEY,
     INITIAL_STORAGE,
     OnboardingStorageSchema,
+  );
+  const [, setFeatureTourSeen] = useLocalStorage(
+    FEATURE_TOUR_STORAGE_KEY,
+    EMPTY_FEATURE_TOUR_SEEN,
+    FeatureTourSeenSchema,
   );
   const [sessionCompletion, setSessionCompletion] =
     useState<LocalOnboardingCompletion>(INITIAL_STORAGE);
@@ -165,6 +175,13 @@ export function useOnboarding(): UseOnboardingResult {
     // arrives. Only a known installation can safely retain a failed server write.
     if (installationKey !== null) {
       setStorage({ completedAt, installationKey });
+      // A new installation has just seen its welcome flow. Record this here, before
+      // delayed startup probes mount announcements, so it is not greeted twice.
+      if (openReason === "first-run") {
+        setFeatureTourSeen((seen) =>
+          seen.includes(installationKey) ? seen : [...seen, installationKey],
+        );
+      }
     }
     closeStore();
     if (serverCompletedAt === null) {
