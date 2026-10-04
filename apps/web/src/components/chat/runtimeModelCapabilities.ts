@@ -19,7 +19,7 @@ import {
 import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
 import { normalizeClaudeModelOptionSlug } from "../../providerModelOptions";
 
-function runtimeEffortLabel(value: string): string {
+export function runtimeEffortLabel(value: string): string {
   switch (value) {
     case "none":
       return "None";

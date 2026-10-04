@@ -43,6 +43,7 @@ import { createAccountRateLimitThreadsSelector } from "~/storeSelectors";
 import { useTasksSurfaceEnabled } from "~/tasksSurface";
 import type { Project } from "~/types";
 import { formatNumber } from "../profile/profileFormatting";
+import { MiniBarChart } from "../MiniBarChart";
 import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 import { ProviderIcon } from "../ProviderIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
@@ -196,22 +197,19 @@ function SlotColumns({ slots }: { slots: readonly InboxSlotSummary[] }) {
               {pluralize(slot.prompts, "prompt")}
             </span>
           </div>
-          <div className="flex h-7 items-end justify-between gap-[3px]" aria-hidden>
-            {slot.hours.map((hour) => (
-              <span
-                key={hour.fromMs}
-                className={cn(
-                  "min-h-[3px] w-full max-w-2 rounded-[2px]",
-                  hour.future || hour.tokens === 0
-                    ? "bg-foreground/8"
-                    : slot.status === "now"
-                      ? "bg-foreground"
-                      : "bg-muted-foreground/45",
-                )}
-                style={{ height: `${Math.round((hour.tokens / maxTokens) * 100)}%` }}
-              />
-            ))}
-          </div>
+          <MiniBarChart
+            max={maxTokens}
+            bars={slot.hours.map((hour) => ({
+              key: hour.fromMs,
+              value: hour.tokens,
+              tone:
+                hour.future || hour.tokens === 0
+                  ? "empty"
+                  : slot.status === "now"
+                    ? "strong"
+                    : "muted",
+            }))}
+          />
         </div>
       ))}
     </div>

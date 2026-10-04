@@ -6,6 +6,7 @@
 // Layer: web profile feature (settings panel body).
 
 import { useState } from "react";
+import { MODEL_SPEED_DESCRIPTION } from "@synara/shared/modelSpeed";
 import { useQuery } from "@tanstack/react-query";
 import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@synara/contracts";
 import {
@@ -22,6 +23,7 @@ import {
   selectProfileModelUsage,
   selectProfileTopProvider,
 } from "../profile/profileSelectors";
+import { ProfileModelSpeedRow } from "../profile/ProfileModelSpeedRow";
 import { ProfileUsageCoverage } from "../profile/ProfileUsageCoverage";
 import { ShareDialog } from "../profile/ShareDialog";
 import { EditProfileDialog } from "../profile/EditProfileDialog";
@@ -35,6 +37,7 @@ import {
   formatDays,
   formatNumber,
   formatProviderLabel,
+  formatProfileModelName,
   formatProfileUsageBasis,
   toDisplayName,
 } from "../profile/profileFormatting";
@@ -268,6 +271,25 @@ function ProfileContent({
         <ProfileUsageCoverage unavailableProviders={modelUsage.unavailableProviders} />
       </section>
 
+      {/* Model speed */}
+      {tokenStats && tokenStats.modelSpeeds.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h3 className="text-ui-lg font-medium">Model speed</h3>
+          <p className="text-ui leading-snug text-muted-foreground">
+            Last 7 days against the 7 days before, weekly trend, and lifetime average.{" "}
+            {MODEL_SPEED_DESCRIPTION}.
+          </p>
+          <ul className="grid grid-cols-1 gap-x-12 gap-y-4 sm:grid-cols-2">
+            {tokenStats.modelSpeeds.slice(0, 6).map((entry) => (
+              <ProfileModelSpeedRow
+                key={`${entry.instanceId}:${entry.model}:${entry.fastMode}`}
+                entry={entry}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <ShareDialog
         stats={stats}
         tokenStats={tokenStats}
@@ -368,7 +390,7 @@ function ModelUsageRow({
           ) : (
             <CentralIcon name="chart-2" className="size-3.5 shrink-0 text-muted-foreground" />
           )}
-          <span className="truncate">{model}</span>
+          <span className="truncate">{formatProfileModelName(provider, model)}</span>
         </span>
         <span className="shrink-0 tabular-nums text-muted-foreground">{percent}%</span>
       </div>

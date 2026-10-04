@@ -3,7 +3,8 @@
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
-import { type MessageId, type TurnId } from "@synara/contracts";
+import { type MessageId, type TurnId, type TurnModelSpeed } from "@synara/contracts";
+import { combinedModelSpeedTokensPerSecond, turnModelSpeedsEqual } from "@synara/shared/modelSpeed";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
@@ -280,6 +281,9 @@ export type MessagesTimelineRow =
       inlineWorkGroupId?: string;
       collapsedTurnItems?: CollapsedTurnItem[];
       collapsedWorkElapsed?: string | null;
+      // Model speed of the turns folded into the disclosure; null when none of
+      // them was measured.
+      collapsedWorkModelSpeed?: CollapsedModelSpeed | null;
       durationStart: string;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
@@ -313,6 +317,9 @@ export type MessagesTimelineRow =
       kind: "working-header";
       id: string;
       createdAt: string;
+      // Running model speed of the live turn, refreshed after each model
+      // response; null until the turn can be measured.
+      liveModelSpeed?: CollapsedModelSpeed | null;
     }
   | {
       // Transient "Preparing worktree..." step card shown during the New
@@ -625,6 +632,10 @@ export function deriveMessagesTimelineRows(input: {
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
   conversationOnly?: boolean;
+  // Settled model speed per turn, from turn.completed activities.
+  modelSpeedByTurnId?: ReadonlyMap<string, TurnModelSpeed> | undefined;
+  // Running model speed of the active turn.
+  liveModelSpeed?: TurnModelSpeed | null | undefined;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   // A finished background task wakes the agent into a new response, so it ends
@@ -822,6 +833,7 @@ export function deriveMessagesTimelineRows(input: {
       activeTurnInProgress:
         (input.activeTurnInProgress ?? false) || (input.subagentsRunning ?? false),
       activeTurnId: input.activeTurnId ?? null,
+      modelSpeedByTurnId: input.modelSpeedByTurnId,
     });
   }
 
@@ -840,6 +852,9 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working-header",
       id: "working-header-row",
       createdAt: input.activeTurnStartedAt,
+      liveModelSpeed: input.liveModelSpeed
+        ? collapsedModelSpeed(new Map([["live", input.liveModelSpeed]]), ["live"])
+        : null,
     });
   }
 
@@ -896,9 +911,11 @@ function collapseSettledTurns(
     terminalAssistantMessageIds: ReadonlySet<string>;
     activeTurnInProgress: boolean;
     activeTurnId: TurnId | null;
+    modelSpeedByTurnId?: ReadonlyMap<string, TurnModelSpeed> | undefined;
   },
 ): void {
-  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId } = options;
+  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId, modelSpeedByTurnId } =
+    options;
   const lastTerminalAssistantMessageId = activeTurnInProgress
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
@@ -1022,6 +1039,17 @@ function collapseSettledTurns(
       const elapsed = formatElapsed(collapsedStart, message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
+      row.collapsedWorkModelSpeed = modelSpeedByTurnId
+        ? collapsedModelSpeed(modelSpeedByTurnId, [
+            turnId,
+            ...foldIndices.map((index) => {
+              const folded = rows[index]!;
+              return folded.kind === "message" || folded.kind === "message-segment"
+                ? (folded.message.turnId ?? null)
+                : null;
+            }),
+          ])
+        : null;
       delete row.leadingWorkEntries;
       delete row.leadingWorkGroupId;
       delete row.inlineWorkEntries;
@@ -1033,6 +1061,38 @@ function collapseSettledTurns(
       pass -= foldIndices.length;
     }
   }
+}
+
+export interface CollapsedModelSpeed {
+  readonly tokensPerSecond: number;
+  readonly speeds: ReadonlyArray<TurnModelSpeed>;
+}
+
+// One disclosure can fold several provider turns (mini-turns inside one
+// answer); their measured turns combine token-weighted.
+function collapsedModelSpeed(
+  modelSpeedByTurnId: ReadonlyMap<string, TurnModelSpeed>,
+  turnIds: ReadonlyArray<string | null>,
+): CollapsedModelSpeed | null {
+  const speeds: TurnModelSpeed[] = [];
+  for (const turnId of new Set(turnIds)) {
+    const speed = turnId ? modelSpeedByTurnId.get(turnId) : undefined;
+    if (speed) speeds.push(speed);
+  }
+  const tokensPerSecond = combinedModelSpeedTokensPerSecond(speeds);
+  return tokensPerSecond === null ? null : { tokensPerSecond, speeds };
+}
+
+function collapsedModelSpeedsEqual(
+  left: CollapsedModelSpeed | null | undefined,
+  right: CollapsedModelSpeed | null | undefined,
+): boolean {
+  if (!left || !right) return !left && !right;
+  return (
+    left.tokensPerSecond === right.tokensPerSecond &&
+    left.speeds.length === right.speeds.length &&
+    left.speeds.every((speed, index) => turnModelSpeedsEqual(speed, right.speeds[index]))
+  );
 }
 
 // Reuses stable row references so streaming updates only invalidate rows whose
@@ -1280,7 +1340,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       return a.createdAt === (b as typeof a).createdAt;
 
     case "working-header":
-      return a.createdAt === (b as typeof a).createdAt;
+      return (
+        a.createdAt === (b as typeof a).createdAt &&
+        collapsedModelSpeedsEqual(a.liveModelSpeed, (b as typeof a).liveModelSpeed)
+      );
 
     case "worktree-setup": {
       const bw = b as typeof a;
@@ -1313,6 +1376,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
         collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&
         a.collapsedWorkElapsed === bm.collapsedWorkElapsed &&
+        collapsedModelSpeedsEqual(a.collapsedWorkModelSpeed, bm.collapsedWorkModelSpeed) &&
         a.durationStart === bm.durationStart &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&

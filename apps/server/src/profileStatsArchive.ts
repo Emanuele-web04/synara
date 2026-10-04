@@ -24,7 +24,11 @@ import {
   isManagedCheckpointRefForThread,
   resolveProjectCwdForKind,
 } from "./checkpointing/Utils";
-import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
+import {
+  aggregateProfileSkillUsageRows,
+  modelSpeedCtes,
+  turnModelSelectionCte,
+} from "./profileStats";
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { isProviderIntentEventType } from "./orchestration/providerIntentClassification";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
@@ -62,6 +66,16 @@ interface TokenActivityRow {
   readonly counterProvider?: string | null;
   readonly dispatchOrigin?: string | null;
   readonly createdAt: string | null;
+}
+
+interface ModelSpeedTurnRow {
+  readonly createdAt: string;
+  readonly provider: string | null;
+  readonly instanceId: string | null;
+  readonly model: string | null;
+  readonly fastMode: number | null;
+  readonly outputTokens: number;
+  readonly generationMs: number;
 }
 
 interface SkillMessageRow {
@@ -222,9 +236,11 @@ function hasProfileStatsContribution(input: {
   readonly turnRows: ReadonlyArray<ThreadTurnSnapshotRow>;
   readonly tokenRows: ReadonlyArray<ThreadTokenSnapshotRow>;
   readonly skillRows: ReturnType<typeof aggregateProfileSkillUsageRows>;
+  readonly modelSpeedRows: ReadonlyArray<ModelSpeedTurnRow>;
 }): boolean {
   return (
     input.promptRows.length > 0 ||
+    input.modelSpeedRows.length > 0 ||
     input.turnRows.some((row) => row.turnCount > 0) ||
     input.tokenRows.length > 0 ||
     input.skillRows.some((row) => row.runCount > 0)
@@ -770,12 +786,22 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         WHERE c.dispatch_origin IS NULL OR c.dispatch_origin = 'user'
       `;
       tokenRows.push(...claudeTokenRows);
+      // Measured turns, attributed like the live profileStats.queryModelSpeeds.
+      // One row per turn with its timestamp, so local-day bucketing stays exact
+      // for any client UTC offset.
+      const modelSpeedRows = yield* sql<ModelSpeedTurnRow>`
+        WITH ${modelSpeedCtes(sql, { threadId })}
+        SELECT created_at AS createdAt, provider, instanceId, model, fastMode, outputTokens,
+          generationMs
+        FROM model_speed_turns
+      `;
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
       const hasStatsContribution = hasProfileStatsContribution({
         promptRows: skillMessageRows,
         turnRows,
         tokenRows,
         skillRows,
+        modelSpeedRows,
       });
 
       // Snapshot writes are idempotent per thread so an interrupted purge can
@@ -785,6 +811,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       yield* sql`DELETE FROM profile_stats_deleted_turns WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_skills WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_tokens WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM profile_stats_deleted_model_speeds WHERE thread_id = ${threadId}`;
 
       if (hasStatsContribution) {
         yield* sql`
@@ -833,6 +860,17 @@ const makeProfileStatsArchive = Effect.gen(function* () {
             VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.instanceId}, ${row.model},
               ${row.tokens},
               ${row.provider === "claudeAgent" ? 1 : null})
+          `,
+          { concurrency: 1, discard: true },
+        );
+        yield* Effect.forEach(
+          modelSpeedRows,
+          (row) => sql`
+            INSERT INTO profile_stats_deleted_model_speeds
+              (thread_id, created_at, provider, provider_instance_id, model, fast_mode,
+                output_tokens, generation_ms, turn_count)
+            VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.instanceId},
+              ${row.model}, ${row.fastMode}, ${row.outputTokens}, ${row.generationMs}, 1)
           `,
           { concurrency: 1, discard: true },
         );

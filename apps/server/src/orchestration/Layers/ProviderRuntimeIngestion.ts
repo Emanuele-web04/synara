@@ -109,6 +109,11 @@ import {
   runtimePayloadRecord,
   runtimeTurnState,
 } from "../providerRuntimeActivityProjection.ts";
+import {
+  turnModelSelectionHint,
+  type TurnModelSpeedObservation,
+  TurnModelSpeedTracker,
+} from "../turnModelSpeed.ts";
 
 // FILE: ProviderRuntimeIngestion.ts
 // Purpose: Projects provider runtime events into orchestration read-model updates and thread activity.
@@ -328,6 +333,28 @@ function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
     event.type === "session.exited" ||
     event.type === "runtime.error"
   );
+}
+
+// The settled speed rides on the turn's `turn.completed` activity; the live
+// figure rides on the running turn's `context-window.updated` activity.
+function withTurnModelSpeed(
+  activity: OrchestrationThreadActivity,
+  observation: TurnModelSpeedObservation | undefined,
+): OrchestrationThreadActivity {
+  if (!observation) return activity;
+  const field = observation.live ? "liveModelSpeed" : "modelSpeed";
+  const kind = observation.live ? "context-window.updated" : "turn.completed";
+  if (activity.kind !== kind || !isJsonObject(activity.payload)) return activity;
+  const { outputTokens, generationMs, provider, model, fastMode, effort } = observation.speed;
+  const speed = {
+    outputTokens,
+    generationMs,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(effort ? { effort } : {}),
+  };
+  return { ...activity, payload: { ...activity.payload, [field]: speed } };
 }
 
 function parseProviderTurnDiffFiles(
@@ -738,6 +765,9 @@ const make = Effect.gen(function* () {
   // Throttle map for the durable last-runtime-activity timestamp: one row
   // write per thread per ~15s of observed activity instead of per event.
   const lastActivityFlushByThreadRef = yield* Ref.make(new Map<string, number>());
+  // Per-thread turn timing and output counters for the model-speed metric.
+  // In-memory only: a turn that started before a restart is simply not measured.
+  const turnModelSpeedTracker = new TurnModelSpeedTracker();
   const outstandingTurnIdsByThreadRef = yield* Ref.make<ReadonlyMap<ThreadId, ReadonlySet<TurnId>>>(
     new Map(),
   );
@@ -2322,6 +2352,11 @@ const make = Effect.gen(function* () {
         return;
       }
       const thread = targetThreadResolution.thread;
+      const turnModelSpeed = turnModelSpeedTracker.observe(
+        thread.id,
+        event,
+        event.type === "turn.started" ? turnModelSelectionHint(thread.modelSelection) : undefined,
+      );
 
       // Durable last-activity signal (worker-monitoring silence is measured
       // from this, not from session lifecycle rows): every runtime event of
@@ -3204,7 +3239,12 @@ const make = Effect.gen(function* () {
             ? (completedReasoning?.sequence ?? runtimeSequence)
             : runtimeSequence,
         ),
-        (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
+        (activity) =>
+          dispatchActivityUpdate(
+            activityEvent,
+            thread.id,
+            withTurnModelSpeed(activity, turnModelSpeed),
+          ),
       );
 
       if (isTerminalTurnEvent) {

@@ -4,15 +4,24 @@ import {
   formatContextWindowTokens,
   formatCostUsd,
 } from "~/lib/contextWindow";
+import type { TurnModelSpeed } from "@synara/contracts";
+import {
+  formatModelSpeed,
+  MODEL_SPEED_DESCRIPTION,
+  modelSpeedTokensPerSecond,
+} from "@synara/shared/modelSpeed";
 import { useState } from "react";
 import { useNowMs } from "~/hooks/useNowMs";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ClaudeCacheDetails } from "./ClaudeCacheDetails";
+import { formatModelSpeedModelSummary } from "./ModelSpeedLabel";
 import { Button } from "../ui/button";
 
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
   cumulativeCostUsd?: number | null | undefined;
+  // Model speed of the last completed turn, when it was measured.
+  lastTurnModelSpeed?: TurnModelSpeed | null | undefined;
   activeWindowLabel?: string | null | undefined;
   pendingWindowLabel?: string | null | undefined;
   showClaudeCache?: boolean;
@@ -27,6 +36,11 @@ export function ContextWindowMeter(props: {
   const [open, setOpen] = useState(false);
   const nowMs = useNowMs(open && usage.claudeCache != null, 10_000);
   const display = deriveContextWindowMeterDisplay(usage);
+  const lastTurnSpeed = props.lastTurnModelSpeed;
+  const lastTurnTokensPerSecond = lastTurnSpeed
+    ? modelSpeedTokensPerSecond(lastTurnSpeed.outputTokens, lastTurnSpeed.generationMs)
+    : null;
+  const lastTurnModelSummary = lastTurnSpeed ? formatModelSpeedModelSummary([lastTurnSpeed]) : null;
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference - (display.normalizedPercentage / 100) * circumference;
@@ -141,6 +155,21 @@ export function ContextWindowMeter(props: {
           {cumulativeCostUsd !== null && cumulativeCostUsd !== undefined ? (
             <div className="text-ui leading-snug text-muted-foreground">
               Session cost: {formatCostUsd(cumulativeCostUsd)}
+            </div>
+          ) : null}
+          {lastTurnSpeed && lastTurnTokensPerSecond !== null ? (
+            <div className="max-w-72 space-y-0.5">
+              <div className="text-ui leading-snug text-muted-foreground">
+                Last turn speed: {formatModelSpeed(lastTurnTokensPerSecond)}
+              </div>
+              {lastTurnModelSummary ? (
+                <div className="text-ui-xs leading-snug text-muted-foreground/80">
+                  {lastTurnModelSummary}
+                </div>
+              ) : null}
+              <p className="text-ui-xs leading-snug text-muted-foreground/80">
+                {MODEL_SPEED_DESCRIPTION}
+              </p>
             </div>
           ) : null}
           {usage.claudeCache || props.showClaudeCache ? (

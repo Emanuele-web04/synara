@@ -629,6 +629,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [128, "HubWork"],
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
+        [131, "ProfileStatsDeletedModelSpeeds"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -711,6 +712,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 128, name: "HubWork" },
           { migration_id: 129, name: "ProjectionThreadsSnooze" },
           { migration_id: 130, name: "PullRequestAutoFix" },
+          { migration_id: 131, name: "ProfileStatsDeletedModelSpeeds" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -873,6 +875,7 @@ agentGatewayRetentionLegacyLayer(
           [128, "HubWork"],
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
+          [131, "ProfileStatsDeletedModelSpeeds"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -998,6 +1001,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [128, "HubWork"],
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
+        [131, "ProfileStatsDeletedModelSpeeds"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1064,6 +1068,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [128, "HubWork"],
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
+          [131, "ProfileStatsDeletedModelSpeeds"],
         ],
       );
 
@@ -1184,6 +1189,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [128, "HubWork"],
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
+        [131, "ProfileStatsDeletedModelSpeeds"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1246,6 +1252,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [128, "HubWork"],
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
+          [131, "ProfileStatsDeletedModelSpeeds"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

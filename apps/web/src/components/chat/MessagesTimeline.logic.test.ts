@@ -1,4 +1,10 @@
-import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@synara/contracts";
+import {
+  CheckpointRef,
+  MessageId,
+  OrchestrationProposedPlanId,
+  TurnId,
+  type TurnModelSpeed,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
@@ -745,6 +751,13 @@ describe("resolveAssistantMessageDisplayText", () => {
 describe("deriveMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 
+  const live = (outputTokens: number): TurnModelSpeed => ({
+    outputTokens,
+    generationMs: 10_000,
+    model: "claude-opus-5-5",
+    fastMode: true,
+  });
+
   const baseInput = {
     isWorking: false,
     worktreeSetup: null as WorktreeSetupSnapshot | null,
@@ -987,6 +1000,91 @@ describe("deriveMessagesTimelineRows", () => {
     // Timed from the user message, not from the last intermediate narration.
     expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
     expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("shows the folded turns' token-weighted model speed next to Worked for", () => {
+    const timelineEntries = [
+      userEntry("u1", "2026-01-01T00:00:00Z"),
+      assistantEntry("a1", "2026-01-01T00:00:01Z", {
+        turnId: "t1",
+        text: "Looking into it",
+        completedAt: "2026-01-01T00:00:01Z",
+      }),
+      workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+      assistantEntry("a2", "2026-01-01T00:00:05Z", {
+        turnId: "t2",
+        text: "All done",
+        completedAt: "2026-01-01T00:00:06Z",
+      }),
+    ];
+    const t1 = { outputTokens: 1_000, generationMs: 10_000, model: "claude-opus-5-5" };
+    const t2 = { outputTokens: 200, generationMs: 10_000, model: "claude-sonnet-5" };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries,
+      // Two provider mini-turns in one response: 1,000 + 200 tokens over 10s + 10s.
+      modelSpeedByTurnId: new Map<string, TurnModelSpeed>([
+        ["t1", t1],
+        ["t2", t2],
+        ["t-other", { outputTokens: 9_000, generationMs: 10_000 }],
+      ]),
+    });
+    expect(messageRow(rows, "a2")!.collapsedWorkModelSpeed).toEqual({
+      tokensPerSecond: 60,
+      speeds: [t2, t1],
+    });
+
+    // Re-derived speeds with equal values keep the settled row's identity.
+    const stable = computeStableMessagesTimelineRows(rows, { byId: new Map(), result: [] });
+    const rederived = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries,
+      modelSpeedByTurnId: new Map([
+        ["t1", { ...t1 }],
+        ["t2", { ...t2 }],
+      ]),
+    });
+    expect(computeStableMessagesTimelineRows(rederived, stable)).toBe(stable);
+
+    const unmeasured = deriveMessagesTimelineRows({ ...baseInput, timelineEntries });
+    expect(messageRow(unmeasured, "a2")!.collapsedWorkModelSpeed).toBeNull();
+  });
+
+  it("carries the live model speed on the working header and refreshes the row when it changes", () => {
+    const input = {
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: "2026-01-01T00:00:05Z",
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:05Z")],
+    };
+    const header = (liveModelSpeed: TurnModelSpeed | null) =>
+      deriveMessagesTimelineRows({ ...input, liveModelSpeed }).find(
+        (row) => row.kind === "working-header",
+      );
+    expect(header(null)).toMatchObject({ liveModelSpeed: null });
+    expect(header(live(1_324))).toMatchObject({
+      liveModelSpeed: { tokensPerSecond: 132.4, speeds: [live(1_324)] },
+    });
+    // Below the thresholds the header shows nothing.
+    expect(header(live(10))).toMatchObject({ liveModelSpeed: null });
+
+    const first = computeStableMessagesTimelineRows(
+      deriveMessagesTimelineRows({ ...input, liveModelSpeed: live(1_200) }),
+      { byId: new Map(), result: [] },
+    );
+    const same = computeStableMessagesTimelineRows(
+      deriveMessagesTimelineRows({ ...input, liveModelSpeed: live(1_200) }),
+      first,
+    );
+    expect(same).toBe(first);
+    const next = computeStableMessagesTimelineRows(
+      deriveMessagesTimelineRows({ ...input, liveModelSpeed: live(1_300) }),
+      first,
+    );
+    expect(next.result.find((row) => row.kind === "working-header")).toMatchObject({
+      liveModelSpeed: { tokensPerSecond: 130 },
+    });
   });
 
   it("folds settled message-segments into the collapsed group instead of stranding the turn", () => {

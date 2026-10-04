@@ -6,7 +6,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
@@ -14,6 +14,8 @@ import recoverClaudeUsage from "./persistence/Migrations/103_ClaudeTokenAccounti
 import {
   aggregateProfileSkillUsageRows,
   heatmapIntensity,
+  isoWeekStart,
+  modelSpeedChangePercent,
   ProfileStatsQuery,
   ProfileStatsQueryLive,
 } from "./profileStats";
@@ -55,6 +57,21 @@ describe("heatmapIntensity", () => {
   it("gives tied days the same level and renders a uniform window at full intensity", () => {
     const active = sorted([500, 500, 500, 500]);
     expect(active.map((count) => heatmapIntensity(count, active))).toEqual([4, 4, 4, 4]);
+  });
+});
+
+describe("model speed buckets", () => {
+  it("starts ISO weeks on Monday", () => {
+    expect(isoWeekStart("2026-10-04")).toBe("2026-09-28");
+    expect(isoWeekStart("2026-09-28")).toBe("2026-09-28");
+    expect(isoWeekStart("2026-01-01")).toBe("2025-12-29");
+  });
+
+  it("reports the change only when both sides have a rate", () => {
+    expect(modelSpeedChangePercent(108, 100)).toBe(8);
+    expect(modelSpeedChangePercent(40, 50)).toBe(-20);
+    expect(modelSpeedChangePercent(null, 50)).toBeNull();
+    expect(modelSpeedChangePercent(40, null)).toBeNull();
   });
 });
 
@@ -1100,6 +1117,151 @@ describe("ProfileStatsQuery", () => {
         ]);
       }),
     );
+  });
+
+  it("buckets model speed by local day per model and fast mode, including purged threads", async () => {
+    // Fixed clock: today is Sunday 2026-10-04 (UTC); its ISO week starts Monday 09-28.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-04T12:00:00.000Z"));
+    try {
+      await runProfileStatsTest(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const statsQuery = yield* ProfileStatsQuery;
+
+          yield* sql`
+            INSERT INTO projection_threads (
+              thread_id, project_id, title, model_selection_json, runtime_mode,
+              interaction_mode, env_mode, created_at, updated_at, deleted_at
+            )
+            VALUES (
+              'thread-speed', 'project-profile', 'Speed Thread',
+              '{"provider":"claudeAgent","model":"claude-opus-4-8"}', 'full-access',
+              'default', 'local', '2026-09-01T09:00:00.000Z', '2026-09-01T09:00:00.000Z', NULL
+            )
+          `;
+          yield* sql`
+            INSERT INTO orchestration_events (
+              event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+              actor_kind, payload_json, metadata_json
+            )
+            VALUES (
+              'event-speed-1', 'thread', 'thread-speed', 1, 'thread.turn-start-requested',
+              '2026-09-01T09:01:00.000Z', 'client',
+              '{"threadId":"thread-speed","messageId":"message-speed-1","modelSelection":{"provider":"claudeAgent","model":"claude-fable-5"}}',
+              '{}'
+            )
+          `;
+          yield* sql`
+            INSERT INTO projection_turns (
+              thread_id, turn_id, pending_message_id, state, requested_at, checkpoint_files_json
+            )
+            VALUES (
+              'thread-speed', 'turn-speed-1', 'message-speed-1', 'completed',
+              '2026-09-01T09:01:00.000Z', '[]'
+            )
+          `;
+          // Fable (selected for turn-speed-1): two turns in the last 7 days
+          // (1,000 + 200 tokens over 10s + 20s = 40 tok/s token-weighted, not
+          // the 55 tok/s mean of rates), one in the 7 days before (500 / 10s).
+          // The 23:30Z turn on 09-27 is the previous week in UTC but Monday
+          // 09-28 for a UTC+1 viewer. Opus Fast: the provider-reported model
+          // wins over the selection, and fast mode gets its own row.
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence,
+              created_at
+            )
+            VALUES
+              (
+                'activity-speed-1', 'thread-speed', 'turn-speed-1', 'info', 'turn.completed',
+                'Turn completed',
+                '{"state":"completed","modelSpeed":{"outputTokens":1000,"generationMs":10000,"provider":"claudeAgent","fastMode":false}}',
+                1, '2026-10-03T10:00:00.000Z'
+              ),
+              (
+                'activity-speed-2', 'thread-speed', 'turn-speed-1', 'info', 'turn.completed',
+                'Turn completed',
+                '{"state":"completed","modelSpeed":{"outputTokens":200,"generationMs":20000,"provider":"claudeAgent","fastMode":false}}',
+                2, '2026-09-29T10:00:00.000Z'
+              ),
+              (
+                'activity-speed-3', 'thread-speed', 'turn-speed-1', 'info', 'turn.completed',
+                'Turn completed',
+                '{"state":"completed","modelSpeed":{"outputTokens":500,"generationMs":10000,"provider":"claudeAgent","fastMode":false}}',
+                3, '2026-09-27T23:30:00.000Z'
+              ),
+              (
+                'activity-speed-4', 'thread-speed', 'turn-speed-other', 'info', 'turn.completed',
+                'Turn completed',
+                '{"state":"completed","modelSpeed":{"outputTokens":800,"generationMs":10000,"provider":"claudeAgent","model":"claude-opus-4-8-fast","fastMode":true}}',
+                4, '2026-10-04T09:00:00.000Z'
+              ),
+              (
+                'activity-speed-5', 'thread-speed', 'turn-speed-other', 'info', 'turn.completed',
+                'Turn completed', '{"state":"completed"}', 5, '2026-10-04T09:05:00.000Z'
+              )
+          `;
+          // A purged thread's archived Codex turn (one row per turn, with its time).
+          yield* sql`
+            INSERT INTO profile_stats_deleted_model_speeds (
+              thread_id, created_at, provider, provider_instance_id, model, fast_mode,
+              output_tokens, generation_ms, turn_count
+            )
+            VALUES (
+              'thread-purged', '2026-08-01T10:00:00.000Z', 'codex', NULL, 'gpt-5-codex', 0,
+              9000, 60000, 1
+            )
+          `;
+
+          const utc = (yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 })).modelSpeeds;
+          expect(
+            utc.map((entry) => [entry.model, entry.fastMode, entry.last7Days.outputTokens]),
+          ).toEqual([
+            ["claude-fable-5", false, 1200],
+            ["claude-opus-4-8-fast", true, 800],
+            ["gpt-5-codex", false, 0],
+          ]);
+          const fable = utc[0]!;
+          expect(fable.last7Days).toEqual({
+            outputTokens: 1200,
+            generationMs: 30000,
+            turnCount: 2,
+            tokensPerSecond: 40,
+          });
+          expect(fable.previous7Days.tokensPerSecond).toBe(50);
+          expect(fable.changePercent).toBe(-20);
+          expect(fable.lifetime).toEqual({
+            outputTokens: 1700,
+            generationMs: 40000,
+            turnCount: 3,
+            tokensPerSecond: 42.5,
+          });
+          expect(fable.weeks).toHaveLength(12);
+          expect(fable.weeks.at(-1)).toMatchObject({ weekStart: "2026-09-28", turnCount: 2 });
+          expect(fable.weeks.at(-2)).toMatchObject({ weekStart: "2026-09-21", turnCount: 1 });
+          // Weeks without measured turns stay as gaps.
+          expect(fable.weeks.at(-3)).toEqual({
+            weekStart: "2026-09-14",
+            outputTokens: 0,
+            generationMs: 0,
+            turnCount: 0,
+            tokensPerSecond: null,
+          });
+          // The archived turn is outside the 12-week window but counts for lifetime.
+          expect(utc[2]!.lifetime.tokensPerSecond).toBe(150);
+          expect(utc[2]!.changePercent).toBeNull();
+
+          const plusOne = (yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 60 }))
+            .modelSpeeds;
+          const fablePlusOne = plusOne.find((entry) => entry.model === "claude-fable-5")!;
+          expect(fablePlusOne.weeks.at(-1)).toMatchObject({ turnCount: 3 });
+          expect(fablePlusOne.weeks.at(-2)).toMatchObject({ turnCount: 0 });
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("counts usedTokens-only model groups in threads that also have cumulative telemetry", async () => {

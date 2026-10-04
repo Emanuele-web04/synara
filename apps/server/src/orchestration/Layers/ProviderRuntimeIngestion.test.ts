@@ -1466,6 +1466,106 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("stamps live and settled model speed on the turn's activities", async () => {
+    const harness = await createHarness();
+    const startedAtMs = Date.parse("2026-10-04T10:00:00.000Z");
+    const at = (seconds: number) => new Date(startedAtMs + seconds * 1_000).toISOString();
+    const usage = (eventId: string, seconds: number, cumulativeOutput: number) =>
+      harness.emit({
+        type: "thread.token-usage.updated",
+        eventId: asEventId(eventId),
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: at(seconds),
+        turnId: asTurnId("turn-speed"),
+        payload: {
+          usage: {
+            usedTokens: 5_000 + cumulativeOutput,
+            cumulativeUsage: { inputTokens: 5_000, outputTokens: cumulativeOutput },
+            outputTokens: 500,
+            lastOutputTokens: 500,
+          },
+        },
+      });
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-speed-turn-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: at(0),
+      turnId: asTurnId("turn-speed"),
+    });
+    usage("evt-speed-usage-1", 5, 500);
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-speed-tool-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: at(5),
+      turnId: asTurnId("turn-speed"),
+      itemId: asItemId("item-speed-command"),
+      payload: { itemType: "command_execution", status: "inProgress", title: "Command" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-speed-tool-completed"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: at(15),
+      turnId: asTurnId("turn-speed"),
+      itemId: asItemId("item-speed-command"),
+      payload: { itemType: "command_execution", status: "completed", title: "Command" },
+    });
+    usage("evt-speed-usage-2", 20, 1_000);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-speed-turn-completed"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: at(20),
+      turnId: asTurnId("turn-speed"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity) => activity.kind === "turn.completed" && activity.turnId === "turn-speed",
+      ),
+    );
+    const settled = thread.activities.find(
+      (activity) => activity.kind === "turn.completed" && activity.turnId === "turn-speed",
+    );
+    const settledPayload = settled?.payload as Record<string, unknown> | undefined;
+    // Codex reported no model on turn.started, so the thread's selection names it.
+    expect(settledPayload?.modelSpeed).toEqual({
+      outputTokens: 1_000,
+      generationMs: 10_000,
+      provider: "codex",
+      model: "gpt-5-codex",
+      fastMode: false,
+    });
+    const live = thread.activities
+      .filter((activity) => activity.kind === "context-window.updated")
+      .map((activity) => (activity.payload as Record<string, unknown>).liveModelSpeed);
+    expect(live).toEqual([
+      {
+        outputTokens: 500,
+        generationMs: 5_000,
+        provider: "codex",
+        model: "gpt-5-codex",
+        fastMode: false,
+      },
+      {
+        outputTokens: 1_000,
+        generationMs: 10_000,
+        provider: "codex",
+        model: "gpt-5-codex",
+        fastMode: false,
+      },
+    ]);
+  });
+
   it("requests another goal turn after a clean active-goal completion", async () => {
     const harness = await createHarness();
     const turnId = asTurnId("turn-active-goal");

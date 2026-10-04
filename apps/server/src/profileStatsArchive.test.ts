@@ -633,6 +633,16 @@ describe("ProfileStatsArchive", () => {
           INSERT INTO project_import_history (thread_id, revision, state_json)
           VALUES ('thread-purge', 1, '{"messages":["cached imported text"]}')
         `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'activity-purge-speed', 'thread-purge', 'turn-purge-1', 'info', 'turn.completed',
+            'Turn completed',
+            '{"state":"completed","modelSpeed":{"outputTokens":1200,"generationMs":15000,"provider":"opencode","fastMode":true}}',
+            99, '2026-06-13T17:30:00.000Z'
+          )
+        `;
         yield* acknowledgeProviderCommandJournal(sql);
         yield* sql`
           INSERT INTO external_mcp_integrations (
@@ -668,6 +678,19 @@ describe("ProfileStatsArchive", () => {
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         const tokenStatsBefore = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        // The archive keeps each turn's timestamp and fast mode, so the
+        // before/after comparisons below (UTC and +05:30) also cover model speed.
+        expect(tokenStatsBefore.modelSpeeds).toContainEqual(
+          expect.objectContaining({
+            fastMode: true,
+            lifetime: {
+              outputTokens: 1200,
+              generationMs: 15000,
+              turnCount: 1,
+              tokensPerSecond: 80,
+            },
+          }),
+        );
         expect(statsBefore.providerModels).toContainEqual(
           expect.objectContaining({
             provider: "opencode",

@@ -7401,6 +7401,84 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("publishes the turn's running main-loop output after each response", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hello", attachments: [] });
+
+      const sessionId = "sdk-session-turn-output";
+      const streamEvent = (uuid: string, event: Record<string, unknown>) =>
+        harness.query.emit({
+          type: "stream_event",
+          session_id: sessionId,
+          uuid,
+          parent_tool_use_id: null,
+          event,
+        } as unknown as SDKMessage);
+
+      for (const [index, finalOutput] of [300, 200].entries()) {
+        const messageId = `msg-turn-output-${index}`;
+        streamEvent(`${messageId}-start`, {
+          type: "message_start",
+          message: { id: messageId, usage: { input_tokens: 100, output_tokens: 2 } },
+        });
+        // Block snapshots carry the streaming-start output count.
+        emitAssistantUsage(
+          harness.query,
+          sessionId,
+          `${messageId}-block`,
+          "Working",
+          {
+            input_tokens: 100,
+            output_tokens: 2,
+          },
+          messageId,
+        );
+        streamEvent(`${messageId}-delta`, {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: finalOutput },
+        });
+      }
+      emitSuccessResult(harness.query, sessionId, "result-turn-output", {
+        input_tokens: 200,
+        output_tokens: 500,
+      });
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.flatMap((event) =>
+          event.type === "thread.token-usage.updated" &&
+          event.payload.usage.turnOutputTokens !== undefined
+            ? [event.payload.usage.turnOutputTokens]
+            : [],
+        ),
+        [300, 500],
+      );
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.deepEqual(
+        turnCompleted?.type === "turn.completed" ? turnCompleted.payload.usage : undefined,
+        { input_tokens: 200, output_tokens: 500 },
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("does not fabricate provider thread ids before first SDK session_id", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
