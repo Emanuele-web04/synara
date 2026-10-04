@@ -112,6 +112,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
+    ...(thread.isProjectImport ? { isProjectImport: true } : {}),
     claudeCacheReview: thread.claudeCacheReview ?? null,
     ...(thread.snoozeSequence !== undefined ? { snoozeSequence: thread.snoozeSequence } : {}),
     ...(thread.claudeCacheReviewSequence !== undefined

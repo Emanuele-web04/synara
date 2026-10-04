@@ -5,7 +5,7 @@ import {
   type LoadProjectImportHistoryResult,
 } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
-import { createRef, type ComponentProps } from "react";
+import { act, createRef, type ComponentProps } from "react";
 import { page } from "vitest/browser";
 import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -16,6 +16,7 @@ vi.mock("../../nativeApi", async (importOriginal) => ({
   ensureNativeApi: () => ({ orchestration: api }),
 }));
 import { ChatTranscriptPane } from "./ChatTranscriptPane";
+import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
 
 const noop = () => {};
 const recent = Array.from({ length: 10 }, (_, index) => ({
@@ -32,6 +33,7 @@ const recent = Array.from({ length: 10 }, (_, index) => ({
 }));
 const props: ComponentProps<typeof ChatTranscriptPane> = {
   activeThreadId: "imported",
+  isProjectImport: true,
   activeTurnInProgress: false,
   activeTurnStartedAt: null,
   chatFontSizePx: 15,
@@ -121,7 +123,9 @@ it("prepends older imported messages without moving the reading position and iso
     await expect
       .element(page.getByRole("button", { name: "Loading earlier messages…" }))
       .toBeDisabled();
-    await screen.rerender(<ChatTranscriptPane {...props} activeThreadId="other" />);
+    await screen.rerender(
+      <ChatTranscriptPane {...props} activeThreadId="other" isProjectImport={false} />,
+    );
     finishLate!({
       nextCursor: null,
       messages: [
@@ -142,7 +146,7 @@ it("prepends older imported messages without moving the reading position and iso
   }
 });
 
-it("checks a new chat for imported history only after the server has created it", async () => {
+it("never requests imported history for an ordinary chat, before or after saving", async () => {
   let serverKnowsThread = false;
   api.loadProjectImportHistory.mockReset();
   api.loadProjectImportHistory.mockImplementation(async () => {
@@ -152,7 +156,13 @@ it("checks a new chat for imported history only after the server has created it"
   const host = document.createElement("div");
   host.style.cssText = "display:flex;width:700px;height:520px;overflow:hidden;";
   document.body.append(host);
-  const draftProps = { ...props, activeThreadId: "draft", hasMessages: false, timelineEntries: [] };
+  const draftProps = {
+    ...props,
+    isProjectImport: false,
+    activeThreadId: "draft",
+    hasMessages: false,
+    timelineEntries: [],
+  };
   const screen = await render(<ChatTranscriptPane {...draftProps} isLocalDraft />, {
     container: host,
   });
@@ -164,13 +174,127 @@ it("checks a new chat for imported history only after the server has created it"
 
     serverKnowsThread = true;
     await screen.rerender(<ChatTranscriptPane {...draftProps} isLocalDraft={false} />);
-    await expect
-      .element(page.getByRole("button", { name: "Load earlier messages" }))
-      .toBeInTheDocument();
-    expect(api.loadProjectImportHistory).toHaveBeenCalledTimes(1);
-    expect(api.loadProjectImportHistory).toHaveBeenCalledWith({ threadId: "draft" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(api.loadProjectImportHistory).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("earlier messages");
+    expect(page.getByRole("alert").query()).toBeNull();
   } finally {
     await screen.unmount();
     host.remove();
+  }
+});
+
+it.each(["initial", "older-page"])(
+  "recovers %s imported history from capacity errors without a manual retry",
+  async (phase) => {
+    let releaseCapacity = false;
+    api.loadProjectImportHistory.mockReset();
+    api.loadProjectImportHistory.mockImplementation(
+      async (input: LoadProjectImportHistoryInput) => {
+        if (phase === "older-page" && !input.cursor) return { messages: [], nextCursor: "1" };
+        if (!releaseCapacity)
+          throw Object.assign(new Error("WebSocket expensive-read request capacity exceeded."), {
+            code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+            retryable: true,
+            retryAfterMs: 50,
+          });
+        return {
+          nextCursor: null,
+          messages: [
+            {
+              messageId: MessageId.makeUnsafe("recovered"),
+              role: "user",
+              text: "Recovered earlier message",
+              createdAt: "2026-08-01T00:00:00.000Z",
+              updatedAt: "2026-08-01T00:00:00.000Z",
+            },
+          ],
+        };
+      },
+    );
+    const host = document.createElement("div");
+    host.style.cssText = "display:flex;width:700px;height:520px;overflow:hidden;";
+    document.body.append(host);
+    const screen = await render(<ChatTranscriptPane {...props} />, { container: host });
+    try {
+      if (phase === "older-page")
+        await page.getByRole("button", { name: "Load earlier messages" }).click();
+      await expect
+        .element(page.getByRole("button", { name: "Loading earlier messages…" }))
+        .toBeDisabled();
+      expect(page.getByRole("alert").query()).toBeNull();
+      releaseCapacity = true;
+      await expect
+        .element(page.getByText("Recovered earlier message", { exact: true }))
+        .toBeInTheDocument();
+      const calls = api.loadProjectImportHistory.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(api.loadProjectImportHistory).toHaveBeenCalledTimes(calls);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  },
+);
+
+it("cancels a scheduled capacity retry when switching to an ordinary chat", async () => {
+  api.loadProjectImportHistory.mockReset();
+  api.loadProjectImportHistory.mockRejectedValue(
+    Object.assign(new Error("Server busy"), {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 500,
+    }),
+  );
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;width:700px;height:520px;overflow:hidden;";
+  document.body.append(host);
+  const screen = await render(<ChatTranscriptPane {...props} />, { container: host });
+  try {
+    await expect
+      .element(page.getByRole("button", { name: "Loading earlier messages…" }))
+      .toBeDisabled();
+    await screen.rerender(
+      <ChatTranscriptPane {...props} activeThreadId="ordinary" isProjectImport={false} />,
+    );
+    const calls = api.loadProjectImportHistory.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(api.loadProjectImportHistory).toHaveBeenCalledTimes(calls);
+    expect(host.textContent).not.toContain("earlier messages");
+    expect(page.getByRole("alert").query()).toBeNull();
+  } finally {
+    await screen.unmount();
+    host.remove();
+  }
+});
+
+it("continues capacity recovery after backoff reaches its maximum delay", async () => {
+  api.loadProjectImportHistory.mockReset();
+  api.loadProjectImportHistory.mockRejectedValue(
+    Object.assign(new Error("Server busy"), {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 10_000,
+    }),
+  );
+  function History() {
+    const history = useImportedHistory("imported", true);
+    return <ImportedHistoryButton history={history} />;
+  }
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const screen = await render(<History />);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    expect(api.loadProjectImportHistory).toHaveBeenCalledTimes(1);
+    for (let requests = 2; requests <= 4; requests += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(api.loadProjectImportHistory).toHaveBeenCalledTimes(requests);
+    }
+  } finally {
+    await screen.unmount();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   }
 });

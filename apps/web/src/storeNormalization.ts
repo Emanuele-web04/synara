@@ -187,6 +187,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
+    (left.isProjectImport ?? false) === (right.isProjectImport ?? false) &&
     deepEqualJson(left.claudeCacheReview ?? null, right.claudeCacheReview ?? null) &&
     left.claudeCacheReviewSequence === right.claudeCacheReviewSequence &&
     left.snoozeSequence === right.snoozeSequence &&
@@ -1790,6 +1791,7 @@ export function normalizeThreadFromReadModel(
     (previous.sidechatExpiredAt ?? null) === (incoming.sidechatExpiredAt ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
+    (previous.isProjectImport ?? false) === (incoming.isProjectImport ?? false) &&
     (previous.claudeCacheReview ?? null) === claudeCacheReview &&
     previous.claudeCacheReviewSequence === claudeCacheReviewSequence &&
     previous.pinnedMessages === pinnedMessages &&
@@ -1849,6 +1851,7 @@ export function normalizeThreadFromReadModel(
     sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
     handoff,
+    ...(incoming.isProjectImport ? { isProjectImport: true } : {}),
     claudeCacheReview,
     ...(claudeCacheReviewSequence !== undefined ? { claudeCacheReviewSequence } : {}),
     ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
@@ -1995,6 +1998,7 @@ export function normalizeThreadShellSnapshot(
     sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
     handoff,
+    ...(incoming.isProjectImport ? { isProjectImport: true } : {}),
     claudeCacheReview,
     ...(claudeCacheReviewSequence !== undefined ? { claudeCacheReviewSequence } : {}),
     // The sidebar shell snapshot/event does not carry detail-only annotations, so keep those

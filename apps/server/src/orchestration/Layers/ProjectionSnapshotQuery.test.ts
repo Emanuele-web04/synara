@@ -35,6 +35,53 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("identifies project imports from durable provenance in full and shell snapshots", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-04T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('import-flag-project', 'Import flag', '/tmp/import-flag', '[]', ${now}, ${now})`;
+      for (const [id, status] of [
+        ["native-history-thread", null],
+        ["imported-history-thread", "completed"],
+        ["pending-history-thread", "pending"],
+      ] as const) {
+        const threadId = asThreadId(id);
+        yield* sql`INSERT INTO projection_threads
+          (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+          VALUES (${threadId}, 'import-flag-project', ${id}, '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+        if (status)
+          yield* sql`INSERT INTO project_import_origins
+          (source_key, provider, source_home, external_id, project_id, thread_id, status, created_at)
+          VALUES (${id}, 'codex', '/tmp/codex', ${id}, 'import-flag-project', ${threadId}, ${status}, ${now})`;
+        const snapshots = [
+          yield* query.getSnapshot(),
+          yield* query.getShellSnapshot(),
+          yield* query.getCommandReadModel(),
+        ];
+        const threads = [
+          ...snapshots.map((snapshot) => snapshot.threads.find((thread) => thread.id === threadId)),
+          Option.getOrUndefined(yield* query.getThreadDetailById(threadId)),
+          Option.getOrUndefined(yield* query.getThreadShellById(threadId)),
+        ];
+        for (const thread of threads) {
+          assert.isDefined(thread);
+          assert.strictEqual(thread?.isProjectImport ?? false, status === "completed");
+        }
+        if (status === "pending") {
+          yield* sql`UPDATE project_import_origins SET status = 'completed' WHERE thread_id = ${threadId}`;
+          const completed = yield* query.getShellSnapshot();
+          assert.strictEqual(
+            completed.threads.find((thread) => thread.id === threadId)?.isProjectImport,
+            true,
+          );
+        }
+      }
+    }),
+  );
+
   it.effect("rehydrates pending cache decisions in snapshots and thread detail after restart", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;

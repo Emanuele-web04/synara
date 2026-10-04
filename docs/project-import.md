@@ -53,7 +53,9 @@ imports display up to ten recent turn summaries (the user message and final assi
 Claude imports display up to twenty recent text messages from the SDK-selected conversation chain.
 Original timestamps are retained where available; older pages stay ordered before newer messages.
 
-Choose **Load earlier messages** at the top of the transcript to read previous pages. These are
+Choose **Load earlier messages** at the top of an imported transcript to read previous pages.
+Ordinary Synara chats do not request imported history. If the server is temporarily busy, history
+loading retries automatically with backoff and keeps messages already on screen. These are
 read-only display history: loading them does not send a model turn, add messages to the live session,
 or change its activity time. They do not expose actions that require a Synara message, such as pinning
 or forking, and are not added to Synara's searchable message store. Reopening a chat starts with its recent messages again; fetched pages are cached durably

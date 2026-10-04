@@ -47,6 +47,16 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./t
 import { applyOrchestrationEvents } from "./storeEventReducer";
 
 describe("store projection", () => {
+  it("retains project-import provenance through shell hydration, detail updates, and eviction", () => {
+    const thread = makeReadModelThread({ isProjectImport: true });
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = syncServerReadModel(state, makeReadModel(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = evictThreadDetailFromClientState(state, thread.id);
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+  });
+
   it("retains an active resend timestamp through binding updates and rollback", () => {
     const at = (minute: number) => `2026-09-17T10:0${minute}:00.000Z`;
     const messageId = MessageId.makeUnsafe("resent");
