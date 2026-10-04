@@ -319,6 +319,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
 
 describe("kanbanDispatch persisted image attachments", () => {
   const originalCreateObjectUrl = URL.createObjectURL;
+  const originalRevokeObjectUrl = URL.revokeObjectURL;
 
   beforeEach(() => {
     resetComposerDraftStore();
@@ -326,54 +327,63 @@ describe("kanbanDispatch persisted image attachments", () => {
     nativeApiMocks.stagedUploads.length = 0;
     nativeApiMocks.runWithDispatch.mockClear();
     URL.createObjectURL = vi.fn((file: Blob) => `blob:${(file as File).name}`);
+    URL.revokeObjectURL = vi.fn();
   });
 
   afterEach(() => {
     URL.createObjectURL = originalCreateObjectUrl;
+    URL.revokeObjectURL = originalRevokeObjectUrl;
     vi.restoreAllMocks();
   });
 
-  it("hydrates persisted blob images a reload has not restored yet", async () => {
-    const threadId = ThreadId.makeUnsafe("thread-persisted-image");
-    const projectId = ProjectId.makeUnsafe("project-persisted-image");
-    useComposerDraftStore.getState().setPrompt(threadId, "Prompt with a saved screenshot");
-    const persisted: PersistedComposerImageAttachment = {
-      id: "appsnap-saved-1",
-      name: "saved-capture.png",
-      mimeType: "image/png",
-      sizeBytes: 4,
-      blobKey: "thread-persisted-image:appsnap-saved-1",
-    };
-    useComposerDraftStore.setState((state) => {
-      const draft = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
-      return {
-        draftsByThreadId: {
-          ...state.draftsByThreadId,
-          [threadId]: { ...draft, persistedAttachments: [persisted] },
-        },
+  it.each(["accepted", "refused"] as const)(
+    "hydrates saved images and releases temporary previews when dispatch is %s",
+    async (outcome) => {
+      const threadId = ThreadId.makeUnsafe("thread-persisted-image");
+      const projectId = ProjectId.makeUnsafe("project-persisted-image");
+      useComposerDraftStore.getState().setPrompt(threadId, "Prompt with a saved screenshot");
+      const persisted: PersistedComposerImageAttachment = {
+        id: "appsnap-saved-1",
+        name: "saved-capture.png",
+        mimeType: "image/png",
+        sizeBytes: 4,
+        blobKey: "thread-persisted-image:appsnap-saved-1",
       };
-    });
-    const blobFile = new File(["png"], "saved-capture.png", { type: "image/png" });
-    vi.spyOn(composerImageBlobStore, "readComposerImageBlob").mockResolvedValue(blobFile);
+      useComposerDraftStore.setState((state) => {
+        const draft = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: { ...draft, persistedAttachments: [persisted] },
+          },
+        };
+      });
+      const blobFile = new File(["png"], "saved-capture.png", { type: "image/png" });
+      vi.spyOn(composerImageBlobStore, "readComposerImageBlob").mockResolvedValue(blobFile);
 
-    const result = await dispatchKanbanDraftThread({
-      threadId,
-      projectId,
-      thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
-      defaultProvider: "codex",
-      assistantDeliveryMode: "buffered",
-    });
+      if (outcome === "refused") {
+        nativeApiMocks.dispatchCommand.mockRejectedValue(new Error("Turn refused"));
+      }
+      const result = await dispatchKanbanDraftThread({
+        threadId,
+        projectId,
+        thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
+        defaultProvider: "codex",
+        assistantDeliveryMode: "buffered",
+      });
 
-    expect(result.kind).toBe("dispatched");
-    // The staged turn carries the hydrated image — it is not silently dropped
-    // before the composer clear deletes its persisted blob.
-    const stagedImages = nativeApiMocks.stagedUploads.at(-1)?.images as
-      | ReadonlyArray<{ id: string; file: File }>
-      | undefined;
-    expect(stagedImages).toHaveLength(1);
-    expect(stagedImages?.[0]?.id).toBe("appsnap-saved-1");
-    expect(stagedImages?.[0]?.file).toBe(blobFile);
-  });
+      expect(result.kind).toBe(outcome === "accepted" ? "dispatched" : "error");
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:saved-capture.png");
+      // The staged turn carries the hydrated image — it is not silently dropped
+      // before the composer clear deletes its persisted blob.
+      const stagedImages = nativeApiMocks.stagedUploads.at(-1)?.images as
+        | ReadonlyArray<{ id: string; file: File }>
+        | undefined;
+      expect(stagedImages).toHaveLength(1);
+      expect(stagedImages?.[0]?.id).toBe("appsnap-saved-1");
+      expect(stagedImages?.[0]?.file).toBe(blobFile);
+    },
+  );
 });
 
 describe("kanbanDispatch oversized prompts and pasted text", () => {

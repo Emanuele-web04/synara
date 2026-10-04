@@ -19,6 +19,7 @@ import type {
 } from "@synara/contracts";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import type { ComposerFileAttachment } from "../composerDraftDomain";
+import { revokeObjectPreviewUrl } from "../composerDraftAttachments";
 import { hasActiveComposerSend } from "./composerSendOwnership";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
 import {
@@ -290,6 +291,10 @@ async function dispatchDraftThreadOnce(
       images: liveComposerImages,
     }),
   );
+  // Headless hydration only needs each File for upload, never its preview.
+  // These URLs do not belong to the composer store and its cleanup cannot
+  // release them, including when dispatch is refused.
+  for (const image of hydratedPendingImages) revokeObjectPreviewUrl(image.previewUrl);
   const composerImages = [...liveComposerImages, ...hydratedPendingImages];
 
   const composerFiles = draftComposerState?.files ?? [];
