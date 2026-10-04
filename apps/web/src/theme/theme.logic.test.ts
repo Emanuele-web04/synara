@@ -361,9 +361,12 @@ describe("window translucency", () => {
     translucency: { opacity, blur: 0, sidebarOnly: true },
   });
 
-  it("limits the glass to the sidebar by default", () => {
-    expect(DEFAULT_THEME_STATE.translucency.dark.sidebarOnly).toBe(true);
-    expect(DEFAULT_THEME_STATE.translucency.light.sidebarOnly).toBe(true);
+  it("defaults both themes to full-window glass with 90% opacity and 64 blur", () => {
+    const state = normalizeThemeState({});
+    expect(state.translucency).toEqual({
+      dark: { opacity: 90, blur: 64, sidebarOnly: false },
+      light: { opacity: 90, blur: 64, sidebarOnly: false },
+    });
   });
 
   it("makes the whole window one translucent coat when not limited to the sidebar", () => {
@@ -460,12 +463,12 @@ describe("window translucency", () => {
   it("gives stored states without translucency the defaults and clamps edits", () => {
     const legacy = normalizeThemeState({ mode: "dark" });
     expect(legacy.translucency).toEqual(DEFAULT_THEME_STATE.translucency);
-    expect(legacy.translucency.dark.blur).toBeNull();
+    expect(legacy.translucency.dark.blur).toBe(64);
 
-    // States saved before the scope existed keep the sidebar-only glass they had.
+    // Missing scope uses the default while preserving explicit opacity and blur.
     expect(
       normalizeThemeState({ translucency: { dark: { opacity: 50, blur: 10 } } }).translucency.dark,
-    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: true });
+    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: false });
 
     const edited = setWindowTranslucency(legacy, "dark", {
       opacity: 140,

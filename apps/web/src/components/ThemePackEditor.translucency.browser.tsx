@@ -50,16 +50,20 @@ it("tunes opacity, desktop blur, and scope, then switches to a solid window", as
   localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "dark" }));
   await render(<ThemePackEditor variant="dark" />);
   await expect.poll(() => root.getAttribute("data-window-material")).toBe("translucent");
-  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("sidebar");
+  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("window");
 
   const opacity = page.getByRole("slider", { name: "Dark theme translucency opacity" });
   const blur = page.getByRole("slider", { name: "Dark theme background blur" });
-  await expect.element(opacity).toHaveValue("72");
-  await expect.element(blur).toHaveValue("30");
-  // Untouched defaults keep the system vibrancy material rather than a custom blur.
+  await expect.element(opacity).toHaveValue("90");
+  await expect.element(blur).toHaveValue("64");
+  const sidebarOnly = page.getByRole("switch", { name: "Dark theme translucent sidebar only" });
+  await expect.element(sidebarOnly).not.toBeChecked();
   await expect
     .poll(() => setWindowMaterial.mock.lastCall)
-    .toEqual([{ material: "opaque", blurRadius: 0 }]);
+    .toEqual([{ material: "translucent", blurRadius: 64 }]);
+
+  await sidebarOnly.click();
+  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("sidebar");
 
   // Both sliders stop at a floor: no fill over no blur would leave a see-through window.
   setSliderValue("Dark theme translucency opacity", 0);
