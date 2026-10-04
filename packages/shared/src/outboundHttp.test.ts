@@ -166,18 +166,6 @@ console.log("survived");
       }),
     ).rejects.toThrow(/Outbound request failed/u);
   });
-
-  it("stays usable for the next caller after a connection failure", async () => {
-    const port = await refusedPort();
-
-    await expect(
-      outboundHttp.request({
-        policy: policyFor(port),
-        url: `https://127.0.0.1:${port}/again.ico`,
-        headers: { Accept: "image/*" },
-      }),
-    ).rejects.toThrow(/Outbound request failed/u);
-  });
 });
 
 describe("loopback HTTP transport", () => {

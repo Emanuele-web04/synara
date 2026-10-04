@@ -9,11 +9,10 @@ import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
 import { arrayMove } from "@dnd-kit/sortable";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 
-import { resolveDraftThreadTitle } from "./components/ChatView.logic";
 import { resolveThreadStatusPill } from "./components/Sidebar.logic";
 import { resolveSubagentPresentationForThread } from "./lib/subagentPresentation";
 import { resolveTabAfterClose } from "./lib/tabStrip";
-import type { SidebarThreadSummary, Thread, ThreadPrimarySurface } from "./types";
+import type { SidebarThreadSummary, Thread } from "./types";
 
 export interface OpenThreadTab {
   threadId: ThreadId;
@@ -22,8 +21,6 @@ export interface OpenThreadTab {
   provider: ProviderKind;
   // Terminal-first threads show the terminal glyph, like the chat header and sidebar.
   isTerminal: boolean;
-  // Not sent yet: exists only as a local composer draft.
-  isDraft: boolean;
   // Working or connecting: the tab spins where the sidebar row does.
   isRunning: boolean;
 }
@@ -35,14 +32,6 @@ export interface OpenThreadTabSource {
   // A subagent thread's parent, whose activity log names the agent when the subagent's
   // own summary does not.
   parentThread?: Pick<Thread, "id" | "activities"> | undefined;
-  draft:
-    | {
-        projectId: ProjectId;
-        entryPoint: ThreadPrimarySurface;
-        // The provider the draft's composer will send with.
-        provider: ProviderKind;
-      }
-    | undefined;
   terminalEntryPoint: boolean;
   isPreparingWorktree?: boolean | undefined;
 }
@@ -108,7 +97,8 @@ export function normalizeOpenThreadTabIds(input: unknown): ThreadId[] {
 /**
  * Whether an open thread can keep a tab while it is not being viewed. Archived threads
  * and Side chats (which live in their host's dock) keep one only while they
- * are the thread on screen; anything that no longer exists loses it.
+ * are the thread on screen; anything that no longer exists loses it. Draft IDs stay
+ * registered through promotion, but do not render until a server summary exists.
  */
 export function canKeepOpenThreadTab(
   summary: SidebarThreadSummary | undefined,
@@ -121,7 +111,7 @@ export function canKeepOpenThreadTab(
 }
 
 function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null {
-  const { summary, draft, parentThread } = source;
+  const { summary, parentThread } = source;
   if (summary) {
     return {
       threadId: source.threadId,
@@ -135,7 +125,6 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
         : summary.title,
       provider: summary.session?.provider ?? summary.modelSelection.provider,
       isTerminal: source.terminalEntryPoint,
-      isDraft: false,
       // The sidebar row's own status, so a tab and its row never disagree.
       isRunning:
         resolveThreadStatusPill({
@@ -146,23 +135,12 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
         })?.pulse === true,
     };
   }
-  if (draft) {
-    return {
-      threadId: source.threadId,
-      projectId: draft.projectId,
-      title: resolveDraftThreadTitle(draft.entryPoint),
-      provider: draft.provider,
-      isTerminal: source.terminalEntryPoint || draft.entryPoint === "terminal",
-      isDraft: true,
-      isRunning: false,
-    };
-  }
   return null;
 }
 
 /**
  * Tabs in open order. `projectId` scopes the list (the editor view only shows its own
- * project's threads); the active thread always renders if it is open, even when it is
+ * project's threads); unsent drafts never render. An active saved thread renders even when it is
  * a thread that could not keep a tab in the background (archived, Side chat).
  */
 export function buildOpenThreadTabs(input: {
@@ -171,10 +149,7 @@ export function buildOpenThreadTabs(input: {
   projectId?: ProjectId | null | undefined;
 }): OpenThreadTab[] {
   return input.sources.flatMap((source) => {
-    if (
-      source.threadId !== input.activeThreadId &&
-      !canKeepOpenThreadTab(source.summary, source.draft !== undefined)
-    ) {
+    if (source.threadId !== input.activeThreadId && !canKeepOpenThreadTab(source.summary, false)) {
       return [];
     }
     const tab = resolveOpenThreadTab(source);

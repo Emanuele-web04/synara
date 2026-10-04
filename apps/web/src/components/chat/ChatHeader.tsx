@@ -14,8 +14,6 @@ import {
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import React, { useEffect, useRef, useState } from "react";
-import { HiMiniArrowsPointingOut } from "react-icons/hi2";
-import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import {
@@ -130,16 +128,6 @@ interface ChatHeaderProps {
   environment?: EnvironmentToggleState | null;
   projectPanel?: SurfacePanelToggleState | null;
   libraryPanel?: SurfacePanelToggleState | null;
-  chatLayoutAction?: {
-    kind: "split" | "maximize";
-    label: string;
-    shortcutLabel: string | null;
-    onClick: () => void;
-  } | null;
-  changeThreadAction?: {
-    label: string;
-    onClick: () => void;
-  } | null;
   // Editor-rail chat controls rendered beside the title: a "new chat" button and
   // a project chat-history menu. Provided only by the editor workspace chat pane.
   editorChatControls?: {
@@ -284,7 +272,11 @@ function EditorRailTabs(props: {
   }, [props.terminalAvailable]);
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
-  const shouldShowTabs = tabCount > 1;
+  const shouldShowTabs =
+    tabCount > 1 ||
+    (props.activeSurface === "chat" &&
+      chatTabs.length > 0 &&
+      !chatTabs.some((tab) => tab.threadId === props.activeThreadId));
   const newTerminalTab = () => {
     cancelChatTabSelection();
     setTerminalTabOpen(true);
@@ -458,8 +450,6 @@ export function ChatHeader({
   environment: environmentProp,
   projectPanel = null,
   libraryPanel = null,
-  chatLayoutAction: chatLayoutActionProp,
-  changeThreadAction: changeThreadActionProp,
   editorChatControls: editorChatControlsProp,
   onRunProjectScript,
   onAddProjectScript,
@@ -484,16 +474,10 @@ export function ChatHeader({
   const surfaceMode = surfaceModeProp ?? "single";
   const isSidechat = isSidechatProp ?? false;
   const environment = environmentProp ?? null;
-  const chatLayoutAction = chatLayoutActionProp ?? null;
-  const changeThreadAction = changeThreadActionProp ?? null;
   const editorChatControls = editorChatControlsProp ?? null;
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
-  const {
-    additions: diffAdditions,
-    deletions: diffDeletions,
-    hasChanges: showDiffTotals,
-  } = diffTotals;
+  const { additions: diffAdditions, deletions: diffDeletions, hasChanges } = diffTotals;
 
   // Own the open-favorite editor shortcut here so it survives regardless of which editor UI
   // is mounted (the legacy Open-in button, the Environment panel's Editor section, or
@@ -506,9 +490,7 @@ export function ChatHeader({
   });
 
   const isSplitPane = surfaceMode === "split";
-  // Split-chat creation moved to a shortcut only; the header keeps just the inline
-  // "maximize" affordance for an already-split focused pane.
-  const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
+  const showDiffTotals = hasChanges && !isSplitPane;
   const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint, activeThreadTitle);
   const showSidechatTitleChip = isSidechat && compact;
 
@@ -686,7 +668,7 @@ export function ChatHeader({
                   >
                     {activeThreadTitle}
                   </h2>
-                  {showSidechatTitleChip && onCloseThreadPane ? (
+                  {showSidechatTitleChip && !isSplitPane && onCloseThreadPane ? (
                     <IconButton
                       variant="chrome"
                       size="icon-xs"
@@ -804,41 +786,6 @@ export function ChatHeader({
           />
         ) : null}
 
-        {inlineChatLayoutAction ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ChatHeaderIconButton
-                  type="button"
-                  label={inlineChatLayoutAction.label}
-                  onClick={inlineChatLayoutAction.onClick}
-                >
-                  <HiMiniArrowsPointingOut className="size-3.5" />
-                </ChatHeaderIconButton>
-              }
-            />
-            <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
-          </Tooltip>
-        ) : null}
-
-        {/* Change thread stays as a standalone control (split/sidechat only). */}
-        {changeThreadAction ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ChatHeaderIconButton
-                  type="button"
-                  label={changeThreadAction.label}
-                  onClick={changeThreadAction.onClick}
-                >
-                  <TbExchange className="size-3.5" />
-                </ChatHeaderIconButton>
-              }
-            />
-            <TooltipPopup side="bottom">{changeThreadAction.label}</TooltipPopup>
-          </Tooltip>
-        ) : null}
-
         {/* Environment: one button consolidating Open-in-editor and most git actions into
             the Environment panel. Pull still appears in this action cluster when the
             branch is behind. The right-side panel control stays beside it, acting as the
@@ -890,6 +837,27 @@ export function ChatHeader({
             {rightPanelToggleControl}
           </>
         )}
+        {isSplitPane && onCloseThreadPane ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ChatHeaderIconButton
+                  type="button"
+                  tone="surface"
+                  label="Close chat"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCloseThreadPane();
+                  }}
+                >
+                  <XIcon className="size-4" />
+                </ChatHeaderIconButton>
+              }
+            />
+            <TooltipPopup side="bottom">Close chat</TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
     </div>
   );

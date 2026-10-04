@@ -154,6 +154,7 @@ export function BetaWelcomeDialog() {
           ) : null}
         </div>
       }
+      handOffOnConfirm={false}
       confirmLabel="Get started"
       onDismiss={acknowledge}
       onConfirm={acknowledge}

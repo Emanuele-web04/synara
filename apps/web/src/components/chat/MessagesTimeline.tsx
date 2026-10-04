@@ -2748,6 +2748,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onTouchStart={handleMessagesTouchStart}
         onWheel={handleMessagesWheel}
         data-chat-scroll-container="true"
+        // LegendList sets overflow inline, so a CSS class cannot keep this
+        // vertical transcript from gaining a horizontal scrollbar.
+        showsHorizontalScrollIndicator={false}
         ListFooterComponent={listFooter}
         ListHeaderComponent={historyHeader}
         // `scroll-edge-fade` (index.css) dissolves rows under the chat header and toward
@@ -2758,7 +2761,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // `listScrollStyle` moves the bottom fade up to the composer's top edge and
         // intersects the footer-controls dissolve.
         className={cn(
-          "scroll-edge-fade h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          "scroll-edge-fade h-full overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
           ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
           CHAT_COLUMN_GUTTER_CLASS_NAME,
         )}

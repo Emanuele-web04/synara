@@ -936,34 +936,60 @@ describe("wsNativeApi", () => {
     );
   });
 
-  it("falls back to WebSocket voice RPC when an older server has no upload route", async () => {
-    Object.defineProperty(getWindowForTest(), "desktopBridge", {
-      configurable: true,
-      writable: true,
-      value: { getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret" },
-    });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response("Not Found", { status: 404 }));
-    vi.stubGlobal("fetch", fetchMock);
-    requestMock.mockResolvedValueOnce({ text: "legacy transport" });
+  it.each([
+    { status: 404, stalledBody: false },
+    { status: 404, stalledBody: true },
+    { status: 405, stalledBody: true },
+  ])(
+    "falls back to WebSocket voice RPC for $status with stalled body: $stalledBody",
+    async ({ status, stalledBody }) => {
+      Object.defineProperty(getWindowForTest(), "desktopBridge", {
+        configurable: true,
+        writable: true,
+        value: { getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret" },
+      });
+      let finishBody: (() => void) | undefined;
+      const body = stalledBody
+        ? new ReadableStream<Uint8Array>({
+            start(controller) {
+              finishBody = () => controller.close();
+            },
+            cancel() {
+              finishBody = undefined;
+            },
+          })
+        : "Not Found";
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status }));
+      vi.stubGlobal("fetch", fetchMock);
+      requestMock.mockResolvedValueOnce({ text: "legacy transport" });
 
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
-    const input = {
-      provider: "codex" as const,
-      cwd: "/repo",
-      audioBase64: "AQID",
-      mimeType: "audio/wav",
-      sampleRateHz: 24_000,
-      durationMs: 1000,
-    };
+      const { createWsNativeApi } = await import("./wsNativeApi");
+      const api = createWsNativeApi();
+      const input = {
+        provider: "codex" as const,
+        cwd: "/repo",
+        audioBase64: "AQID",
+        mimeType: "audio/wav",
+        sampleRateHz: 24_000,
+        durationMs: 1000,
+      };
 
-    await expect(api.server.transcribeVoice(input)).resolves.toEqual({
-      text: "legacy transport",
-    });
-    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverTranscribeVoice, input, {
-      timeoutMs: null,
-    });
-  });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          api.server.transcribeVoice(input),
+          new Promise<string>((resolve) => {
+            timeout = setTimeout(() => resolve("still waiting for an irrelevant error body"), 100);
+          }),
+        ]);
+        expect(result).toEqual({ text: "legacy transport" });
+        expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverTranscribeVoice, input, {
+          timeoutMs: null,
+        });
+      } finally {
+        clearTimeout(timeout);
+        finishBody?.();
+      }
+    },
+  );
 });

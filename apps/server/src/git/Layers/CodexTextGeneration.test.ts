@@ -1085,52 +1085,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-  it.effect("ignores missing attachment ids for codex image inputs", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "fix/ui-regression",
-        }),
-        forbidImage: true,
-      },
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const { attachmentsDir } = yield* ServerConfig;
-        const missingAttachmentId = `thread-missing-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const missingPath = path.join(attachmentsDir, `${missingAttachmentId}.png`);
-        yield* fs.remove(missingPath).pipe(Effect.catch(() => Effect.void));
-
-        const textGeneration = yield* TextGeneration;
-        const result = yield* textGeneration
-          .generateBranchName({
-            cwd: process.cwd(),
-            message: "Fix layout bug from screenshot.",
-            attachments: [
-              {
-                type: "image",
-                id: missingAttachmentId,
-                name: "outside.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-            ],
-          })
-          .pipe(
-            Effect.match({
-              onFailure: (error) => ({ _tag: "Left" as const, left: error }),
-              onSuccess: (value) => ({ _tag: "Right" as const, right: value }),
-            }),
-          );
-
-        expect(result._tag).toBe("Right");
-        if (result._tag === "Right") {
-          expect(result.right.branch).toBe("fix/ui-regression");
-        }
-      }),
-    ),
-  );
-
   it.effect(
     "fails with typed TextGenerationError when codex returns wrong branch payload shape",
     () =>

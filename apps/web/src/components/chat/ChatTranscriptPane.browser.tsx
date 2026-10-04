@@ -96,6 +96,10 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           hasMessages
           isRevertingCheckpoint={false}
           isWorking={false}
+          // A local draft skips the async imported-history load, whose
+          // post-mount commit would otherwise race the baseline below and
+          // be misattributed to the composer keystroke.
+          isLocalDraft
           worktreeSetup={null}
           followLiveOutput={false}
           listRef={listRef}
@@ -235,9 +239,18 @@ describe("ChatTranscriptPane", () => {
         expect(clampWrapper).not.toBeNull();
         expect(clampWrapper!.scrollHeight).toBeGreaterThan(clampWrapper!.clientHeight);
       });
-      expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
-        "Show more",
-      );
+      const clamp = screen.container.querySelector<HTMLElement>(
+        '[data-user-message-clamp="true"]',
+      )!;
+      expect(clamp.textContent).toContain(hiddenTail);
+      expect(getComputedStyle(clamp).maskImage).toContain("linear-gradient");
+      const expandButton = screen.container.querySelector<HTMLButtonElement>(
+        "button[data-scroll-anchor-ignore]",
+      )!;
+      expect(expandButton.textContent).toBe("Show more");
+      expect(expandButton.getAttribute("aria-expanded")).toBe("false");
+      expect(clamp.id).not.toBe("");
+      expect(expandButton.getAttribute("aria-controls")).toBe(clamp.id);
 
       await page.getByText("Show more").click();
 
@@ -247,6 +260,7 @@ describe("ChatTranscriptPane", () => {
         expect(wrapper!.scrollHeight).toBeLessThanOrEqual(wrapper!.clientHeight + 1);
       });
       await expect.element(page.getByText("Show less")).toBeInTheDocument();
+      expect(expandButton.getAttribute("aria-expanded")).toBe("true");
       expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
         "Show less",
       );

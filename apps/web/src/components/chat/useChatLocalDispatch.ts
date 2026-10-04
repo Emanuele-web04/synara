@@ -1,7 +1,8 @@
 import { ThreadId } from "@synara/contracts";
-import { useCallback, useEffect, useMemo, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore, type SetStateAction } from "react";
 import { create } from "zustand";
 import { markPendingTurnDispatch } from "../../pendingTurnDispatch";
+import { getWsSettlingThreadIds, subscribeWsTurnSettlements } from "../../wsTransportEvents";
 import { derivePhase } from "../../session-logic";
 import { type ChatMessage, type Thread, type WorktreeSetupResolutionAction } from "../../types";
 import {
@@ -70,6 +71,11 @@ export function useChatLocalDispatch({
   activePendingApproval,
   activePendingUserInput,
 }: ChatLocalDispatchInput) {
+  const isSettlingTurnDispatch = useSyncExternalStore(
+    subscribeWsTurnSettlements,
+    getWsSettlingThreadIds,
+    getWsSettlingThreadIds,
+  ).has(threadId);
   const localDispatch = useThreadDispatchStore(
     (state) => state.threads[threadId]?.localDispatch ?? null,
   );
@@ -148,7 +154,8 @@ export function useChatLocalDispatch({
       phase,
     ],
   );
-  const isSendBusy = localDispatch !== null && !serverAcknowledgedLocalDispatch;
+  const isSendBusy =
+    isSettlingTurnDispatch || (localDispatch !== null && !serverAcknowledgedLocalDispatch);
   const isAwaitingTurnStart = localDispatch !== null && !turnTakenOver;
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
@@ -311,6 +318,7 @@ export function useChatLocalDispatch({
     return () => window.clearTimeout(timer);
   }, [localDispatch, resetLocalDispatch, turnTakenOver]);
   return {
+    isSettlingTurnDispatch,
     localDispatch,
     setLocalDispatch,
     worktreeSetupResolutionRef,

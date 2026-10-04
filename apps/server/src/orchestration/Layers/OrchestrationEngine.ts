@@ -105,6 +105,7 @@ type OrchestrationEnginePhase = "running" | "quiescing" | "draining" | "stopped"
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
+  settleOnly: boolean;
   attachmentPrincipal: ManagedAttachmentPrincipal;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   executionState: Ref.Ref<CommandExecutionState>;
@@ -312,6 +313,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const resolveStoredCommandOutcome = (
     command: OrchestrationCommand,
     principal: ManagedAttachmentPrincipal,
+    settleOnly: boolean,
   ): Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never> =>
     Effect.gen(function* () {
       const receiptExit = yield* Effect.exit(
@@ -326,7 +328,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const fingerprint = fingerprintOrchestrationCommand(command);
       yield* validateCommandReceiptIdentity(existingReceipt.value, fingerprint);
       if (existingReceipt.value.status === "accepted") {
-        yield* validateAcceptedAttachmentRetry(command, principal);
+        if (!settleOnly) yield* validateAcceptedAttachmentRetry(command, principal);
         return {
           sequence: existingReceipt.value.resultSequence,
         };
@@ -824,7 +826,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           return;
         }
         if (existingReceipt.value.status === "accepted") {
-          yield* validateAcceptedAttachmentRetry(envelope.command, envelope.attachmentPrincipal);
+          // Settlement reads a fingerprint-bound receipt and cannot reclaim or
+          // deliver attachments. Its verdict must survive reconnect ownership changes.
+          if (!envelope.settleOnly) {
+            yield* validateAcceptedAttachmentRetry(envelope.command, envelope.attachmentPrincipal);
+          }
           yield* Deferred.succeed(envelope.result, {
             sequence: existingReceipt.value.resultSequence,
           });
@@ -835,6 +841,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           new OrchestrationCommandPreviouslyRejectedError({
             commandId: envelope.command.commandId,
             detail: existingReceipt.value.error ?? "Previously rejected.",
+          }),
+        );
+        return;
+      }
+
+      if (envelope.settleOnly) {
+        const detail =
+          "The connection was interrupted before this message was accepted. Please send it again.";
+        const aggregateRef = commandToAggregateRef(envelope.command);
+        // This runs under the same serialization lock as normal dispatch. The
+        // receipt fences a delayed original RPC, including one still outside
+        // the engine in startup/normalization when settlement arrived.
+        const inserted = yield* commandReceiptRepository.insert({
+          commandId: envelope.command.commandId,
+          aggregateKind: aggregateRef.aggregateKind,
+          aggregateId: aggregateRef.aggregateId,
+          acceptedAt: new Date().toISOString(),
+          resultSequence: commandReadModel.snapshotSequence,
+          status: "rejected",
+          error: detail,
+          fingerprintVersion: commandFingerprint.version,
+          commandFingerprint: commandFingerprint.value,
+        });
+        if (!inserted) {
+          return yield* makeCommandInternalError(
+            envelope.command,
+            "Failed to settle the original message.",
+          );
+        }
+        yield* Deferred.fail(
+          envelope.result,
+          new OrchestrationCommandPreviouslyRejectedError({
+            commandId: envelope.command.commandId,
+            detail,
           }),
         );
         return;
@@ -1286,6 +1326,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             const resolvedTimeoutOutcome = yield* resolveStoredCommandOutcome(
               envelope.command,
               envelope.attachmentPrincipal,
+              envelope.settleOnly,
             ).pipe(
               Effect.match({
                 onFailure: (resolvedError) => ({ _tag: "Left" as const, left: resolvedError }),
@@ -1348,6 +1389,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           const resolvedCrashOutcome = yield* resolveStoredCommandOutcome(
             envelope.command,
             envelope.attachmentPrincipal,
+            envelope.settleOnly,
           ).pipe(
             Effect.match({
               onFailure: (resolvedError) => ({ _tag: "Left" as const, left: resolvedError }),
@@ -1586,6 +1628,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const executionState = yield* Ref.make<CommandExecutionState>("queued");
       const envelope: CommandEnvelope = {
         command,
+        settleOnly: context?.settleOnly === true,
         attachmentPrincipal: context?.attachmentPrincipal ?? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
         result,
         executionState,
@@ -1598,7 +1641,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (
             current.phase === "draining" ||
             current.phase === "stopped" ||
-            (current.phase === "quiescing" && !isQuiescingCommandAdmissible(command.type))
+            (current.phase === "quiescing" &&
+              !envelope.settleOnly &&
+              !isQuiescingCommandAdmissible(command.type))
           ) {
             return [{ accepted: false, reason: "stopped" as const }, current] as const;
           }
@@ -1606,6 +1651,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             queues: commandQueues,
             envelope,
             commandType: command.type,
+            settleOnly: envelope.settleOnly,
           });
           if (!decision.accepted) {
             return [decision, current] as const;

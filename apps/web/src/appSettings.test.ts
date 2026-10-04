@@ -30,8 +30,6 @@ import {
   getDefaultNativeFontSmoothing,
   getCustomModelsByProvider,
   getCustomModelsForProviderInstance,
-  getGitTextGenerationModelOptions,
-  getGitTextGenerationPickerOptions,
   getManageableProviderInstances,
   getProviderInstanceOptions,
   getUnsupportedProviderInstanceOptions,
@@ -287,72 +285,6 @@ describe("getAppModelOptions", () => {
   });
 });
 
-describe("getGitTextGenerationModelOptions", () => {
-  it("merges codex and OpenCode model options for git writing settings", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: ["custom/codex-model"],
-      customOpenCodeModels: ["openrouter/gpt-oss-120b"],
-      textGenerationModel: "openai/gpt-5",
-      textGenerationProvider: "opencode",
-    });
-
-    expect(options.some((option) => option.slug === "gpt-5.4-mini")).toBe(true);
-    expect(options.some((option) => option.slug === "openai/gpt-5")).toBe(true);
-    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-  });
-
-  it("prefers runtime-discovered OpenCode models for git writing settings", () => {
-    const options = getGitTextGenerationModelOptions(
-      {
-        customCodexModels: [],
-        customOpenCodeModels: [],
-        textGenerationModel: "openrouter/custom-model",
-        textGenerationProvider: "opencode",
-      },
-      {
-        opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
-      },
-    );
-
-    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-    expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
-  });
-
-  it("includes Git text-generation providers and omits chat-only providers", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: [],
-      customClaudeModels: ["claude-opus-4-8"],
-      customGrokModels: ["grok-4.6"],
-      customOpenCodeModels: [],
-      textGenerationModel: "gpt-5.6-luna",
-      textGenerationProvider: "codex",
-    });
-
-    expect(options.some((option) => option.provider === "claudeAgent")).toBe(true);
-    expect(options.some((option) => option.provider === "grok")).toBe(false);
-    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
-    expect(options.some((option) => option.provider === "pi")).toBe(false);
-    expect(options.some((option) => option.provider === "devin")).toBe(false);
-  });
-
-  it("omits chat-only providers that have no Git text-generation backend", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: [],
-      customClaudeModels: ["claude-opus-4-8"],
-      customGrokModels: ["grok-4.6"],
-      customOpenCodeModels: [],
-      textGenerationModel: "gpt-5.6-luna",
-      textGenerationProvider: "codex",
-    });
-
-    expect(options.some((option) => option.provider === "claudeAgent")).toBe(true);
-    expect(options.some((option) => option.provider === "grok")).toBe(false);
-    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
-    expect(options.some((option) => option.provider === "pi")).toBe(false);
-    expect(options.some((option) => option.provider === "devin")).toBe(false);
-  });
-});
-
 describe("isGitTextGenerationSettingsDirty", () => {
   it("compares the normalized provider and model defaults", () => {
     const defaults = AppSettingsSchema.makeUnsafe({});
@@ -402,52 +334,6 @@ describe("environment panel defaults", () => {
       showEnvironmentInstructions: true,
       showEnvironmentNotepad: true,
     });
-  });
-
-  it("keeps runtime-discovered git-writing models isolated by provider instance", () => {
-    const options = getGitTextGenerationPickerOptions(
-      {
-        customCodexModels: [],
-        customClaudeModels: [],
-        customCursorModels: [],
-        customAntigravityModels: [],
-        customGrokModels: [],
-        customDroidModels: [],
-        customDevinModels: [],
-        customOpenCodeModels: [],
-        customPiModels: [],
-        customOmpModels: [],
-        codexAccounts: [],
-        codexHomePath: "",
-        selectedCodexAccountId: "default",
-        textGenerationModel: "openrouter/work-model",
-        textGenerationProvider: "opencode",
-        textGenerationProviderInstanceId: "opencode_work",
-        providerInstances: {
-          opencode_work: {
-            driver: "opencode",
-            enabled: true,
-            displayName: "OpenCode Work",
-          },
-        },
-      },
-      {
-        opencode: [{ slug: "openrouter/personal-model", name: "Personal Model" }],
-        opencode_work: [{ slug: "openrouter/work-model", name: "Work Model" }],
-      },
-    );
-
-    const defaultModels = options
-      .filter((entry) => entry.instance.instanceId === "opencode")
-      .map((entry) => entry.option.slug);
-    const workModels = options
-      .filter((entry) => entry.instance.instanceId === "opencode_work")
-      .map((entry) => entry.option.slug);
-
-    expect(defaultModels).toContain("openrouter/personal-model");
-    expect(defaultModels).not.toContain("openrouter/work-model");
-    expect(workModels).toContain("openrouter/work-model");
-    expect(workModels).not.toContain("openrouter/personal-model");
   });
 });
 

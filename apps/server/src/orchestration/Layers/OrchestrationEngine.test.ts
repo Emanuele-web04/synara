@@ -173,6 +173,89 @@ function now() {
 
 describe("OrchestrationEngine", () => {
   it.each([false, true])(
+    "settles an uncertain send without executing it again (already accepted=%s)",
+    async (accepted) => {
+      const system = await createOrchestrationSystem();
+      const { engine } = system;
+      const createdAt = now();
+      const projectId = asProjectId("settlement-project");
+      const threadId = ThreadId.makeUnsafe("settlement-thread");
+      try {
+        await system.run(
+          engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("settlement-project-create"),
+            projectId,
+            title: "Settlement",
+            workspaceRoot: "/tmp/settlement",
+            defaultModelSelection: null,
+            createdAt,
+          }),
+        );
+        await system.run(
+          engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("settlement-thread-create"),
+            threadId,
+            projectId,
+            title: "Settlement",
+            modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+            interactionMode: "default",
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          }),
+        );
+        const command = {
+          type: "thread.turn.start" as const,
+          commandId: CommandId.makeUnsafe("settlement-send"),
+          threadId,
+          message: {
+            messageId: asMessageId("settlement-message"),
+            role: "user" as const,
+            text: "hello",
+            attachments: [],
+          },
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          createdAt,
+        };
+        const original = accepted ? await system.run(engine.dispatch(command)) : null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const settlement = system.run(engine.dispatch(command, { settleOnly: true }));
+          if (accepted) {
+            await expect(settlement).resolves.toEqual(original);
+          } else {
+            await expect(settlement).rejects.toMatchObject({
+              _tag: "OrchestrationCommandPreviouslyRejectedError",
+            });
+          }
+        }
+        // A delayed original RPC must see the rejection recorded by settlement.
+        if (!accepted) {
+          await expect(system.run(engine.dispatch(command))).rejects.toMatchObject({
+            _tag: "OrchestrationCommandPreviouslyRejectedError",
+          });
+        }
+        await system.run(engine.quiesce);
+        const shutdownSettlement = system.run(engine.dispatch(command, { settleOnly: true }));
+        if (accepted) await expect(shutdownSettlement).resolves.toEqual(original);
+        else
+          await expect(shutdownSettlement).rejects.toMatchObject({
+            _tag: "OrchestrationCommandPreviouslyRejectedError",
+          });
+        const events = await system.run(Stream.runCollect(engine.readEvents(0)));
+        expect(
+          Array.from(events).filter((event) => event.type === "thread.turn-start-requested"),
+        ).toHaveLength(accepted ? 1 : 0);
+      } finally {
+        await system.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
     "persists async questions and admits one concurrent answer (running=%s)",
     async (running) => {
       const system = await createOrchestrationSystem();
@@ -766,6 +849,13 @@ describe("OrchestrationEngine", () => {
     await expect(
       system.run(engine.dispatch(command, { attachmentPrincipal: principal })),
     ).resolves.toEqual(accepted);
+
+    await expect(system.run(engine.dispatch(command, { settleOnly: true }))).resolves.toEqual(
+      accepted,
+    );
+    await expect(system.run(engine.dispatch(command))).rejects.toThrow(
+      "different managed attachment set or owner",
+    );
 
     const editResendClaim = await system.run(
       repository.claimForAcceptedTurn({

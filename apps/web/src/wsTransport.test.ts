@@ -6,6 +6,9 @@
 import { Cause, Effect, Exit, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CommandId,
+  MessageId,
+  type ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_CHANNELS,
@@ -16,6 +19,7 @@ import {
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
+  WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WsCompatibilityError,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
@@ -50,6 +54,7 @@ import {
   threadStreamInputsEqual,
   projectFileChangeStreamKey,
   WsTransport,
+  WsTransportRequestInterruptedError,
   type WsThreadStreamFailure,
 } from "./wsTransport";
 import {
@@ -60,6 +65,7 @@ import {
 import {
   addWsCompatibilityIssueListener,
   emitWsCompatibilityIssue,
+  getWsSettlingThreadIds,
   readLatestWsCompatibilityIssue,
 } from "./wsTransportEvents";
 
@@ -289,6 +295,315 @@ afterEach(() => {
 });
 
 describe("WsTransport", () => {
+  it.each(["caller", "transport"])(
+    "keeps an unacknowledged send pending through settlement failures until %s cancellation",
+    async (cancelSource) => {
+      vi.useFakeTimers();
+      bindWindowTimersToCurrentGlobals();
+      const lifetime = new AbortController();
+      const caller = new AbortController();
+      try {
+        const { transport, internals } = makeBareTransport();
+        const dispatch = vi.fn(() => Effect.never);
+        const settle = vi
+          .fn()
+          .mockImplementationOnce(() =>
+            Effect.fail(
+              new WsTransportRequestInterruptedError({
+                message: "Connection lost",
+                code: "WS_REQUEST_RECONNECTED",
+                method: ORCHESTRATION_WS_METHODS.settleTurnDispatch,
+              }),
+            ),
+          )
+          .mockImplementation(() => Effect.never);
+        const client = {
+          [ORCHESTRATION_WS_METHODS.dispatchCommand]: dispatch,
+          [ORCHESTRATION_WS_METHODS.settleTurnDispatch]: settle,
+        };
+        Object.assign(internals, {
+          lifetime,
+          compatibility: {
+            ...NEGOTIATION_RESULT,
+            capabilities: [WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY],
+          },
+          getClient: async () => client,
+          getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+        });
+        const command = {
+          type: "thread.turn.start",
+          commandId: "uncertain-send",
+          threadId: "uncertain-thread",
+          message: { messageId: "uncertain-message", role: "user", text: "hello", attachments: [] },
+        };
+        let finished = false;
+        const send = transport.request(
+          ORCHESTRATION_WS_METHODS.dispatchCommand,
+          { command },
+          { timeoutMs: 20, signal: caller.signal },
+        );
+        const verdict = expect(
+          send.finally(() => {
+            finished = true;
+          }),
+        ).rejects.toMatchObject({ code: "WS_REQUEST_ABORTED" });
+        await vi.advanceTimersByTimeAsync(520);
+        expect(settle).toHaveBeenCalledTimes(2);
+        expect(finished).toBe(false);
+        expect(getWsSettlingThreadIds().has(ThreadId.makeUnsafe(command.threadId))).toBe(true);
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(settle).toHaveBeenLastCalledWith({ command });
+        (cancelSource === "caller" ? caller : lifetime).abort();
+        await verdict;
+        expect(getWsSettlingThreadIds().size).toBe(0);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(settle).toHaveBeenCalledTimes(2);
+        expect(dispatch).toHaveBeenCalledOnce();
+      } finally {
+        lifetime.abort();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("releases settlement ownership when recovery loses the optional capability", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const lifetime = new AbortController();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const dispatch = vi.fn(() => Effect.never);
+      const settle = vi.fn(() => Effect.never);
+      const client = {
+        [ORCHESTRATION_WS_METHODS.dispatchCommand]: dispatch,
+        [ORCHESTRATION_WS_METHODS.settleTurnDispatch]: settle,
+      };
+      Object.assign(internals, {
+        lifetime,
+        compatibility: {
+          ...NEGOTIATION_RESULT,
+          capabilities: [WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY],
+        },
+        getClient: vi
+          .fn()
+          .mockResolvedValueOnce(client)
+          .mockImplementation(async () => {
+            Object.assign(internals, { compatibility: NEGOTIATION_RESULT });
+            return client;
+          }),
+        getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+      });
+      const command = {
+        type: "thread.turn.start",
+        commandId: "optional-capability-send",
+        threadId: "optional-capability-thread",
+        message: {
+          messageId: "optional-capability-message",
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+      };
+      const send = transport.request(
+        ORCHESTRATION_WS_METHODS.dispatchCommand,
+        { command },
+        { timeoutMs: 20 },
+      );
+      let failure: unknown;
+      const verdict = send.catch((error) => {
+        failure = error;
+      });
+      await vi.advanceTimersByTimeAsync(20);
+      // Observe a terminal result without allowing an unresolved baseline promise to hang the test.
+      expect(getWsSettlingThreadIds().size).toBe(0);
+      await verdict;
+      expect(failure).toMatchObject({ code: "WS_TURN_SETTLEMENT_UNAVAILABLE", retryable: false });
+      expect(settle).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      lifetime.abort();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps recovery connecting when the detached feature probe rejects", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
+    );
+    const transport = new WsTransport();
+    const runtimeOwner = transport as unknown as {
+      closeRuntime: (...args: unknown[]) => Promise<void>;
+    };
+    const closeRuntime = runtimeOwner.closeRuntime.bind(runtimeOwner);
+    let releaseClose!: () => void;
+    const closing = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const close = vi.spyOn(runtimeOwner, "closeRuntime").mockImplementation(async (...args) => {
+      await closing;
+      await closeRuntime(...args);
+    });
+    try {
+      await waitForSockets(1);
+      sockets[0]!.open();
+      await vi.waitFor(() => expect(sockets[0]!.sent.length).toBeGreaterThan(0));
+      sockets[0]!.close(1006, "probe connection died");
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(transport.getState()).toBe("connecting");
+      releaseClose();
+      await vi.waitFor(() => expect(sockets.length).toBe(2));
+      sockets[1]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    } finally {
+      releaseClose();
+      await transport.dispose();
+    }
+  });
+
+  it("recovers an unopened feature socket without reporting it as connected", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
+    );
+    const transport = new WsTransport();
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sockets).toHaveLength(1);
+      expect(transport.getState()).toBe("connecting");
+      await vi.advanceTimersByTimeAsync(10_501);
+      expect(sockets[0]!.readyState).toBe(MockWebSocket.CLOSED);
+      expect(sockets).toHaveLength(2);
+      expect(transport.getState()).toBe("connecting");
+      sockets[1]!.serveVoidRpc();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(transport.getState()).toBe("open");
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["accepted", "rejected"] as const)(
+    "settles a lost send acknowledgement after reconnect (%s) without resending the turn",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          jsonResponse(200, {
+            ...NEGOTIATION_RESULT,
+            capabilities: [
+              ...NEGOTIATION_RESULT.capabilities,
+              WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
+            ],
+          }),
+        ),
+      );
+      const transport = new WsTransport();
+      const command = {
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("lost-ack-command"),
+        threadId: ThreadId.makeUnsafe("lost-ack-thread"),
+        message: {
+          messageId: MessageId.makeUnsafe("lost-ack-message"),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-10-04T12:00:00.000Z",
+      } satisfies ClientOrchestrationCommand;
+      try {
+        await waitForSockets(1);
+        sockets[0]!.onSend = (data) => {
+          const frame = JSON.parse(data);
+          if (frame._tag === "Ping") sockets[0]!.receive(JSON.stringify({ _tag: "Pong" }));
+          if (frame._tag === "Request" && frame.tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            queueMicrotask(() => sockets[0]!.close(1006, "lost acknowledgement"));
+          } else if (frame._tag === "Request") {
+            sockets[0]!.receive(
+              JSON.stringify({
+                _tag: "Exit",
+                requestId: frame.id,
+                exit: { _tag: "Success", value: null },
+              }),
+            );
+          }
+        };
+        sockets[0]!.open();
+        const send = transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command });
+        const verdict =
+          status === "accepted"
+            ? expect(send).resolves.toEqual({ sequence: 42 })
+            : expect(send).rejects.toMatchObject({
+                message: "Message was not accepted. Send again.",
+              });
+        await vi.waitFor(() => expect(sockets.length).toBe(2));
+        const recovered = sockets[1]!;
+        recovered.onSend = (data) => {
+          const frame = JSON.parse(data);
+          if (frame._tag === "Ping") recovered.receive(JSON.stringify({ _tag: "Pong" }));
+          if (frame._tag !== "Request") return;
+          const value =
+            frame.tag === ORCHESTRATION_WS_METHODS.settleTurnDispatch
+              ? status === "accepted"
+                ? { status, sequence: 42 }
+                : { status, message: "Message was not accepted. Send again." }
+              : null;
+          recovered.receive(
+            JSON.stringify({ _tag: "Exit", requestId: frame.id, exit: { _tag: "Success", value } }),
+          );
+        };
+        recovered.open();
+        await verdict;
+        const requests = sockets
+          .flatMap((socket) => socket.sent.map((data) => JSON.parse(String(data))))
+          .filter((frame) => frame._tag === "Request");
+        expect(
+          requests.filter((frame) => frame.tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
+        ).toHaveLength(1);
+        expect(
+          requests.find((frame) => frame.tag === ORCHESTRATION_WS_METHODS.settleTurnDispatch)
+            ?.payload.command,
+        ).toMatchObject(command);
+      } finally {
+        await transport.dispose();
+      }
+    },
+  );
+
+  it("replaces a failed feature socket even when no streams are subscribed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
+    );
+    const transport = new WsTransport();
+    transport.onStateChange((state) => {
+      if (state === "open" && sockets.length === 2) {
+        // Fail after the probe, while the reconnect promise is still settling.
+        sockets[1]!.close(1006, "connection lost again");
+      }
+    });
+    try {
+      await waitForSockets(1);
+      sockets[0]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      sockets[0]!.close(1006, "connection lost");
+      await vi.waitFor(() => expect(transport.getState()).toBe("connecting"));
+      await vi.waitFor(() => expect(sockets.length).toBe(2));
+      sockets[1]!.serveVoidRpc();
+      await vi.waitFor(() => expect(sockets.length).toBe(3));
+      sockets[2]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    } finally {
+      await transport.dispose();
+    }
+  });
+
   it("shares one stream per watched file and stops it after the last listener leaves", async () => {
     const { transport, internals } = makeBareTransport();
     const input = { cwd: "/repo", relativePath: "src/app.ts" };
@@ -1596,6 +1911,10 @@ describe("WsTransport", () => {
     const transport = new WsTransport("ws://localhost:3020");
     await waitForSockets(1);
 
+    expect(transport.getState()).toBe("connecting");
+    sockets[0]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const negotiateUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(negotiateUrl.protocol).toBe("http:");
@@ -1640,6 +1959,35 @@ describe("WsTransport", () => {
     );
     await expect(negotiateOverHttp("ws://localhost:3020")).resolves.toBeNull();
   });
+
+  it.each([404, 503])(
+    "falls back on HTTP %s without waiting for its error body",
+    async (status) => {
+      let finishBody!: () => void;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          finishBody = () => controller.close();
+        },
+        cancel() {
+          finishBody = () => undefined;
+        },
+      });
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status })));
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          negotiateOverHttp("ws://localhost:3020"),
+          new Promise<string>((resolve) => {
+            timeout = setTimeout(() => resolve("still waiting for an irrelevant error body"), 100);
+          }),
+        ]);
+        expect(result).toBeNull();
+      } finally {
+        clearTimeout(timeout);
+        finishBody();
+      }
+    },
+  );
 
   it("falls back to bootstrap when the negotiate request never settles", async () => {
     // A connection that accepts and then stalls (WAN/tunnel black hole) must
@@ -1752,6 +2100,8 @@ describe("WsTransport", () => {
       compatibility: WsBootstrapNegotiateResult | null;
     };
     await waitForSockets(1);
+    sockets[0]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
 
@@ -1785,6 +2135,8 @@ describe("WsTransport", () => {
       sequence: number;
     };
     await waitForSockets(1);
+    sockets[0]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
     internals.latestPushByChannel.set("server.welcome", { stale: true });
     internals.sequence = 7;
 
@@ -1793,7 +2145,10 @@ describe("WsTransport", () => {
     internals.compatibility = null;
     const restarted = { ...NEGOTIATION_RESULT, serverInstanceId: "server-instance-2" };
     fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, restarted)));
-    await internals.createSession().clientPromise;
+    const reconnected = internals.createSession().clientPromise;
+    await waitForSockets(2);
+    sockets[1]!.serveVoidRpc();
+    await reconnected;
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(internals.compatibility).toEqual(restarted);

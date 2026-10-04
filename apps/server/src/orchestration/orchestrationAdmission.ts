@@ -97,6 +97,7 @@ export function tryAdmitOrchestrationCommand<A>(input: {
   readonly envelope: A;
   readonly commandType: OrchestrationCommand["type"];
   readonly policy?: OrchestrationCommandAdmissionPolicy;
+  readonly settleOnly?: boolean;
 }): OrchestrationCommandAdmissionDecision {
   const policy = input.policy ?? {
     capacity: ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
@@ -122,7 +123,7 @@ export function tryAdmitOrchestrationCommand<A>(input: {
     return { accepted: false, reason: "stopped" };
   }
 
-  const lane = orchestrationCommandLane(input.commandType);
+  const lane = input.settleOnly ? "control" : orchestrationCommandLane(input.commandType);
   // The reserve is measured against everything already queued, so only control
   // commands can consume the last `reservedCapacity` slots.
   const admissionLimit =

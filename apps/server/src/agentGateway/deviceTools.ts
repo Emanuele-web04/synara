@@ -78,7 +78,7 @@ const AGENT_RECOVERABLE_ERROR_PATTERNS: readonly RegExp[] = [
   /scrolling stopped moving/iu,
 ];
 
-export function isViewerFacingDeviceError(error: unknown): boolean {
+function isViewerFacingDeviceError(error: unknown): boolean {
   const message = errorText(error);
   return !AGENT_RECOVERABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }

@@ -251,6 +251,80 @@ it("keeps the full tool progress summary so the hover card can reveal it", () =>
   expect(cappedPayload.detail.endsWith("...")).toBe(true);
 });
 
+it("keeps the full task failure summary so the work-log reveal can show it", () => {
+  // A failed background/subagent task's summary is exactly what the operator
+  // needs to read in full; provider-authored failure text (rate-limit bodies,
+  // unsupported-version messages) routinely runs past 180 chars.
+  const failureSummary = `Subagent run failed after 3 retries: provider returned 429 rate_limit_error — "request exceeds the per-minute token budget for claude-opus-4-1; reduce context or wait for the current window to reset" (request id req_01JX4K9VF0Q8M2W7ABCDE)`;
+  expect(failureSummary.length).toBeGreaterThan(180);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.completed",
+      eventId: "task-completed-full-summary",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-1", status: "failed", summary: failureSummary },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "task.completed",
+    tone: "error",
+    payload: { detail: failureSummary },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized summaries.
+  const oversized = `prefix-${"z".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.completed",
+      eventId: "task-completed-oversized",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-2", status: "failed", summary: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
+it("keeps the full task update error so the work-log reveal can show it", () => {
+  // The task.updated error is the provider's own failure text; the row's CSS
+  // `truncate` does the one-line clip, so the payload must carry the full
+  // string rather than a 180-char row-sized cut.
+  const taskError = `Task crashed while streaming the provider response: socket hang up after 42s without a delta — the CLI reported "unsupported client version 0.31.x; server requires >= 0.40.0" and refused the reconnect attempt (attempt 3 of 3)`;
+  expect(taskError.length).toBeGreaterThan(180);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.updated",
+      eventId: "task-updated-full-error",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-3", status: "failed", error: taskError },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "task.updated",
+    tone: "error",
+    payload: { detail: taskError },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized errors.
+  const oversized = `prefix-${"e".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.updated",
+      eventId: "task-updated-oversized",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-4", status: "failed", error: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
 describe("projected activities satisfy the orchestration command schema", () => {
   it("omits an absent approval request id instead of emitting an explicit undefined", () => {
     expectSchemaValidActivities(

@@ -50,6 +50,17 @@ describe("orchestration command admission", () => {
         expect(admit("task-stop", "thread.task.stop")).toEqual({ accepted: true });
         yield* takeNextOrchestrationCommand(queues);
         expect(admit("task-background", "thread.task.background")).toEqual({ accepted: true });
+        yield* takeNextOrchestrationCommand(queues);
+        expect(
+          tryAdmitOrchestrationCommand({
+            queues,
+            policy,
+            envelope: "settlement",
+            commandType: "thread.turn.start",
+            settleOnly: true,
+          }),
+        ).toEqual({ accepted: true });
+        expect(yield* takeNextOrchestrationCommand(queues)).toBe("settlement");
 
         yield* Queue.shutdown(queues.control);
         yield* Queue.shutdown(queues.user);

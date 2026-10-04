@@ -1838,8 +1838,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         includeRootTree: options.includeRootTree,
         onError: (error, context) => {
           this.logger.warn(
-            context.source === "tree-kill"
-              ? `tree-kill ${signal} failed`
+            context.source === "root-tree"
+              ? `root tree ${signal} failed`
               : `captured process ${signal} failed`,
             {
               threadId,

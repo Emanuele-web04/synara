@@ -273,24 +273,23 @@ async function waitFor(
 }
 
 describe("ProviderCommandReactor", () => {
-  let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor,
-    unknown
-  > | null = null;
+  const runtimes = new Set<{ dispose: () => Promise<void> }>();
+  const scopes = new Set<Scope.Closeable>();
   let scope: Scope.Closeable | null = null;
   const createdStateDirs = new Set<string>();
   const createdBaseDirs = new Set<string>();
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    if (scope) {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
+    for (const activeScope of scopes) {
+      await Effect.runPromise(Scope.close(activeScope, Exit.void));
     }
+    scopes.clear();
     scope = null;
-    if (runtime) {
+    for (const runtime of runtimes) {
       await runtime.dispose();
     }
-    runtime = null;
+    runtimes.clear();
     for (const stateDir of createdStateDirs) {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -788,6 +787,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const runtime = ManagedRuntime.make(layer);
+    runtimes.add(runtime);
     const emitRuntimeEvent = (event: ProviderRuntimeEvent) =>
       Effect.runPromise(PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid));
 
@@ -831,15 +831,17 @@ describe("ProviderCommandReactor", () => {
     const gatewayOperations = await runtime.runPromise(
       Effect.service(AgentGatewayOperationRepository),
     );
-    scope = await Effect.runPromise(Scope.make("sequential"));
+    const harnessScope = await Effect.runPromise(Scope.make("sequential"));
+    scopes.add(harnessScope);
+    scope = harnessScope;
     if (input?.ingestRuntimeEvents) {
       const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
-      await Effect.runPromise(ingestion.start.pipe(Scope.provide(scope)));
+      await Effect.runPromise(ingestion.start.pipe(Scope.provide(harnessScope)));
     }
     let reactorStarted = false;
     const startReactor = async () => {
       if (reactorStarted) return;
-      await Effect.runPromise(reactor.start.pipe(Scope.provide(scope!)));
+      await Effect.runPromise(reactor.start.pipe(Scope.provide(harnessScope)));
       reactorStarted = true;
     };
     if (input?.startReactor !== false) {
@@ -11983,6 +11985,7 @@ describe("ProviderCommandReactor", () => {
     const activeScope = scope;
     expect(activeScope).not.toBeNull();
     await Effect.runPromise(Scope.close(activeScope!, Exit.void));
+    scopes.delete(activeScope!);
     scope = null;
 
     expect(promotionDispatches).toBe(1);

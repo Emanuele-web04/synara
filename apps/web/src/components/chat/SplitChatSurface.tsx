@@ -13,6 +13,7 @@ import {
 } from "react";
 import { Schema } from "effect";
 
+import { SplitPaneLayout } from "./SplitPaneLayout";
 import { ProviderIcon } from "../ProviderIcon";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
@@ -41,20 +42,13 @@ import {
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
 import { useRightDockStore } from "../../rightDockStore";
 import { resolveActiveSplitView } from "../../splitViewRoute";
-import {
-  canSubdividePane,
-  collectLeaves,
-  findLeafPaneById,
-  layoutSplitPanes,
-  type PaneRect,
-} from "../../splitView.logic";
+import { canSubdividePane, collectLeaves, findLeafPaneById } from "../../splitView.logic";
 import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
   resolveSplitViewThreadIds,
   selectSplitView,
   type LeafPane,
-  type Pane,
   type PaneId,
   type SplitDirection,
   type SplitDropSide,
@@ -66,23 +60,11 @@ import {
 import { useStore } from "../../store";
 import { createThreadShellsSelector } from "../../storeSelectors";
 import {
-  normalizeSingleSearchFromPane,
   resolveSplitPaneCloseDecision,
-  resolveSplitPaneMaximizeDecision,
   resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
 } from "../../routes/-chatThreadRoute.logic";
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
-import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
 import { ChatPaneBody, KeptChatPane } from "./ChatPaneKeepAlive";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
@@ -99,14 +81,6 @@ const SPLIT_PANE_CHAT_MIN_WIDTH = 20 * 16;
 const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
 const BROWSER_PANEL_MIN_WIDTH = 21 * 16;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
-const SPLIT_RATIO_MIN = 0.25;
-const SPLIT_RATIO_MAX = 0.75;
-
-function clampSplitRatio(value: number): number {
-  if (!Number.isFinite(value)) return 0.5;
-  return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, value));
-}
-
 // Split panes cannot reuse the desktop Sidebar primitive because it positions the panel
 // against the viewport. This embedded shell keeps browser/diff content anchored to the pane.
 function SplitPaneEmbeddedPanel(props: {
@@ -305,173 +279,6 @@ function SplitPaneEmptyState(props: {
   );
 }
 
-function SplitDivider(props: {
-  splitNodeId: PaneId;
-  direction: SplitDirection;
-  ratio: number;
-  onSetRatio: (nodeId: PaneId, ratio: number) => void;
-}) {
-  const { onSetRatio, splitNodeId, direction } = props;
-  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const target = event.currentTarget;
-    const parent = target.parentElement as HTMLElement | null;
-    if (!parent) return;
-    event.preventDefault();
-    const rect = parent.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-
-    const computeRatio = (clientX: number, clientY: number) =>
-      clampSplitRatio(
-        direction === "horizontal"
-          ? (clientX - rect.left) / rect.width
-          : (clientY - rect.top) / rect.height,
-      );
-
-    let latestRatio = computeRatio(event.clientX, event.clientY);
-    let frameId = 0;
-    const previousParentPosition = parent.style.position;
-    const previousBodyCursor = document.body.style.cursor;
-    const previousBodyUserSelect = document.body.style.userSelect;
-    if (getComputedStyle(parent).position === "static") {
-      parent.style.position = "relative";
-    }
-    const resizeGuide = document.createElement("div");
-    resizeGuide.setAttribute("data-split-resize-guide", "true");
-    Object.assign(resizeGuide.style, {
-      position: "absolute",
-      zIndex: "50",
-      pointerEvents: "none",
-      borderRadius: "999px",
-      background: "var(--info)",
-      opacity: "0.75",
-      boxShadow: "0 0 0 1px color-mix(in srgb, var(--info) 70%, transparent)",
-    });
-    if (direction === "horizontal") {
-      Object.assign(resizeGuide.style, {
-        top: "0",
-        bottom: "0",
-        left: "0",
-        width: "2px",
-      });
-    } else {
-      Object.assign(resizeGuide.style, {
-        top: "0",
-        left: "0",
-        right: "0",
-        height: "2px",
-      });
-    }
-    parent.append(resizeGuide);
-
-    const applyGuide = () => {
-      frameId = 0;
-      const offsetPx =
-        direction === "horizontal" ? rect.width * latestRatio : rect.height * latestRatio;
-      resizeGuide.style.transform =
-        direction === "horizontal"
-          ? `translateX(${Math.round(offsetPx)}px)`
-          : `translateY(${Math.round(offsetPx)}px)`;
-    };
-
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      latestRatio = computeRatio(moveEvent.clientX, moveEvent.clientY);
-      if (frameId === 0) {
-        frameId = window.requestAnimationFrame(applyGuide);
-      }
-    };
-    const onPointerUp = () => {
-      if (frameId !== 0) {
-        window.cancelAnimationFrame(frameId);
-        applyGuide();
-      }
-      document.body.style.userSelect = previousBodyUserSelect;
-      document.body.style.cursor = previousBodyCursor;
-      parent.style.position = previousParentPosition;
-      resizeGuide.remove();
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-      onSetRatio(splitNodeId, latestRatio);
-    };
-
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
-    applyGuide();
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
-  };
-
-  return (
-    <div
-      data-split-divider="true"
-      data-split-node-id={splitNodeId}
-      data-split-direction={direction}
-      className={cn(
-        "pointer-events-auto absolute z-10 bg-border/70",
-        direction === "horizontal"
-          ? "inset-y-0 w-px cursor-col-resize before:absolute before:inset-y-0 before:-left-1 before:w-2 before:bg-transparent"
-          : "inset-x-0 h-px cursor-row-resize before:absolute before:inset-x-0 before:-top-1 before:h-2 before:bg-transparent",
-      )}
-      style={
-        direction === "horizontal"
-          ? { left: `${props.ratio * 100}%` }
-          : { top: `${props.ratio * 100}%` }
-      }
-      onPointerDown={handlePointerDown}
-    />
-  );
-}
-
-function paneRectStyle(rect: PaneRect): CSSProperties {
-  return {
-    left: `${rect.left * 100}%`,
-    top: `${rect.top * 100}%`,
-    width: `${rect.width * 100}%`,
-    height: `${rect.height * 100}%`,
-  };
-}
-
-// Every leaf is a sibling keyed by its pane id and placed by absolute box, so adding, moving,
-// or closing a pane keeps the others mounted; nesting the tree would change their parent and
-// remount their chats (see layoutSplitPanes). Each split node gets a frame over its own box
-// that holds the divider, which reads that frame to turn a drag into a ratio.
-function PaneRenderer(props: {
-  pane: Pane;
-  renderLeaf: (input: { leaf: LeafPane }) => ReactNode;
-  onSetRatio: (nodeId: PaneId, ratio: number) => void;
-}) {
-  const layout = useMemo(() => layoutSplitPanes(props.pane), [props.pane]);
-  return (
-    <div data-split-container="true" className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-      {layout.leaves.map(({ leaf, rect }) => (
-        <div
-          key={leaf.id}
-          className="absolute flex min-h-0 min-w-0 overflow-hidden"
-          style={{
-            ...paneRectStyle(rect),
-            // A leading edge inside the surface is a divider's line; leave it that pixel.
-            paddingLeft: rect.left > 0 ? 1 : 0,
-            paddingTop: rect.top > 0 ? 1 : 0,
-          }}
-        >
-          {props.renderLeaf({ leaf })}
-        </div>
-      ))}
-      {layout.splits.map(({ node, rect }) => (
-        <div key={node.id} className="pointer-events-none absolute" style={paneRectStyle(rect)}>
-          <SplitDivider
-            splitNodeId={node.id}
-            direction={node.direction}
-            ratio={node.ratio}
-            onSetRatio={props.onSetRatio}
-          />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function SplitPaneSurface(props: {
   splitView: SplitView;
   paneId: PaneId;
@@ -500,9 +307,7 @@ function SplitPaneSurface(props: {
   onUpdatePanelState: (
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
-  onMaximize: () => void;
   onCloseThreadPane: () => void;
-  onChooseThread: () => void;
   onSelectThread: (threadId: ThreadId) => void;
   onChatMounted: () => void;
   onDropThread: (payload: {
@@ -568,8 +373,6 @@ function SplitPaneSurface(props: {
               onToggleBrowser={props.onToggleBrowser}
               onOpenBrowserUrl={props.onOpenBrowserUrl}
               onOpenTurnDiff={props.onOpenTurnDiff}
-              onMaximize={props.onMaximize}
-              onChangeThread={props.onChooseThread}
               onCloseThreadPane={props.onCloseThreadPane}
               onMounted={props.onChatMounted}
             />
@@ -628,7 +431,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const dropThreadOnPane = useSplitViewStore((store) => store.dropThreadOnPane);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const removePaneFromSplitView = useSplitViewStore((store) => store.removePaneFromSplitView);
-  const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
   const requestFloatingBrowser = useFloatingBrowserRequestStore((store) => store.request);
   const dismissFloatingBrowserForThread = useFloatingBrowserRequestStore((store) => store.dismiss);
   const floatingBrowserRequestedByThreadId = useFloatingBrowserRequestStore(
@@ -802,32 +604,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
   };
 
-  const maximizeFocusedPane = () => {
-    if (!activeSplitView) return;
-    const focusedLeaf = findLeafPaneById(activeSplitView.root, activeSplitView.focusedPaneId);
-    const decision = resolveSplitPaneMaximizeDecision({
-      splitViewId: activeSplitView.id,
-      focusedThreadId: focusedLeaf?.threadId ?? null,
-      focusedPanelState: focusedLeaf?.panel ?? null,
-    });
-
-    if (decision) {
-      // Keep the departing split until the route points at the retained thread;
-      // otherwise the single surface can claim a pane using the stale parameter.
-      void navigate({
-        to: "/$threadId",
-        params: { threadId: decision.threadId },
-        replace: true,
-        search: () =>
-          decision.panelState ? normalizeSingleSearchFromPane(decision.panelState) : {},
-      }).then(() => removeSplitView(decision.splitViewIdToRemove));
-      return;
-    }
-
-    removeSplitView(activeSplitView.id);
-    void handleNewChat();
-  };
-
   const closePaneThread = (paneId: PaneId) => {
     if (!activeSplitView) return;
     const closingLeaf = findLeafPaneById(activeSplitView.root, paneId);
@@ -839,13 +615,16 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     // navigation commits, so publishing leftover leaves cannot race the exit.
     if (
       closingThread?.sidechatSourceThreadId ||
-      (closingLeaf?.threadId && closingLeaf.threadId !== activeSplitView.sourceThreadId)
+      (closingThread &&
+        isSidechatThread(closingThread) &&
+        closingThread.id !== activeSplitView.sourceThreadId)
     ) {
       const decision = resolveSplitPaneCloseDecision({
         splitViewId: activeSplitView.id,
         sourceThreadId: activeSplitView.sourceThreadId,
         closingThreadId: closingLeaf?.threadId ?? null,
         closingSidechatSourceThreadId: closingThread?.sidechatSourceThreadId ?? null,
+        closingSidechatContext: closingThread?.sidechatContext ?? null,
         nextFocusedThreadId: null,
         nextLeafCount: 0,
       });
@@ -959,13 +738,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     return <ChatMountLoader />;
   }
 
-  const chooseThreadForPane = (threadId: ThreadId, paneOverride?: PaneId) => {
-    const paneId = paneOverride ?? threadPickerPaneId;
-    if (!paneId) {
-      return;
-    }
-    setThreadPickerPaneId(null);
-
+  const chooseThreadForPane = (threadId: ThreadId, paneId: PaneId) => {
     const existingPaneIdForThread = resolveSplitViewPaneIdForThread(activeSplitView, threadId);
     if (existingPaneIdForThread && existingPaneIdForThread !== paneId) {
       setPaneFocus(existingPaneIdForThread);
@@ -1029,12 +802,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
         }}
         onPopFloatingBrowser={() => popFloatingBrowser(leaf.id)}
         onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
-        onMaximize={maximizeFocusedPane}
         onCloseThreadPane={() => closePaneThread(leaf.id)}
-        onChooseThread={() => {
-          setPaneFocus(leaf.id);
-          setThreadPickerPaneId(leaf.id);
-        }}
         onSelectThread={(threadId) => chooseThreadForPane(threadId, leaf.id)}
         onChatMounted={noopChatSurfaceAction}
         onDropThread={(payload) => handleDropThreadOnPane(leaf.id, payload)}
@@ -1042,78 +810,13 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     );
   };
 
-  const pickerLeaf = threadPickerPaneId
-    ? findLeafPaneById(activeSplitView.root, threadPickerPaneId)
-    : null;
-
   return (
-    <>
-      <div
-        className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
-      >
-        <PaneRenderer
-          pane={activeSplitView.root}
-          renderLeaf={renderLeaf}
-          onSetRatio={handleSetRatio}
-        />
-      </div>
-      <Dialog
-        open={threadPickerPaneId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setThreadPickerPaneId(null);
-          }
-        }}
-      >
-        <DialogPopup className="max-w-lg">
-          <DialogHeader className="items-center text-center">
-            <DialogTitle>Choose Chat</DialogTitle>
-            <DialogDescription className="max-w-sm text-center">
-              Pick which chat should appear in the focused split pane.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="space-y-3">
-            <div className="max-h-[56vh] space-y-1 overflow-y-auto">
-              {selectableThreads.map((thread) => {
-                const projectName =
-                  projects.find((project) => project.id === thread.projectId)?.name ?? "Project";
-                const isSelected = pickerLeaf?.threadId === thread.id;
-                return (
-                  <button
-                    key={thread.id}
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
-                      isSelected
-                        ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)]"
-                        : "border-[color:var(--color-border-light)] hover:bg-[var(--sidebar-accent)]",
-                    )}
-                    onClick={() => chooseThreadForPane(thread.id)}
-                  >
-                    <ProviderIcon
-                      provider={thread.modelSelection.provider}
-                      className="size-4 shrink-0"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-ui-lg leading-snug font-medium text-foreground">
-                        {resolveThreadPickerTitle(thread.title)}
-                      </div>
-                      <div className="truncate text-ui leading-snug text-muted-foreground">
-                        {projectName}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            <DialogFooter variant="bare">
-              <Button type="button" variant="outline" onClick={() => setThreadPickerPaneId(null)}>
-                Cancel
-              </Button>
-            </DialogFooter>
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
-    </>
+    <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
+      <SplitPaneLayout
+        pane={activeSplitView.root}
+        renderLeaf={renderLeaf}
+        onSetRatio={handleSetRatio}
+      />
+    </div>
   );
 }

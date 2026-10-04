@@ -94,11 +94,15 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   background-color: var(--synara-code-surface) !important;
 }
 
-/* Pierre blends each changed row against --diffs-bg again. Keep only those rows
-   backed by the theme so their tints survive a clear context surface. */
-[data-line-type="change-addition"],
+/* Pierre blends each changed row against --diffs-bg again, so a clear context surface would
+   wash the change tint out. Rows are backed by the theme, or on a clear viewer by a sheer
+   accent tint of their own (--app-code-viewer-*-row, index.css) so they stay glass. */
+[data-line-type="change-addition"] {
+  --diffs-bg: var(--app-code-viewer-addition-row, var(--background)) !important;
+}
+
 [data-line-type="change-deletion"] {
-  --diffs-bg: var(--background) !important;
+  --diffs-bg: var(--app-code-viewer-deletion-row, var(--background)) !important;
 }
 
 [data-diffs-header],

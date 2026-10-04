@@ -238,6 +238,7 @@ export interface ThreadWorkspacePatch {
 }
 
 export interface Thread extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -294,6 +295,7 @@ export interface Thread extends ThreadWorkspaceState {
 }
 
 export interface ThreadShell extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
