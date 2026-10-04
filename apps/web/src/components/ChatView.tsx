@@ -273,6 +273,7 @@ import { ComposerPromptEditor } from "./ComposerPromptEditor";
 import PlanSidebar from "./PlanSidebar";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
 import { ProjectImportLandingBanner } from "~/projectImport/ProjectImportLandingBanner";
@@ -1346,6 +1347,27 @@ export default function ChatView({
     activeThread?.lastVisitedAt,
     activeLatestTurn?.completedAt,
     latestTurnSettled,
+    markThreadVisited,
+  ]);
+
+  // A chat back from snooze reads as unread until it is opened. Stamp the reminder time
+  // rather than now: a client clock behind the server would leave the stamp before it.
+  const activeSnoozedUntil = activeThread?.snoozedUntil;
+  const activeSnoozeReminderAt = activeThread?.snoozeReminderAt;
+  const activeLastVisitedAt = activeThread?.lastVisitedAt;
+  useEffect(() => {
+    if (!activeThread?.id || !activeSnoozeReminderAt) return;
+    const returned = {
+      snoozedUntil: activeSnoozedUntil,
+      snoozeReminderAt: activeSnoozeReminderAt,
+      lastVisitedAt: activeLastVisitedAt,
+    };
+    if (hasUnseenSnoozeReturn(returned)) markThreadVisited(activeThread.id, activeSnoozeReminderAt);
+  }, [
+    activeThread?.id,
+    activeSnoozedUntil,
+    activeSnoozeReminderAt,
+    activeLastVisitedAt,
     markThreadVisited,
   ]);
 

@@ -109,6 +109,7 @@ import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
+import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
@@ -7958,6 +7959,57 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("marks a chat back from snooze as seen once it is opened", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: "msg-snooze-return" as MessageId,
+      targetText: "Snoozed chat",
+    });
+    const finishedTurn = {
+      turnId: TurnId.makeUnsafe("turn-snooze-return"),
+      state: "completed" as const,
+      requestedAt: isoAt(-700),
+      startedAt: isoAt(-690),
+      completedAt: isoAt(-600),
+      assistantMessageId: null,
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(
+        {
+          ...base,
+          threads: base.threads.map((thread) =>
+            thread.id === THREAD_ID ? { ...thread, latestTurn: finishedTurn } : thread,
+          ),
+        },
+        OTHER_THREAD_ID,
+      ),
+      initialEntry: `/${OTHER_THREAD_ID}`,
+    });
+    try {
+      await waitForLayout();
+      // The reminder fires while another chat is open: THREAD_ID returns unread. The server
+      // clock is ahead of this one, so a visit stamped with this clock's now stays before it.
+      const reminderAt = new Date(Date.now() + 60_000).toISOString();
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? { ...thread, snoozedUntil: null, snoozeReminderAt: reminderAt, updatedAt: reminderAt }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+      const returnedChat = () => useStore.getState().sidebarThreadSummaryById[THREAD_ID]!;
+      expect(hasUnseenSnoozeReturn(returnedChat())).toBe(true);
+
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await vi.waitFor(() => expect(hasUnseenSnoozeReturn(returnedChat())).toBe(false));
     } finally {
       await mounted.cleanup();
     }
