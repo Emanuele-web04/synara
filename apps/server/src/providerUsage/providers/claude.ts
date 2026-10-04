@@ -10,7 +10,6 @@
 // consuming that refresh token without writing the rotation back to the CLI's store would
 // invalidate the on-disk/keychain login and force the user to re-authenticate.
 
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import nodePath from "node:path";
 import { promisify } from "node:util";
@@ -20,6 +19,7 @@ import type {
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
 } from "@synara/contracts";
+import { execProcessFile } from "@synara/shared/processRuntime";
 
 import { createLogger } from "../../logger";
 import { acquireClaudeAuthStatusLock } from "../../provider/claudeAuthStatusLock";
@@ -46,7 +46,7 @@ import {
 import { createRateLimitResilience } from "../rateLimitResilience";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(execProcessFile);
 const log = createLogger("provider-usage:claude");
 
 const SOURCE = "claude-oauth-usage";
@@ -227,7 +227,11 @@ interface ClaudeAuthNudgeDeps {
 const defaultAuthNudgeDeps: ClaudeAuthNudgeDeps = {
   acquireLock: acquireClaudeAuthStatusLock,
   async runAuthStatus(input) {
+    // `execProcessFile` (rather than node's `execFile`) resolves the CLI through
+    // the shared platform boundary and keeps its console window hidden, so this
+    // background probe cannot flash a terminal on Windows.
     await execFileAsync(input.binaryPath, ["auth", "status"], {
+      encoding: "utf8",
       timeout: AUTH_NUDGE_TIMEOUT_MS,
       env: buildClaudeProcessEnv({
         env: input.env,

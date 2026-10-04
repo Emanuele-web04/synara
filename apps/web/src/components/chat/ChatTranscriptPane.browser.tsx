@@ -96,6 +96,10 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           hasMessages
           isRevertingCheckpoint={false}
           isWorking={false}
+          // A local draft skips the async imported-history load, whose
+          // post-mount commit would otherwise race the baseline below and
+          // be misattributed to the composer keystroke.
+          isLocalDraft
           worktreeSetup={null}
           followLiveOutput={false}
           listRef={listRef}

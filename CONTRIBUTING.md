@@ -80,8 +80,9 @@ bun run --cwd apps/web test:browser src/components/codeEditor/CodeEditorPane.bro
 
 The pinned `@effect/platform-node-shared` patch preserves Windows spawn options
 and rejects invalid PIDs before converting child handles into process-group
-signals. Valid groups may outlive their leader; cleanup must continue to reach
-those descendants. When updating Effect, keep these behaviors and run
+signals. Windows group cleanup must launch `taskkill` directly with
+`windowsHide: true`, so teardown does not open a console beneath the desktop app.
+Valid groups may outlive their leader; cleanup must continue to reach those descendants. When updating Effect, keep these behaviors and run
 `apps/server/src/platform/effectProcessSignals.test.ts` against the installed
 runtime, including its Windows cases.
 

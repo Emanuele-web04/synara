@@ -2,8 +2,7 @@
 // Purpose: Captures, inspects, and signals owned process trees across platforms.
 // Layer: Server platform runtime
 
-import { spawnProcessSync } from "@synara/shared/processRuntime";
-import treeKill from "tree-kill";
+import { execProcessFile, spawnProcessSync } from "@synara/shared/processRuntime";
 
 import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot";
 
@@ -52,7 +51,7 @@ export interface ProcessTreeKiller {
     readonly includeRootTree?: boolean | undefined;
     readonly onError: (
       error: Error,
-      context: { readonly pid: number; readonly source: "tree-kill" | "captured" },
+      context: { readonly pid: number; readonly source: "root-tree" | "captured" },
     ) => void;
   }): void;
 }
@@ -174,6 +173,31 @@ function signalPid(pid: number, signal: TerminalKillSignal): Error | null {
   }
 }
 
+/**
+ * Signals an owned Windows process tree with `taskkill /T /F`, which is the
+ * only tree-wide signal Windows provides, so `signal` is intentionally unused.
+ *
+ * This runs through the shared process boundary instead of a shell `exec`:
+ * a shell-wrapped `taskkill` launches a visible `cmd.exe` under a GUI parent,
+ * which flashes a console window on every teardown.
+ */
+function signalWindowsProcessTree(
+  rootPid: number,
+  _signal: TerminalKillSignal,
+  callback: (error?: Error | null) => void,
+): void {
+  try {
+    execProcessFile(
+      "taskkill",
+      ["/pid", String(rootPid), "/T", "/F"],
+      { encoding: "utf8" },
+      (error) => callback(error),
+    );
+  } catch (error) {
+    callback(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
 function capturedProcessesForSignal(
   descendants: readonly CapturedProcess[],
   signal: TerminalKillSignal,
@@ -207,7 +231,7 @@ export function createProcessTreeKiller(
     captureChildrenMap: captureProcessChildrenMapSync,
     readCurrentProcesses,
     signalPid,
-    signalTree: treeKill,
+    signalTree: signalWindowsProcessTree,
     ...dependencies,
   };
 
@@ -271,9 +295,9 @@ export function createProcessTreeKiller(
       includeRootTree = true,
       onError,
     }) => {
-      // Refuse even when a caller supplies its own tree: signalTree (tree-kill)
-      // walks the live process table itself, so an unsafe rootPid would kill
-      // far more than `tree.descendants`.
+      // Refuse even when a caller supplies its own tree: signalTree runs
+      // `taskkill /T` across the live process tree itself, so an unsafe rootPid
+      // would kill far more than `tree.descendants`.
       if (isUnsafeProcessTreeRoot(rootPid)) return;
       const capturedProcesses = capturedProcessesForSignal(
         tree.descendants,
@@ -288,14 +312,14 @@ export function createProcessTreeKiller(
       if (includeRootTree) {
         if (deps.platform === "win32") {
           deps.signalTree(rootPid, signal, (error) => {
-            if (error) onError(error, { pid: rootPid, source: "tree-kill" });
+            if (error) onError(error, { pid: rootPid, source: "root-tree" });
           });
         } else {
           // The captured descendants were already signalled above. Signal the
-          // POSIX root directly so teardown cannot leak an unhandled error from
-          // tree-kill's internal `ps`/`pgrep` subprocesses when PATH is sparse.
+          // POSIX root directly: `kill` needs no process-table walk, so teardown
+          // cannot leak an unhandled error when PATH is sparse.
           const error = deps.signalPid(rootPid, signal);
-          if (error) onError(error, { pid: rootPid, source: "tree-kill" });
+          if (error) onError(error, { pid: rootPid, source: "root-tree" });
         }
       }
     },
@@ -397,7 +421,7 @@ export async function inspectProcessTree(
   };
 }
 
-/** Signal an owned tree through one platform boundary (taskkill /T on Windows via tree-kill). */
+/** Signal an owned tree through one platform boundary (`taskkill /T` on Windows). */
 export function signalProcessTree(input: {
   readonly rootPid: number;
   readonly signal: TerminalKillSignal;
@@ -406,7 +430,7 @@ export function signalProcessTree(input: {
   readonly includeRootTree?: boolean;
   readonly onError?: (
     error: Error,
-    context: { readonly pid: number; readonly source: "tree-kill" | "captured" },
+    context: { readonly pid: number; readonly source: "root-tree" | "captured" },
   ) => void;
   readonly processTreeKiller?: ProcessTreeKiller;
 }): void {
