@@ -70,6 +70,12 @@ is cancelled, the task and its prompt remain available for retry.
 You do not need every surface open at once. Bring each one in when it answers a question: what is
 running, what changed, whether the UI works, or whether the task is safe to ship.
 
+Desktop quit requests ask for confirmation even when no chats are running. On macOS,
+⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
+application and its running chats stay active. Quitting with no open window uses a
+native confirmation. With an open window and running chats, the quit dialog lists the work that
+will stop and offers to resume it automatically on the next launch.
+
 ## Projects
 
 A project is the folder Synara works with.

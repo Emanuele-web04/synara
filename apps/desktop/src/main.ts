@@ -117,7 +117,7 @@ import {
   type BetaDiagnosticsEventName,
 } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
-import { showDesktopConfirmDialog } from "./confirmDialog";
+import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
@@ -568,6 +568,7 @@ let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
+let nativeQuitConfirmationPromise: Promise<boolean> | null = null;
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForDatabaseRestore = false;
 const migrationConsentHandoff = new MigrationConsentHandoff();
@@ -4844,6 +4845,18 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   }
 
   const window = mainWindow;
+  if (!isMainRendererAvailable()) {
+    nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(`Quit ${APP_DISPLAY_NAME}?`, null)
+      .catch((error) => {
+        console.warn("[desktop] Failed to confirm app quit", error);
+        return false;
+      })
+      .finally(() => {
+        nativeQuitConfirmationPromise = null;
+      });
+    if (await nativeQuitConfirmationPromise) requestGracefulAppQuit(reason);
+    return;
+  }
   const presentation = quitConfirmationPresentationForPlatform();
   const allowed = await runningChatsQuitGuard.askRenderer({
     send: (request) => {
@@ -5694,6 +5707,17 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
+  if (process.platform === "darwin") {
+    guardDesktopWindowClose(
+      window,
+      `Close the ${APP_DISPLAY_NAME} window?`,
+      () =>
+        !isQuitting &&
+        !desktopShutdownComplete &&
+        !isUpdaterQuitAndInstallInFlight &&
+        !isUpdaterInstallPreparing,
+    );
+  }
   window.on("close", (event) => {
     try {
       writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
