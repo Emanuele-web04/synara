@@ -58,6 +58,7 @@ import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
 } from "../chat-scroll";
+import { useGroupPanelClosedStore } from "../groupPanelClosedStore";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import {
@@ -9145,6 +9146,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
   it("keeps hub suggestions above the composer as image attachments change", async () => {
     const previousSummaries = useProjectAgentSummariesStore.getState();
+    const previousClosedPanels = useGroupPanelClosedStore.getState();
     const snapshot = withStudioProject(
       createSnapshotForTargetUser({
         targetMessageId: "msg-hub-welcome" as MessageId,
@@ -9268,6 +9270,7 @@ describe("ChatView transcript geometry (full app)", () => {
     } finally {
       await mounted.cleanup();
       useProjectAgentSummariesStore.setState(previousSummaries);
+      useGroupPanelClosedStore.setState(previousClosedPanels);
     }
   });
 
