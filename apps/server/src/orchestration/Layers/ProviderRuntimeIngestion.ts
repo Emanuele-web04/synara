@@ -888,12 +888,19 @@ const make = Effect.gen(function* () {
       }
     });
 
+  // The TTL runs from the last write, so every read re-arms it: a turn that
+  // streams for longer than the TTL must keep its bound mode instead of
+  // falling back to the default mid-message, which would interleave live
+  // deltas with a buffered head flushed only at completion.
   const getAssistantDeliveryMode = (threadId: ThreadId, turnId: TurnId | undefined) =>
-    turnId
-      ? Cache.getOption(assistantDeliveryModeByTurnKey, providerTurnKey(threadId, turnId)).pipe(
-          Effect.map(Option.getOrElse(() => DEFAULT_ASSISTANT_DELIVERY_MODE)),
-        )
-      : Effect.succeed(DEFAULT_ASSISTANT_DELIVERY_MODE);
+    Effect.gen(function* () {
+      if (!turnId) return DEFAULT_ASSISTANT_DELIVERY_MODE;
+      const key = providerTurnKey(threadId, turnId);
+      const mode = yield* Cache.getOption(assistantDeliveryModeByTurnKey, key);
+      if (Option.isNone(mode)) return DEFAULT_ASSISTANT_DELIVERY_MODE;
+      yield* Cache.set(assistantDeliveryModeByTurnKey, key, mode.value);
+      return mode.value;
+    });
 
   const clearAssistantDeliveryModeBindingsForThread = (threadId: ThreadId) =>
     Ref.update(assistantDeliveryModeBindingsRef, (state) => {
