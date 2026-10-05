@@ -201,7 +201,7 @@ export function makeRunningChatsQuitGuard(
         clearTimeout(pending.readyTimer);
         pending.readyTimer = null;
       }
-      if (response.runningCount <= 0) {
+      if (response.runningCount <= 0 && pending.presentation === "native") {
         finish(true);
         return;
       }
