@@ -235,7 +235,15 @@ describe("ComposerModelPicker", () => {
         .click();
 
       expect(readStoredStars()).toEqual([
-        { provider: "codex", model: GPT_5_5, effort: "high", fastMode: false, thinking: null },
+        {
+          provider: "codex",
+          model: GPT_5_5,
+          effort: "high",
+          fastMode: false,
+          thinking: null,
+          modelVariant: null,
+          variantLabel: null,
+        },
       ]);
 
       await page.getByRole("tab", { name: "Starred" }).click();
