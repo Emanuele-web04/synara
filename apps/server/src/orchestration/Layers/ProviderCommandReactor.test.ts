@@ -14273,12 +14273,60 @@ describe("ProviderCommandReactor", () => {
       expect(after).toMatchObject(
         interveningEvent
           ? { status: "running", activeTurnId: "late-turn" }
-          : { status: "ready", activeTurnId: null, runtimeMode: prior.runtimeMode },
+          : {
+              status: "ready",
+              activeTurnId: null,
+              runtimeMode: prior.runtimeMode,
+              lastError: "Your message was not sent. Background work is active",
+            },
       );
       expect(harness.sendTurn).not.toHaveBeenCalled();
       expect(harness.stopSession).not.toHaveBeenCalled();
     });
   }
+
+  it("defers switching Computer off while Claude still has background work", async () => {
+    const registry = makeAgentGatewaySessionRegistry();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
+      gatewaySessions: registry,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    const send = (id: string) =>
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(id),
+        threadId,
+        message: { messageId: asMessageId(id), role: "user", text: "continue", attachments: [] },
+        enableComputerControl: false,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+    await Effect.runPromise(send("bootstrap-computer"));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    // The previous turn ran with Computer on; this one turns it off.
+    registry.issue(threadId, "claudeAgent", { additionalCapabilities: ["computer:control"] });
+    harness.startSession.mockClear();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: "claudeAgent",
+          operation: "session/reconfigure",
+          issue: "Background work is active",
+        }),
+      ),
+    );
+    await Effect.runPromise(send("computer-off-busy"));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const session = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!.session!;
+    expect(session.lastError).toBeNull();
+  });
 
   it("seeds imported Droid selection before handling idle metadata updates", async () => {
     const harness = await createHarness({
