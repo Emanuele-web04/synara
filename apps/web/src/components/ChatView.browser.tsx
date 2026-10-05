@@ -70,6 +70,7 @@ import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
+import { emitWsTransportState } from "../wsTransportEvents";
 import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
@@ -4733,6 +4734,41 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows transport recovery without auto-following a detached transcript", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await waitForLayout();
+      scrollContainer.scrollTop = 100;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      const previousTop = scrollContainer.scrollTop;
+      emitWsTransportState("connecting");
+      await expect
+        .element(page.getByRole("status").filter({ hasText: "Reconnecting to Synara…" }), {
+          timeout: 4000,
+        })
+        .toBeVisible();
+      await waitForLayout();
+      expect(Math.abs(scrollContainer.scrollTop - previousTop)).toBeLessThanOrEqual(1);
+      emitWsTransportState("open");
+      await expect
+        .element(page.getByRole("status").filter({ hasText: "Reconnecting to Synara…" }))
+        .not.toBeInTheDocument();
+      await waitForLayout();
+      expect(Math.abs(scrollContainer.scrollTop - previousTop)).toBeLessThanOrEqual(1);
+    } finally {
+      emitWsTransportState("open");
       await mounted.cleanup();
     }
   });

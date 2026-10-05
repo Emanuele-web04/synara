@@ -295,6 +295,7 @@ import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
 import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
 import { ComposerGoalHeader } from "./chat/ComposerGoalHeader";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
+import { ComposerTransportNotice } from "./chat/ComposerTransportNotice";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
 import {
   ComposerLocalDirectoryMenu,
@@ -5701,6 +5702,7 @@ export default function ChatView({
           {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
           <div>
+            <ComposerTransportNotice />
             {isSidechatExpired ? (
               <ExpiredSidechatNotice onStartNew={startReplacementSidechat} />
             ) : null}
@@ -6070,9 +6072,7 @@ export default function ChatView({
                               ? "Ask for follow-up changes"
                               : standaloneSidechatContext
                                 ? `Ask about this ${standaloneSidechatItemNoun}`
-                                : phase === "disconnected"
-                                  ? "Ask for follow-up changes or attach images"
-                                  : "Ask anything, @tag files/folders, or use / to show available commands"
+                                : "Ask anything, @tag files/folders, or use / to show available commands"
                   }
                   disabled={isComposerEditorDisabled}
                 />
