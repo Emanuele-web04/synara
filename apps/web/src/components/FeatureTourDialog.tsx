@@ -21,15 +21,22 @@ import { AnnouncementSheet } from "./AnnouncementSheet";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { Button } from "./ui/button";
 
-/** Wait for other modals to leave the DOM, including their exit transitions. */
+/** Wait for other dialogs to leave the DOM, including their exit transitions. */
 function useOtherDialogOpen(enabled: boolean) {
   const [open, setOpen] = useState(true);
   useEffect(() => {
     if (!enabled) return;
     const update = () =>
       setOpen(
-        Boolean(
-          document.querySelector('[role="dialog"]:not([data-feature-tour]), [role="alertdialog"]'),
+        Array.from(
+          document.querySelectorAll(
+            '[role="dialog"]:not([data-feature-tour]), [role="alertdialog"]',
+          ),
+        ).some(
+          // Base UI toasts also have dialog/alertdialog roles. Waiting for those
+          // would delay the slot handoff until their timeout (or manual dismissal).
+          (dialog) =>
+            !dialog.closest('[data-slot="toast-viewport"], [data-slot="toast-viewport-anchored"]'),
         ),
       );
     update();
