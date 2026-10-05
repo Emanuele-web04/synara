@@ -40,7 +40,7 @@ function ControlledSidebar() {
   );
 }
 
-function IntegratedRailShell() {
+function IntegratedRailShell({ compactPreview = false }: { compactPreview?: boolean }) {
   const { open } = useSidebar();
   const [rail, setRail] = useState<HTMLDivElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLDivElement | null>(null);
@@ -57,7 +57,13 @@ function IntegratedRailShell() {
       <div data-sidebar-preview-host className="flex min-h-0 shrink-0">
         <div ref={setRail} className="flex shrink-0" />
         <div className="app-rail-panel relative flex shrink-0">
-          <Sidebar collapsible="compact" compactInRail compactAnchor={anchor} transparentSurface>
+          <Sidebar
+            collapsible="compact"
+            compactInRail
+            compactPreview={compactPreview}
+            compactAnchor={anchor}
+            transparentSurface
+          >
             <AppRailPortal items={[item("home")]} shortcuts={[]} bottomItems={[item("settings")]} />
             <SidebarContent>
               <div
@@ -96,6 +102,40 @@ function IntegratedRailShell() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("sidebar toggles", () => {
+  it("keeps the integrated compact list usable until the sidebar toggle is selected", async () => {
+    await page.viewport(1280, 800);
+    const screen = await render(
+      <SidebarProvider defaultOpen={false}>
+        <IntegratedRailShell />
+      </SidebarProvider>,
+    );
+    try {
+      const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
+      const gap = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+      const rail = screen.getByRole("navigation", { name: "Primary" }).element();
+      const collapsedWidth = rail.getBoundingClientRect().width;
+      const thread = screen.getByRole("button", { name: "codex thread", exact: true });
+      await thread.hover();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect(panel.getBoundingClientRect().width).toBe(collapsedWidth);
+      await thread.click();
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "claudeAgent thread", exact: true }).element(),
+      );
+      expect(panel.getBoundingClientRect().width).toBe(collapsedWidth);
+      expect(gap.getBoundingClientRect().width).toBe(0);
+      await screen.getByRole("button", { name: "Toggle integrated sidebar" }).click();
+      await expect.poll(() => gap.getBoundingClientRect().width).toBe(256);
+      await screen.getByRole("button", { name: "Toggle integrated sidebar" }).click();
+      await expect.poll(() => gap.getBoundingClientRect().width).toBe(0);
+      await thread.hover();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect(panel.getBoundingClientRect().width).toBe(collapsedWidth);
+    } finally {
+      await screen.unmount();
+    }
+  });
   it("lets users click compact icons and cross the rail before a sustained hover opens it", async () => {
     await page.viewport(1280, 800);
     const onSelect = vi.fn();
@@ -162,7 +202,7 @@ describe("sidebar toggles", () => {
             } as import("react").CSSProperties
           }
         >
-          <IntegratedRailShell />
+          <IntegratedRailShell compactPreview />
         </SidebarProvider>,
         { container: root },
       );
@@ -241,7 +281,7 @@ describe("sidebar toggles", () => {
     await page.viewport(1280, 800);
     const screen = await render(
       <SidebarProvider defaultOpen>
-        <IntegratedRailShell />
+        <IntegratedRailShell compactPreview />
       </SidebarProvider>,
     );
     try {

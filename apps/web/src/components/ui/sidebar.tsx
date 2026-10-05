@@ -245,6 +245,7 @@ function Sidebar({
   className,
   gapClassName,
   compactInRail = false,
+  compactPreview = true,
   compactAnchor,
   innerClassName,
   transparentSurface: transparentSurfaceProp,
@@ -259,6 +260,8 @@ function Sidebar({
   gapClassName?: string;
   /** Reserve no extra column; align compact rows to the shell rail's available space. */
   compactInRail?: boolean;
+  /** Allow automatic full-list previews on pointer hover or keyboard focus. */
+  compactPreview?: boolean;
   compactAnchor?: HTMLElement | null;
   innerClassName?: string;
   transparentSurface?: boolean;
@@ -334,7 +337,7 @@ function Sidebar({
     clearPreviewTimer();
     setPreviewOpen(false);
     return clearPreviewTimer;
-  }, [compactCollapsed, clearPreviewTimer]);
+  }, [compactCollapsed, compactPreview, clearPreviewTimer]);
   React.useLayoutEffect(() => {
     if (!compactCollapsed || !compactInRail || !previewOpen) return;
     const host = panelRef.current?.closest<HTMLElement>("[data-sidebar-preview-host]");
@@ -343,7 +346,7 @@ function Sidebar({
     return registerInPageGlassOverlay(host, surface);
   }, [compactCollapsed, compactInRail, previewOpen]);
   React.useEffect(() => {
-    if (!compactCollapsed || !previewOpen) return;
+    if (!compactCollapsed || !compactPreview || !previewOpen) return;
     // Menus and dialogs opened by a row live in portals. Keep the preview available
     // while using them, then close after the pointer/focus returns to the chat.
     const isInside = (target: EventTarget | null) =>
@@ -383,6 +386,7 @@ function Sidebar({
     };
   }, [
     compactCollapsed,
+    compactPreview,
     compactInRail,
     compactAnchor,
     previewOpen,
@@ -468,7 +472,7 @@ function Sidebar({
           if (compactCollapsed && !previewOpen) clearPreviewTimer();
         }}
         onPointerMove={(event) => {
-          if (!compactCollapsed || event.pointerType === "touch") return;
+          if (!compactCollapsed || !compactPreview || event.pointerType === "touch") return;
           // Portal navigation shares React ancestors but is outside the panel.
           // Leaving for it must cancel an opening that has not fired yet.
           if (!(event.target instanceof Node) || !panelRef.current?.contains(event.target)) {
@@ -479,6 +483,7 @@ function Sidebar({
           else if (previewTimerTarget.current !== true) schedulePreview(true);
         }}
         onPointerLeave={(event) => {
+          if (!compactPreview) return;
           if (
             compactInRail &&
             event.relatedTarget instanceof Node &&
@@ -499,6 +504,7 @@ function Sidebar({
           // its focus belongs to the shell, outside this panel's DOM boundary.
           if (
             !compactCollapsed ||
+            !compactPreview ||
             !(event.target instanceof Element) ||
             !panelRef.current?.contains(event.target) ||
             !event.target.matches(":focus-visible")

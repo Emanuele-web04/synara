@@ -597,6 +597,7 @@ function ChatRouteLayout() {
       side="left"
       collapsible={compactThreadSidebar ? "compact" : "offcanvas"}
       compactInRail={compactThreadSidebar}
+      compactPreview={false}
       compactAnchor={compactThreadAnchor}
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
