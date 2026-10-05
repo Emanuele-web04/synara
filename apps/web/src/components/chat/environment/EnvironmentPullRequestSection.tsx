@@ -2,7 +2,7 @@
 // Purpose: "Pull request" section of the Environment panel — one row (state glyph, title,
 //          live check status) that opens the PR action menu: view / code changes, the
 //          checks and review-comment lists, Repair (hands comments, failing checks, or
-//          conflicts to the composer as context cards), Auto-fix CI (Beta), Merge, Status
+//          conflicts to the composer as context cards), Auto-fix CI, Merge, Status
 //          (draft / ready / close / reopen), and Add to chat. Copy link and Open in GitHub
 //          ride on the View PR row.
 // Layer: Environment panel section
@@ -415,7 +415,7 @@ export function EnvironmentPullRequestSection({
     PULL_REQUEST_AUTO_FIX_ON && activeThreadId !== null && displayPr?.state === "open";
   // Merge capabilities (allowed methods, stack state) and the merged/closed timestamps only
   // live on the detail query. Fetch it lazily while the menu is open so the row itself stays
-  // as cheap as before. With Auto-fix CI (Beta) it also loads once while the panel is open,
+  // as cheap as before. With Auto-fix CI it also loads once while the panel is open,
   // because the stack rows and their checkboxes come from its stack entries.
   const detailQuery = useQuery({
     ...pullRequestDetailQueryOptions(actionInput, { pollingEnabled: false }),
@@ -434,7 +434,7 @@ export function EnvironmentPullRequestSection({
   const settledState = displayPr.state !== "open" ? displayPr.state : null;
   const autoFixStates = autoFixQuery.data?.states ?? [];
   const autoFixState = findPullRequestAutoFixState(autoFixStates, displayPr.url);
-  // The other PRs of this PR's stack, each with its own Auto-fix CI checkbox (Beta).
+  // The other PRs of this PR's stack, each with its own Auto-fix CI checkbox.
   const stackRows =
     autoFixAvailable && detailQuery.data?.stack
       ? detailQuery.data.stack.entries.filter((entry) => entry.number !== displayPr.number)
@@ -831,7 +831,7 @@ export function EnvironmentPullRequestSection({
                 </ComposerPickerMenuSubPopup>
               </MenuSub>
 
-              {/* Beta-only: the server watches this PR's checks and starts a fix turn in this
+              {/* Opt-in: the server watches this PR's checks and starts a fix turn in this
                   chat when they fail. Stays open on toggle so the new state is visible. */}
               {autoFixAvailable && activeThreadId ? (
                 <PullRequestAutoFixToggle

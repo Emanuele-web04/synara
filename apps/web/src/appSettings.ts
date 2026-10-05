@@ -525,7 +525,7 @@ export const AppSettingsSchema = Schema.Struct({
   // One-shot composer hint that suggests Medium effort for faster desktop actions.
   // Set when the user applies or dismisses it, so the hint never asks twice.
   dismissedComputerControlEffortHint: Schema.Boolean.pipe(withDefaults(() => false)),
-  // One-shot composer hint offering Auto-fix CI (Beta) on a chat's open PR. Set when the
+  // One-shot composer hint offering Auto-fix CI on a chat's open PR. Set when the
   // user dismisses it or turns Auto-fix CI on anywhere, so it never asks twice.
   dismissedPullRequestAutoFixHint: Schema.Boolean.pipe(withDefaults(() => false)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(

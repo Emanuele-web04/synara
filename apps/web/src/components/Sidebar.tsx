@@ -1794,7 +1794,7 @@ export default function Sidebar() {
       hasUnreadActivityOutsideActiveThread(visibleNonGroupSidebarThreads, activeSidebarThreadId),
     [activeSidebarThreadId, visibleNonGroupSidebarThreads],
   );
-  // Inbox is Beta-only: its rail item and page stay hidden on Stable.
+  // Inbox is available in both Stable and Beta.
   const inboxAvailable = INBOX_ON;
   const inboxBadge = useMemo(() => {
     if (!inboxAvailable) return null;

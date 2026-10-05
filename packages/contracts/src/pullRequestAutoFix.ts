@@ -1,7 +1,7 @@
 // FILE: pullRequestAutoFix.ts
 // Purpose: "Auto-fix CI" state per chat and pull request: the server watches every PR a
 //          chat turned it on for (e.g. each PR of a stack) and starts a fix turn in that chat
-//          when one fails, one fix at a time. Beta-only.
+//          when one fails, one fix at a time. Available in Stable and Beta.
 // Layer: Shared contracts (server watcher, WS RPCs, Environment panel PR section)
 
 import { Schema } from "effect";

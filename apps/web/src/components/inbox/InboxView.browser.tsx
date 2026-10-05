@@ -1,3 +1,4 @@
+import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -16,10 +17,11 @@ const fixture = vi.hoisted(() => ({
   getRecap: vi.fn(),
   navigate: vi.fn(),
   activity: vi.fn(),
+  listTodos: vi.fn(),
 }));
 vi.mock("~/betaFeatures", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/betaFeatures")>()),
-  INBOX_ON: false,
+  INBOX_ON: isBetaFeatureEnabled("inbox", "production"),
 }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -27,14 +29,33 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 vi.mock("~/nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/nativeApi")>()),
-  ensureNativeApi: () => ({ stats: { getRecap: fixture.getRecap } }),
+  ensureNativeApi: () => ({
+    stats: { getRecap: fixture.getRecap },
+    automation: { list: async () => ({ runs: [] }) },
+    server: { listProviderUsage: async () => [] },
+    todo: { list: fixture.listTodos },
+  }),
 }));
 vi.mock("~/hooks/useActivityThreads", () => ({ useActivityThreads: fixture.activity }));
+
+vi.mock("~/tasksSurface", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/tasksSurface")>()),
+  useTasksSurfaceEnabled: () => isBetaFeatureEnabled("tasks", "production"),
+}));
+vi.mock("../RouteInsetSurface", () => ({
+  RouteInsetSurface: ({ children }: { children: import("react").ReactNode }) => (
+    <div>{children}</div>
+  ),
+}));
+vi.mock("../RouteSurface", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../RouteSurface")>()),
+  RouteSurfaceHeader: () => null,
+}));
 
 import InboxView from "./InboxView";
 import { Route as inboxRoute } from "~/routes/_chat.inbox";
 
-it("redirects a Stable Inbox deep link before mounting its route component", async () => {
+it("opens a Stable Inbox deep link", async () => {
   const mounted = vi.fn();
   const root = createRootRoute();
   const home = createRoute({ getParentRoute: () => root, path: "/", component: () => <p>Home</p> });
@@ -55,39 +76,36 @@ it("redirects a Stable Inbox deep link before mounting its route component", asy
   const view = await render(<RouterProvider router={router} />);
   try {
     await expect.poll(() => router.state.status).toBe("idle");
-    expect(router.state.location.pathname).toBe("/");
-    expect(mounted).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe("/inbox");
+    expect(mounted).toHaveBeenCalled();
   } finally {
     await view.unmount();
   }
 });
 
-it("does not manually refetch a disabled recap when a completion arrives before redirect finishes", async () => {
-  fixture.getRecap.mockReset();
+it("loads the Stable Inbox without offering or requesting Beta to-dos", async () => {
   fixture.navigate.mockReset();
+  fixture.listTodos.mockReset();
   fixture.activity.mockReturnValue({ visibleNonGroupThreads: [] });
+  fixture.getRecap.mockRejectedValue({ code: "FEATURE_UNAVAILABLE" });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const content = () => (
+  const view = await render(
     <QueryClientProvider client={client}>
       <InboxView />
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
-  const view = await render(content());
   try {
-    expect(fixture.navigate).toHaveBeenCalledWith({ to: "/", replace: true });
-    // Keep the unavailable view mounted, as while its client redirect is pending.
-    fixture.activity.mockReturnValue({
-      visibleNonGroupThreads: [
-        {
-          latestTurn: { completedAt: "2026-09-30T12:00:00.000Z" },
-          lastVisitedAt: "2026-09-30T12:00:00.000Z",
-        } as SidebarThreadSummary,
-      ],
-    });
-    await view.rerender(content());
-    // The completion effect schedules a zero-delay manual refetch on first update.
-    await new Promise((resolve) => window.setTimeout(resolve, 30));
-    expect(fixture.getRecap).not.toHaveBeenCalled();
+    await expect.element(view.getByRole("heading", { name: "Inbox", exact: true })).toBeVisible();
+    await expect
+      .element(view.getByText("The day recap needs a newer Synara server."))
+      .toBeVisible();
+    expect(fixture.getRecap).toHaveBeenCalled();
+    expect(fixture.navigate).not.toHaveBeenCalled();
+    expect(fixture.listTodos).not.toHaveBeenCalled();
+    await expect
+      .element(view.getByRole("heading", { name: "Today’s tasks" }))
+      .not.toBeInTheDocument();
+    await expect.element(view.getByRole("button", { name: "All tasks" })).not.toBeInTheDocument();
   } finally {
     await view.unmount();
     client.clear();

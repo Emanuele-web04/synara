@@ -16,6 +16,11 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
+  it.each(["inbox", "pull-request-auto-fix"])("offers %s in Stable and Beta", (feature) => {
+    expect(isBetaFeatureEnabled(feature, "production")).toBe(true);
+    expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
+  });
+
   it("enables Oh My Pi in Stable and all other flavors", () => {
     for (const flavor of [
       "production",

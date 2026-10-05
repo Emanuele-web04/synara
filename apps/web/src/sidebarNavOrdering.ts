@@ -3,7 +3,7 @@
 // Layer: Web settings utility
 // Exports: nav item ids and the Kanban/Tasks slot resolver.
 
-/** Inbox is Beta-only: the rail drops it where INBOX_ON is off. */
+/** The rail drops Inbox only where INBOX_ON is off. */
 export const SIDEBAR_NAV_ITEM_IDS = [
   "newThread",
   "inbox",
