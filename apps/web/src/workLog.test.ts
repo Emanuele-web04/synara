@@ -13,6 +13,90 @@ import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
+  it("pairs an answered question with its answers in one exchange row", () => {
+    const questions = [
+      {
+        id: "icon",
+        header: "Icon",
+        question: "Which icon should mark background work?",
+        options: [
+          { label: "Tray", description: "Tray icon" },
+          { label: "Dimmed spinner", description: "Spinner at reduced opacity" },
+        ],
+      },
+      {
+        id: "scope",
+        header: "Scope",
+        question: "Where should it apply?",
+        options: [{ label: "Sidebar", description: "Sidebar rows" }],
+        multiSelect: true,
+      },
+    ];
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: { requestId: "req-1", questions },
+        }),
+        makeActivity({
+          id: "answered",
+          sequence: 2,
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          // Claude keys answers by question text; Codex and Synara by question id.
+          payload: {
+            requestId: "req-1",
+            answers: {
+              "Which icon should mark background work?": "Dimmed spinner",
+              scope: ["Sidebar", "Menu"],
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "answered",
+      activityKind: "user-input.resolved",
+      userInputExchange: [
+        {
+          id: "icon",
+          header: "Icon",
+          question: "Which icon should mark background work?",
+          options: ["Tray", "Dimmed spinner"],
+          answer: "Dimmed spinner",
+        },
+        { id: "scope", options: ["Sidebar"], answer: "Sidebar, Menu" },
+      ],
+    });
+  });
+
+  it("keeps an unanswered question as a plain row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "req-1",
+            questions: [{ id: "q", header: "Q", question: "Continue?", options: [] }],
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: "asked", activityKind: "user-input.requested" });
+    expect(entries[0]?.userInputExchange).toBeUndefined();
+  });
+
   it("omits routine approval resolutions between tool lifecycle updates", () => {
     const activities = [
       makeActivity({
