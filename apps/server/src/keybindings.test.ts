@@ -105,6 +105,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults composer voice toggle to alt+M outside terminal focus", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "composer.voice.toggle"),
+        {
+          key: "alt+m",
+          command: "composer.voice.toggle",
+          when: "!terminalFocus",
+        },
+      );
+    }),
+  );
+
   it.effect("compiles valid rule with parsed when AST", () =>
     Effect.sync(() => {
       const compiled = compileResolvedKeybindingRule({

@@ -65,6 +65,7 @@ interface ChatKeyboardShortcutsInput {
   isVoiceRecording: ReturnType<typeof useComposerVoiceController>["isVoiceRecording"];
   isVoiceTranscribing: ReturnType<typeof useComposerVoiceController>["isVoiceTranscribing"];
   onVoiceRecordingEnter: () => void;
+  onToggleVoiceNote: () => void;
   isComposerApprovalState: boolean;
   terminalState: ReturnType<typeof useChatTerminalController>["terminalState"];
   terminalWorkspaceOpen: ReturnType<typeof useChatTerminalController>["terminalWorkspaceOpen"];
@@ -135,6 +136,7 @@ export function useChatKeyboardShortcuts({
   isVoiceRecording,
   isVoiceTranscribing,
   onVoiceRecordingEnter,
+  onToggleVoiceNote,
   isComposerApprovalState,
   terminalState,
   terminalWorkspaceOpen,
@@ -272,6 +274,16 @@ export function useChatKeyboardShortcuts({
         if (!cycleEffort()) return;
         event.preventDefault();
         event.stopPropagation();
+        return;
+      }
+
+      if (command === "composer.voice.toggle") {
+        // Handled before the voice guards below so a second press stops an active
+        // recording. Always consumed: on macOS bare Alt+M would otherwise insert "µ".
+        event.preventDefault();
+        event.stopPropagation();
+        if (isVoiceTranscribing) return;
+        onToggleVoiceNote();
         return;
       }
 
@@ -505,6 +517,7 @@ export function useChatKeyboardShortcuts({
     isVoiceRecording,
     isVoiceTranscribing,
     onVoiceRecordingEnter,
+    onToggleVoiceNote,
     setTerminalWorkspaceTab,
     surfaceMode,
     scheduleComposerFocus,

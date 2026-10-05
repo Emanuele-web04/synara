@@ -99,6 +99,7 @@ Removing a command's last shortcut in Settings writes this rule. It never matche
 - `diff.change.previous`: scroll the diff panel to the previous changed file (only while the diff panel is open)
 - `sidechat.toggle`: open or hide the active main thread's side chat panel
 - `composer.focus.toggle`: focus or blur the chat prompt composer
+- `composer.voice.toggle`: start or stop the composer voice note recording (default `alt+m`)
 - `thread.copyId`: copy the active thread's ID to the clipboard
 - `editor.openFavorite`: open current project/worktree in the last-used editor
 - `editor.file.save`: write the focused file editor's unsaved changes back to disk (editor view file and diff editors)
