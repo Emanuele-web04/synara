@@ -41,7 +41,7 @@ function render(
 }
 
 describe("ProviderUsageSettingsPanel", () => {
-  it("keeps sidebar provider switches alongside account usage cards", () => {
+  it("keeps sidebar account switches alongside account usage cards", () => {
     const markup = render([
       snapshot({
         instanceId: "codex",
@@ -188,6 +188,8 @@ describe("ProviderUsageSettingsPanel", () => {
 
     expect(markup).toContain("Work account");
     expect(markup).toContain("Research account");
+    expect(markup).toContain("Show Claude · Default account usage at the bottom of the sidebar");
+    expect(markup).toContain("Show Claude · Research account usage at the bottom of the sidebar");
     expect(markup.indexOf("Work account")).toBeLessThan(markup.indexOf("Research account"));
     expect(markup.match(/Personal allowance/g)).toHaveLength(1);
     expect(markup.match(/Company allowance/g)).toHaveLength(1);

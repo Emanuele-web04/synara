@@ -1,38 +1,78 @@
 // FILE: AppRailUsage.logic.ts
 // Purpose: Pure selection rules for the provider usage rings at the bottom of the app rail.
 
-import type { ProviderKind } from "@synara/contracts";
-import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
+import type { ProviderInstanceId } from "@synara/contracts";
+import type { ResolvedProviderInstance } from "@synara/shared/providerInstances";
+import { PROVIDER_USAGE_PROVIDERS, providerUsageDisplayName } from "@synara/shared/providerUsage";
 
 import type { RailUsageWindow } from "~/appSettings";
+import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
 import type { ProviderUsageDisplayRow } from "~/lib/providerUsageDisplay";
 
 /** The rail is one icon wide, so only a couple of rings fit above the Help button. */
-export const MAX_RAIL_USAGE_PROVIDERS = 2;
+export const MAX_RAIL_USAGE_ACCOUNTS = 2;
 
-/** Stored selection → the providers actually drawn: usage-capable, unique, capped. */
-export function resolveRailUsageProviders(
-  selected: ReadonlyArray<ProviderKind>,
-): ReadonlyArray<ProviderKind> {
-  return [...new Set(selected)]
-    .filter((provider) => PROVIDER_USAGE_PROVIDERS.includes(provider))
-    .slice(0, MAX_RAIL_USAGE_PROVIDERS);
+export interface RailUsageAccount {
+  readonly instance: ResolvedProviderInstance;
+  readonly label: string;
+  readonly dotted: boolean;
 }
 
-/** Next selection after a Settings toggle; a provider past the cap is ignored. */
-export function toggleRailUsageProvider(
-  selected: ReadonlyArray<ProviderKind>,
-  provider: ProviderKind,
+/** Enabled usage-capable accounts, named consistently in Settings and the rail. */
+export function getRailUsageAccounts(
+  instances: ReadonlyArray<ResolvedProviderInstance>,
+): ReadonlyArray<RailUsageAccount> {
+  return PROVIDER_USAGE_PROVIDERS.flatMap((provider) => {
+    const accounts = instances.filter(
+      (instance) => instance.enabled && instance.driver === provider,
+    );
+    const providerName = providerUsageDisplayName(provider);
+    return accounts.map((instance) => {
+      const showAccountName =
+        !instance.isDefault || accounts.length > 1 || Boolean(instance.raw.displayName?.trim());
+      const accountName =
+        instance.isDefault && !instance.raw.displayName?.trim()
+          ? "Default account"
+          : instance.displayName;
+      return {
+        instance,
+        dotted: accounts.length > 1 && !instance.isDefault,
+        label: showAccountName
+          ? providerAccountQualifiedLabel(providerName, accountName)
+          : providerName,
+      };
+    });
+  });
+}
+
+/** Stored selection → unique available accounts, capped after dropping stale ids. */
+export function resolveRailUsageAccounts(
+  selected: ReadonlyArray<ProviderInstanceId>,
+  available: ReadonlyArray<RailUsageAccount>,
+): ReadonlyArray<RailUsageAccount> {
+  const byId = new Map(available.map((account) => [account.instance.instanceId, account]));
+  return [...new Set(selected)]
+    .flatMap((instanceId) => {
+      const account = byId.get(instanceId);
+      return account ? [account] : [];
+    })
+    .slice(0, MAX_RAIL_USAGE_ACCOUNTS);
+}
+
+/** Next selection after a Settings toggle; an account past the cap is ignored. */
+export function toggleRailUsageAccount(
+  selected: ReadonlyArray<ProviderInstanceId>,
+  instanceId: ProviderInstanceId,
   enabled: boolean,
-): ReadonlyArray<ProviderKind> {
-  const current = resolveRailUsageProviders(selected);
+): ReadonlyArray<ProviderInstanceId> {
+  const current = [...new Set(selected)].slice(0, MAX_RAIL_USAGE_ACCOUNTS);
   if (!enabled) {
-    return current.filter((entry) => entry !== provider);
+    return current.filter((entry) => entry !== instanceId);
   }
-  if (current.includes(provider) || current.length >= MAX_RAIL_USAGE_PROVIDERS) {
+  if (current.includes(instanceId) || current.length >= MAX_RAIL_USAGE_ACCOUNTS) {
     return current;
   }
-  return [...current, provider];
+  return [...current, instanceId];
 }
 
 /**

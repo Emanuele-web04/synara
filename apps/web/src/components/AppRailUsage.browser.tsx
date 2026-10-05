@@ -1,6 +1,10 @@
 import "../index.css";
 
-import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS_VIEW,
+  type ServerProviderUsageSnapshot,
+  type ServerSettingsView,
+} from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page, userEvent } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,23 +13,57 @@ import { render } from "vitest-browser-react";
 const settings = vi.hoisted(() => ({
   codexHomePath: "",
   railUsageProviders: ["codex"],
+  railUsageInstanceIds: null as string[] | null,
   railUsageWindow: "both",
 }));
+const updateSettings = vi.hoisted(() => vi.fn());
 
-vi.mock("~/appSettings", () => ({ useAppSettings: () => ({ settings }) }));
+vi.mock("~/appSettings", () => ({ useAppSettings: () => ({ settings, updateSettings }) }));
 
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 
 import { AppRailUsage } from "./AppRailUsage";
+import { ProviderUsageSettingsPanel } from "./settings/ProviderUsageSettingsPanel";
+
+async function renderAccounts(
+  snapshots: readonly ServerProviderUsageSnapshot[],
+  serverSettings: ServerSettingsView = DEFAULT_SERVER_SETTINGS_VIEW,
+  showSettings = false,
+) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, enabled: false } },
+  });
+  client.setQueryData(serverQueryKeys.allProviderUsage(), snapshots);
+  client.setQueryData(serverQueryKeys.settings(), serverSettings);
+  const onOpenUsageSettings = vi.fn();
+  const content = () => (
+    <QueryClientProvider client={client}>
+      {showSettings ? (
+        <div className="flex items-start gap-6 p-6">
+          <div
+            data-testid="usage-rail"
+            className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg bg-sidebar py-2"
+          >
+            <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+          </div>
+          <div className="w-[520px] space-y-6">
+            <ProviderUsageSettingsPanel />
+          </div>
+        </div>
+      ) : (
+        <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+      )}
+    </QueryClientProvider>
+  );
+  const view = await render(content());
+  return { client, onOpenUsageSettings, rerender: () => view.rerender(content()) };
+}
 
 async function renderUsage(
   limits: ServerProviderUsageSnapshot["limits"],
   status: ServerProviderUsageSnapshot["status"] = "ok",
 ) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, enabled: false } },
-  });
-  client.setQueryData(serverQueryKeys.allProviderUsage(), [
+  const { onOpenUsageSettings } = await renderAccounts([
     {
       provider: "codex",
       updatedAt: "2026-10-02T12:00:00.000Z",
@@ -35,19 +73,149 @@ async function renderUsage(
       usageLines: [],
     } satisfies ServerProviderUsageSnapshot,
   ]);
-  client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
-  const onOpenUsageSettings = vi.fn();
-  await render(
-    <QueryClientProvider client={client}>
-      <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
-    </QueryClientProvider>,
-  );
   return onOpenUsageSettings;
 }
+
+const claudeSettings: ServerSettingsView = {
+  ...DEFAULT_SERVER_SETTINGS_VIEW,
+  providerInstances: {
+    claude_work: { driver: "claudeAgent", displayName: "Work", accentColor: "#2563eb" },
+  },
+};
+const claudeSnapshots: readonly ServerProviderUsageSnapshot[] = [
+  {
+    provider: "claudeAgent",
+    instanceId: "claude_work",
+    updatedAt: "2026-10-02T12:00:00.000Z",
+    status: "ok",
+    source: "test",
+    limits: [{ window: "Weekly", usedPercent: 80 }],
+    usageLines: [],
+  },
+  {
+    provider: "claudeAgent",
+    instanceId: "claudeAgent",
+    updatedAt: "2026-10-02T12:00:00.000Z",
+    status: "ok",
+    source: "test",
+    limits: [{ window: "Weekly", usedPercent: 25 }],
+    usageLines: [],
+  },
+];
 
 describe("AppRailUsage", () => {
   beforeEach(() => {
     settings.railUsageWindow = "both";
+    settings.railUsageProviders = ["codex"];
+    settings.railUsageInstanceIds = null;
+    updateSettings.mockReset().mockImplementation((patch) => Object.assign(settings, patch));
+  });
+
+  it("selects two Claude accounts in Settings and shows each account's ring and hover card", async () => {
+    settings.railUsageInstanceIds = [];
+    const { rerender } = await renderAccounts(claudeSnapshots, claudeSettings, true);
+    const personalSwitch = page.getByRole("switch", {
+      name: "Show Claude · Default account usage at the bottom of the sidebar",
+    });
+    const workSwitch = page.getByRole("switch", {
+      name: "Show Claude · Work usage at the bottom of the sidebar",
+    });
+    await personalSwitch.click();
+    await rerender();
+    await workSwitch.click();
+    await rerender();
+    expect(updateSettings).toHaveBeenLastCalledWith({
+      railUsageInstanceIds: ["claudeAgent", "claude_work"],
+    });
+    await expect.element(personalSwitch).toBeChecked();
+    await expect.element(workSwitch).toBeChecked();
+    await expect
+      .element(
+        page.getByRole("switch", {
+          name: "Show Codex usage at the bottom of the sidebar",
+        }),
+      )
+      .toBeDisabled();
+
+    const personal = page.getByRole("button", { name: /^Claude · Default account usage:/ });
+    const work = page.getByRole("button", { name: /^Claude · Work usage:/ });
+    await expect.element(personal).toBeVisible();
+    await expect.element(work).toBeVisible();
+    expect(
+      personal
+        .element()
+        .querySelector("circle[stroke-dasharray]")
+        ?.getAttribute("stroke-dasharray"),
+    ).toBe("75 100");
+    expect(
+      work.element().querySelector("circle[stroke-dasharray]")?.getAttribute("stroke-dasharray"),
+    ).toBe("20 100");
+    const accountDot = work.element().querySelector('[data-accent="#2563eb"]');
+    expect(accountDot).not.toBeNull();
+    const dotBounds = accountDot!.getBoundingClientRect();
+    const glyphBounds = Array.from(work.element().querySelectorAll("svg"))
+      .at(-1)!
+      .getBoundingClientRect();
+    // The account mark belongs beside the glyph, as in the model picker.
+    expect(dotBounds.x + dotBounds.width / 2).toBeGreaterThan(
+      glyphBounds.x + glyphBounds.width / 2,
+    );
+    expect(dotBounds.y + dotBounds.height / 2).toBeLessThan(glyphBounds.y + glyphBounds.height / 2);
+    expect(dotBounds.right).toBeLessThanOrEqual(glyphBounds.right + 5);
+    await userEvent.hover(work);
+    await expect.element(page.getByText("Claude · Work", { exact: true }).last()).toBeVisible();
+    await expect.element(page.getByText("20% left", { exact: true }).last()).toBeVisible();
+    await page
+      .getByTestId("usage-rail")
+      .screenshot({ path: "node_modules/.cache/multiple-claude-accounts.png" });
+
+    await workSwitch.click();
+    await rerender();
+    await expect.element(work).not.toBeInTheDocument();
+    await expect
+      .element(
+        page.getByRole("switch", {
+          name: "Show Codex usage at the bottom of the sidebar",
+        }),
+      )
+      .toBeEnabled();
+  });
+
+  it("never borrows a sibling's usage when the selected account has no matching snapshot", async () => {
+    settings.railUsageInstanceIds = ["claudeAgent"];
+    await renderAccounts(
+      claudeSnapshots.filter((snapshot) => snapshot.instanceId === "claude_work"),
+      claudeSettings,
+    );
+    await expect
+      .element(page.getByRole("button", { name: /Claude.*usage:/ }))
+      .not.toBeInTheDocument();
+  });
+
+  it("keeps the model picker's neutral marker for an additional account without an accent", async () => {
+    settings.railUsageInstanceIds = ["claudeAgent", "claude_work"];
+    await renderAccounts(claudeSnapshots, {
+      ...claudeSettings,
+      providerInstances: { claude_work: { driver: "claudeAgent", displayName: "Work" } },
+    });
+    const personal = page.getByRole("button", { name: /^Claude · Default account usage:/ });
+    const work = page.getByRole("button", { name: /^Claude · Work usage:/ });
+    expect(personal.element().querySelector('span[aria-hidden="true"]')).toBeNull();
+    expect(work.element().querySelector('span[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it("hides disabled and removed accounts even when their usage remains cached", async () => {
+    settings.railUsageInstanceIds = ["claude_work", "claude_removed"];
+    await renderAccounts(
+      [...claudeSnapshots, { ...claudeSnapshots[0]!, instanceId: "claude_removed" }],
+      {
+        ...claudeSettings,
+        providerInstances: { claude_work: { driver: "claudeAgent", enabled: false } },
+      },
+    );
+    await expect
+      .element(page.getByRole("button", { name: /Claude.*usage:/ }))
+      .not.toBeInTheDocument();
   });
 
   it("shows independent weekly and five-hour rings even when a model sublimit is tighter", async () => {

@@ -48,6 +48,11 @@ These rows use events already supplied by the provider and do not trigger extra 
 The Environment panel's Usage section shows enabled accounts for the active provider, with a
 separate row and detail menu for each account. Providers with multiple accounts show account names
 beside the provider label. Settings → Usage uses the same account-specific snapshots.
+In Settings → Usage → Sidebar, select up to two enabled accounts for the rail rings, including
+two accounts of the same provider (for example, personal and work Claude accounts). Each ring's
+hover card identifies the account and shows its own usage. The rings use the same account color
+dots as the model picker. Existing provider selections keep
+their default accounts selected.
 Usage checks follow each account's configured credentials; unassigned thread telemetry and
 provider-wide local totals are not used as a fallback for an individual account.
 

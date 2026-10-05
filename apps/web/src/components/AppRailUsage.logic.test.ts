@@ -1,38 +1,74 @@
+import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
+import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
 
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 
 import {
-  MAX_RAIL_USAGE_PROVIDERS,
+  MAX_RAIL_USAGE_ACCOUNTS,
+  getRailUsageAccounts,
   railUsageRingTone,
   selectRailUsageRows,
-  resolveRailUsageProviders,
-  toggleRailUsageProvider,
+  resolveRailUsageAccounts,
+  toggleRailUsageAccount,
 } from "./AppRailUsage.logic";
 
-describe("resolveRailUsageProviders", () => {
-  it("drops duplicates and caps the selection", () => {
-    const resolved = resolveRailUsageProviders(["codex", "codex", "claudeAgent", "cursor"]);
-    expect(resolved).toEqual(["codex", "claudeAgent"]);
-    expect(resolved.length).toBeLessThanOrEqual(MAX_RAIL_USAGE_PROVIDERS);
+describe("rail usage accounts", () => {
+  const accounts = getRailUsageAccounts(
+    deriveProviderInstances({
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providerInstances: {
+        claude_work: { driver: "claudeAgent", displayName: "Work" },
+        claude_disabled: { driver: "claudeAgent", enabled: false },
+      },
+    }),
+  );
+  const selectedIds = (selected: readonly string[]) =>
+    resolveRailUsageAccounts(selected, accounts).map((account) => account.instance.instanceId);
+
+  it("allows two accounts of the same provider and distinguishes their names", () => {
+    const selected = resolveRailUsageAccounts(["claudeAgent", "claude_work"], accounts);
+    expect(selected.map((account) => account.label)).toEqual([
+      "Claude · Default account",
+      "Claude · Work",
+    ]);
+    expect(selected.map((account) => account.instance.instanceId)).toEqual([
+      "claudeAgent",
+      "claude_work",
+    ]);
+  });
+
+  it("drops duplicate, removed, and disabled accounts before applying the cap", () => {
+    expect(
+      selectedIds(["removed", "claude_disabled", "codex", "codex", "claude_work", "cursor"]),
+    ).toEqual(["codex", "claude_work"]);
+    expect(selectedIds(["codex", "claudeAgent", "claude_work"]).length).toBe(
+      MAX_RAIL_USAGE_ACCOUNTS,
+    );
+    expect(selectedIds([])).toEqual([]);
+  });
+
+  it("keeps single-account provider labels and default account routing", () => {
+    expect(resolveRailUsageAccounts(["codex"], accounts)[0]?.label).toBe("Codex");
+    expect(selectedIds(["codex", "claudeAgent"])).toEqual(["codex", "claudeAgent"]);
   });
 });
 
-describe("toggleRailUsageProvider", () => {
-  it("adds a provider while there is room and removes it again", () => {
-    expect(toggleRailUsageProvider(["codex"], "claudeAgent", true)).toEqual([
-      "codex",
+describe("toggleRailUsageAccount", () => {
+  it("adds a second Claude account while there is room and removes it again", () => {
+    expect(toggleRailUsageAccount(["claudeAgent"], "claude_work", true)).toEqual([
       "claudeAgent",
+      "claude_work",
     ]);
-    expect(toggleRailUsageProvider(["codex", "claudeAgent"], "codex", false)).toEqual([
-      "claudeAgent",
+    expect(toggleRailUsageAccount(["claudeAgent", "claude_work"], "claudeAgent", false)).toEqual([
+      "claude_work",
     ]);
   });
 
-  it("ignores a provider past the cap", () => {
-    expect(toggleRailUsageProvider(["codex", "claudeAgent"], "cursor", true)).toEqual([
-      "codex",
+  it("ignores another account past the cap", () => {
+    expect(toggleRailUsageAccount(["claudeAgent", "claude_work"], "codex", true)).toEqual([
       "claudeAgent",
+      "claude_work",
     ]);
   });
 });

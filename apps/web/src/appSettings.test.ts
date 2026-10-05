@@ -1880,6 +1880,49 @@ describe("AppSettingsSchema", () => {
     });
   });
 
+  it("migrates sidebar provider selections to their default account ids", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(normalizeStoredAppSettings(decode("{}")).railUsageInstanceIds).toEqual([
+      "codex",
+      "claudeAgent",
+    ]);
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ railUsageProviders: ["gemini"] })))
+        .railUsageInstanceIds,
+    ).toEqual(["antigravity"]);
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ railUsageProviders: [] })))
+        .railUsageInstanceIds,
+    ).toEqual([]);
+  });
+
+  it("persists two Claude accounts and an explicit empty sidebar selection", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const updated = applyLocalAppSettingsPatch(decode("{}"), {
+      railUsageInstanceIds: ["claudeAgent", "claude_work"],
+    });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(updated))).railUsageInstanceIds,
+    ).toEqual(["claudeAgent", "claude_work"]);
+    const hidden = applyLocalAppSettingsPatch(updated, { railUsageInstanceIds: [] });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(hidden))).railUsageInstanceIds,
+    ).toEqual([]);
+  });
+
+  it("drops malformed sidebar account ids without resetting unrelated preferences", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        railUsageInstanceIds: ["claude_work", "invalid id", "", "../account"],
+        chatFontSizePx: 17,
+      }),
+    );
+    expect(decoded.railUsageInstanceIds).toEqual(["claude_work"]);
+    expect(decoded.chatFontSizePx).toBe(17);
+  });
+
   it("drops rail ids this build does not know and ignores the retired classic-sidebar keys", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
