@@ -49,6 +49,7 @@ import {
   resolveFollowUpDispatchMode,
   resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
+  serverSettingsToAppSettings,
 } from "./appSettings";
 
 describe("source control writing settings", () => {
@@ -1990,5 +1991,29 @@ describe("AppSettingsSchema", () => {
     expect(
       normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
     ).not.toHaveProperty("enableAppshots");
+  });
+});
+
+describe("keepAwakeMode mapping", () => {
+  it("defaults to off when absent from stored settings", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(decode("{}").keepAwakeMode).toBe("off");
+  });
+
+  it("maps the server setting into app settings", () => {
+    const mapped = serverSettingsToAppSettings({
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      keepAwakeMode: "always",
+    });
+    expect(mapped.keepAwakeMode).toBe("always");
+  });
+
+  it("maps the app setting into a server patch", () => {
+    expect(appSettingsPatchToServerSettingsPatch({ keepAwakeMode: "agent" })).toEqual({
+      keepAwakeMode: "agent",
+    });
+    expect(
+      appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true }),
+    ).not.toHaveProperty("keepAwakeMode");
   });
 });

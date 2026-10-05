@@ -104,6 +104,8 @@ import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
@@ -346,6 +348,7 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
+  const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
@@ -1477,6 +1480,13 @@ function SettingsRouteView() {
           ariaLabel: "Automatically open simulator",
         })}
       </SettingsSection>
+
+      <KeepAwakeSettingsSection
+        state={keepAwake}
+        mode={settings.keepAwakeMode}
+        defaultMode={defaults.keepAwakeMode}
+        onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
+      />
 
       <SettingsSection title="Review">
         <SettingsRow
