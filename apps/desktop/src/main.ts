@@ -1,3 +1,5 @@
+import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
+import { BackendIssueDetector } from "./backendIssueDetector";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
@@ -48,6 +50,7 @@ import type {
   FileFilter,
   IpcMainEvent,
   MenuItemConstructorOptions,
+  MessageBoxOptions,
 } from "electron";
 import * as Effect from "effect/Effect";
 import type {
@@ -4227,6 +4230,7 @@ function schemaTooNewRestoreDetail(
 
 async function handleDesktopSchemaTooNewRecovery(
   block: MigrationSchemaTooNewStartupBlock,
+  diagnosticId: string | null = null,
 ): Promise<void> {
   const paths = desktopMigrationRecoveryPaths();
   const restoreCandidate = resolveDesktopMigrationRestoreCandidate(paths, block);
@@ -4263,29 +4267,33 @@ async function handleDesktopSchemaTooNewRecovery(
         { label: "Quit", decision: "quit" },
       );
 
-      const result = await dialog.showMessageBox({
-        type: previousFailure === null ? "warning" : "error",
-        title:
-          previousFailure === null
-            ? "This database is newer than Synara"
-            : restoreFailed
-              ? "Database restore failed"
-              : "Synara could not update itself",
-        message:
-          previousFailure === null
-            ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
-            : restoreFailed
-              ? "The verified database backup could not be restored."
-              : "The newest Synara release could not be installed.",
-        detail:
-          `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
-          `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
-          "The backend and provider processes will remain stopped until you update, restore, or quit.",
-        buttons: choices.map((choice) => choice.label),
-        defaultId: 0,
-        cancelId: choices.length - 1,
-        noLink: true,
-      });
+      const result = await showDiagnosticStartupDialog(
+        {
+          type: previousFailure === null ? "warning" : "error",
+          title:
+            previousFailure === null
+              ? "This database is newer than Synara"
+              : restoreFailed
+                ? "Database restore failed"
+                : "Synara could not update itself",
+          message:
+            previousFailure === null
+              ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
+              : restoreFailed
+                ? "The verified database backup could not be restored."
+                : "The newest Synara release could not be installed.",
+          detail:
+            `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
+            `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
+            "The backend and provider processes will remain stopped until you update, restore, or quit.",
+          buttons: choices.map((choice) => choice.label),
+          defaultId: 0,
+          cancelId: choices.length - 1,
+          noLink: true,
+        },
+        diagnosticId,
+        betaDiagnostics,
+      );
       return choices[result.response]?.decision ?? "quit";
     },
     installUpdate: installLatestUpdateForMigrationRecovery,
@@ -4321,9 +4329,18 @@ async function handleDesktopSchemaTooNewRecovery(
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
 
+  const diagnosticId =
+    betaDiagnostics?.trackIssue("main", {
+      code: `startup.${block.kind}`,
+      ...(block.kind === "database-locked"
+        ? { reason: block.ownerPid === null ? "unknown-owner" : "live-owner" }
+        : {}),
+    }) ?? null;
+  const showBlockDialog = (options: MessageBoxOptions) =>
+    showDiagnosticStartupDialog(options, diagnosticId, betaDiagnostics);
   const task = (async () => {
     if (block.kind === "migration-schema-too-new") {
-      await handleDesktopSchemaTooNewRecovery(block.block);
+      await handleDesktopSchemaTooNewRecovery(block.block, diagnosticId);
       return;
     }
 
@@ -4338,7 +4355,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
             canInstallUpdate: canInstallUpdateFromRecovery(),
             canOpenReleasePage: releaseUrl !== null,
           });
-          const result = await dialog.showMessageBox({
+          const result = await showBlockDialog({
             type: "error",
             title:
               previousFailure === null
@@ -4377,7 +4394,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
 
     if (block.kind === "migration-divergence-consent-required") {
       const challenge = block.challenge;
-      const result = await dialog.showMessageBox({
+      const result = await showBlockDialog({
         type: "warning",
         title: "Synara found a different database migration history",
         message: `Migration ${challenge.firstDivergedId} does not match this build.`,
@@ -4403,7 +4420,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     }
 
     if (block.kind === "migration-runtime-identity-mismatch") {
-      await dialog.showMessageBox({
+      await showBlockDialog({
         type: "error",
         title: "Synara's server build does not match",
         message: "The desktop and server migration code came from different builds.",
@@ -4419,7 +4436,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     }
 
     if (block.kind === "migration-recovery-required") {
-      const result = await dialog.showMessageBox({
+      const result = await showBlockDialog({
         type: "warning",
         title: "Synara needs to recover its database",
         message: "A database migration did not finish safely.",
@@ -4444,7 +4461,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
         ? "Synara could not verify the database lock. The lock may be left over from an interrupted startup, or another server may still be using it."
         : `Another Synara server (process ${block.ownerPid}) is already using this database.`;
     for (;;) {
-      const result = await dialog.showMessageBox({
+      const result = await showBlockDialog({
         type: "warning",
         title:
           block.ownerPid === null
@@ -4622,7 +4639,18 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     writeStderr: (chunk) => {
       process.stderr.write(chunk);
     },
-    detectors: [listeningDetector, startupBlockDetector, outputTailDetector],
+    detectors: [
+      listeningDetector,
+      startupBlockDetector,
+      outputTailDetector,
+      ...(betaDiagnostics
+        ? [
+            new BackendIssueDetector((issue) => {
+              betaDiagnostics.trackIssue("main", issue);
+            }),
+          ]
+        : []),
+    ],
   });
 
   // Readiness is authoritative even when the optional log marker is delayed or

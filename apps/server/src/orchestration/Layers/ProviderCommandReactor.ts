@@ -142,6 +142,8 @@ import {
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ServerConfig } from "../../config.ts";
+import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
+import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   mergeProviderStartOptions,
@@ -2594,6 +2596,16 @@ const make = Effect.gen(function* () {
         createdAt: new Date().toISOString(),
       })
       .pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (review?.status === "failed" || review?.status === "uncertain") {
+              reportBetaOperationalIssue({
+                code: review.status === "failed" ? "claude.cache.failed" : "claude.cache.uncertain",
+                reason: diagnosticIssueReason(review.error),
+              });
+            }
+          }),
+        ),
         Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
           error.detail === "Command produced no events." ? Effect.void : Effect.fail(error),
         ),

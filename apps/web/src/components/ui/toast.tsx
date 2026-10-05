@@ -3,7 +3,10 @@
 import { Toast, type ToastObject } from "@base-ui/react/toast";
 import { useMemo, useEffect, useState, type CSSProperties } from "react";
 import { useParams } from "@tanstack/react-router";
-import { ThreadId } from "@synara/contracts";
+import { ThreadId, type DesktopDiagnosticIssue } from "@synara/contracts";
+import { reportHandledIssue } from "~/lib/rendererErrorDiagnostics";
+import { DiagnosticReportAction } from "../DiagnosticReportAction";
+import { CopyTextButton } from "./copyTextButton";
 import {
   CircleAlertIcon,
   CircleCheckIcon,
@@ -45,6 +48,7 @@ type ThreadToastData = {
   compactContextual?: boolean;
   copyItems?: ReadonlyArray<ToastCopyItem>;
   copyText?: string;
+  diagnosticId?: string;
   onClose?: () => void;
   secondaryActionProps?: React.ComponentProps<typeof Button>;
   threadId?: ThreadId | null;
@@ -62,6 +66,17 @@ type ThreadToastData = {
 const toastManager = Toast.createToastManager<ThreadToastData>();
 const anchoredToastManager = Toast.createToastManager<ThreadToastData>();
 type ToastId = ReturnType<typeof toastManager.add>;
+
+/** Enrich the existing error toast asynchronously; diagnostics never delays its display. */
+export function reportToastIssue(
+  id: ToastId,
+  issue: DesktopDiagnosticIssue,
+  data?: ThreadToastData,
+): void {
+  void reportHandledIssue(issue).then((diagnosticId) => {
+    if (diagnosticId) toastManager.update(id, { data: { ...data, diagnosticId } });
+  });
+}
 const threadToastVisibleTimeoutRemainingMs = new Map<ToastId, number>();
 
 const TOAST_ICONS = {
@@ -270,21 +285,12 @@ function ThreadToastVisibleAutoDismiss({
 // Each copyItems entry owns a hook instance, so its Copied state doesn't
 // clear when a sibling path is copied.
 function ToastCopyItemButton({ item }: { item: ToastCopyItem }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard();
   return (
-    <Button
-      aria-label={isCopied ? `Copied ${item.label}` : `Copy ${item.label}`}
+    <CopyTextButton
+      text={item.text}
+      label={item.label}
       className={TOAST_ACTION_BUTTON_CLASS_NAME}
-      onClick={() => {
-        copyToClipboard(item.text, undefined);
-      }}
-      size={TOAST_ACTION_BUTTON_SIZE}
-      title={isCopied ? `Copied ${item.label}` : `Copy ${item.label}`}
-      variant={TOAST_ACTION_BUTTON_VARIANT}
-    >
-      {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      <span>{isCopied ? "Copied" : `Copy ${item.label}`}</span>
-    </Button>
+    />
   );
 }
 
@@ -292,19 +298,23 @@ function ToastActions({
   actionProps,
   copyItems,
   copyText,
+  diagnosticId,
   secondaryActionProps,
 }: {
   actionProps: ToastObject<ThreadToastData>["actionProps"];
   copyItems: ThreadToastData["copyItems"];
   copyText: string | undefined;
+  diagnosticId: string | undefined;
   secondaryActionProps: ThreadToastData["secondaryActionProps"];
 }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
-  if (!actionProps && !copyText && !secondaryActionProps && !copyItems?.length) return null;
+  if (!actionProps && !copyText && !secondaryActionProps && !copyItems?.length && !diagnosticId)
+    return null;
 
   return (
     <div className="-ms-2 mt-1.5 flex flex-wrap items-center gap-0.5">
+      {diagnosticId ? <DiagnosticReportAction id={diagnosticId} /> : null}
       {copyText && (
         <Button
           aria-label={isCopied ? "Copied error message" : "Copy error message"}
@@ -556,6 +566,7 @@ function ToastSurface({
             actionProps={toast.actionProps}
             copyItems={toast.data?.copyItems}
             copyText={toast.data?.copyText}
+            diagnosticId={toast.data?.diagnosticId}
             secondaryActionProps={toast.data?.secondaryActionProps}
           />
         ) : null}

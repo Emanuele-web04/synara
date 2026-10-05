@@ -40,6 +40,8 @@ import {
   type DesktopRendererError,
   type DesktopUpdateState,
   DesktopDiagnosticBreadcrumb,
+  DesktopDiagnosticIssue,
+  type DesktopDiagnosticReportStatus,
   LEGACY_PROVIDER_MIGRATIONS,
   ProviderKind,
 } from "@synara/contracts";
@@ -429,6 +431,8 @@ export class BetaDiagnostics {
   private readonly homeDir: string;
   private readonly errorFingerprintSentAt = new Map<string, number>();
   private readonly errorSentTimestamps: number[] = [];
+  private readonly issueReports = new Map<string, { id: string; at: number }>();
+  private readonly reportStatuses = new Map<string, DesktopDiagnosticReportStatus>();
 
   private loadInstallId(homeDir: string): string {
     const diagnosticsDir = join(homeDir, "diagnostics");
@@ -500,7 +504,7 @@ export class BetaDiagnostics {
     this.usageTimers.push(first);
   }
 
-  track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): void {
+  track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): string | undefined {
     if (this.disposed) return;
     if (payload.kind === "crash" && payload.reason === "clean-exit") return;
     const withContext =
@@ -534,9 +538,60 @@ export class BetaDiagnostics {
         mode: 0o600,
       });
       this.trimQueueIfNeeded();
+      return record.id;
     } catch {
       // Diagnostics must never break the app.
     }
+  }
+
+  /** Reuse the deployed app.error envelope; no receiver schema change is required. */
+  trackIssue(source: "main" | "renderer", input: unknown): string | null {
+    if (this.disposed) return null;
+    try {
+      if (!Schema.is(DesktopDiagnosticIssue)(input)) return null;
+      if (
+        input.durationMs !== undefined &&
+        (!Number.isFinite(input.durationMs) ||
+          input.durationMs < 0 ||
+          input.durationMs > 604_800_000)
+      )
+        return null;
+      const message = `Handled issue: ${input.code} (${input.reason ?? "unknown"})`;
+      const fingerprint = errorFingerprint(message, undefined, this.homeDir);
+      const now = this.now().getTime();
+      const previous = this.issueReports.get(fingerprint);
+      if (
+        previous &&
+        now - previous.at < ERROR_FINGERPRINT_WINDOW_MS &&
+        this.getReportStatus(previous.id) !== "unavailable"
+      )
+        return previous.id;
+      if (!this.allowError(fingerprint, false)) return null;
+      const id = this.track("app.error", {
+        kind: "error",
+        source,
+        message,
+        fingerprint,
+        ...(input.durationMs === undefined
+          ? {}
+          : { stack: `durationMs=${Math.round(input.durationMs)}` }),
+      });
+      if (!id) return null;
+      this.allowError(fingerprint);
+      this.issueReports.set(fingerprint, { id, at: now });
+      this.reportStatuses.set(id, "queued");
+      if (this.reportStatuses.size > 128)
+        this.reportStatuses.delete(this.reportStatuses.keys().next().value!);
+      // Use the existing bounded queue and retry cadence. Uploads never delay the operation.
+      void this.flush();
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
+  getReportStatus(id: unknown): DesktopDiagnosticReportStatus {
+    return typeof id === "string" ? (this.reportStatuses.get(id) ?? "unavailable") : "unavailable";
   }
 
   /** Reconstruct from the allowlist so unknown IPC properties never enter the ring. */
@@ -748,7 +803,7 @@ export class BetaDiagnostics {
     }
   }
 
-  private allowError(fingerprint: string): boolean {
+  private allowError(fingerprint: string, record = true): boolean {
     const nowMs = this.now().getTime();
     while (
       this.errorSentTimestamps.length > 0 &&
@@ -759,6 +814,7 @@ export class BetaDiagnostics {
     if (this.errorSentTimestamps.length >= ERROR_HOURLY_CAP) return false;
     const lastSent = this.errorFingerprintSentAt.get(fingerprint);
     if (lastSent !== undefined && nowMs - lastSent < ERROR_FINGERPRINT_WINDOW_MS) return false;
+    if (!record) return true;
     this.errorFingerprintSentAt.set(fingerprint, nowMs);
     if (this.errorFingerprintSentAt.size > 256) {
       for (const [key, sentAt] of this.errorFingerprintSentAt) {
@@ -787,6 +843,18 @@ export class BetaDiagnostics {
       const stagingPath = `${this.queuePath}.trim-${process.pid}`;
       writeFileSync(stagingPath, `${kept.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
       renameSync(stagingPath, this.queuePath);
+      const keptIds = new Set(
+        kept.map((line) => {
+          try {
+            return (JSON.parse(line) as { id?: unknown }).id;
+          } catch {
+            return undefined;
+          }
+        }),
+      );
+      for (const [id, status] of this.reportStatuses) {
+        if (status === "queued" && !keptIds.has(id)) this.reportStatuses.set(id, "unavailable");
+      }
     } catch {
       // best effort
     }
@@ -849,6 +917,9 @@ export class BetaDiagnostics {
         } catch {
           // unparseable sent line: leave a defensive retry in place below
         }
+      }
+      for (const id of sentIds) {
+        if (this.reportStatuses.has(id)) this.reportStatuses.set(id, "sent");
       }
       const current = readFileSync(this.queuePath, "utf8")
         .split("\n")

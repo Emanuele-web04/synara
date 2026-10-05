@@ -19,7 +19,8 @@ import {
 } from "../../lib/voiceRecorder";
 import { readNativeApi } from "../../nativeApi";
 import type { RefreshProviderStatusesNow } from "../../hooks/useProviderStatusRefresh";
-import { toastManager } from "../ui/toast";
+import { toastManager, reportToastIssue } from "../ui/toast";
+import { diagnosticIssueReason } from "../../lib/rendererErrorDiagnostics";
 import {
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
@@ -249,10 +250,14 @@ export function useComposerVoiceController(
       if (isVoiceRecordingCancelledError(error)) {
         return;
       }
-      toastManager.add({
+      const toastId = toastManager.add({
         type: "error",
         title: "Could not start recording",
         description: describeVoiceRecordingStartError(error),
+      });
+      reportToastIssue(toastId, {
+        code: "voice.record.failed",
+        reason: diagnosticIssueReason(error),
       });
     }
   };
@@ -276,6 +281,8 @@ export function useComposerVoiceController(
     }
 
     setIsVoiceTranscribing(true);
+    const startedAt = performance.now();
+    let transcriptionStarted = false;
     const requestId = voiceTranscriptionRequestIdRef.current + 1;
     voiceTranscriptionRequestIdRef.current = requestId;
     const requestThreadId = threadId;
@@ -303,6 +310,7 @@ export function useComposerVoiceController(
           });
           return false;
         }
+        transcriptionStarted = true;
         return api.server
           .transcribeVoice({
             provider: "codex",
@@ -332,7 +340,7 @@ export function useComposerVoiceController(
         if (authExpired) {
           void refreshVoiceStatus();
         }
-        toastManager.add({
+        const toastId = toastManager.add({
           type: "error",
           title: authExpired ? failureCopy.authExpiredTitle : failureCopy.transcriptionFailedTitle,
           description: authExpired ? failureCopy.authExpiredDescription : description,
@@ -346,6 +354,11 @@ export function useComposerVoiceController(
                 },
               }
             : {}),
+        });
+        reportToastIssue(toastId, {
+          code: transcriptionStarted ? "voice.transcribe.failed" : "voice.record.failed",
+          reason: authExpired ? "auth" : diagnosticIssueReason(error),
+          durationMs: performance.now() - startedAt,
         });
         return false;
       })

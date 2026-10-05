@@ -3,6 +3,7 @@
 // Layer: Orchestration integration tests
 // Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
 
+import * as betaOperationalIssue from "../../betaOperationalIssue";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2318,7 +2319,18 @@ describe("ProviderCommandReactor", () => {
           }),
         ),
       );
-      await respondToReview(harness, review, "compact");
+      const issueReport = vi
+        .spyOn(betaOperationalIssue, "reportBetaOperationalIssue")
+        .mockImplementation(() => {});
+      try {
+        await respondToReview(harness, review, "compact");
+        expect(issueReport).toHaveBeenCalledWith({
+          code: "claude.cache.failed",
+          reason: "unknown",
+        });
+      } finally {
+        issueReport.mockRestore();
+      }
       const blocker = await Effect.runPromise(
         harness.deliveryRepository.firstBlockingDeliveryForThread({
           consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,

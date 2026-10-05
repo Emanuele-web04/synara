@@ -904,12 +904,53 @@ export const DesktopDiagnosticBreadcrumb = Schema.Struct({
 });
 export type DesktopDiagnosticBreadcrumb = typeof DesktopDiagnosticBreadcrumb.Type;
 
+/** Handled failures carry fixed categories, never exception text or operation arguments. */
+export const DesktopDiagnosticIssue = Schema.Struct({
+  code: Schema.Literals([
+    "git.request.failed",
+    "git.branch.failed",
+    "git.commit.failed",
+    "git.push.failed",
+    "git.pr.failed",
+    "voice.record.failed",
+    "voice.transcribe.failed",
+    "claude.compaction.request-failed",
+    "claude.compaction.uncertain",
+    "claude.cache.request-failed",
+    "claude.cache.failed",
+    "claude.cache.uncertain",
+    "startup.database-locked",
+    "startup.migration-recovery-required",
+    "startup.migration-divergence-consent-required",
+    "startup.migration-runtime-identity-mismatch",
+    "startup.migration-schema-too-new",
+    "startup.migration-startup-block-invalid",
+  ]),
+  reason: Schema.optional(
+    Schema.Literals([
+      "unknown",
+      "auth",
+      "invalid-response",
+      "timeout",
+      "output-limit",
+      "live-owner",
+      "unknown-owner",
+    ]),
+  ),
+  durationMs: Schema.optional(Schema.Finite),
+});
+export type DesktopDiagnosticIssue = typeof DesktopDiagnosticIssue.Type;
+export const DESKTOP_DIAGNOSTIC_ISSUE_PREFIX = "SYNARA_DIAGNOSTIC_ISSUE ";
+export type DesktopDiagnosticReportStatus = "queued" | "sent" | "unavailable";
+
 export interface DesktopBridge {
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;
     reportError: (error: DesktopRendererError) => void;
     recordActivity?: (breadcrumb: DesktopDiagnosticBreadcrumb) => void;
+    reportIssue?: (issue: DesktopDiagnosticIssue) => Promise<string | null>;
+    getReportStatus?: (id: string) => Promise<DesktopDiagnosticReportStatus>;
   };
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;

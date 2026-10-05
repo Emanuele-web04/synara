@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, FileSystem, Layer, PlatformError, Scope, Stream } from "effect";
 import { expect, vi } from "vitest";
+import * as betaOperationalIssue from "../../betaOperationalIssue";
 import * as processRunner from "../../processRunner";
 import { GitHubCliLive } from "./GitHubCli";
 import { WsRpcError, type GitActionProgressEvent } from "@synara/contracts";
@@ -2997,6 +2998,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       const { manager } = yield* makeManager();
+      const issueReport = vi
+        .spyOn(betaOperationalIssue, "reportBetaOperationalIssue")
+        .mockImplementation(() => {});
+      yield* Effect.addFinalizer(() => Effect.sync(() => issueReport.mockRestore()));
       const events: GitActionProgressEvent[] = [];
 
       const errorMessage = yield* runStackedAction(
@@ -3020,6 +3025,12 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(errorMessage).toContain("hook: fail");
+      expect(issueReport).toHaveBeenCalledExactlyOnceWith({
+        code: "git.commit.failed",
+        reason: "unknown",
+        durationMs: expect.any(Number),
+      });
+      expect(JSON.stringify(issueReport.mock.calls)).not.toContain("hook: fail");
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

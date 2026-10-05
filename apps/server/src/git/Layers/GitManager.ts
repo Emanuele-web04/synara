@@ -29,6 +29,8 @@ import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { detectPrTemplate } from "../PrTemplateDetection.ts";
 import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
+import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
+import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 import { ServerConfig } from "../../config.ts";
 
 const MAX_PROGRESS_TEXT_LENGTH = 500;
@@ -2669,6 +2671,7 @@ The local stash entry was kept for recovery.`,
       const progress = createProgressEmitter(input, options);
       let currentPhase: GitActionProgressPhase | null = null;
 
+      const diagnosticStartedAt = Date.now();
       const runAction = Effect.gen(function* () {
         const initialStatus = yield* gitCore.readActionStatus(input.cwd);
         const textGenerationParams: GitTextGenerationParams = {
@@ -2836,6 +2839,15 @@ The local stash entry was kept for recovery.`,
       });
 
       return yield* runAction.pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() =>
+            reportBetaOperationalIssue({
+              code: `git.${currentPhase ?? "request"}.failed`,
+              reason: diagnosticIssueReason(error.message),
+              durationMs: Date.now() - diagnosticStartedAt,
+            }),
+          ),
+        ),
         Effect.catch((error) =>
           progress
             .emit({

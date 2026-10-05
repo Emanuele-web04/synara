@@ -10,6 +10,9 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { BackendIssueDetector } from "./backendIssueDetector";
+import { DESKTOP_DIAGNOSTIC_ISSUE_PREFIX } from "@synara/contracts";
+
 import {
   BetaDiagnostics,
   readLogTail,
@@ -881,5 +884,125 @@ describe("resolveBetaDiagnosticsEndpoint", () => {
         BETA_DIAGNOSTICS_ENDPOINT,
       );
     }
+  });
+});
+
+describe("handled issue reports", () => {
+  it("keeps a searchable ID through offline retry and deduplicates backend/UI reports", async () => {
+    let accept = false;
+    let requests = 0;
+    const received: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += String(chunk);
+      });
+      request.on("end", () => {
+        requests += 1;
+        if (accept)
+          received.push(
+            ...body
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line)),
+          );
+        response.writeHead(accept ? 204 : 503).end();
+      });
+    });
+    servers.push(server);
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, `http://127.0.0.1:${await listen(server)}`);
+    const id = diagnostics.trackIssue("main", { code: "git.push.failed", reason: "timeout" });
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    await vi.waitFor(() => expect(diagnostics.getReportStatus(id)).toBe("queued"));
+    await vi.waitFor(() => expect(requests).toBe(1));
+    expect(
+      diagnostics.trackIssue("renderer", {
+        code: "git.push.failed",
+        reason: "timeout",
+        durationMs: 1234,
+      }),
+    ).toBe(id);
+    expect(
+      readFileSync(join(root, "diagnostics/events.jsonl"), "utf8").trim().split("\n"),
+    ).toHaveLength(1);
+    accept = true;
+    await vi.waitFor(async () => {
+      await diagnostics.flush();
+      expect(diagnostics.getReportStatus(id)).toBe("sent");
+    });
+    expect(received).toEqual([
+      expect.objectContaining({
+        id,
+        event: "app.error",
+        payload: expect.objectContaining({ message: "Handled issue: git.push.failed (timeout)" }),
+      }),
+    ]);
+    expect(existsSync(join(root, "diagnostics/events.jsonl"))).toBe(false);
+    await diagnostics.dispose();
+  });
+
+  it("validates fragmented backend reports and never uploads arbitrary fields or oversized lines", async () => {
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, "http://127.0.0.1:1");
+    const detector = new BackendIssueDetector((issue) => {
+      diagnostics.trackIssue("main", issue);
+    });
+    const line =
+      DESKTOP_DIAGNOSTIC_ISSUE_PREFIX +
+      JSON.stringify({
+        code: "claude.cache.uncertain",
+        reason: "timeout",
+        durationMs: 120000,
+        prompt: "private chat text",
+        path: "/Users/person/private",
+        token: "private credentials",
+      }) +
+      "\n";
+    detector.push(Buffer.from(line.slice(0, 12)), "stdout");
+    detector.push(Buffer.from("ordinary error\n"), "stderr");
+    detector.push(Buffer.from(line.slice(12)), "stdout");
+    detector.push(Buffer.from(DESKTOP_DIAGNOSTIC_ISSUE_PREFIX + "x".repeat(4096) + line), "stdout");
+    detector.push(
+      Buffer.from(DESKTOP_DIAGNOSTIC_ISSUE_PREFIX + '{"code":"private payload"}\n'),
+      "stdout",
+    );
+    expect(
+      diagnostics.trackIssue("renderer", { code: "voice.transcribe.failed", durationMs: Infinity }),
+    ).toBeNull();
+    expect(
+      diagnostics.trackIssue("renderer", {
+        code: "voice.transcribe.failed",
+        reason: "private text",
+      }),
+    ).toBeNull();
+    const queued = readFileSync(join(root, "diagnostics/events.jsonl"), "utf8");
+    expect(queued.trim().split("\n")).toHaveLength(1);
+    expect(queued).not.toMatch(/private|credentials|person/);
+    expect(JSON.parse(queued).payload).toMatchObject({
+      message: "Handled issue: claude.cache.uncertain (timeout)",
+      stack: "durationMs=120000",
+    });
+    await diagnostics.dispose();
+  });
+
+  it("offers an ID after a transient queue write failure without consuming its rate limit", async () => {
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, "http://127.0.0.1:1");
+    rmSync(join(root, "diagnostics"), { recursive: true });
+    writeFileSync(join(root, "diagnostics"), "not a directory");
+    expect(
+      diagnostics.trackIssue("main", { code: "startup.database-locked", reason: "unknown-owner" }),
+    ).toBeNull();
+    expect(diagnostics.getReportStatus("made-up-id")).toBe("unavailable");
+    rmSync(join(root, "diagnostics"));
+    const id = diagnostics.trackIssue("main", {
+      code: "startup.database-locked",
+      reason: "unknown-owner",
+    });
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(diagnostics.getReportStatus(id)).toBe("queued");
+    expect(JSON.parse(readFileSync(join(root, "diagnostics/events.jsonl"), "utf8")).id).toBe(id);
+    await diagnostics.dispose();
   });
 });

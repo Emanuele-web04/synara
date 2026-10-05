@@ -43,6 +43,8 @@ export const DESKTOP_IPC_CHANNELS = {
     rendererReady: "desktop:beta-diagnostics-renderer-ready",
     reportError: "desktop:beta-diagnostics-report-error",
     recordActivity: "desktop:beta-diagnostics-record-activity",
+    reportIssue: "desktop:beta-diagnostics-report-issue",
+    getReportStatus: "desktop:beta-diagnostics-report-status",
   },
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",
