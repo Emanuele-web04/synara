@@ -48,6 +48,31 @@ describe("editable keybinding resolution", () => {
   });
 });
 
+describe("active thread action shortcuts", () => {
+  for (const [key, command] of [
+    ["a", "thread.archive"],
+    ["s", "thread.snooze"],
+    ["u", "thread.markUnread"],
+  ] as const) {
+    it(`resolves ${command} on both platforms and yields to non-Mac terminals`, () => {
+      for (const platform of ["MacIntel", "Win32", "Linux"]) {
+        const press = event({
+          key,
+          metaKey: platform === "MacIntel",
+          ctrlKey: platform !== "MacIntel",
+          altKey: true,
+          shiftKey: true,
+        });
+        assert.equal(resolveShortcutCommand(press, [], { platform }), command);
+        assert.equal(
+          resolveShortcutCommand(press, [], { platform, context: { terminalFocus: true } }),
+          platform === "MacIntel" ? command : null,
+        );
+      }
+    });
+  }
+});
+
 describe("layout-aware matching", () => {
   const rules = (...entries: Array<[KeybindingCommand, string]>): ResolvedKeybindingsConfig =>
     entries.map(([command, key]) => ({
