@@ -34,7 +34,11 @@ export function guardDesktopWindowClose(
   let confirmed = false;
   let pending = false;
   window.on("close", (event) => {
-    if (confirmed || !shouldConfirm()) return;
+    if (confirmed) {
+      confirmed = false;
+      return;
+    }
+    if (!shouldConfirm()) return;
     event.preventDefault();
     if (pending) return;
     pending = true;

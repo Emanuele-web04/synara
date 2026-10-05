@@ -114,4 +114,20 @@ describe("guardDesktopWindowClose", () => {
     expect(window.close().preventDefault).not.toHaveBeenCalled();
     expect(showMessageBoxMock).not.toHaveBeenCalled();
   });
+
+  it("asks again when another close handler vetoes the confirmed attempt", async () => {
+    showMessageBoxMock
+      .mockResolvedValueOnce({ response: 1 })
+      .mockResolvedValueOnce({ response: 0 });
+    const window = createWindow();
+    window.on("close", (event) => event.preventDefault());
+
+    window.close();
+    await vi.waitFor(() => expect(window.close).toHaveBeenCalledTimes(2));
+    expect(window.close.mock.results[1]?.value.preventDefault).toHaveBeenCalledOnce();
+
+    window.close();
+    await vi.waitFor(() => expect(showMessageBoxMock).toHaveBeenCalledTimes(2));
+    expect(window.close).toHaveBeenCalledTimes(3);
+  });
 });
