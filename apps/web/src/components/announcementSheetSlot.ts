@@ -18,15 +18,19 @@ import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
 
 interface AnnouncementSheetSlotStore {
   owner: string | null;
+  /** Startup probes and the feature tour have finished; passive hints may now claim. */
+  startupSettled: boolean;
   /** True once a sheet was confirmed; no further sheet opens during this launch. */
   handedOff: boolean;
   claim: (id: string, allowAfterHandOff?: boolean) => void;
   release: (id: string) => void;
   handOff: () => void;
+  settleStartup: () => void;
 }
 
 export const useAnnouncementSheetSlotStore = create<AnnouncementSheetSlotStore>((set) => ({
   owner: null,
+  startupSettled: false,
   handedOff: false,
   claim: (id, allowAfterHandOff = false) =>
     set((state) =>
@@ -34,6 +38,7 @@ export const useAnnouncementSheetSlotStore = create<AnnouncementSheetSlotStore>(
     ),
   release: (id) => set((state) => (state.owner === id ? { owner: null } : state)),
   handOff: () => set({ handedOff: true }),
+  settleStartup: () => set({ startupSettled: true }),
 }));
 
 /** `open` is true while this sheet wants to open and holds the slot. */

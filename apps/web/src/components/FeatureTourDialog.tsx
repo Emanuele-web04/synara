@@ -62,6 +62,7 @@ export function FeatureTourDialog() {
   const importAnnouncement = useProjectImportAnnouncement();
   const owner = useAnnouncementSheetSlotStore((state) => state.owner);
   const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
+  const settleStartup = useAnnouncementSheetSlotStore((state) => state.settleStartup);
   const replay = useFeatureTourStore((state) => state.replay);
   const needsTour = Boolean(
     installation && (replay || (!handedOff && !seen.includes(installation))),
@@ -70,6 +71,11 @@ export function FeatureTourDialog() {
   const [ready, setReady] = useState(false);
   const blocked =
     startupBlocking || importing || (importAnnouncement.visible && !handedOff) || otherDialog;
+  // This is the last startup surface, mounted after Safari/AppSnap probes settle.
+  // Passive coachmarks wait for the tour to be seen or dismissed before claiming.
+  useEffect(() => {
+    if (installation && !needsTour && !blocked && !handedOff) settleStartup();
+  }, [blocked, handedOff, installation, needsTour, settleStartup]);
   // AppSnap and Safari probes are resolved by the parent before this mounts. The
   // quiet interval lets the announcement queue and dialog exit animation settle.
   useEffect(() => {
