@@ -3,8 +3,10 @@ import {
   type ProviderKind,
   type OrchestrationThreadActivity,
   type ThreadTokenUsageSnapshot,
+  type TurnModelSpeed,
 } from "@synara/contracts";
 import { normalizeModelSlug, stripClaudeContextWindowSuffix } from "@synara/shared/model";
+import { readTurnModelSpeed } from "@synara/shared/modelSpeed";
 import { Schema } from "effect";
 
 const decodeClaudeCacheObservation = Schema.decodeUnknownOption(ClaudeCacheObservation);
@@ -150,6 +152,7 @@ export function deriveLatestContextWindowState(
         toolUses: asFiniteNumber(payload?.toolUses),
         durationMs: asFiniteNumber(payload?.durationMs),
         compactsAutomatically: asBoolean(payload?.compactsAutomatically) ?? false,
+        turnOutputTokens: asFiniteNumber(payload?.turnOutputTokens),
         updatedAt: activity.createdAt,
       },
       invalidatedByCompaction: false,
@@ -209,6 +212,7 @@ export function deriveSelectedContextWindowSnapshot(
     toolUses: null,
     durationMs: null,
     compactsAutomatically: false,
+    turnOutputTokens: null,
     updatedAt: "",
   };
 }
@@ -268,6 +272,51 @@ export function deriveCumulativeCostUsd(
     return latestCumulative + turnDeltaTotal;
   }
   return foundTurnDelta ? turnDeltaTotal : null;
+}
+
+// Settled model speed of every measured turn, keyed by turn id.
+export function deriveTurnModelSpeedByTurnId(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, TurnModelSpeed> {
+  const speeds = new Map<string, TurnModelSpeed>();
+  for (const activity of activities) {
+    if (activity.kind !== "turn.completed" || !activity.turnId) continue;
+    const speed = readTurnModelSpeed(activity.payload);
+    if (speed) speeds.set(activity.turnId, speed);
+  }
+  return speeds;
+}
+
+// Model speed of the most recent completed turn; null when that turn was not
+// measured (too short, a provider without output counters, or older).
+export function deriveLastTurnModelSpeed(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): TurnModelSpeed | null {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (activity?.kind !== "turn.completed") continue;
+    if (asRecord(activity.payload)?.state !== "completed") continue;
+    return readTurnModelSpeed(activity.payload);
+  }
+  return null;
+}
+
+// Running model speed of `turnId`: the server refreshes it on the turn's
+// token-usage snapshots, i.e. after each model response.
+export function deriveLiveTurnModelSpeed(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  turnId: string | null | undefined,
+): TurnModelSpeed | null {
+  if (!turnId) return null;
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    // An earlier settled turn bounds the search: nothing older belongs to this one.
+    if (activity?.kind === "turn.completed" && activity.turnId !== turnId) break;
+    if (activity?.kind !== "context-window.updated" || activity.turnId !== turnId) continue;
+    const speed = readTurnModelSpeed(activity.payload, "liveModelSpeed");
+    if (speed) return speed;
+  }
+  return null;
 }
 
 function formatContextWindowSelectionLabel(value: string | null | undefined): string | null {

@@ -7,8 +7,11 @@ import {
   deriveAppliedContextWindowSelection,
   deriveContextWindowMeterDisplay,
   deriveCumulativeCostUsd,
+  deriveLastTurnModelSpeed,
   deriveLatestContextWindowState,
+  deriveLiveTurnModelSpeed,
   deriveSelectedContextWindowSnapshot,
+  deriveTurnModelSpeedByTurnId,
   formatContextWindowTokens,
 } from "./contextWindow";
 
@@ -278,6 +281,65 @@ describe("contextWindow", () => {
         }),
       ]),
     ).toBe(0.25);
+  });
+
+  it("reads settled model speed per turn and for the last completed turn", () => {
+    const onTurn = (activity: OrchestrationThreadActivity, turnId: string) => ({
+      ...activity,
+      turnId: TurnId.makeUnsafe(turnId),
+    });
+    const activities = [
+      onTurn(
+        makeActivity("done-1", "turn.completed", {
+          state: "completed",
+          modelSpeed: { outputTokens: 850, generationMs: 10_000 },
+        }),
+        "turn-a",
+      ),
+      onTurn(makeActivity("done-2", "turn.completed", { state: "interrupted" }), "turn-b"),
+    ];
+    expect([...deriveTurnModelSpeedByTurnId(activities)]).toEqual([
+      ["turn-a", { outputTokens: 850, generationMs: 10_000 }],
+    ]);
+    // An interrupted turn does not hide the last completed one.
+    expect(deriveLastTurnModelSpeed(activities)).toEqual({
+      outputTokens: 850,
+      generationMs: 10_000,
+    });
+    // The latest completed turn was not measured: show nothing, not an older turn.
+    expect(
+      deriveLastTurnModelSpeed([
+        ...activities,
+        onTurn(makeActivity("done-3", "turn.completed", { state: "completed" }), "turn-c"),
+      ]),
+    ).toBeNull();
+  });
+
+  it("reads the running turn's latest live model speed", () => {
+    const activities = [
+      makeActivity("usage-1", "context-window.updated", {
+        usedTokens: 1_000,
+        liveModelSpeed: {
+          outputTokens: 600,
+          generationMs: 5_000,
+          provider: "claudeAgent",
+          model: "claude-opus-5-5",
+          fastMode: true,
+          effort: "high",
+        },
+      }),
+      makeActivity("usage-2", "context-window.updated", { usedTokens: 1_200 }),
+    ];
+    expect(deriveLiveTurnModelSpeed(activities, "turn-1")).toEqual({
+      outputTokens: 600,
+      generationMs: 5_000,
+      provider: "claudeAgent",
+      model: "claude-opus-5-5",
+      fastMode: true,
+      effort: "high",
+    });
+    expect(deriveLiveTurnModelSpeed(activities, "turn-2")).toBeNull();
+    expect(deriveLiveTurnModelSpeed(activities, null)).toBeNull();
   });
 
   it("marks a selected Claude context window as pending when the live session differs", () => {

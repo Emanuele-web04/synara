@@ -85,6 +85,7 @@ export const tokenStats = {
       percent: 16.7,
     },
   ],
+  modelSpeeds: [],
   heatmapMetric: "tokens",
   heatmap: [tokenHeatmapCell],
 } satisfies ProfileTokenStats;

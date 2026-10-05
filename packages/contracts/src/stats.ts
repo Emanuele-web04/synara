@@ -57,6 +57,63 @@ export const ProfileTokenModelUsage = Schema.Struct({
 });
 export type ProfileTokenModelUsage = typeof ProfileTokenModelUsage.Type;
 
+// Model speed of one settled turn, stamped by the server on the turn's
+// `turn.completed` activity payload as `modelSpeed`. Output tokens are the
+// model's own output for the turn (reasoning included, subagents excluded);
+// generationMs is the turn's wall time minus tool execution and pending
+// approvals/user input. Absent when the numbers would be misleading. The
+// model is the one the provider reported for the turn (the turn's selection
+// otherwise); fastMode and effort come from the turn's model selection.
+export const TurnModelSpeed = Schema.Struct({
+  outputTokens: NonNegativeInt,
+  generationMs: NonNegativeInt,
+  provider: Schema.optional(ProviderKind),
+  model: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  effort: Schema.optional(TrimmedNonEmptyString),
+});
+export type TurnModelSpeed = typeof TurnModelSpeed.Type;
+
+// Measured turns summed over a period. The rate is token-weighted (sum of
+// output tokens over the sum of generation time, not a mean of per-turn
+// rates) and null when the period has no data or fails the plausibility limits.
+export const ProfileModelSpeedBucket = Schema.Struct({
+  outputTokens: NonNegativeInt,
+  generationMs: NonNegativeInt,
+  turnCount: NonNegativeInt,
+  tokensPerSecond: Schema.NullOr(Schema.Finite),
+});
+export type ProfileModelSpeedBucket = typeof ProfileModelSpeedBucket.Type;
+
+export const ProfileModelSpeedWeek = Schema.Struct({
+  ...ProfileModelSpeedBucket.fields,
+  // Local Monday the ISO week starts on (YYYY-MM-DD).
+  weekStart: TrimmedNonEmptyString,
+});
+export type ProfileModelSpeedWeek = typeof ProfileModelSpeedWeek.Type;
+
+export const PROFILE_MODEL_SPEED_WEEKS = 12;
+
+// Model speed per provider/model, with fast mode as its own row; effort does
+// not split rows. Days are the caller's local days.
+export const ProfileModelSpeed = Schema.Struct({
+  provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
+  model: TrimmedNonEmptyString,
+  fastMode: Schema.Boolean,
+  lifetime: ProfileModelSpeedBucket,
+  // Today and the 6 days before it, and the 7 days before those.
+  last7Days: ProfileModelSpeedBucket,
+  previous7Days: ProfileModelSpeedBucket,
+  // last7Days rate relative to previous7Days, in percent; null when either
+  // side has no rate.
+  changePercent: Schema.NullOr(Schema.Finite),
+  // The last PROFILE_MODEL_SPEED_WEEKS ISO weeks, oldest first, current week
+  // last; weeks without measured turns have zero counts and a null rate.
+  weeks: Schema.Array(ProfileModelSpeedWeek),
+});
+export type ProfileModelSpeed = typeof ProfileModelSpeed.Type;
+
 export const ProfileSkillUsage = Schema.Struct({
   name: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
@@ -169,6 +226,9 @@ export const ProfileTokenStats = Schema.Struct({
   // Per-model token shares; clients prefer this over the turn-based
   // ProfileStats.providerModels when token telemetry is available.
   models: Schema.Array(ProfileTokenModelUsage),
+  // Model speed per model, most used in the last 7 days first; models whose
+  // lifetime rate is unavailable are omitted.
+  modelSpeeds: Schema.Array(ProfileModelSpeed),
   heatmapMetric: Schema.Literal("tokens"),
   heatmap: Schema.Array(ProfileHeatmapCell),
 });

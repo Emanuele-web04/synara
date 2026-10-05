@@ -28,6 +28,10 @@
       "types": "./src/claudeCache.ts",
       "import": "./src/claudeCache.ts"
     },
+    "./modelSpeed": {
+      "types": "./src/modelSpeed.ts",
+      "import": "./src/modelSpeed.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"

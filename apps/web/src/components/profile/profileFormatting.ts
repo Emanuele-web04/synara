@@ -4,6 +4,14 @@
 
 import type { ProviderKind } from "@synara/contracts";
 
+import { formatProviderModelOptionName } from "../../providerModelOptions";
+
+// The composer picker's display name for a model slug ("Claude Opus 5.5").
+export function formatProfileModelName(provider: ProviderKind | "unknown", model: string): string {
+  if (provider === "unknown" || model === "unknown") return model;
+  return formatProviderModelOptionName({ provider, slug: model }) || model;
+}
+
 // Compact token/count formatting matching the reference card ("17bn", "538m", "1.2k").
 export function formatCompact(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {

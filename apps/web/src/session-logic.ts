@@ -81,7 +81,7 @@ export interface LatestProposedPlanState {
   implementationThreadId: ThreadId | null;
 }
 
-function formatDuration(durationMs: number): string {
+export function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
   if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1)}s`;

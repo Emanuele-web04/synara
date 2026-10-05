@@ -3,7 +3,7 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
+import { type MessageId, type ThreadId, type TurnId, type TurnModelSpeed } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
@@ -119,6 +119,8 @@ interface ChatTranscriptPaneProps {
   /** Core Audio UID of the microphone the trail listens to; "" follows the Mac default. */
   messageTrailMicrophoneId?: string;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  modelSpeedByTurnId?: ReadonlyMap<string, TurnModelSpeed> | undefined;
+  liveModelSpeed?: TurnModelSpeed | null | undefined;
   conversationOnly?: boolean;
   /** Stored thread-level error, rendered in flow above the transcript. */
   threadError?: string | null;
@@ -210,6 +212,8 @@ export function ChatTranscriptPane({
   messageTrailAudioSource,
   messageTrailMicrophoneId,
   turnDiffSummaryByAssistantMessageId,
+  modelSpeedByTurnId,
+  liveModelSpeed,
   conversationOnly,
   threadError,
   unblockingThread,
@@ -361,6 +365,8 @@ export function ChatTranscriptPane({
             hubWorkItemsByMessageId={hubWorkItemsByMessageId}
             messageChangeSignal={messageChangeSignal ?? timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            modelSpeedByTurnId={modelSpeedByTurnId}
+            liveModelSpeed={liveModelSpeed}
             conversationOnly={conversationOnly === true}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}

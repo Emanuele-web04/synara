@@ -351,6 +351,9 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   toolUses: Schema.optional(NonNegativeInt),
   durationMs: Schema.optional(NonNegativeInt),
   compactsAutomatically: Schema.optional(Schema.Boolean),
+  // Claude: main-loop output tokens of the running turn so far, final for every
+  // completed model response (subagents excluded). Drives the live model speed.
+  turnOutputTokens: Schema.optional(NonNegativeInt),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 

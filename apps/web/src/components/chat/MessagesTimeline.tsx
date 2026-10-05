@@ -12,6 +12,7 @@ import {
   ThreadId,
   type ThreadGoalAchievement,
   type TurnId,
+  type TurnModelSpeed,
 } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { pluralize } from "@synara/shared/text";
@@ -166,6 +167,7 @@ import {
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { ModelSpeedLabel } from "./ModelSpeedLabel";
 import {
   DISCLOSURE_CLEANUP_BUFFER_MS,
   DISCLOSURE_TRANSITION_MS,
@@ -466,6 +468,10 @@ interface MessagesTimelineProps {
   messageChangeSignal?: unknown;
   hubWorkItemsByMessageId?: ReadonlyMap<MessageId, readonly HubWorkItem[]> | undefined;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  /** Settled model speed per turn, shown next to "Worked for". */
+  modelSpeedByTurnId?: ReadonlyMap<string, TurnModelSpeed> | undefined;
+  /** Running model speed of the live turn, shown next to "Working for". */
+  liveModelSpeed?: TurnModelSpeed | null | undefined;
   /** Coordinator/bot chats hide tool rows and keep a text conversation. */
   conversationOnly?: boolean;
   nowIso?: string;
@@ -566,6 +572,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   messageChangeSignal: messageChangeSignalProp,
   hubWorkItemsByMessageId,
   turnDiffSummaryByAssistantMessageId,
+  modelSpeedByTurnId,
+  liveModelSpeed,
   conversationOnly: conversationOnlyProp,
   nowIso,
   expandedWorkGroups,
@@ -801,6 +809,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
         conversationOnly,
+        modelSpeedByTurnId,
+        liveModelSpeed,
       }),
     [
       timelineEntries,
@@ -814,6 +824,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
       conversationOnly,
+      modelSpeedByTurnId,
+      liveModelSpeed,
     ],
   );
   const rows = useStableRows(rawRows);
@@ -2279,6 +2291,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         {row.collapsedWorkElapsed
                           ? `Worked for ${row.collapsedWorkElapsed}`
                           : "Details"}
+                        {row.collapsedWorkElapsed && row.collapsedWorkModelSpeed ? (
+                          <ModelSpeedLabel
+                            tokensPerSecond={row.collapsedWorkModelSpeed.tokensPerSecond}
+                            speeds={row.collapsedWorkModelSpeed.speeds}
+                          />
+                        ) : null}
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
@@ -2674,6 +2692,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ) : (
                 <WorkingTimer createdAt={row.createdAt} />
               )}
+              {row.liveModelSpeed ? (
+                <ModelSpeedLabel
+                  tokensPerSecond={row.liveModelSpeed.tokensPerSecond}
+                  speeds={row.liveModelSpeed.speeds}
+                  live
+                />
+              ) : null}
             </span>
           </div>
           <div className="h-px w-full bg-border" />

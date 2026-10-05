@@ -10,6 +10,9 @@ import nodePath from "node:path";
 
 import {
   ProviderInstanceId,
+  PROFILE_MODEL_SPEED_WEEKS,
+  type ProfileModelSpeed,
+  type ProfileModelSpeedBucket,
   type ProfileQuota,
   type ProfileStats,
   type ProfileTokenStats,
@@ -18,6 +21,7 @@ import {
   type StatsGetProfileTokenStatsInput,
 } from "@synara/contracts";
 import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
+import { modelSpeedTokensPerSecond } from "@synara/shared/modelSpeed";
 import {
   inferLegacyProviderKindFromInstanceId,
   inferLegacyProviderKindFromModel,
@@ -99,6 +103,20 @@ interface TokenDayRow {
   readonly instanceId: string | null;
   readonly model: string | null;
   readonly tokens: number;
+}
+
+// Measured turns summed per local day and provider/model/fast mode (live
+// turn.completed activities plus the profile_stats_deleted_model_speeds
+// archive of purged threads).
+export interface ModelSpeedDayRow {
+  readonly day: string | null;
+  readonly provider: string | null;
+  readonly instanceId: string | null;
+  readonly model: string | null;
+  readonly fastMode: number | bigint | boolean | null;
+  readonly outputTokens: number | bigint | null;
+  readonly generationMs: number | bigint | null;
+  readonly turnCount: number | bigint | null;
 }
 
 type UsageKind = "skill" | "agent";
@@ -510,6 +528,156 @@ function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivity
     }
   }
   return { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime };
+}
+
+const MODEL_SPEED_RESULT_LIMIT = 8;
+
+interface MutableSpeedBucket {
+  outputTokens: number;
+  generationMs: number;
+  turnCount: number;
+}
+
+function emptySpeedBucket(): MutableSpeedBucket {
+  return { outputTokens: 0, generationMs: 0, turnCount: 0 };
+}
+
+function addToSpeedBucket(bucket: MutableSpeedBucket, row: MutableSpeedBucket): void {
+  bucket.outputTokens += row.outputTokens;
+  bucket.generationMs += row.generationMs;
+  bucket.turnCount += row.turnCount;
+}
+
+function toSpeedBucket(bucket: MutableSpeedBucket): ProfileModelSpeedBucket {
+  const tokensPerSecond = modelSpeedTokensPerSecond(bucket.outputTokens, bucket.generationMs);
+  return {
+    ...bucket,
+    tokensPerSecond: tokensPerSecond === null ? null : Math.round(tokensPerSecond * 10) / 10,
+  };
+}
+
+/** Monday of the ISO week containing `day` (both YYYY-MM-DD). */
+export function isoWeekStart(day: string): string {
+  return addDaysIso(day, -((weekdayOf(day) + 6) % 7));
+}
+
+/** Change of a rate relative to an earlier one, in whole percent; null when either is missing. */
+export function modelSpeedChangePercent(
+  current: number | null,
+  previous: number | null,
+): number | null {
+  if (current === null || previous === null || previous <= 0) return null;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
+// Per provider/model/fast mode: lifetime, the last two 7-day windows ending
+// today, and the last PROFILE_MODEL_SPEED_WEEKS ISO weeks. Every rate is
+// token-weighted (summed tokens over summed generation time). Sorted by
+// output in the last 7 days, then lifetime output.
+export function aggregateProfileModelSpeeds(
+  rows: ReadonlyArray<ModelSpeedDayRow>,
+  todayKey: string,
+): ProfileModelSpeed[] {
+  const last7Start = addDaysIso(todayKey, -6);
+  const previous7Start = addDaysIso(todayKey, -13);
+  const currentWeekStart = isoWeekStart(todayKey);
+  const weekStarts = Array.from({ length: PROFILE_MODEL_SPEED_WEEKS }, (_, index) =>
+    addDaysIso(currentWeekStart, (index - (PROFILE_MODEL_SPEED_WEEKS - 1)) * 7),
+  );
+  const firstWeekStart = weekStarts[0] ?? currentWeekStart;
+  const byModel = new Map<
+    string,
+    {
+      provider: ProviderKind | "unknown";
+      instanceId: ProviderInstanceId | "unknown";
+      model: string;
+      fastMode: boolean;
+      lifetime: MutableSpeedBucket;
+      last7Days: MutableSpeedBucket;
+      previous7Days: MutableSpeedBucket;
+      weeks: Map<string, MutableSpeedBucket>;
+    }
+  >();
+  for (const row of rows) {
+    const day = nonEmptyString(row.day);
+    const counts = {
+      outputTokens: num(row.outputTokens),
+      generationMs: num(row.generationMs),
+      turnCount: num(row.turnCount),
+    };
+    if (!day || counts.outputTokens <= 0 || counts.generationMs <= 0 || counts.turnCount <= 0) {
+      continue;
+    }
+    const provider = normalizeProviderKind(row.provider, row.model);
+    const instanceId = normalizeProviderInstanceId(row.instanceId);
+    const model = nonEmptyString(row.model) ?? "unknown";
+    const fastMode = row.fastMode === true || num(row.fastMode) === 1;
+    const key = `${provider}\u0000${instanceId}\u0000${model}\u0000${fastMode}`;
+    let entry = byModel.get(key);
+    if (!entry) {
+      entry = {
+        provider,
+        instanceId,
+        model,
+        fastMode,
+        lifetime: emptySpeedBucket(),
+        last7Days: emptySpeedBucket(),
+        previous7Days: emptySpeedBucket(),
+        weeks: new Map(),
+      };
+      byModel.set(key, entry);
+    }
+    addToSpeedBucket(entry.lifetime, counts);
+    if (day >= last7Start && day <= todayKey) {
+      addToSpeedBucket(entry.last7Days, counts);
+    } else if (day >= previous7Start && day < last7Start) {
+      addToSpeedBucket(entry.previous7Days, counts);
+    }
+    const weekStart = isoWeekStart(day);
+    if (weekStart >= firstWeekStart && weekStart <= currentWeekStart) {
+      const week = entry.weeks.get(weekStart) ?? emptySpeedBucket();
+      addToSpeedBucket(week, counts);
+      entry.weeks.set(weekStart, week);
+    }
+  }
+  return [...byModel.values()]
+    .flatMap((entry) => {
+      const lifetime = toSpeedBucket(entry.lifetime);
+      if (lifetime.tokensPerSecond === null) return [];
+      const last7Days = toSpeedBucket(entry.last7Days);
+      const previous7Days = toSpeedBucket(entry.previous7Days);
+      return [
+        {
+          provider: entry.provider,
+          instanceId: entry.instanceId,
+          model: entry.model,
+          fastMode: entry.fastMode,
+          lifetime,
+          last7Days,
+          previous7Days,
+          changePercent: modelSpeedChangePercent(
+            last7Days.tokensPerSecond,
+            previous7Days.tokensPerSecond,
+          ),
+          weeks: weekStarts.map((weekStart) =>
+            Object.assign(
+              { weekStart },
+              toSpeedBucket(entry.weeks.get(weekStart) ?? emptySpeedBucket()),
+            ),
+          ),
+        },
+      ];
+    })
+    .toSorted(
+      (left, right) =>
+        right.last7Days.outputTokens - left.last7Days.outputTokens ||
+        right.lifetime.outputTokens - left.lifetime.outputTokens ||
+        compareNullableText(left.provider, right.provider) ||
+        compareNullableText(left.instanceId, right.instanceId) ||
+        compareNullableText(left.model, right.model) ||
+        Number(left.fastMode) - Number(right.fastMode),
+    )
+    .slice(0, MODEL_SPEED_RESULT_LIMIT);
 }
 
 function computeStreaks(
@@ -946,6 +1114,59 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
   `;
 }
 
+// Defines `turn_model` and `model_speed_turns(created_at, provider, instanceId,
+// model, fastMode, outputTokens, generationMs)`: one row per measured turn
+// (`modelSpeed` on turn.completed activities, see
+// orchestration/turnModelSpeed.ts). The model is the one the provider reported
+// for the turn, then the turn's selection, then the thread's. Shared by the
+// live query and the delete-time archive snapshot.
+export function modelSpeedCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThreadScope) {
+  return sql`
+    turn_model AS (
+      ${turnModelSelectionCte(sql, scope)}
+    ),
+    model_speed_turns AS (
+      SELECT
+        a.created_at AS created_at,
+        COALESCE(
+          tm.provider,
+          json_extract(a.payload_json, '$.modelSpeed.provider'),
+          s.provider_name
+        ) AS provider,
+        COALESCE(
+          tm.instanceId,
+          s.provider_instance_id,
+          tm.provider,
+          json_extract(a.payload_json, '$.modelSpeed.provider')
+        ) AS instanceId,
+        COALESCE(
+          json_extract(a.payload_json, '$.modelSpeed.model'),
+          tm.model,
+          CASE
+            WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+            THEN json_extract(th.model_selection_json, '$.model')
+          END
+        ) AS model,
+        CASE json_type(a.payload_json, '$.modelSpeed.fastMode')
+          WHEN 'true' THEN 1
+          WHEN 'false' THEN 0
+        END AS fastMode,
+        json_extract(a.payload_json, '$.modelSpeed.outputTokens') AS outputTokens,
+        json_extract(a.payload_json, '$.modelSpeed.generationMs') AS generationMs
+      FROM projection_thread_activities a
+      JOIN projection_threads th ON th.thread_id = a.thread_id
+      LEFT JOIN turn_model tm
+        ON tm.thread_id = a.thread_id
+       AND tm.turn_id = a.turn_id
+      LEFT JOIN projection_thread_sessions s ON s.thread_id = a.thread_id
+      WHERE a.kind = 'turn.completed'
+        ${tokenStatsThreadFilter(sql, sql.literal("a.thread_id"), scope)}
+        AND json_type(a.payload_json, '$.modelSpeed.outputTokens') = 'integer'
+        AND json_type(a.payload_json, '$.modelSpeed.generationMs') = 'integer'
+    )
+  `;
+}
+
 // ── Service ────────────────────────────────────────────────────────────
 
 export interface ProfileStatsQueryShape {
@@ -1042,6 +1263,43 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SUM(d) AS tokens
         FROM all_tokens
         GROUP BY day, provider, instanceId, model
+      `,
+    );
+
+  // Measured turns per local day, merged with purged threads' archived turns.
+  const queryModelSpeeds = (tz: string) =>
+    legacyCompatibleQuery(
+      "profileStats.modelSpeeds",
+      sql<ModelSpeedDayRow>`
+        WITH ${modelSpeedCtes(sql)},
+        all_speeds AS (
+          SELECT
+            created_at, provider, instanceId, model, fastMode, outputTokens, generationMs,
+            1 AS turnCount
+          FROM model_speed_turns
+          UNION ALL
+          SELECT
+            d.created_at,
+            d.provider,
+            COALESCE(d.provider_instance_id, d.provider),
+            d.model,
+            d.fast_mode,
+            d.output_tokens,
+            d.generation_ms,
+            d.turn_count
+          FROM profile_stats_deleted_model_speeds d
+        )
+        SELECT
+          STRFTIME('%Y-%m-%d', DATETIME(created_at, ${tz})) AS day,
+          provider,
+          instanceId,
+          model,
+          COALESCE(fastMode, 0) AS fastMode,
+          SUM(outputTokens) AS outputTokens,
+          SUM(generationMs) AS generationMs,
+          SUM(turnCount) AS turnCount
+        FROM all_speeds
+        GROUP BY day, provider, instanceId, model, COALESCE(fastMode, 0)
       `,
     );
 
@@ -1486,6 +1744,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const todayKey = localToday(input.utcOffsetMinutes);
       const rows = yield* queryTokenActivity(tz);
       const turnInsightRows = yield* queryTurnInsights();
+      const modelSpeeds = aggregateProfileModelSpeeds(yield* queryModelSpeeds(tz), todayKey);
       const { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime } =
         aggregateTokenActivity(rows);
 
@@ -1561,6 +1820,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         topProvider,
         topProviderPercent,
         models,
+        modelSpeeds,
         heatmapMetric: "tokens",
         heatmap: buildHeatmap(tokensByDay, todayKey),
       } satisfies ProfileTokenStats;

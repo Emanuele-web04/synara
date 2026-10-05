@@ -29,3 +29,13 @@ describe.each(["America/Los_Angeles", "Pacific/Kiritimati"])(
     });
   },
 );
+
+describe("formatProfileModelName", () => {
+  it("shows the picker's display name and keeps unknown slugs raw", async () => {
+    const { formatProfileModelName } = await import("./profileFormatting");
+    expect(formatProfileModelName("claudeAgent", "claude-opus-5-5")).toBe("Claude Opus 5.5");
+    expect(formatProfileModelName("codex", "gpt-5-codex")).toBe("GPT-5 Codex");
+    expect(formatProfileModelName("unknown", "mystery-model")).toBe("mystery-model");
+    expect(formatProfileModelName("codex", "unknown")).toBe("unknown");
+  });
+});

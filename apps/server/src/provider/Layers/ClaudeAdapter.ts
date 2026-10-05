@@ -241,6 +241,9 @@ interface ClaudeTurnState {
     { itemId: string; text: string; completed: boolean; snapshotReceived?: boolean }
   >;
   reasoningMessageId?: string;
+  // Main-loop output tokens per API response id; message_delta carries each
+  // response's final count. Feeds the live model speed (turnOutputTokens).
+  mainLoopOutputTokensByMessageId?: Map<string, number>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
@@ -3655,6 +3658,64 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
       });
 
+    // Subagent runs use their own context (with subagentRefs), so only the main
+    // loop's responses reach here. Once a response's final output count lands,
+    // republish the current usage with the turn's running main-loop output so
+    // ingestion can show a live model speed. Not stored on lastKnownTokenUsage:
+    // the figure belongs to this turn only.
+    const recordMainLoopOutputTokens = (
+      context: ClaudeSessionContext,
+      event: Extract<
+        Extract<SDKMessage, { type: "stream_event" }>["event"],
+        { type: "message_start" | "message_delta" }
+      >,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const turnState = context.turnState;
+        if (context.subagentRefs || !turnState || turnState.compactionInProgress) return;
+        const messageId =
+          event.type === "message_start" ? event.message.id : turnState.reasoningMessageId;
+        const outputTokens =
+          event.type === "message_start"
+            ? event.message.usage?.output_tokens
+            : event.usage?.output_tokens;
+        if (
+          messageId === undefined ||
+          typeof outputTokens !== "number" ||
+          !Number.isFinite(outputTokens) ||
+          outputTokens < 0
+        ) {
+          return;
+        }
+        const byMessageId = (turnState.mainLoopOutputTokensByMessageId ??= new Map());
+        byMessageId.set(messageId, Math.max(byMessageId.get(messageId) ?? 0, outputTokens));
+        if (event.type !== "message_delta" || !context.lastKnownTokenUsage) return;
+        if (context.tokenUsageState !== "current") return;
+        let turnOutputTokens = 0;
+        for (const tokens of byMessageId.values()) turnOutputTokens += tokens;
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent(context, {
+          type: "thread.token-usage.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          turnId: asCanonicalTurnId(turnState.turnId),
+          payload: {
+            usage: {
+              ...context.lastKnownTokenUsage,
+              turnOutputTokens: Math.round(turnOutputTokens),
+            },
+          },
+          providerRefs: nativeProviderRefs(context),
+          raw: {
+            source: "claude.sdk.message",
+            method: "claude/stream_event/message_delta",
+            payload: {},
+          },
+        });
+      });
+
     // A turn contains several API messages, each of which reuses block indices.
     const emitReasoning = (
       context: ClaudeSessionContext,
@@ -3747,6 +3808,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const { event } = message;
         if (event.type === "message_start" && context.turnState) {
           context.turnState.reasoningMessageId = event.message.id;
+        }
+        if (event.type === "message_start" || event.type === "message_delta") {
+          yield* recordMainLoopOutputTokens(context, event);
         }
         if (event.type === "content_block_start" && event.content_block.type === "thinking") {
           yield* emitReasoning(context, event.index, event.content_block.thinking, false);

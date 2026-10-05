@@ -160,7 +160,10 @@ import {
   deriveComposerContextWindowLabel,
   deriveAppliedContextWindowSelection,
   deriveCumulativeCostUsd,
+  deriveLastTurnModelSpeed,
   deriveLatestContextWindowState,
+  deriveLiveTurnModelSpeed,
+  deriveTurnModelSpeedByTurnId,
 } from "../lib/contextWindow";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { resolveGroupCoordinatorDisplayName } from "../lib/groupCoordinatorName";
@@ -1657,6 +1660,18 @@ export default function ChatView({
   // progress, collapsing the newest answer into a closed "Worked for" disclosure.
   // The latest turn is the transcript's own notion of "current", so fall back to it.
   const activeTurnIdForTranscript = activeThread?.session?.activeTurnId ?? activeLatestTurnId;
+  const modelSpeedByTurnId = useMemo(
+    () => deriveTurnModelSpeedByTurnId(threadActivities),
+    [threadActivities],
+  );
+  const liveModelSpeed = useMemo(
+    () => deriveLiveTurnModelSpeed(threadActivities, activeTurnIdForTranscript),
+    [threadActivities, activeTurnIdForTranscript],
+  );
+  const lastTurnModelSpeed = useMemo(
+    () => deriveLastTurnModelSpeed(threadActivities),
+    [threadActivities],
+  );
   // The edit affordance must mirror the exact policy the server decider applies:
   // resolve the editable target from the raw sequence-ordered thread messages and
   // the running-session turn id — never from the createdAt-sorted timeline rows,
@@ -6112,6 +6127,7 @@ export default function ChatView({
                         {...(activeCumulativeCostUsd != null
                           ? { cumulativeCostUsd: activeCumulativeCostUsd }
                           : {})}
+                        lastTurnModelSpeed={lastTurnModelSpeed}
                         {...(contextWindowSelectionStatus.activeLabel !== undefined
                           ? {
                               activeWindowLabel: contextWindowSelectionStatus.activeLabel,
@@ -6500,6 +6516,8 @@ export default function ChatView({
                     timelineEntries={timelineEntries}
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                    modelSpeedByTurnId={modelSpeedByTurnId}
+                    liveModelSpeed={liveModelSpeed}
                     conversationOnly={isCoordinatorConversation}
                     hubWorkItemsByMessageId={hubWorkItemsByMessageId}
                     threadError={activeThread?.error ?? null}
