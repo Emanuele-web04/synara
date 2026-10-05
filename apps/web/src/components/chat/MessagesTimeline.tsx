@@ -53,6 +53,8 @@ import ChatMarkdown from "../ChatMarkdown";
 import type { WorkingLabel } from "../ChatView.logic";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
+  ActivityLoadingIcon,
+  ActivityStartingIcon,
   BotIcon,
   ChangesIcon,
   CircleAlertIcon,
@@ -61,11 +63,15 @@ import {
   GitForkIcon,
   GoalIcon,
   LoaderIcon,
+  MessageDeliveryCheckIcon,
   type LucideIcon,
   NewThreadIcon,
   PinIcon,
   SteerIcon,
+  ThinkingIcon,
   Undo2Icon,
+  WorkDetailsIcon,
+  WorkingIcon,
   WorktreeIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
@@ -98,6 +104,7 @@ import { UserMessagePullRequestContextCard } from "./PullRequestContextCard";
 import {
   EditedFileRowContent,
   prefersCompactWorkEntryRow,
+  renderWorkEntryIcon,
   TimelineWorkEntryRow,
 } from "./TimelineWorkEntryRow";
 import {
@@ -610,6 +617,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // entire component (silently, since `panicThreshold` is unset), which would drop
   // memoization for the whole transcript. See MessagesTimeline.compiler.test.ts.
   const workingLabel = workingLabelProp ?? "Thinking";
+  const workingIcon =
+    workingLabel === "Thinking"
+      ? ThinkingIcon
+      : workingLabel === "Loading"
+        ? ActivityLoadingIcon
+        : workingLabel === "Checking message delivery…"
+          ? MessageDeliveryCheckIcon
+          : ActivityStartingIcon;
   const worktreeSetup = worktreeSetupProp ?? null;
   const worktreeSetupPendingAction = worktreeSetupPendingActionProp ?? null;
   const followLiveOutput = followLiveOutputProp ?? false;
@@ -2251,15 +2266,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <CollapsibleTrigger
                       // ChatView's click anchor preserves this trigger's screen position
                       // while the disclosure height animates, so opening it should not tail-scroll.
-                      // -ml-0.5 optically aligns the leading "W" with the reply
-                      // text below: the box is already flush, but the W glyph
-                      // carries a left side-bearing that reads as an inset.
                       className={cn(
-                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
+                        "inline-flex items-center gap-1.5 pb-2 text-left transition-colors duration-200 hover:text-foreground",
                         MUTED_LABEL_TEXT_CLASS_NAME,
                       )}
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
+                      <span aria-hidden="true" className="flex shrink-0">
+                        {renderWorkEntryIcon(
+                          row.collapsedWorkElapsed ? ClockIcon : WorkDetailsIcon,
+                          MESSAGE_ACTION_ICON_CLASS_NAME,
+                        )}
+                      </span>
                       <span>
                         {row.collapsedWorkElapsed
                           ? `Worked for ${row.collapsedWorkElapsed}`
@@ -2646,18 +2664,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "working-header" && !conversationOnly && (
         <div>
           {/* Non-collapsible twin of the settled "Worked for" header: same label
-              tone, size, and full-width divider, but counting up live. -ml-0.5
-              optically aligns the leading "W" with the reply text below. */}
+              tone, size, and full-width divider, but counting up live. */}
           <div
-            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
+            className={cn("flex items-center gap-1.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
-            Working for{" "}
-            {nowIso ? (
-              (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
-            ) : (
-              <WorkingTimer createdAt={row.createdAt} />
-            )}
+            <WorkingIcon className={cn("shrink-0", MESSAGE_ACTION_ICON_CLASS_NAME)} />
+            <span>
+              Working for{" "}
+              {nowIso ? (
+                (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
+              ) : (
+                <WorkingTimer createdAt={row.createdAt} />
+              )}
+            </span>
           </div>
           <div className="h-px w-full bg-border" />
         </div>
@@ -2665,11 +2685,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          ref={syncAnimationsToTimelineOrigin}
-          className={cn("shimmer pt-0.5 font-system-ui", MUTED_LABEL_TEXT_CLASS_NAME)}
+          className={cn(
+            "flex items-center gap-1.5 pt-0.5 font-system-ui",
+            MUTED_LABEL_TEXT_CLASS_NAME,
+          )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          {workingLabel}
+          <span aria-hidden="true" className="flex shrink-0">
+            {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
+          </span>
+          <span ref={syncAnimationsToTimelineOrigin} className="shimmer">
+            {workingLabel}
+          </span>
         </div>
       )}
 
