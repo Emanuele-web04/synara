@@ -32,7 +32,11 @@ describe("deriveWorkLogEntries", () => {
           kind: "approval.resolved",
           summary: "Approval resolved",
           tone: "approval",
-          payload: { requestId: `req-${index}`, requestType: "command_execution_approval" },
+          payload: {
+            requestId: `req-${index}`,
+            requestType: "command_execution_approval",
+            decision: "accept",
+          },
         }),
       ),
       makeActivity({
@@ -53,6 +57,30 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(1);
     expect(deriveTimelineEntries([], [], entries)).toHaveLength(1);
     expect(activities.filter((activity) => activity.kind === "approval.resolved")).toHaveLength(12);
+  });
+
+  it.each([
+    ["declined command", { decision: "decline" }],
+    ["cancelled command", { decision: "cancel" }],
+    ["session-wide grant", { decision: "acceptForSession" }],
+    ["unknown outcome", {}],
+    ["clipboard consent", { decision: "accept", toolName: "computer_read_clipboard" }],
+    [
+      "wrapped clipboard consent",
+      { decision: "accept", toolName: "mcp__synara__computer_read_clipboard" },
+    ],
+    ["scoped consent", { decision: "accept", approvalScope: "device-task" }],
+  ])("keeps the %s outcome visible", (_name, payload) => {
+    const activity = makeActivity({
+      id: "approval-outcome",
+      kind: "approval.resolved",
+      summary: "Approval resolved",
+      tone: "info",
+      payload: { requestId: "request-outcome", ...payload },
+    });
+    expect(deriveWorkLogEntries([activity], undefined).map((entry) => entry.id)).toEqual([
+      "approval-outcome",
+    ]);
   });
 
   it("keeps pending approvals, questions and errors alongside quiet resolutions", () => {

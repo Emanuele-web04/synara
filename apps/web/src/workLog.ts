@@ -576,10 +576,15 @@ function isQuietApprovalResolutionActivity(activity: OrchestrationThreadActivity
   if (activity.kind !== "approval.resolved" || activity.tone === "error") {
     return false;
   }
-  // Resolution events still settle pending requests in the store. They are not
-  // transcript work, except for explicit Computer/Device consent outcomes.
-  const scope = asRecord(activity.payload)?.approvalScope;
-  return scope !== "computer-task" && scope !== "computer-foreground" && scope !== "device-task";
+  // Keep refusals, cancellations and broader grants visible. Only accepted
+  // routine requests are noise; Computer/Device consent remains part of the log,
+  // including clipboard consent, which has no task scope.
+  const payload = asRecord(activity.payload);
+  return (
+    payload?.decision === "accept" &&
+    payload.approvalScope === undefined &&
+    computerToolName(extractToolName(payload)) === null
+  );
 }
 
 function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {
