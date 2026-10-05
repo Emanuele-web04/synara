@@ -14,6 +14,13 @@ export const DEFAULT_CODEX_ACCOUNT_ID = "default";
 export const SidechatExpiry = Schema.Literals(["1h", "24h", "never"]);
 export type SidechatExpiry = typeof SidechatExpiry.Type;
 
+export const SourceControlWritingStyle = Schema.Literals(["repository", "conventional", "custom"]);
+export type SourceControlWritingStyle = typeof SourceControlWritingStyle.Type;
+export const MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH = 4096;
+export const SourceControlCustomInstructions = Schema.String.check(
+  Schema.isMaxLength(MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH),
+);
+
 export const CodexAccountId = TrimmedString.check(Schema.isMaxLength(64));
 export type CodexAccountId = typeof CodexAccountId.Type;
 
@@ -132,6 +139,12 @@ export const ServerSettings = Schema.Struct({
   // reads the project's other GitHub remotes, such as the upstream of a fork.
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   sidechatExpiry: SidechatExpiry.pipe(Schema.withDecodingDefault(() => "1h")),
+  sourceControlWritingStyle: SourceControlWritingStyle.pipe(
+    Schema.withDecodingDefault(() => "repository"),
+  ),
+  sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(
+    Schema.withDecodingDefault(() => ""),
+  ),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
@@ -189,6 +202,8 @@ export const ServerSettingsPatch = Schema.Struct({
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),
   sidechatExpiry: Schema.optionalKey(SidechatExpiry),
+  sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),
+  sourceControlCustomInstructions: Schema.optionalKey(SourceControlCustomInstructions),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   providers: Schema.optionalKey(
     Schema.Struct({

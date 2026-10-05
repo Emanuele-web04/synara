@@ -51,6 +51,29 @@ import {
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
+describe("source control writing settings", () => {
+  it("defaults old settings to repository conventions and saves both preferences to the server", () => {
+    const settings = Schema.decodeSync(AppSettingsSchema)({});
+    expect(settings.sourceControlWritingStyle).toBe("repository");
+    expect(settings.sourceControlCustomInstructions).toBe("");
+    expect(
+      appSettingsPatchToServerSettingsPatch({
+        sourceControlWritingStyle: "custom",
+        sourceControlCustomInstructions: "Use short bullets.",
+      }),
+    ).toEqual({
+      sourceControlWritingStyle: "custom",
+      sourceControlCustomInstructions: "Use short bullets.",
+    });
+    expect(
+      appSettingsPatchToServerSettingsPatch({ sourceControlWritingStyle: "conventional" }),
+    ).toEqual({ sourceControlWritingStyle: "conventional" });
+    expect(appSettingsPatchToServerSettingsPatch({ sourceControlCustomInstructions: "" })).toEqual({
+      sourceControlCustomInstructions: "",
+    });
+  });
+});
+
 describe("computer control defaults", () => {
   it("leaves computer control off until a preference is explicitly saved", () => {
     expect(AppSettingsSchema.makeUnsafe({}).computerControlEnabled).toBe(false);

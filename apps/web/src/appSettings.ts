@@ -23,6 +23,8 @@ import {
   TrimmedNonEmptyString,
   ProviderKind,
   SidechatExpiry,
+  SourceControlWritingStyle,
+  SourceControlCustomInstructions,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -547,6 +549,10 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  sourceControlWritingStyle: SourceControlWritingStyle.pipe(
+    withDefaults(() => "repository" as const),
+  ),
+  sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
@@ -1537,6 +1543,8 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationProviderInstanceId: settings.textGenerationModelSelection.instanceId,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    sourceControlWritingStyle: settings.sourceControlWritingStyle,
+    sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
@@ -1659,6 +1667,12 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
+  }
+  if (patch.sourceControlWritingStyle !== undefined) {
+    serverPatch.sourceControlWritingStyle = patch.sourceControlWritingStyle;
+  }
+  if (patch.sourceControlCustomInstructions !== undefined) {
+    serverPatch.sourceControlCustomInstructions = patch.sourceControlCustomInstructions;
   }
   if (
     hasOwn(patch, "textGenerationModel") ||
@@ -1876,6 +1890,8 @@ export function buildInitialServerSettingsMigrationPatch(
     "textGenerationModel",
     "textGenerationProvider",
     "textGenerationProviderInstanceId",
+    "sourceControlWritingStyle",
+    "sourceControlCustomInstructions",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
       patch[key] = normalizedSettings[key] as never;

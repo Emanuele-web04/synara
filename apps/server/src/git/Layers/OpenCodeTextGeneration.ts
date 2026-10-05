@@ -557,6 +557,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       }
 
       const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
+        writingPreferences: input.writingPreferences,
         branch: input.branch,
         stagedSummary: input.stagedSummary,
         stagedPatch: input.stagedPatch,
@@ -592,6 +593,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       }
 
       const { prompt, outputSchemaJson } = buildPrContentPrompt({
+        writingPreferences: input.writingPreferences,
         baseBranch: input.baseBranch,
         headBranch: input.headBranch,
         commitSummary: input.commitSummary,

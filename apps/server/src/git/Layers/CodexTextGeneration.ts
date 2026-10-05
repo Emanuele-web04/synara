@@ -787,6 +787,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = (input) => {
     const wantsBranch = input.includeBranch === true;
     const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
+      writingPreferences: input.writingPreferences,
       branch: input.branch,
       stagedSummary: input.stagedSummary,
       stagedPatch: input.stagedPatch,
@@ -818,6 +819,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
 
   const generatePrContent: TextGenerationShape["generatePrContent"] = (input) => {
     const { prompt, outputSchemaJson } = buildPrContentPrompt({
+      writingPreferences: input.writingPreferences,
       baseBranch: input.baseBranch,
       headBranch: input.headBranch,
       commitSummary: input.commitSummary,

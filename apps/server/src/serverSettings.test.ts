@@ -11,7 +11,7 @@ import {
   deriveProviderInstances,
   providerStartOptionsFromInstance,
 } from "@synara/shared/providerInstances";
-import { Effect, FileSystem, Layer } from "effect";
+import { Effect, FileSystem, Layer, Schema } from "effect";
 import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { describe, expect, it } from "vitest";
 import { providerDisabledSettingsMessage } from "./provider/enabledProviderAdapter";
@@ -23,6 +23,11 @@ import {
   ServerSettingsLive,
   ServerSettingsService,
 } from "./serverSettings";
+import {
+  ServerSettings as ServerSettingsSchema,
+  ServerSettingsPatch as ServerSettingsPatchSchema,
+  MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH,
+} from "@synara/contracts";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "synara-settings-test-",
@@ -35,6 +40,52 @@ const runWithSettings = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
+  it("defaults legacy writing settings and validates style and instruction length", () => {
+    expect(Schema.decodeSync(ServerSettingsSchema)({})).toMatchObject({
+      sourceControlWritingStyle: "repository",
+      sourceControlCustomInstructions: "",
+    });
+    expect(() =>
+      Schema.decodeUnknownSync(ServerSettingsPatchSchema)({ sourceControlWritingStyle: "unknown" }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeSync(ServerSettingsPatchSchema)({
+        sourceControlCustomInstructions: "x".repeat(
+          MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH + 1,
+        ),
+      }),
+    ).toThrow();
+  });
+
+  it("persists writing style and custom instructions across a service restart", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        yield* service.start;
+        yield* service.updateSettings({
+          sourceControlWritingStyle: "custom",
+          sourceControlCustomInstructions: "Use short bullets.\nKeep titles concise.",
+        });
+        // A fresh service over the same isolated settings path proves reload, not just cached state.
+        return yield* Effect.gen(function* () {
+          const restarted = yield* ServerSettingsService;
+          yield* restarted.start;
+          return yield* restarted.getSettings;
+        }).pipe(
+          Effect.provide(
+            ServerSettingsLive.pipe(
+              Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+            ),
+          ),
+        );
+      }),
+    );
+    expect(result).toMatchObject({
+      sourceControlWritingStyle: "custom",
+      sourceControlCustomInstructions: "Use short bullets.\nKeep titles concise.",
+    });
+  });
   it("persists updates and reloads them", async () => {
     const result = await runWithSettings(
       Effect.gen(function* () {

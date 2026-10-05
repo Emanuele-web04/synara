@@ -284,6 +284,8 @@ describe("wsNativeApi", () => {
         addProjectBaseDirectory: "",
         githubInboxIncludeUpstreams: false,
         sidechatExpiry: "1h",
+        sourceControlWritingStyle: "repository",
+        sourceControlCustomInstructions: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
         providers: {
           codex: {
