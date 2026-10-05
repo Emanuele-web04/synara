@@ -1,22 +1,17 @@
 import { useState } from "react";
 import { type TimestampFormat } from "../appSettings";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { ScrollArea } from "./ui/scroll-area";
 import ChatMarkdown from "./ChatMarkdown";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  LoaderIcon,
-  PanelRightCloseIcon,
-} from "~/lib/icons";
+import { CheckIcon, ListTodoIcon, LoaderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ActiveTaskListState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "../proposedPlan";
 import { ProposedPlanActions } from "./chat/ProposedPlanActions";
+import { DockPaneHeader } from "./chat/DockPaneHeader";
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -65,40 +60,31 @@ const PlanSidebar = function PlanSidebar({
   return (
     <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-border/70 bg-card/50">
       {/* Header */}
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
-        <div className="flex items-center gap-2">
-          <Badge
-            variant="secondary"
-            className="rounded-md bg-[color-mix(in_srgb,var(--color-accent-blue)_10%,transparent)] px-1.5 py-0 text-ui-xs font-semibold text-[var(--color-accent-blue)]"
-          >
-            Plan
-          </Badge>
-          {activeTaskList ? (
-            <span className="text-ui-sm text-muted-foreground/60">
-              {formatTimestamp(activeTaskList.createdAt, timestampFormat)}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-1">
-          {planMarkdown ? (
+      <DockPaneHeader
+        title={
+          <span className="flex min-w-0 items-center gap-2">
+            <span>Plan</span>
+            {activeTaskList ? (
+              <span className="truncate text-ui-sm font-normal text-muted-foreground/60">
+                {formatTimestamp(activeTaskList.createdAt, timestampFormat)}
+              </span>
+            ) : null}
+          </span>
+        }
+        leadingIcon={<ListTodoIcon className="size-4" />}
+        actions={
+          planMarkdown ? (
             <ProposedPlanActions
               planMarkdown={planMarkdown}
               workspaceRoot={workspaceRoot}
               variant="ghost"
               buttonClassName="text-muted-foreground/50 hover:text-foreground/70"
             />
-          ) : null}
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            onClick={onClose}
-            aria-label="Close plan sidebar"
-            className="text-muted-foreground/50 hover:text-foreground/70"
-          >
-            <PanelRightCloseIcon className="size-3.5" />
-          </Button>
-        </div>
-      </div>
+          ) : null
+        }
+        onClose={onClose}
+        closeLabel="Close plan sidebar"
+      />
 
       {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
@@ -149,18 +135,18 @@ const PlanSidebar = function PlanSidebar({
               <button
                 type="button"
                 className="group flex w-full items-center gap-1.5 text-left"
+                aria-expanded={proposedPlanExpanded}
                 onClick={() => setProposedPlanExpanded((v) => !v)}
               >
-                {proposedPlanExpanded ? (
-                  <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                ) : (
-                  <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                )}
+                <DisclosureChevron
+                  open={proposedPlanExpanded}
+                  className="size-3 text-muted-foreground/40"
+                />
                 <span className="text-ui-xs font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
                   {planTitle ?? "Full Plan"}
                 </span>
               </button>
-              {proposedPlanExpanded ? (
+              <DisclosureRegion open={proposedPlanExpanded}>
                 <div className="rounded-lg border border-border/50 bg-background/50 p-3">
                   <ChatMarkdown
                     text={displayedPlanMarkdown ?? ""}
@@ -168,7 +154,7 @@ const PlanSidebar = function PlanSidebar({
                     isStreaming={false}
                   />
                 </div>
-              ) : null}
+              </DisclosureRegion>
             </div>
           ) : null}
 
