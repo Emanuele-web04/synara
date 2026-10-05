@@ -114,6 +114,7 @@ function renderActivity(input: {
 function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
+  const [groupMode, setGroupMode] = useState<"time" | "project">("time");
   return (
     <SidebarActivityView
       compact={input.compact ?? false}
@@ -124,6 +125,8 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
       threadsHydrated={input.threadsHydrated ?? true}
+      groupMode={groupMode}
+      onGroupModeChange={setGroupMode}
       scopeSelection={input.scope ? input.scope.selection : localScope}
       onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
       prByThreadId={input.prByThreadId ?? new Map()}

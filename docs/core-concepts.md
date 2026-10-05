@@ -155,6 +155,10 @@ full sidebar, which keeps its configured theme and transparency.
 The left rail summarizes working conversations, conversations needing
 review, and snoozed conversations. Selecting **Snoozed** opens its section; postponed
 conversations stay out of the work and review counts until they return.
+Hover the eye counter to see unread responses and pending review requests. Its
+interactive card lists the chats in Activity order; selecting one opens it through
+the same navigation as a sidebar row. Hovering alone does not mark a chat read or
+expand the sidebar.
 
 When due, the thread returns to recent activity and Synara shows a reminder using
 your notification settings. If Synara and its server are closed, the overdue

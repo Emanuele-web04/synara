@@ -18,21 +18,39 @@ export function countSidebarActivity(
   resolveStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null,
   activeThreadId: ThreadId | null,
 ): { working: number; review: number; snoozed: number } {
-  const counts = { working: 0, review: 0, snoozed: 0 };
+  const groups = groupSidebarActivityThreads(threads, resolveStatus, activeThreadId);
+  return {
+    working: groups.working.length,
+    review: groups.review.length,
+    snoozed: groups.snoozed.length,
+  };
+}
+
+/** Membership shared by the rail counters and their interactive hover lists. */
+export function groupSidebarActivityThreads(
+  threads: readonly SidebarThreadSummary[],
+  resolveStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null,
+  activeThreadId: ThreadId | null,
+): Record<"working" | "review" | "snoozed", SidebarThreadSummary[]> {
+  const groups: Record<"working" | "review" | "snoozed", SidebarThreadSummary[]> = {
+    working: [],
+    review: [],
+    snoozed: [],
+  };
   for (const thread of threads) {
     if (thread.archivedAt != null || thread.parentThreadId != null) continue;
     if (thread.snoozedUntil != null) {
-      counts.snoozed += 1;
+      groups.snoozed.push(thread);
       continue;
     }
     const status = resolveThreadStatusTrailingIndicator({
       status: resolveStatus(thread),
       isActive: thread.id === activeThreadId,
     });
-    if (status?.pulse || status?.label === "In Background") counts.working += 1;
-    else if (status?.dismissible) counts.review += 1;
+    if (status?.pulse || status?.label === "In Background") groups.working.push(thread);
+    else if (status?.dismissible) groups.review.push(thread);
   }
-  return counts;
+  return groups;
 }
 
 export function isThreadRunningForActivity(

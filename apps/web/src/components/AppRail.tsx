@@ -39,6 +39,12 @@ import {
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import type { SidebarActionBadge } from "./Sidebar.logic";
 import { SidebarIconButton } from "./SidebarIconButton";
+import {
+  SIDEBAR_HOVER_CARD_POPUP_PROPS,
+  SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME,
+  SIDEBAR_HOVER_CARD_TRIGGER_PROPS,
+} from "./sidebarHoverCardStyles";
+import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 
 type RailGlyph = ComponentType<{ className?: string }>;
 /** A rail button's glyph pair: outline at rest, filled while active (like Codex). */
@@ -136,6 +142,8 @@ export type AppRailItem = {
   readonly onFocus?: (() => void) | undefined;
   readonly showBadgeCount?: boolean;
   readonly badgeClassName?: string;
+  /** Interactive detail card, replacing the button's plain tooltip. */
+  readonly hoverContent?: ReactNode;
 };
 
 type AppRailProps = {
@@ -172,14 +180,23 @@ export function appRailButtonClassName(active: boolean): string {
 function AppRailButton({ item }: { item: AppRailItem }) {
   const label = item.badge ? `${item.label} · ${item.badge.accessibleLabel}` : item.label;
   const glyphs = item.glyphs;
-  return (
+  const button = (
     <div className="relative shrink-0">
       <SidebarIconButton
         icon={item.active ? glyphs.active : glyphs.idle}
         iconClassName={APP_RAIL_GLYPH_CLASS_NAME}
         label={label}
         size="lg"
-        tooltip={label}
+        {...(item.hoverContent
+          ? {
+              render: (
+                <PreviewCardTrigger
+                  {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
+                  render={<button type="button" />}
+                />
+              ),
+            }
+          : { tooltip: label })}
         tooltipSide="right"
         aria-current={item.active ? "page" : undefined}
         className={appRailButtonClassName(item.active)}
@@ -203,6 +220,19 @@ function AppRailButton({ item }: { item: AppRailItem }) {
         </span>
       ) : null}
     </div>
+  );
+  return item.hoverContent ? (
+    <PreviewCard>
+      {button}
+      <PreviewCardPopup
+        {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
+        className={SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME}
+      >
+        {item.hoverContent}
+      </PreviewCardPopup>
+    </PreviewCard>
+  ) : (
+    button
   );
 }
 

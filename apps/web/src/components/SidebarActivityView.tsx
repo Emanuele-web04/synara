@@ -591,6 +591,8 @@ export function SidebarActivityView({
   pinnedThreadIdSet,
   settledOverrideByThreadId,
   threadsHydrated,
+  groupMode,
+  onGroupModeChange: setGroupMode,
   scopeSelection,
   onScopeSelectionChange,
   resolveThreadStatus,
@@ -620,6 +622,9 @@ export function SidebarActivityView({
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
+  /** Shared with the rail hover list so both surfaces follow the selected grouping. */
+  groupMode: ActivityGroupMode;
+  onGroupModeChange: (mode: ActivityGroupMode) => void;
   /** Owned by the sidebar so the scope survives this view unmounting (Settings, reloads). */
   scopeSelection: ActivityScopeSelection;
   onScopeSelectionChange: (selection: ActivityScopeSelection) => void;
@@ -656,7 +661,6 @@ export function SidebarActivityView({
   onAddProject: () => void;
   snoozedRevealRequest?: number;
 }) {
-  const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const [pinnedOpen, setPinnedOpen] = useState(true);
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [earlierExtraPages, setEarlierExtraPages] = useState(0);

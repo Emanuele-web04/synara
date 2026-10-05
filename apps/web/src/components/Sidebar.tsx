@@ -269,8 +269,10 @@ import {
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import {
   type ActivityScopeSelection,
+  type ActivityGroupMode,
   buildActivityViewModel,
-  countSidebarActivity,
+  groupActivityThreadsByProject,
+  groupSidebarActivityThreads,
   hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
 } from "./SidebarActivityView.logic";
 import {
@@ -289,6 +291,8 @@ import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
+import { ProviderIcon } from "./ProviderIcon";
+import { ScrollArea } from "./ui/scroll-area";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
@@ -1711,6 +1715,7 @@ export default function Sidebar({
   const [activityScope, setActivityScope] = useState<ActivityScopeSelection>(
     () => readSidebarUiState().activityScope,
   );
+  const [activityGroupMode, setActivityGroupMode] = useState<ActivityGroupMode>("time");
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const [classicSnoozedVisibleThreadIds, setClassicSnoozedVisibleThreadIds] = useState<
     readonly ThreadId[]
@@ -6946,14 +6951,83 @@ export default function Sidebar({
   const projectContextMenuHasOpenServer =
     projectContextMenuServer !== null && firstLocalServerUrl(projectContextMenuServer) !== null;
 
-  const activityCounts = useMemo(
+  const activityThreads = useMemo(
     () =>
-      countSidebarActivity(
+      groupSidebarActivityThreads(
         activityNonGroupSidebarThreads,
         resolveThreadStatusForSidebar,
         visualActiveSidebarThreadId,
       ),
     [activityNonGroupSidebarThreads, resolveThreadStatusForSidebar, visualActiveSidebarThreadId],
+  );
+  const reviewThreads = useMemo(() => {
+    const model = buildActivityViewModel({
+      threads: activityNonGroupSidebarThreads,
+      pinnedThreadIdSet,
+      draftThreadIdSet,
+      settledOverrideByThreadId,
+      compact: !isMobile && sidebarState === "collapsed",
+    });
+    const reviewThreadIds = new Set(activityThreads.review.map((thread) => thread.id));
+    const feedThreads =
+      activityGroupMode === "project"
+        ? groupActivityThreadsByProject(
+            [...model.drafts, ...model.active],
+            (projectId) => projectById.get(projectId)?.kind === "project",
+          ).flatMap((group) => group.threads)
+        : [...model.drafts, ...model.active];
+    return [...model.pinned, ...feedThreads, ...model.settled].filter((thread) =>
+      reviewThreadIds.has(thread.id),
+    );
+  }, [
+    activityThreads.review,
+    activityNonGroupSidebarThreads,
+    activityGroupMode,
+    projectById,
+    pinnedThreadIdSet,
+    draftThreadIdSet,
+    settledOverrideByThreadId,
+    isMobile,
+    sidebarState,
+  ]);
+  const activityCounts = {
+    working: activityThreads.working.length,
+    review: reviewThreads.length,
+    snoozed: activityThreads.snoozed.length,
+  };
+  const reviewHoverContent = (
+    <div className="p-0.5">
+      <div className="px-1.5 py-1 text-ui-sm font-medium text-foreground">
+        Unread &amp; needs review
+      </div>
+      <ScrollArea className="h-auto [&_[data-slot=scroll-area-viewport]]:max-h-72">
+        <SidebarMenu aria-label="Unread chats" className="gap-0.5">
+          {reviewThreads.map((thread) => {
+            const status = resolveThreadStatusTrailingIndicator({
+              status: resolveThreadStatusForSidebar(thread),
+              isActive: thread.id === visualActiveSidebarThreadId,
+            });
+            return (
+              <SidebarMenuItem key={thread.id}>
+                <SidebarMenuButton
+                  size="sm"
+                  aria-label={thread.title}
+                  isActive={thread.id === visualActiveSidebarThreadId}
+                  onClick={() => activateThreadFromSidebarIntent(thread.id)}
+                >
+                  <ProviderIcon
+                    provider={thread.session?.provider ?? thread.modelSelection.provider}
+                    className="size-3.5 shrink-0"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+                  {status ? <SidebarStatusTrailingGlyph status={status} /> : null}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
+        </SidebarMenu>
+      </ScrollArea>
+    </div>
   );
   const openRailActivity = (snoozed: boolean) => {
     selectRailPanelItem("home");
@@ -7000,6 +7074,7 @@ export default function Sidebar({
       showBadgeCount: true,
       active: false,
       onSelect: () => openRailActivity(item.snoozed),
+      ...(item.id === "activity-review" ? { hoverContent: reviewHoverContent } : {}),
     }));
   const appRailProps = {
     items: railItems,
@@ -7225,6 +7300,8 @@ export default function Sidebar({
                         pinnedThreadIdSet={pinnedThreadIdSet}
                         settledOverrideByThreadId={settledOverrideByThreadId}
                         threadsHydrated={threadsHydrated}
+                        groupMode={activityGroupMode}
+                        onGroupModeChange={setActivityGroupMode}
                         scopeSelection={activityScope}
                         onScopeSelectionChange={setActivityScope}
                         resolveThreadStatus={resolveThreadStatusForSidebar}

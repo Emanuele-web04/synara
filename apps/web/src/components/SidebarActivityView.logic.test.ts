@@ -11,6 +11,7 @@ import {
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
   countSidebarActivity,
+  groupSidebarActivityThreads,
   groupActivityThreadsByProject,
   hasUnreadActivity,
   resolveActivityDateBucket,
@@ -150,6 +151,13 @@ describe("countSidebarActivity", () => {
         null,
       ),
     ).toEqual({ working: 2, review: 2, snoozed: 1 });
+    expect(
+      groupSidebarActivityThreads(
+        [working, connecting, approval, completed, snoozed, archived, child],
+        resolveStatus,
+        null,
+      ).review.map((thread) => thread.id),
+    ).toEqual([approval.id, completed.id]);
   });
 
   it("uses dismissed/read status rules and still counts requests on the active thread", () => {
