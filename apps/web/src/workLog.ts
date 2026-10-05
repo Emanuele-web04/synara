@@ -392,6 +392,7 @@ export function deriveWorkLogEntries(
         activity.kind !== "task.completed",
     )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
+    .filter((activity) => !isQuietApprovalResolutionActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
       (activity) =>
@@ -569,6 +570,21 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
   }
   // Provider lifecycle rows close internal state; assistant/result text is rendered from messages.
   return activity.tone !== "error";
+}
+
+function isQuietApprovalResolutionActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "approval.resolved" || activity.tone === "error") {
+    return false;
+  }
+  // Keep refusals, cancellations and broader grants visible. Only accepted
+  // routine requests are noise; Computer/Device consent remains part of the log,
+  // including clipboard consent, which has no task scope.
+  const payload = asRecord(activity.payload);
+  return (
+    payload?.decision === "accept" &&
+    payload.approvalScope === undefined &&
+    computerToolName(extractToolName(payload)) === null
+  );
 }
 
 function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {
