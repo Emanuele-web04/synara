@@ -11,7 +11,9 @@ import {
   createContext,
   type MouseEvent,
   type ReactNode,
+  type RefCallback,
   useContext,
+  useMemo,
 } from "react";
 import { createPortal } from "react-dom";
 
@@ -149,6 +151,8 @@ type AppRailProps = {
   bottomSlot?: ReactNode;
   /** Right-click on the rail (offers "Customize"). */
   onContextMenu?: ((event: MouseEvent) => void) | undefined;
+  /** Space for the existing conversation panel while it is collapsed into this rail. */
+  compactThreadSlotRef?: RefCallback<HTMLDivElement> | undefined;
 };
 
 /** Rail glyph size, shared with controls rendered into the rail slot (the Help menu). */
@@ -210,6 +214,7 @@ export function AppRail({
   activityItems,
   bottomSlot,
   onContextMenu,
+  compactThreadSlotRef,
 }: AppRailProps) {
   return (
     <nav
@@ -217,7 +222,12 @@ export function AppRail({
       onContextMenu={onContextMenu}
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >
-      <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]">
+      <div
+        className={cn(
+          "flex min-h-0 w-full flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]",
+          compactThreadSlotRef ? "max-h-[40%] shrink-0" : "flex-1",
+        )}
+      >
         {items.map((item) => (
           <AppRailButton key={item.id} item={item} />
         ))}
@@ -234,6 +244,13 @@ export function AppRail({
         ) : null}
         {moreSlot}
       </div>
+      {compactThreadSlotRef ? (
+        <div
+          ref={compactThreadSlotRef}
+          data-slot="app-rail-threads"
+          className="min-h-0 w-full flex-1"
+        />
+      ) : null}
       <div className="flex shrink-0 flex-col items-center gap-1.5">
         {activityItems?.map((item) => (
           <AppRailButton key={item.id} item={item} />
@@ -250,18 +267,37 @@ export function AppRail({
   );
 }
 
-const AppRailSlotContext = createContext<HTMLElement | null>(null);
+const AppRailSlotContext = createContext<{
+  element: HTMLElement | null;
+  compactThreadSlotRef?: RefCallback<HTMLDivElement> | undefined;
+}>({ element: null });
 
 /** Provided by the route shell with the element the rail renders into. */
-export const AppRailSlotProvider = AppRailSlotContext.Provider;
+export function AppRailSlotProvider({
+  value,
+  compactThreadSlotRef,
+  children,
+}: {
+  value: HTMLElement | null;
+  compactThreadSlotRef?: RefCallback<HTMLDivElement> | undefined;
+  children: ReactNode;
+}) {
+  const context = useMemo(
+    () => ({ element: value, compactThreadSlotRef }),
+    [value, compactThreadSlotRef],
+  );
+  return <AppRailSlotContext.Provider value={context}>{children}</AppRailSlotContext.Provider>;
+}
 
 /** The element the rail renders into (null until the shell mounts); anchors rail popovers. */
 export function useAppRailSlot(): HTMLElement | null {
-  return useContext(AppRailSlotContext);
+  return useContext(AppRailSlotContext).element;
 }
 
 /** Renders the rail into the shell's slot; nothing until the slot is mounted. */
 export function AppRailPortal(props: AppRailProps) {
-  const slot = useContext(AppRailSlotContext);
-  return slot ? createPortal(<AppRail {...props} />, slot) : null;
+  const { element, compactThreadSlotRef } = useContext(AppRailSlotContext);
+  return element
+    ? createPortal(<AppRail {...props} compactThreadSlotRef={compactThreadSlotRef} />, element)
+    : null;
 }

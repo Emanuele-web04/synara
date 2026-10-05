@@ -2941,6 +2941,12 @@ diffs-container {
   transition: border-width 0s linear 300ms;
 }
 
+/* Compact rows live inside the rail; their empty panel must reserve no border width. */
+[data-sidebar-layout="rail"]
+  .app-rail-panel:has([data-sidebar-compact-rail="true"][data-state="collapsed"]) {
+  border-width: 0;
+}
+
 /* Short divider on the shell band above the seam, detached from the band's edges, marking
    where the route header starts next to the panel. Hidden with the panel. */
 [data-sidebar-layout="rail"] .app-rail-header-divider {
@@ -3072,7 +3078,7 @@ diffs-container {
     0px,
     calc(
       var(--desktop-top-bar-traffic-light-gutter, 90px) - var(--app-rail-width) -
-        var(--sidebar-width-compact)
+        var(--sidebar-compact-reserved-width, var(--sidebar-width-compact))
     )
   ) !important;
 }
@@ -3087,6 +3093,13 @@ diffs-container {
   min-height: 42px;
   justify-content: center;
   padding-inline: 0;
+}
+
+/* The collapsed conversation list shares the outer rail's free space, beneath
+   navigation and above activity/usage. The header toggle remains in the chat. */
+[data-sidebar-compact-rail="true"][data-sidebar-compact="true"]
+  :is([data-slot="sidebar-panel-controls"], [data-slot="activity-scope-header"]) {
+  display: none;
 }
 
 [data-sidebar-compact="true"]

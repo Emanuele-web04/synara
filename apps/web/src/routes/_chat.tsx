@@ -60,7 +60,6 @@ import { toastManager } from "~/components/ui/toast";
 import {
   Sidebar,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
-  SIDEBAR_WIDTH_COMPACT,
   SidebarInstanceProvider,
   SidebarProvider,
   SidebarRail,
@@ -587,6 +586,7 @@ function ChatRouteLayout() {
   );
   // ThreadSidebar portals its AppRail into this element, left of the panel.
   const [railSlot, setRailSlot] = useState<HTMLDivElement | null>(null);
+  const [compactThreadAnchor, setCompactThreadAnchor] = useState<HTMLDivElement | null>(null);
   // The route column slides with the panel; the leading controls dock needs it to stay put.
   const [routeColumn, setRouteColumn] = useState<HTMLDivElement | null>(null);
 
@@ -596,6 +596,8 @@ function ChatRouteLayout() {
     <Sidebar
       side="left"
       collapsible={compactThreadSidebar ? "compact" : "offcanvas"}
+      compactInRail={compactThreadSidebar}
+      compactAnchor={compactThreadAnchor}
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
       className={cn(
@@ -639,19 +641,27 @@ function ChatRouteLayout() {
       open={resolvedSidebarOpen}
       onOpenChange={handleSidebarOpenChange}
       className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
-      style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
+      style={
+        {
+          "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px`,
+          "--sidebar-compact-reserved-width": "0px",
+        } as CSSProperties
+      }
       data-sidebar-side="left"
       data-sidebar-layout="rail"
       data-sidebar-compact-mode={compactThreadSidebar ? "true" : undefined}
     >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
-      <AppRailSlotProvider value={railSlot}>
-        <SidebarLeadingControlsDock
-          routeColumn={routeColumn}
-          railSlot={railSlot}
-          collapsedPanelWidth={compactThreadSidebar ? SIDEBAR_WIDTH_COMPACT : 0}
-        >
+      <AppRailSlotProvider
+        value={railSlot}
+        compactThreadSlotRef={
+          compactThreadSidebar && !resolvedSidebarOpen && !isMobile
+            ? setCompactThreadAnchor
+            : undefined
+        }
+      >
+        <SidebarLeadingControlsDock routeColumn={routeColumn} railSlot={railSlot}>
           {isMobile ? (
             // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
             // so the shell keeps no left column.

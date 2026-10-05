@@ -7,9 +7,12 @@ import { cdp, page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import { DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./preview-card";
+import { AppRailPortal, AppRailSlotProvider, railItemGlyphs } from "../AppRail";
+import { ProviderIcon } from "../ProviderIcon";
 
 import {
   Sidebar,
+  SidebarContent,
   SidebarProvider,
   SidebarTrigger,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
@@ -35,9 +38,132 @@ function ControlledSidebar() {
   );
 }
 
+function IntegratedRailShell() {
+  const { open } = useSidebar();
+  const [rail, setRail] = useState<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<HTMLDivElement | null>(null);
+  const item = (id: "home" | "settings") => ({
+    id,
+    glyphs: railItemGlyphs(id),
+    label: id === "home" ? "Home" : "Settings",
+    active: id === "home",
+    badge: null,
+    onSelect: vi.fn(),
+  });
+  return (
+    <AppRailSlotProvider value={rail} compactThreadSlotRef={!open ? setAnchor : undefined}>
+      <div ref={setRail} className="flex shrink-0" />
+      <div className="relative flex shrink-0">
+        <Sidebar collapsible="compact" compactInRail compactAnchor={anchor}>
+          <AppRailPortal items={[item("home")]} shortcuts={[]} bottomItems={[item("settings")]} />
+          <SidebarContent>
+            {(["codex", "claudeAgent", "cursor"] as const).map((provider) => (
+              <button
+                key={provider}
+                data-slot="activity-thread-button"
+                className="w-full shrink-0"
+                aria-label={`${provider} thread`}
+              >
+                <span data-slot="activity-thread-identity" className="flex items-center gap-2">
+                  <span data-slot="sidebar-thread-provider">
+                    <ProviderIcon provider={provider} />
+                  </span>
+                  <span data-slot="sidebar-thread-title">{provider} thread</span>
+                </span>
+              </button>
+            ))}
+          </SidebarContent>
+        </Sidebar>
+      </div>
+      <main data-testid="integrated-main" className="min-w-0 flex-1">
+        <SidebarTrigger aria-label="Toggle integrated sidebar" />
+      </main>
+    </AppRailSlotProvider>
+  );
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("sidebar toggles", () => {
+  it("moves the same conversation icons into the outer rail only while collapsed", async () => {
+    await page.viewport(1280, 800);
+    const screen = await render(
+      <SidebarProvider defaultOpen>
+        <IntegratedRailShell />
+      </SidebarProvider>,
+    );
+    try {
+      const rail = page.getByRole("navigation", { name: "Primary" }).element();
+      const main = page.getByTestId("integrated-main").element();
+      const thread = page.getByRole("button", { name: "codex thread", exact: true }).element();
+      const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
+      const gap = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+      expect(thread.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        rail.getBoundingClientRect().right,
+      );
+      expect(screen.container.querySelector('[data-slot="app-rail-threads"]')).toBeNull();
+      await page.getByRole("button", { name: "Toggle integrated sidebar" }).click();
+      await expect.poll(() => gap.getBoundingClientRect().width).toBe(0);
+      await expect
+        .poll(() => panel.getBoundingClientRect().width)
+        .toBe(rail.getBoundingClientRect().width);
+      const slot = screen.container.querySelector<HTMLElement>('[data-slot="app-rail-threads"]')!;
+      const provider = thread.querySelector<HTMLElement>('[data-slot="sidebar-thread-provider"]')!;
+      expect(provider.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        rail.getBoundingClientRect().left,
+      );
+      expect(provider.getBoundingClientRect().right).toBeLessThanOrEqual(
+        rail.getBoundingClientRect().right,
+      );
+      expect(thread.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        slot.getBoundingClientRect().top,
+      );
+      expect(main.getBoundingClientRect().left).toBeCloseTo(rail.getBoundingClientRect().right, 0);
+      expect(screen.container.querySelectorAll('[aria-label="codex thread"]')).toHaveLength(1);
+      await page.getByRole("button", { name: "Home", exact: true }).hover();
+      expect(panel.getBoundingClientRect().width).toBe(rail.getBoundingClientRect().width);
+      const contentLeft = main.getBoundingClientRect().left;
+      await page.getByRole("button", { name: "codex thread", exact: true }).hover();
+      await page.getByRole("button", { name: "Home", exact: true }).hover();
+      await new Promise((resolve) => setTimeout(resolve, DISCLOSURE_TRANSITION_MS * 2));
+      expect(panel.getBoundingClientRect().width).toBe(rail.getBoundingClientRect().width);
+      await page.getByRole("button", { name: "codex thread", exact: true }).hover();
+      await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
+      await expect
+        .element(thread.querySelector<HTMLElement>('[data-slot="sidebar-thread-title"]')!)
+        .toBeVisible();
+      expect(main.getBoundingClientRect().left).toBe(contentLeft);
+      await userEvent.keyboard("{Escape}");
+      await expect
+        .poll(() => panel.getBoundingClientRect().width)
+        .toBe(rail.getBoundingClientRect().width);
+      await page.viewport(1280, 360);
+      await expect
+        .poll(() => panel.getBoundingClientRect().height)
+        .toBe(slot.getBoundingClientRect().height);
+      await expect
+        .element(page.getByRole("button", { name: "Settings", exact: true }))
+        .toBeVisible();
+      expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        page
+          .getByRole("button", { name: "Settings", exact: true })
+          .element()
+          .getBoundingClientRect().top,
+      );
+      await page.viewport(1280, 800);
+      await page.getByRole("button", { name: "Toggle integrated sidebar" }).click();
+      await expect.poll(() => gap.getBoundingClientRect().width).toBe(256);
+      expect(page.getByRole("button", { name: "codex thread", exact: true }).element()).toBe(
+        thread,
+      );
+      expect(screen.container.querySelector('[data-slot="app-rail-threads"]')).toBeNull();
+      expect(thread.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        rail.getBoundingClientRect().right,
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
   it("keeps the compact list visible and previews it without moving content or pinning it", async () => {
     await page.viewport(1280, 800);
     const screen = await render(

@@ -139,8 +139,11 @@ and attention badges until the reminder is due. **Return now** cancels the snooz
 choosing another time reschedules it. Snoozing preserves any running agent work.
 Sending a new message also returns the thread to the list.
 
-On desktop, collapsing the Home or Spaces sidebar keeps a compact conversation
-list with provider icons and status markers. Hover or focus it to preview the full
+On desktop, collapsing the Home or Spaces sidebar moves the conversation list
+into the outer navigation rail, with provider icons and status markers arranged
+vertically between navigation and the activity controls. Opening the sidebar
+returns those same rows to the full list; there is no second compact column.
+Hover or focus the icons to preview the full
 list without moving the chat; use the sidebar toggle to keep it open. Escape closes
 the preview. The left rail summarizes working conversations, conversations needing
 review, and snoozed conversations. Selecting **Snoozed** opens its section; postponed

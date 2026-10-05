@@ -241,6 +241,8 @@ function Sidebar({
   resizable: resizableProp,
   className,
   gapClassName,
+  compactInRail = false,
+  compactAnchor,
   innerClassName,
   transparentSurface: transparentSurfaceProp,
   rail,
@@ -252,6 +254,9 @@ function Sidebar({
   collapsible?: SidebarCollapsible;
   resizable?: boolean | SidebarResizableOptions;
   gapClassName?: string;
+  /** Reserve no extra column; align compact rows to the shell rail's available space. */
+  compactInRail?: boolean;
+  compactAnchor?: HTMLElement | null;
   innerClassName?: string;
   transparentSurface?: boolean;
   /** Desktop rail belongs to the outer shell, outside the clipped content surface. */
@@ -266,16 +271,54 @@ function Sidebar({
   const compactCollapsed = collapsible === "compact" && !isMobile && state === "collapsed";
   const [previewOpen, setPreviewOpen] = React.useState(false);
   const previewTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewTimerTarget = React.useRef<boolean | null>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
+  const [compactBounds, setCompactBounds] = React.useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  React.useLayoutEffect(() => {
+    const root = panelRef.current;
+    if (!compactCollapsed || !compactInRail || !compactAnchor || !root) return;
+    const measure = () => {
+      const bounds = compactAnchor.getBoundingClientRect();
+      const origin = root.getBoundingClientRect();
+      const next = {
+        left: bounds.left - origin.left,
+        top: bounds.top - origin.top,
+        width: bounds.width,
+        height: bounds.height,
+      };
+      setCompactBounds((previous) =>
+        previous &&
+        previous.left === next.left &&
+        previous.top === next.top &&
+        previous.width === next.width &&
+        previous.height === next.height
+          ? previous
+          : next,
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(compactAnchor);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [compactCollapsed, compactInRail, compactAnchor]);
   const clearPreviewTimer = React.useCallback(() => {
     if (previewTimer.current !== null) clearTimeout(previewTimer.current);
     previewTimer.current = null;
+    previewTimerTarget.current = null;
   }, []);
   const schedulePreview = React.useCallback(
     (open: boolean) => {
       clearPreviewTimer();
+      previewTimerTarget.current = open;
       previewTimer.current = setTimeout(() => {
         previewTimer.current = null;
+        previewTimerTarget.current = null;
         setPreviewOpen(open);
       }, DISCLOSURE_TRANSITION_MS);
     },
@@ -398,16 +441,17 @@ function Sidebar({
         data-variant={variant}
         data-sidebar-compact={compactCollapsed && !previewOpen ? "true" : undefined}
         data-sidebar-preview={compactCollapsed && previewOpen ? "true" : undefined}
-        onPointerEnter={(event) => {
-          if (
-            !compactCollapsed ||
-            event.pointerType === "touch" ||
-            !(event.target instanceof Node) ||
-            !panelRef.current?.contains(event.target)
-          )
+        data-sidebar-compact-rail={compactInRail ? "true" : undefined}
+        onPointerMove={(event) => {
+          if (!compactCollapsed || event.pointerType === "touch") return;
+          // Portal navigation shares React ancestors but is outside the panel.
+          // Leaving for it must cancel an opening that has not fired yet.
+          if (!(event.target instanceof Node) || !panelRef.current?.contains(event.target)) {
+            if (!previewOpen) clearPreviewTimer();
             return;
+          }
           if (previewOpen) clearPreviewTimer();
-          else schedulePreview(true);
+          else if (previewTimerTarget.current !== true) schedulePreview(true);
         }}
         onPointerLeave={() => {
           const active = document.activeElement;
@@ -435,7 +479,9 @@ function Sidebar({
           className={cn(
             "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear motion-reduce:transition-none",
             "group-data-[collapsible=offcanvas]:w-0",
-            "group-data-[collapsible=compact]:w-(--sidebar-width-compact)",
+            compactInRail
+              ? "group-data-[collapsible=compact]:w-0"
+              : "group-data-[collapsible=compact]:w-(--sidebar-width-compact)",
             "group-data-[side=right]:rotate-180",
             variant === "floating" || variant === "inset"
               ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
@@ -475,6 +521,21 @@ function Sidebar({
           )}
           data-slot="sidebar-container"
           {...props}
+          style={
+            compactCollapsed && compactInRail
+              ? {
+                  ...props.style,
+                  left: compactBounds?.left ?? "calc(-1 * var(--app-rail-width))",
+                  ...(!previewOpen
+                    ? {
+                        top: compactBounds?.top ?? 0,
+                        width: compactBounds?.width ?? "var(--app-rail-width)",
+                        height: compactBounds?.height ?? 0,
+                      }
+                    : {}),
+                }
+              : props.style
+          }
         >
           {/* The inner surface is the safe place for visual skinning. The outer shell owns
               fixed positioning, width transitions, and the resize rail hit area. */}
