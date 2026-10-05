@@ -10614,6 +10614,77 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it.each(["home", "project", "transcript"] as const)(
+    "prefills the %s empty-state composer without sending or replacing an existing draft",
+    async (surface) => {
+      const base = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+      const snapshot = surface === "home" ? withActiveHomeChatThread(base) : base;
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) => ({
+            ...thread,
+            session: null,
+            ...(surface === "transcript" ? { parentThreadId: OTHER_THREAD_ID } : {}),
+          })),
+        },
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = {
+            ...nextFixture.welcome,
+            homeDir: "/Users/tester",
+            chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          };
+        },
+      });
+
+      try {
+        const editor = await waitForComposerEditor();
+        await expect
+          .element(
+            page.getByRole("heading", {
+              name:
+                surface === "home"
+                  ? "What should we work on?"
+                  : surface === "project"
+                    ? /What should we do in/
+                    : "Let's build",
+            }),
+          )
+          .toBeVisible();
+        await expect.element(page.getByText("to tag files", { exact: false })).toBeVisible();
+        await expect.element(page.getByText("for commands", { exact: false })).toBeVisible();
+        expect(
+          Array.from(document.querySelectorAll('kbd[data-slot="kbd"]')).map(
+            (key) => key.textContent,
+          ),
+        ).toEqual(expect.arrayContaining(["@", "/"]));
+
+        await page.getByRole("button", { name: "Plan a feature", exact: true }).click();
+        await vi.waitFor(() => {
+          expect(editor.textContent).toBe("Help me plan a new feature.");
+          expect(document.activeElement).toBe(editor);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            "Help me plan a new feature.",
+          );
+        });
+        expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+        await expect
+          .element(page.getByRole("button", { name: "Fix a bug", exact: true }))
+          .not.toBeInTheDocument();
+
+        await userEvent.clear(editor);
+        await page.getByRole("button", { name: "Fix a bug", exact: true }).click();
+        await vi.waitFor(() =>
+          expect(editor.textContent).toBe("Help me investigate and fix a bug."),
+        );
+        expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("keeps the transcript open while the first turn starts before its message arrives", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
     const emptyThread = { ...snapshot.threads[0]!, session: null };
