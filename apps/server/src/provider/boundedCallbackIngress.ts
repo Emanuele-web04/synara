@@ -35,45 +35,97 @@ export interface BoundedCallbackIngress<A> {
   readonly status: () => BoundedCallbackIngressStatus;
 }
 
-export interface BoundedCallbackIngressOptions<A> {
+export interface BoundedCallbackIngressOptions<A, P = never> {
   readonly capacity: number;
   readonly maxBufferedBytes: number;
   readonly terminalReserve: number;
   readonly isTerminal: (item: A) => boolean;
   readonly sizeOf: (item: A) => number;
+  /** Prepare small metadata only. Do not retain payloads after eviction; publication stays serial. */
+  readonly prepare?: (item: A) => Promise<P>;
+  readonly prepareConcurrency?: number;
 }
 
-type BufferedItem<A> = {
-  readonly item: A;
+type BufferedItem<A, P> = {
+  item: A | undefined;
   readonly bytes: number;
   readonly terminal: boolean;
+  prepared?: Promise<{ readonly metadata: P } | { readonly cause: unknown }> | undefined;
+  resolvePrepared?:
+    | ((result: { readonly metadata: P } | { readonly cause: unknown }) => void)
+    | undefined;
+  discarded?: boolean;
 };
 
-type ResumeTake<A> = (effect: Effect.Effect<Option.Option<BufferedItem<A>>>) => void;
+type ResumeTake<A, P> = (effect: Effect.Effect<Option.Option<BufferedItem<A, P>>>) => void;
 
 function normalizedPositiveInt(value: number, fallback: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
 }
 
-export const makeBoundedCallbackIngress = <A, E, R>(
-  process: (item: A) => Effect.Effect<void, E, R>,
-  options: BoundedCallbackIngressOptions<A>,
+export const makeBoundedCallbackIngress = <A, E, R, P = never>(
+  process: (item: A, prepared?: P) => Effect.Effect<void, E, R>,
+  options: BoundedCallbackIngressOptions<A, P>,
 ): Effect.Effect<BoundedCallbackIngress<A>, never, Scope.Scope | R> =>
   Effect.gen(function* () {
     const capacity = normalizedPositiveInt(options.capacity, 1);
     const maxBufferedBytes = normalizedPositiveInt(options.maxBufferedBytes, 1);
     const terminalReserve = Math.min(capacity, Math.max(1, Math.floor(options.terminalReserve)));
     const normalCapacity = Math.max(0, capacity - terminalReserve);
-    const buffer: Array<BufferedItem<A>> = [];
+    const buffer: Array<BufferedItem<A, P>> = [];
     let queuedBytes = 0;
     let accepting = true;
-    let waiter: ResumeTake<A> | undefined;
+    let waiter: ResumeTake<A, P> | undefined;
     let accepted = 0;
     let dropped = 0;
     let evictedForTerminal = 0;
     let terminalOverflow = 0;
+    let aborted = false;
+    const preparing = new Set<BufferedItem<A, P>>();
+    const waitingPreparation = new Set<BufferedItem<A, P>>();
+    const prepareConcurrency = normalizedPositiveInt(options.prepareConcurrency ?? 1, 1);
+    const pumpPreparation = () => {
+      if (!options.prepare || aborted) return;
+      for (const buffered of waitingPreparation) {
+        if (preparing.size >= prepareConcurrency) break;
+        waitingPreparation.delete(buffered);
+        preparing.add(buffered);
+        // Capture synchronous throws too, and handle rejection before the serial
+        // consumer reaches this item. No detached, unbounded callback promises.
+        void Promise.resolve()
+          .then(async () => {
+            if (aborted || buffered.discarded) return;
+            try {
+              const metadata = await options.prepare!(buffered.item as A);
+              buffered.resolvePrepared?.({ metadata });
+            } catch (cause) {
+              buffered.resolvePrepared?.({ cause });
+            }
+          })
+          .finally(() => {
+            preparing.delete(buffered);
+            pumpPreparation();
+          });
+      }
+    };
+    const prepare = (buffered: BufferedItem<A, P>) => {
+      if (!options.prepare) return;
+      buffered.prepared = new Promise((resolve) => {
+        buffered.resolvePrepared = resolve;
+      });
+      waitingPreparation.add(buffered);
+      pumpPreparation();
+    };
 
-    const take = Effect.callback<Option.Option<BufferedItem<A>>>((resume) => {
+    const discard = (buffered: BufferedItem<A, P>) => {
+      buffered.discarded = true;
+      buffered.item = undefined;
+      buffered.resolvePrepared = undefined;
+      buffered.prepared = undefined;
+      waitingPreparation.delete(buffered);
+    };
+
+    const take = Effect.callback<Option.Option<BufferedItem<A, P>>>((resume) => {
       const buffered = buffer.shift();
       if (buffered !== undefined) {
         queuedBytes = Math.max(0, queuedBytes - buffered.bytes);
@@ -98,7 +150,16 @@ export const makeBoundedCallbackIngress = <A, E, R>(
           Option.match({
             onNone: () => Effect.void,
             onSome: (buffered) =>
-              process(buffered.item).pipe(
+              (buffered.prepared
+                ? Effect.promise(() => buffered.prepared!).pipe(
+                    Effect.flatMap((result) =>
+                      "cause" in result
+                        ? Effect.die(result.cause)
+                        : process(buffered.item!, result.metadata),
+                    ),
+                  )
+                : process(buffered.item!)
+              ).pipe(
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
                     ? // An interrupts-only cause carries no E failures, so it is safe to
@@ -131,11 +192,12 @@ export const makeBoundedCallbackIngress = <A, E, R>(
         dropped += 1;
         return "dropped";
       }
-      const buffered = { item, bytes, terminal } satisfies BufferedItem<A>;
+      const buffered: BufferedItem<A, P> = { item, bytes, terminal };
       if (waiter !== undefined) {
         const resume = waiter;
         waiter = undefined;
         accepted += 1;
+        prepare(buffered);
         resume(Effect.succeed(Option.some(buffered)));
         return "accepted";
       }
@@ -149,6 +211,7 @@ export const makeBoundedCallbackIngress = <A, E, R>(
         buffer.push(buffered);
         queuedBytes += bytes;
         accepted += 1;
+        prepare(buffered);
         return "accepted";
       }
 
@@ -161,6 +224,7 @@ export const makeBoundedCallbackIngress = <A, E, R>(
         }
         const [removed] = buffer.splice(evictIndex, 1);
         if (removed) {
+          discard(removed);
           queuedBytes = Math.max(0, queuedBytes - removed.bytes);
           dropped += 1;
           evictedForTerminal += 1;
@@ -171,6 +235,7 @@ export const makeBoundedCallbackIngress = <A, E, R>(
       buffer.push(buffered);
       queuedBytes += bytes;
       accepted += 1;
+      prepare(buffered);
       return evicted ? "evicted-for-terminal" : "accepted";
     };
 
@@ -190,7 +255,11 @@ export const makeBoundedCallbackIngress = <A, E, R>(
 
     const abort = Effect.suspend(() => {
       accepting = false;
+      aborted = true;
       stopRequested = true;
+      for (const buffered of buffer) discard(buffered);
+      for (const buffered of preparing) discard(buffered);
+      waitingPreparation.clear();
       buffer.length = 0;
       queuedBytes = 0;
       return Fiber.interrupt(worker).pipe(Effect.asVoid);

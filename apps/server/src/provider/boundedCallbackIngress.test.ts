@@ -1,5 +1,5 @@
-import { Deferred, Effect, Exit, Queue, Scope } from "effect";
-import { describe, expect, it } from "vitest";
+import { Deferred, Effect, Exit, Fiber, Queue, Scope } from "effect";
+import { describe, expect, it, vi } from "vitest";
 
 import { makeBoundedCallbackIngress } from "./boundedCallbackIngress.ts";
 
@@ -10,6 +10,125 @@ type TestItem = {
 };
 
 describe("makeBoundedCallbackIngress", () => {
+  it("drains ordered preparation after a rejection and terminal eviction", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const releases = new Map<string, (metadata: string) => void>();
+          const processed: string[] = [];
+          const ingress = yield* makeBoundedCallbackIngress<TestItem, never, never, string>(
+            (item, metadata) =>
+              Effect.sync(() => {
+                processed.push(`${item.id}:${metadata}`);
+              }),
+            {
+              capacity: 4,
+              maxBufferedBytes: 100,
+              terminalReserve: 1,
+              isTerminal: (item) => item.terminal === true,
+              sizeOf: (item) => item.bytes ?? 50,
+              prepareConcurrency: 2,
+              prepare: ({ id }) =>
+                id === "rejected"
+                  ? Promise.reject(new Error("fixture preparation failure"))
+                  : new Promise<string>((resolve) => {
+                      releases.set(id, resolve);
+                    }),
+            },
+          );
+          ingress.offer({ id: "rejected" });
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          ingress.offer({ id: "head" });
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          ingress.offer({ id: "evicted" });
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          expect(ingress.offer({ id: "terminal", terminal: true, bytes: 75 })).toBe(
+            "evicted-for-terminal",
+          );
+          releases.get("head")!("head");
+          releases.get("evicted")!("evicted");
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          const stopped = yield* ingress.stop.pipe(Effect.forkChild);
+          releases.get("terminal")!("terminal");
+          yield* Fiber.join(stopped);
+          expect(processed).toEqual(["head:head", "terminal:terminal"]);
+          expect(ingress.status()).toMatchObject({
+            accepting: false,
+            queuedBytes: 0,
+            evictedForTerminal: 1,
+          });
+        }),
+      ),
+    );
+  });
+  it("does not start reserved preparation after an immediate abort", async () => {
+    const prepare = vi.fn(async (item: TestItem) => item);
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const ingress = yield* makeBoundedCallbackIngress<TestItem, never, never, TestItem>(
+            () => Effect.void,
+            {
+              capacity: 4,
+              maxBufferedBytes: 100,
+              terminalReserve: 1,
+              isTerminal: () => false,
+              sizeOf: () => 1,
+              prepare,
+              prepareConcurrency: 2,
+            },
+          );
+          ingress.offer({ id: "reserved" });
+          ingress.offer({ id: "waiting" });
+          yield* ingress.abort;
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          expect(prepare).not.toHaveBeenCalled();
+          expect(ingress.status()).toMatchObject({ accepting: false, queued: 0, queuedBytes: 0 });
+        }),
+      ),
+    );
+  });
+  it("bounds asynchronous preparation and delivers in admission order", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const releases = new Map<string, (item: TestItem) => void>();
+          const processed: string[] = [];
+          const ingress = yield* makeBoundedCallbackIngress<TestItem, never, never, TestItem>(
+            (item) =>
+              Effect.sync(() => {
+                processed.push(item.id);
+              }),
+            {
+              capacity: 5,
+              maxBufferedBytes: 100,
+              terminalReserve: 1,
+              isTerminal: () => false,
+              sizeOf: () => 1,
+              prepareConcurrency: 2,
+              prepare: (item) =>
+                new Promise<TestItem>((resolve) => {
+                  releases.set(item.id, resolve);
+                }),
+            },
+          );
+          for (const id of ["a", "b", "c", "d"]) ingress.offer({ id });
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          expect([...releases.keys()]).toEqual(["a", "b"]);
+          releases.get("b")!({ id: "b" });
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          expect(processed).toEqual([]);
+          expect([...releases.keys()]).toEqual(["a", "b", "c"]);
+          releases.get("a")!({ id: "a" });
+          releases.get("c")!({ id: "c" });
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          releases.get("d")!({ id: "d" });
+          yield* ingress.stop;
+          expect(processed).toEqual(["a", "b", "c", "d"]);
+        }),
+      ),
+    );
+  });
   it("closes its scope even when downstream consumption has stopped", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

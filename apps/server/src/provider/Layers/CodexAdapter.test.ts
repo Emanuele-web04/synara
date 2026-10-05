@@ -159,6 +159,22 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.sessionSnapshots;
   }
 
+  override getSessionEventOrigin(threadId: ThreadId) {
+    return {
+      providerInstanceId: this.sessionSnapshots.find((entry) => entry.threadId === threadId)
+        ?.providerInstanceId,
+      inspect: () => this.inspectSessionAsync(threadId),
+      isAuthRejected: () => false,
+      codexOptions: this.codexOptionsByThreadId.get(threadId),
+    };
+  }
+
+  override async inspectSessionAsync(threadId: ThreadId) {
+    const session = this.sessionSnapshots.find((entry) => entry.threadId === threadId);
+    const codexOptions = this.codexOptionsByThreadId.get(threadId);
+    return session ? { session, ...(codexOptions ? { codexOptions } : {}) } : undefined;
+  }
+
   override inspectSessions(): ReturnType<CodexAppServerManager["inspectSessions"]> {
     return this.sessionSnapshots.map((session) => {
       const codexOptions = this.codexOptionsByThreadId.get(session.threadId);
@@ -1509,7 +1525,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("stamps untagged Codex events with the live session provider instance", () =>
+  it.effect("stamps untagged Codex events without synchronous session filesystem reads", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       lifecycleManager.sessionSnapshots = [
@@ -1524,16 +1540,27 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         },
       ];
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-session-closed-work"),
-        kind: "session",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "session/closed",
-        message: "Work session stopped",
-      } satisfies ProviderEvent);
+      const blockingRead = () => {
+        throw new Error("Synchronous session read on the stdout callback");
+      };
+      const listSpy = vi.spyOn(lifecycleManager, "listSessions").mockImplementation(blockingRead);
+      const optionsSpy = vi
+        .spyOn(lifecycleManager, "getSessionCodexOptions")
+        .mockImplementation(blockingRead);
+      try {
+        lifecycleManager.emit("event", {
+          id: asEventId("evt-session-closed-work"),
+          kind: "session",
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          createdAt: new Date().toISOString(),
+          method: "session/closed",
+          message: "Work session stopped",
+        } satisfies ProviderEvent);
+      } finally {
+        listSpy.mockRestore();
+        optionsSpy.mockRestore();
+      }
       const firstEvent = yield* Fiber.join(firstEventFiber);
       lifecycleManager.sessionSnapshots = [];
 
@@ -1544,6 +1571,69 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.type, "session.exited");
       assert.equal(firstEvent.value.providerInstanceId, "codex_work");
     }),
+  );
+
+  it.effect(
+    "retains origin identity and compact terminal events while auth inspection is pending",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        lifecycleManager.sessionSnapshots = [
+          {
+            provider: "codex",
+            providerInstanceId: "codex_work",
+            status: "ready",
+            runtimeMode: "full-access",
+            threadId: asThreadId("thread-1"),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ];
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const inspection = vi
+          .spyOn(lifecycleManager, "inspectSessionAsync")
+          .mockImplementation(async () => {
+            await gate;
+            return undefined;
+          });
+        const collected = yield* Stream.runCollect(adapter.streamEvents.pipe(Stream.take(3))).pipe(
+          Effect.forkChild,
+        );
+        try {
+          for (let i = 0; i < 3; i++)
+            lifecycleManager.emit("event", {
+              id: asEventId(`terminal-${i}`),
+              kind: "notification",
+              provider: "codex",
+              threadId: asThreadId("thread-1"),
+              lifecycleGeneration: "original-generation",
+              createdAt: new Date().toISOString(),
+              method: "turn/completed",
+              turnId: asTurnId(`turn-${i}`),
+              payload: {
+                turn: { id: `turn-${i}`, status: "completed" },
+                diagnostic: "x".repeat(12 * 1024 * 1024),
+              },
+            } satisfies ProviderEvent);
+          lifecycleManager.sessionSnapshots = [];
+          release();
+          const events = yield* Fiber.join(collected);
+          assert.equal(events.length, 3);
+          for (const event of events) {
+            assert.equal(event.type, "turn.completed");
+            assert.equal(event.providerInstanceId, "codex_work");
+            assert.equal(event.lifecycleGeneration, "original-generation");
+            assert.ok(JSON.stringify(event).length < 512 * 1024);
+          }
+        } finally {
+          release();
+          inspection.mockRestore();
+          lifecycleManager.sessionSnapshots = [];
+        }
+      }),
   );
 
   it.effect("maps retryable Codex error notifications to runtime.warning", () =>

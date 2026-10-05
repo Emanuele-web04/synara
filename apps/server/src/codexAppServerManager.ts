@@ -83,6 +83,7 @@ import {
   buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
   prepareCodexAuthTracking,
+  readCodexAuthFingerprintAsync,
   readCodexPreparedAuthTrackingFingerprint,
   type CodexProcessEnvInput,
   type PreparedCodexAuthTracking,
@@ -197,7 +198,10 @@ type CodexSessionApprovalOverride = {
   };
 };
 
+export class CodexSessionAuthInvalidatedError extends Error {}
+
 interface CodexSessionContext {
+  authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
@@ -3101,13 +3105,84 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return inspections;
   }
 
+  /** Bind immutable origin metadata without filesystem work at callback admission. */
+  getSessionEventOrigin(
+    threadId: ThreadId,
+    lifecycleGeneration?: string,
+  ): {
+    readonly providerInstanceId: string | undefined;
+    readonly codexOptions: CodexDiscoveryOptions | undefined;
+    readonly inspect: () => Promise<CodexSessionInspection | undefined>;
+    readonly isAuthRejected: () => boolean;
+  } {
+    const context = this.sessions.get(threadId);
+    const matches =
+      context &&
+      (lifecycleGeneration === undefined || context.lifecycleGeneration === lifecycleGeneration);
+    return {
+      providerInstanceId: matches ? context.session.providerInstanceId : undefined,
+      codexOptions: matches ? normalizeCodexDiscoveryOptions(context.codexOptions) : undefined,
+      isAuthRejected: () => context?.authInvalidation !== undefined,
+      inspect: async () => {
+        if (context?.authInvalidation)
+          throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+        return matches && this.sessions.get(threadId) === context
+          ? this.inspectSessionAsync(threadId, context.lifecycleGeneration)
+          : undefined;
+      },
+    };
+  }
+
+  /** Event projection revalidates only its emitting session, outside the stdout callback. */
+  async inspectSessionAsync(
+    threadId: ThreadId,
+    lifecycleGeneration?: string,
+  ): Promise<CodexSessionInspection | undefined> {
+    const context = this.sessions.get(threadId);
+    if (context?.authInvalidation)
+      throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+    if (
+      !context ||
+      !this.isContextRoutable(context) ||
+      (lifecycleGeneration !== undefined && context.lifecycleGeneration !== lifecycleGeneration)
+    )
+      return undefined;
+    let stalenessMessage: string | undefined;
+    if (context.authTracking && context.authFingerprint !== undefined) {
+      try {
+        const fingerprint = await readCodexAuthFingerprintAsync(
+          codexProcessEnvInputForOptions(context.codexOptions),
+        );
+        if (fingerprint !== context.authFingerprint) {
+          stalenessMessage =
+            "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
+        }
+      } catch (error) {
+        log.warn("codex session auth freshness revalidation failed", {
+          threadId,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+        stalenessMessage =
+          "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.";
+      }
+    }
+    if (stalenessMessage) this.invalidateContextAuth(context, stalenessMessage);
+    // Other overlapping reads may have invalidated this origin while we awaited disk.
+    if (context.authInvalidation)
+      throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+    // Filesystem awaits must not attach a replacement session's identity to an old event.
+    if (this.sessions.get(threadId) !== context || !this.isContextRoutable(context))
+      return undefined;
+    const codexOptions = normalizeCodexDiscoveryOptions(context.codexOptions);
+    return { session: { ...context.session }, ...(codexOptions ? { codexOptions } : {}) };
+  }
+
   hasSession(threadId: ThreadId): boolean {
     const context = this.sessions.get(threadId);
     if (!context || !this.isContextRoutable(context)) return false;
-    if (!this.isContextAuthCurrent(context)) {
-      void this.stopSession(threadId).catch((error) => {
-        log.warn("failed to stop stale Codex session", { threadId, error });
-      });
+    const stalenessMessage = this.contextAuthStalenessMessage(context);
+    if (stalenessMessage) {
+      this.invalidateContextAuth(context, stalenessMessage);
       return false;
     }
     return true;
@@ -3380,16 +3455,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     const stalenessMessage = this.contextAuthStalenessMessage(context);
     if (stalenessMessage) {
-      void this.stopSession(threadId).catch((error) => {
-        log.warn("failed to stop stale Codex session", { threadId, error });
-      });
+      this.invalidateContextAuth(context, stalenessMessage);
       throw new Error(stalenessMessage);
     }
 
     return context;
   }
 
+  private invalidateContextAuth(context: CodexSessionContext, message: string): void {
+    if (context.authInvalidation && context.teardownFailed !== true) return;
+    context.authInvalidation = message;
+    const threadId = context.session.threadId;
+    if (this.sessions.get(threadId) === context) {
+      void this.stopSession(threadId).catch((error) => {
+        log.warn("failed to stop stale Codex session", { threadId, error });
+      });
+    }
+  }
+
   private contextAuthStalenessMessage(context: CodexSessionContext): string | undefined {
+    if (context.authInvalidation) return context.authInvalidation;
     if (!context.authTracking || context.authFingerprint === undefined) return undefined;
     try {
       const codexOptions = context.codexOptions;
@@ -3443,11 +3528,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private pruneStaleAuthSessions(): void {
-    for (const [threadId, context] of this.sessions) {
-      if (this.isContextAuthCurrent(context)) continue;
-      void this.stopSession(threadId).catch((error) => {
-        log.warn("failed to stop stale Codex session", { threadId, error });
-      });
+    for (const context of this.sessions.values()) {
+      const stalenessMessage = this.contextAuthStalenessMessage(context);
+      if (stalenessMessage) this.invalidateContextAuth(context, stalenessMessage);
     }
   }
 

@@ -1,0 +1,238 @@
+{
+  "apps/server/src/agentGateway/creationCoordinator.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/agentGateway/startupRecovery.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 2
+    }
+  },
+  "apps/server/src/attachmentStore.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/betaImport.ts": {
+    "reason": "Startup-only one-way Stable to Beta import; excluded from the streaming hot path.",
+    "references": {
+      "readFileSync": 1,
+      "writeFileSync": 1,
+      "renameSync": 5,
+      "lstatSync": 7,
+      "mkdirSync": 4,
+      "readdirSync": 1,
+      "cpSync": 5,
+      "statSync": 2,
+      "openSync": 1,
+      "readSync": 1,
+      "closeSync": 1,
+      "rmSync": 13,
+      "existsSync": 3,
+      "mkdtempSync": 2,
+      "realpathSync": 2
+    }
+  },
+  "apps/server/src/browserAutomation/browserHostRpcClient.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "readFileSync": 1,
+      "closeSync": 1
+    }
+  },
+  "apps/server/src/codexAuthIo.ts": {
+    "reason": "Shared security algorithm retains synchronous launch/request compatibility; stdout ingress uses the asynchronous interpreter.",
+    "references": {
+      "lstatSync": 1,
+      "statSync": 1,
+      "realpathSync": 1,
+      "openSync": 1,
+      "fstatSync": 1,
+      "readFileSync": 1,
+      "closeSync": 1
+    }
+  },
+  "apps/server/src/codexProcessEnv.ts": {
+    "reason": "Legacy launch overlay binding and migration reads; callback revalidation uses codexAuthIo async operations.",
+    "references": {
+      "lstatSync": 3,
+      "readlinkSync": 1,
+      "readFileSync": 2
+    }
+  },
+  "apps/server/src/codexWorkingDirectory.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "statSync": 1
+    }
+  },
+  "apps/server/src/computer/ComputerControlState.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "readFileSync": 1
+    }
+  },
+  "apps/server/src/computer/scrollGearingFile.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "readFileSync": 1
+    }
+  },
+  "apps/server/src/config.ts": {
+    "reason": "Startup configuration file existence check.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/device/IosSimulatorBackend.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/editorAppDiscovery.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "statSync": 2
+    }
+  },
+  "apps/server/src/externalMcp/bridge.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "lstatSync": 4,
+      "openSync": 3,
+      "fstatSync": 1,
+      "readFileSync": 3,
+      "closeSync": 4,
+      "existsSync": 5,
+      "writeFileSync": 1,
+      "fchmodSync": 1,
+      "fsyncSync": 2,
+      "renameSync": 1,
+      "chmodSync": 1,
+      "unlinkSync": 1,
+      "readdirSync": 1,
+      "rmSync": 1
+    }
+  },
+  "apps/server/src/git/Layers/GitManager.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "realpathSync": 1
+    }
+  },
+  "apps/server/src/git/Layers/GitStatusBroadcaster.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "realpathSync": 1
+    }
+  },
+  "apps/server/src/git/Layers/codexTextGenerationIsolation.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1,
+      "writeFileSync": 1,
+      "chmodSync": 1
+    }
+  },
+  "apps/server/src/git/isRepo.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/migrationBundleIdentity.ts": {
+    "reason": "Startup-only migration bundle identity verification.",
+    "references": {
+      "readFileSync": 2
+    }
+  },
+  "apps/server/src/open.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "statSync": 3
+    }
+  },
+  "apps/server/src/privatePathPermissions.ts": {
+    "reason": "Startup private data permissions: preserve descriptor identity, symlink and TOCTOU checks exactly.",
+    "references": {
+      "mkdirSync": 1,
+      "openSync": 4,
+      "fstatSync": 3,
+      "fchmodSync": 3,
+      "closeSync": 4,
+      "lstatSync": 1,
+      "chmodSync": 1,
+      "readdirSync": 1
+    }
+  },
+  "apps/server/src/provider/acp/CursorAcpCommand.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1,
+      "realpathSync": 1
+    }
+  },
+  "apps/server/src/provider/acp/DroidAcpSupport.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/provider/acp/OmpAcpSupport.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/provider/claudeProcessEnv.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "readFileSync": 1
+    }
+  },
+  "apps/server/src/provider/providerAttachmentPaths.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "statSync": 1
+    }
+  },
+  "apps/server/src/provider/providerBinaryResolution.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1,
+      "readdirSync": 2
+    }
+  },
+  "apps/server/src/provider/providerProcessEnv.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "mkdirSync": 1,
+      "chmodSync": 1
+    }
+  },
+  "apps/server/src/scratchWorkspaces.ts": {
+    "reason": "Legacy scratch-directory permission and descriptor checks; not identified as a streaming blocker.",
+    "references": {
+      "lstatSync": 3,
+      "openSync": 1,
+      "fstatSync": 3,
+      "closeSync": 3,
+      "fchmodSync": 2
+    }
+  },
+  "apps/server/src/terminal/managedTerminalWrappers.ts": {
+    "reason": "Existing unprofiled boundary; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 2,
+      "readFileSync": 2,
+      "writeFileSync": 1,
+      "chmodSync": 1,
+      "unlinkSync": 1
+    }
+  }
+}
