@@ -4,6 +4,7 @@ import { SettingsIcon } from "~/lib/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { Button } from "./ui/button";
+import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import {
   Dialog,
   DialogDescription,
@@ -65,7 +66,9 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
-  const open = info?.supported === true && (decision === "unseen" || revisit);
+  const wantsOpen = info?.supported === true && (decision === "unseen" || revisit);
+  const { open } = useAnnouncementSheetSlot(wantsOpen, revisit);
+  const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
 
   useEffect(() => {
     const show = () => {
@@ -109,7 +112,7 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
 
   return (
     <>
-      {info && !open ? children : null}
+      {info && (!wantsOpen || handedOff) ? children : null}
       <Dialog
         open={open}
         onOpenChange={(value) => {
