@@ -54,7 +54,6 @@ import type { WorkingLabel } from "../ChatView.logic";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
   ActivityLoadingIcon,
-  ActivityStartingIcon,
   BotIcon,
   ChangesIcon,
   CircleAlertIcon,
@@ -620,11 +619,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const workingIcon =
     workingLabel === "Thinking"
       ? ThinkingIcon
-      : workingLabel === "Loading"
-        ? ActivityLoadingIcon
-        : workingLabel === "Checking message delivery…"
-          ? MessageDeliveryCheckIcon
-          : ActivityStartingIcon;
+      : workingLabel === "Checking message delivery…"
+        ? MessageDeliveryCheckIcon
+        : ActivityLoadingIcon;
   const worktreeSetup = worktreeSetupProp ?? null;
   const worktreeSetupPendingAction = worktreeSetupPendingActionProp ?? null;
   const followLiveOutput = followLiveOutputProp ?? false;
