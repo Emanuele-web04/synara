@@ -139,15 +139,22 @@ function cutoutRectWithin(element: HTMLElement, box: DOMRect): CutoutRect {
 const IN_PAGE_SURFACE_SELECTOR = ".chat-raised-panel-surface, .chat-composer-surface";
 
 const inPageOverlayWrappers = new Set<HTMLElement>();
+const inPageOverlaySurfaces = new WeakMap<HTMLElement, HTMLElement>();
 let cutoutId = 0;
 let scheduleInstalledCutout: (() => void) | null = null;
 
 /**
  * Registers the wrapper of an in-page overlay; the content beside it is cut out from under
- * its raised surface while it stays registered. Returns the unregister function.
+ * its raised surface while it stays registered. An explicit surface supports overlays
+ * that use their panel's existing theme rather than a raised-card class.
+ * Returns the unregister function.
  */
-export function registerInPageGlassOverlay(wrapper: HTMLElement): () => void {
+export function registerInPageGlassOverlay(
+  wrapper: HTMLElement,
+  surface?: HTMLElement,
+): () => void {
   inPageOverlayWrappers.add(wrapper);
+  if (surface) inPageOverlaySurfaces.set(wrapper, surface);
   const observer = new MutationObserver(() => scheduleInstalledCutout?.());
   // Side-panel visibility changes on the host. Hidden Git/preview content updates
   // must not restart the frame loop; visible surfaces are already measured every frame.
@@ -156,6 +163,7 @@ export function registerInPageGlassOverlay(wrapper: HTMLElement): () => void {
   return () => {
     observer.disconnect();
     inPageOverlayWrappers.delete(wrapper);
+    inPageOverlaySurfaces.delete(wrapper);
     scheduleInstalledCutout?.();
   };
 }
@@ -288,7 +296,9 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
     if (documentElement.dataset.windowTranslucency !== "window") return 0;
     let covering = 0;
     for (const wrapper of inPageOverlayWrappers) {
-      const surface = wrapper.querySelector<HTMLElement>(IN_PAGE_SURFACE_SELECTOR);
+      const surface =
+        inPageOverlaySurfaces.get(wrapper) ??
+        wrapper.querySelector<HTMLElement>(IN_PAGE_SURFACE_SELECTOR);
       if (!surface || !wrapper.parentElement || !isCoveringOverlay(surface)) continue;
       covering += 1;
       for (const sibling of wrapper.parentElement.children) {

@@ -9,10 +9,12 @@ import { DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./preview-card";
 import { AppRailPortal, AppRailSlotProvider, railItemGlyphs } from "../AppRail";
 import { ProviderIcon } from "../ProviderIcon";
+import { installGlassOverlayCutout } from "~/lib/glassOverlayCutout";
 
 import {
   Sidebar,
   SidebarContent,
+  SidebarHeaderTrigger,
   SidebarProvider,
   SidebarTrigger,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
@@ -52,28 +54,37 @@ function IntegratedRailShell() {
   });
   return (
     <AppRailSlotProvider value={rail} compactThreadSlotRef={!open ? setAnchor : undefined}>
-      <div ref={setRail} className="flex shrink-0" />
-      <div className="relative flex shrink-0">
-        <Sidebar collapsible="compact" compactInRail compactAnchor={anchor}>
-          <AppRailPortal items={[item("home")]} shortcuts={[]} bottomItems={[item("settings")]} />
-          <SidebarContent>
-            {(["codex", "claudeAgent", "cursor"] as const).map((provider) => (
-              <button
-                key={provider}
-                data-slot="activity-thread-button"
-                className="w-full shrink-0"
-                aria-label={`${provider} thread`}
+      <div data-sidebar-preview-host className="flex min-h-0 shrink-0">
+        <div ref={setRail} className="flex shrink-0" />
+        <div className="app-rail-panel relative flex shrink-0">
+          <Sidebar collapsible="compact" compactInRail compactAnchor={anchor} transparentSurface>
+            <AppRailPortal items={[item("home")]} shortcuts={[]} bottomItems={[item("settings")]} />
+            <SidebarContent>
+              <div
+                data-slot="sidebar-panel-controls"
+                className="flex items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5"
               >
-                <span data-slot="activity-thread-identity" className="flex items-center gap-2">
-                  <span data-slot="sidebar-thread-provider">
-                    <ProviderIcon provider={provider} />
+                <SidebarHeaderTrigger data-slot="sidebar-compact-trigger" className="hidden" />
+                <strong data-testid="rail-panel-title">Synara</strong>
+              </div>
+              {(["codex", "claudeAgent", "cursor"] as const).map((provider) => (
+                <button
+                  key={provider}
+                  data-slot="activity-thread-button"
+                  className="w-full shrink-0"
+                  aria-label={`${provider} thread`}
+                >
+                  <span data-slot="activity-thread-identity" className="flex items-center gap-2">
+                    <span data-slot="sidebar-thread-provider">
+                      <ProviderIcon provider={provider} />
+                    </span>
+                    <span data-slot="sidebar-thread-title">{provider} thread</span>
                   </span>
-                  <span data-slot="sidebar-thread-title">{provider} thread</span>
-                </span>
-              </button>
-            ))}
-          </SidebarContent>
-        </Sidebar>
+                </button>
+              ))}
+            </SidebarContent>
+          </Sidebar>
+        </div>
       </div>
       <main data-testid="integrated-main" className="min-w-0 flex-1">
         <SidebarTrigger aria-label="Toggle integrated sidebar" />
@@ -85,6 +96,114 @@ function IntegratedRailShell() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("sidebar toggles", () => {
+  it.each([
+    { dark: false, scope: "none" },
+    { dark: true, scope: "none" },
+    { dark: false, scope: "sidebar" },
+    { dark: true, scope: "sidebar" },
+    { dark: false, scope: "window" },
+    { dark: true, scope: "window" },
+  ])(
+    "preserves configured appearance in the hover preview (dark=$dark, glass=$scope)",
+    async ({ dark, scope }) => {
+      await page.viewport(1280, 800);
+      const html = document.documentElement;
+      const savedClass = html.className;
+      const savedScope = html.getAttribute("data-window-translucency");
+      const savedMaterial = html.getAttribute("data-window-material");
+      html.classList.toggle("dark", dark);
+      html.dataset.windowTranslucency = scope;
+      html.dataset.windowMaterial = scope === "none" ? "opaque" : "translucent";
+      const root = document.createElement("div");
+      root.style.cssText = "position:fixed;inset:0";
+      document.body.append(root);
+      const dispose = installGlassOverlayCutout(root);
+      const screen = await render(
+        <SidebarProvider
+          defaultOpen
+          data-sidebar-layout="rail"
+          style={
+            {
+              "--color-background-surface": "rgb(34, 46, 58)",
+              "--popover": "rgb(200, 100, 60)",
+            } as import("react").CSSProperties
+          }
+        >
+          <IntegratedRailShell />
+        </SidebarProvider>,
+        { container: root },
+      );
+      try {
+        const host = root.querySelector<HTMLElement>(".app-rail-panel")!;
+        const surface = root.querySelector<HTMLElement>('[data-slot="sidebar-inner"]')!;
+        const main = page.getByTestId("integrated-main").element() as HTMLElement;
+        const title = page.getByTestId("rail-panel-title").element();
+        const normal = getComputedStyle(host);
+        const expected = {
+          background: normal.backgroundColor,
+          border: normal.borderLeftWidth,
+          radius: normal.borderTopLeftRadius,
+          shadow: normal.boxShadow,
+          titleOffset: title.getBoundingClientRect().left - host.getBoundingClientRect().left,
+          font: getComputedStyle(title).fontFamily,
+          fontSize: getComputedStyle(title).fontSize,
+        };
+        await page.getByRole("button", { name: "Toggle integrated sidebar" }).click();
+        await expect
+          .poll(
+            () =>
+              root.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!.getBoundingClientRect()
+                .width,
+          )
+          .toBe(0);
+        await page.getByRole("button", { name: "codex thread", exact: true }).hover();
+        await expect
+          .poll(
+            () =>
+              root
+                .querySelector<HTMLElement>('[data-slot="sidebar-container"]')!
+                .getBoundingClientRect().width,
+          )
+          .toBe(256);
+        const preview = getComputedStyle(surface);
+        expect(preview.backgroundColor).toBe(expected.background);
+        expect(preview.borderLeftWidth).toBe(expected.border);
+        expect(preview.borderTopLeftRadius).toBe(expected.radius);
+        expect(preview.boxShadow).toBe(expected.shadow);
+        expect(
+          Math.abs(
+            title.getBoundingClientRect().left -
+              surface.getBoundingClientRect().left -
+              expected.titleOffset,
+          ),
+        ).toBeLessThan(1);
+        expect(getComputedStyle(title).fontFamily).toBe(expected.font);
+        expect(getComputedStyle(title).fontSize).toBe(expected.fontSize);
+        expect(root.style.clipPath).toBe("");
+        if (scope === "window") {
+          await expect.poll(() => main.style.clipPath).not.toBe("");
+          const bounds = surface.getBoundingClientRect();
+          expect(
+            document.elementsFromPoint(
+              bounds.left + bounds.width / 2,
+              bounds.top + bounds.height / 2,
+            ),
+          ).not.toContain(main);
+        } else expect(main.style.clipPath).toBe("");
+        await userEvent.keyboard("{Escape}");
+        await expect.poll(() => main.style.clipPath).toBe("");
+      } finally {
+        await screen.unmount();
+        dispose();
+        root.remove();
+        html.className = savedClass;
+        if (savedScope === null) html.removeAttribute("data-window-translucency");
+        else html.setAttribute("data-window-translucency", savedScope);
+        if (savedMaterial === null) html.removeAttribute("data-window-material");
+        else html.setAttribute("data-window-material", savedMaterial);
+      }
+    },
+  );
   it("moves the same conversation icons into the outer rail only while collapsed", async () => {
     await page.viewport(1280, 800);
     const screen = await render(

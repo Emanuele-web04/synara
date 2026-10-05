@@ -145,7 +145,8 @@ vertically between navigation and the activity controls. Opening the sidebar
 returns those same rows to the full list; there is no second compact column.
 Hover or focus the icons to preview the full
 list without moving the chat; use the sidebar toggle to keep it open. Navigation
-stays visible beside both the full sidebar and its hover preview. Escape closes
+stays visible beside both the full sidebar and its hover preview. The preview
+uses the sidebar's configured theme and transparency. Escape closes
 the preview. The left rail summarizes working conversations, conversations needing
 review, and snoozed conversations. Selecting **Snoozed** opens its section; postponed
 conversations stay out of the work and review counts until they return.

@@ -3065,12 +3065,6 @@ diffs-container {
   display: none;
 }
 
-[data-sidebar-preview="true"] [data-slot="sidebar-inner"] {
-  background: var(--popover);
-  border-right: 1px solid var(--app-rail-inset-border, var(--border));
-  box-shadow: 12px 0 28px -16px rgb(0 0 0 / 35%);
-}
-
 :root[data-runtime="electron"]
   [data-sidebar-compact-mode="true"]
   .desktop-top-bar-traffic-light-gutter:not(.app-shell-top-strip) {
@@ -3083,8 +3077,7 @@ diffs-container {
   ) !important;
 }
 
-:is([data-sidebar-compact="true"], [data-sidebar-preview="true"])
-  [data-slot="sidebar-compact-trigger"] {
+[data-sidebar-compact="true"] [data-slot="sidebar-compact-trigger"] {
   display: inline-flex;
   flex-shrink: 0;
 }

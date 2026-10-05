@@ -5,6 +5,7 @@ import * as React from "react";
 import { LayoutAlignLeftIcon, LayoutLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { DISCLOSURE_TRANSITION_MS, DISCLOSURE_WIDTH_MOTION_CLASS } from "~/lib/disclosureMotion";
+import { registerInPageGlassOverlay } from "~/lib/glassOverlayCutout";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -329,6 +330,13 @@ function Sidebar({
     setPreviewOpen(false);
     return clearPreviewTimer;
   }, [compactCollapsed, clearPreviewTimer]);
+  React.useLayoutEffect(() => {
+    if (!compactCollapsed || !compactInRail || !previewOpen) return;
+    const host = panelRef.current?.closest<HTMLElement>("[data-sidebar-preview-host]");
+    const surface = panelRef.current?.querySelector<HTMLElement>('[data-slot="sidebar-inner"]');
+    if (!host || !surface) return;
+    return registerInPageGlassOverlay(host, surface);
+  }, [compactCollapsed, compactInRail, previewOpen]);
   React.useEffect(() => {
     if (!compactCollapsed || !previewOpen) return;
     // Menus and dialogs opened by a row live in portals. Keep the preview available
@@ -563,6 +571,7 @@ function Sidebar({
             className={cn(
               "relative z-0 flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
               !transparentSurface && "bg-sidebar",
+              compactInRail && previewOpen && "app-rail-panel mb-0",
               innerClassName,
             )}
             data-sidebar="sidebar"
