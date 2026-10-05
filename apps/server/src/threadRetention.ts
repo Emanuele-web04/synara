@@ -162,6 +162,8 @@ function isThreadEligibleForRetention(
 ): boolean {
   if (protectedThreadIds.has(thread.id)) return false;
   if (thread.isPinned === true) return false;
+  // Archiving clears a pending snooze, so its reminder would never fire.
+  if ((thread.snoozedUntil ?? null) !== null) return false;
   if (isThreadBusy(thread)) return false;
   const lastActivityMs = getThreadLastActivityMs(thread);
   return lastActivityMs !== null && lastActivityMs <= cutoffMs;
@@ -170,7 +172,7 @@ function isThreadEligibleForRetention(
 // Archiving a parent also archives its active subagent subtree. Select only roots
 // whose entire subtree is eligible, then omit eligible descendants that the root
 // command will archive. This prevents retention from cascading over a protected,
-// pinned, busy, or recent child and avoids duplicate archive commands.
+// pinned, snoozed, busy, or recent child and avoids duplicate archive commands.
 export function getRetentionArchiveRootIds(
   readModel: Pick<OrchestrationReadModel, "threads"> | Pick<OrchestrationShellSnapshot, "threads">,
   nowMs = Date.now(),
