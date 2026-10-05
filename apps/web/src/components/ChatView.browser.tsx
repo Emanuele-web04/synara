@@ -8264,15 +8264,25 @@ describe("ChatView transcript geometry (full app)", () => {
       const actionButtons = document.querySelectorAll<HTMLButtonElement>(
         'button[aria-label="Queued follow-up actions"]',
       );
+      await page.getByRole("button", { name: "Steer", exact: true }).first().hover();
+      await expect
+        .element(page.getByText("Send this follow-up now to redirect the current work."))
+        .toHaveTextContent(
+          "Send this follow-up now to redirect the current work. If native steering is unavailable, stop the current turn and start a new one.",
+        );
+      expect(
+        document.querySelectorAll('button[aria-label="Delete queued follow-up"]'),
+      ).toHaveLength(2);
       actionButtons[0]?.click();
 
       const editMenuItem = await waitForElement(
         () =>
           Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-item"]')).find(
-            (item) => item.textContent?.trim() === "Edit queued prompt",
+            (item) => item.textContent?.trim() === "Edit queued follow-up",
           ) ?? null,
-        "Unable to find edit queued prompt menu item.",
+        "Unable to find edit queued follow-up menu item.",
       );
+      expect(document.querySelectorAll('[data-slot="menu-item"]')).toHaveLength(1);
       editMenuItem.click();
 
       await vi.waitFor(
