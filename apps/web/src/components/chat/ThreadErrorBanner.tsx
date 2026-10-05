@@ -9,13 +9,12 @@
 // toast via useThreadErrorToast.
 
 import { isProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
-import { useId, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CopyTextButton } from "../ui/copyTextButton";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
-import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -43,33 +42,48 @@ function ThreadErrorBannerContent({
   className,
 }: ThreadErrorBannerProps & { error: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  const textRef = useRef<HTMLParagraphElement>(null);
   const detailsId = useId();
+  // Offer "Show details" only when the collapsed text actually hides something.
+  useLayoutEffect(() => {
+    const node = textRef.current;
+    if (!node || expanded) return;
+    const measure = () => setClamped(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [error, expanded]);
   const canUnblock = onUnblock !== undefined && isProviderDeliveryBlockDetail(error);
   return (
     <Alert variant="error" className={cn("w-full max-w-[36rem] shadow-sm", className)}>
       <CircleAlertIcon />
       <AlertDescription className="min-w-0">
-        <div className="[overflow-wrap:anywhere]">
-          {!expanded ? <p className="line-clamp-3 whitespace-pre-wrap">{error}</p> : null}
-          <div id={detailsId}>
-            <DisclosureRegion open={expanded}>
-              <p className="max-h-60 overflow-y-auto whitespace-pre-wrap" tabIndex={0}>
-                {error}
-              </p>
-            </DisclosureRegion>
-          </div>
-        </div>
+        <p
+          ref={textRef}
+          id={detailsId}
+          className={cn(
+            "whitespace-pre-wrap [overflow-wrap:anywhere]",
+            expanded ? "max-h-60 overflow-y-auto" : "line-clamp-3",
+          )}
+          tabIndex={expanded ? 0 : undefined}
+        >
+          {error}
+        </p>
         <div className="flex flex-wrap items-center gap-1">
-          <Button
-            size="xs"
-            variant="ghost"
-            aria-expanded={expanded}
-            aria-controls={detailsId}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <DisclosureChevron open={expanded} />
-            {expanded ? "Hide details" : "Show details"}
-          </Button>
+          {clamped || expanded ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-expanded={expanded}
+              aria-controls={detailsId}
+              onClick={() => setExpanded((value) => !value)}
+            >
+              <DisclosureChevron open={expanded} />
+              {expanded ? "Hide details" : "Show details"}
+            </Button>
+          ) : null}
           <CopyTextButton text={error} label="error" />
           {canUnblock ? (
             <Button

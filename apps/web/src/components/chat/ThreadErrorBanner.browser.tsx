@@ -30,7 +30,7 @@ describe("ThreadErrorBanner", () => {
     await show.click();
     const hide = page.getByRole("button", { name: "Hide details" });
     await expect.element(hide).toHaveAttribute("aria-expanded", "true");
-    const fullError = document.getElementById(detailsId!)!.querySelector("p")!;
+    const fullError = document.getElementById(detailsId!)!;
     expect(fullError.textContent).toBe(LONG_ERROR);
     await expect.element(fullError).toBeVisible();
     expect(getComputedStyle(fullError).whiteSpace).toBe("pre-wrap");
@@ -38,9 +38,9 @@ describe("ThreadErrorBanner", () => {
 
     await hide.click();
     await expect.element(show).toHaveAttribute("aria-expanded", "false");
-    const closedRegion = fullError.closest<HTMLElement>("[inert]")!;
-    expect(closedRegion.getAttribute("aria-hidden")).toBe("true");
-    await expect.poll(() => closedRegion.getBoundingClientRect().height).toBe(0);
+    expect(getComputedStyle(fullError).webkitLineClamp).toBe("3");
+    // The error text is rendered once, collapsed or expanded.
+    expect(page.getByText("Provider request failed", { exact: false }).elements()).toHaveLength(1);
   });
 
   it("keeps long errors scrollable without widening a narrow pane", async () => {
@@ -55,7 +55,7 @@ describe("ThreadErrorBanner", () => {
       .getByRole("button", { name: "Hide details" })
       .element()
       .getAttribute("aria-controls");
-    const fullError = document.getElementById(detailsId!)!.querySelector("p")!;
+    const fullError = document.getElementById(detailsId!)!;
     expect(fullError.textContent).toBe(error);
     await expect.poll(() => fullError.clientHeight).toBeGreaterThan(0);
     expect(fullError.scrollHeight).toBeGreaterThan(fullError.clientHeight);
@@ -85,9 +85,8 @@ describe("ThreadErrorBanner", () => {
     await expect.element(page.getByRole("button", { name: "Copied error" })).toBeVisible();
 
     await screen.rerender(<ThreadErrorBanner error="A different provider error" />);
-    await expect
-      .element(page.getByRole("button", { name: "Show details" }))
-      .toHaveAttribute("aria-expanded", "false");
+    // Short errors fit in the collapsed text, so there is nothing to expand.
+    await expect.element(page.getByRole("button", { name: /details/ })).not.toBeInTheDocument();
     await expect
       .element(page.getByRole("button", { name: "Copy error", exact: true }))
       .toBeVisible();
