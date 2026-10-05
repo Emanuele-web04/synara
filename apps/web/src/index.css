@@ -9,6 +9,8 @@
      share frames instead of repeatedly recompositing the translucent sidebar
      and composer. Keep 1300ms / 26 steps equal to shimmer's 2000ms / 40 steps. */
   --animate-spin-stepped: spin-stepped 1.3s steps(26, end) infinite;
+  /* Same 50ms step, half the speed: background work that keeps going without you. */
+  --animate-spin-stepped-slow: spin-stepped 2.6s steps(52, end) infinite;
   --font-sans: var(--font-ui-family);
   /* Font sizes that follow the size chosen in Settings (useAppTypography). */
   --text-ui: var(--app-font-size-ui);
