@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-import { AppRail, railCentralGlyphs } from "./AppRail";
+import { AppRail, railCentralGlyphs, railItemGlyphs } from "./AppRail";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "./ui/sidebar";
 
 function RailHoverHarness() {
@@ -45,6 +45,51 @@ function RailHoverHarness() {
 }
 
 describe("AppRail hover content", () => {
+  it("keeps compact conversations and Settings reachable in a short rail with all activity counters", async () => {
+    await page.viewport(1280, 360);
+    const item = (id: string) => ({
+      id,
+      glyphs: railItemGlyphs("home"),
+      label: id,
+      badge: null,
+      active: false,
+      onSelect: () => {},
+    });
+    const mounted = await render(
+      <div className="fixed inset-0 flex">
+        <AppRail
+          items={["Home", "Inbox", "Projects", "Tasks", "Automations", "History", "More"].map(item)}
+          shortcuts={[]}
+          activityItems={["Working", "Needs review", "Snoozed"].map(item)}
+          bottomItems={[item("Settings")]}
+          bottomSlot={
+            <>
+              <button type="button" className="size-9 shrink-0" aria-label="Usage" />
+              <button type="button" className="size-9 shrink-0" aria-label="Help" />
+            </>
+          }
+          compactThreadSlotRef={() => {}}
+        />
+      </div>,
+    );
+    try {
+      const rail = mounted.getByRole("navigation", { name: "Primary" }).element();
+      const settings = mounted.getByRole("button", { name: "Settings", exact: true }).element();
+      expect(settings.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        rail.getBoundingClientRect().bottom,
+      );
+      expect(
+        mounted.container.querySelector('[data-slot="app-rail-threads"]')!.getBoundingClientRect()
+          .height,
+      ).toBeGreaterThan(0);
+      const navigation = rail.firstElementChild!;
+      navigation.scrollTop = navigation.scrollHeight;
+      await mounted.getByRole("button", { name: "More", exact: true }).click();
+      await mounted.getByRole("button", { name: "Settings", exact: true }).click();
+    } finally {
+      await mounted.unmount();
+    }
+  });
   it("shows an interactive chat list on hover without moving the rail or activating its destination", async () => {
     await page.viewport(1280, 800);
     const mounted = await render(<RailHoverHarness />);

@@ -254,8 +254,8 @@ export function AppRail({
     >
       <div
         className={cn(
-          "flex min-h-0 w-full flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]",
-          compactThreadSlotRef ? "max-h-[40%] shrink-0" : "flex-1",
+          "flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]",
+          compactThreadSlotRef && "max-h-[40%]",
         )}
       >
         {items.map((item) => (
