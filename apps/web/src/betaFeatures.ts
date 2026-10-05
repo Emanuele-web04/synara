@@ -33,14 +33,12 @@ export const isBetaFeatureOn = (feature: string): boolean =>
 export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
 
 /**
- * Inbox is Beta-only. Off, its rail and sidebar entries are gone and its route
- * redirects home; the server refuses its recap RPC regardless.
+ * Inbox is available in Stable and Beta. Tasks within it retain their separate gate.
  */
 export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
 
 /**
- * Auto-fix CI is Beta-only. Off, the PR menu has no Auto-fix CI checkbox; the server refuses
- * its RPCs and never starts the watcher regardless.
+ * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.
  */
 export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
 

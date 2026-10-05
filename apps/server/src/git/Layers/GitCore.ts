@@ -59,6 +59,9 @@ import { ServerConfig } from "../../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+// Writes can scale with repository size and network speed. Bound captured logs,
+// not the operation; caller interruption still closes the owned process scope.
+const GIT_MUTATION_OPTIONS = { timeoutMs: null, outputMode: "truncate" } as const;
 // Successful upstream refreshes stay warm for 15s. Failures used to use
 // Duration.zero, which re-ran `git fetch` on every git.status and created a
 // permanent fetch storm for unreachable remotes (#515). Cache failures too,
@@ -173,7 +176,7 @@ function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
 class StatusUpstreamRefreshCacheKey extends Data.Class<StatusUpstreamRefreshCacheKeyFields> {}
 
 interface ExecuteGitOptions {
-  timeoutMs?: number | undefined;
+  timeoutMs?: number | null | undefined;
   allowNonZeroExit?: boolean | undefined;
   fallbackErrorMessage?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
@@ -807,7 +810,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ...input,
           args: [...input.args],
         } as const;
-        const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const timeoutMs = input.timeoutMs === null ? null : (input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
         const outputMode = input.outputMode ?? "error";
 
@@ -883,6 +886,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           } satisfies ExecuteGitResult;
         });
 
+        if (timeoutMs === null) {
+          return yield* commandEffect.pipe(Effect.scoped);
+        }
         return yield* commandEffect.pipe(
           Effect.scoped,
           Effect.timeoutOption(timeoutMs),
@@ -962,6 +968,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       executeGit(operation, cwd, args, { allowNonZeroExit }).pipe(
         Effect.map((result) => result.stdout),
       );
+
+    // Status must enumerate all file metadata for the UI. Stream NUL records
+    // past the diagnostic capture limit; never use this for patches or blobs.
+    const runGitNulMetadata = (
+      operation: string,
+      cwd: string,
+      args: readonly string[],
+      options: ExecuteGitOptions = {},
+    ) =>
+      Effect.gen(function* () {
+        const records: string[] = [];
+        yield* executeGit(operation, cwd, args, {
+          outputMode: "truncate",
+          ...options,
+          progress: {
+            stdoutLineDelimiter: "\0",
+            onStdoutLine: (record) =>
+              Effect.sync(() => {
+                records.push(record);
+              }),
+          },
+        });
+        return records.join("\0");
+      });
 
     const repositoryMutationLocks = new Map<string, Semaphore.Semaphore>();
     const repositoryMutationCounts = new Map<string, number>();
@@ -1062,7 +1092,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             },
           );
 
-          const numstatStdout = yield* executeGit(
+          const numstatStdout = yield* runGitNulMetadata(
             "GitCore.statusDetails.moveAwareNumstat",
             cwd,
             ["diff", "--cached", "--numstat", "-z", "--find-renames"],
@@ -1071,7 +1101,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               allowNonZeroExit: true,
               timeoutMs: MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS,
             },
-          ).pipe(Effect.map((result) => result.stdout));
+          );
 
           return summarizeGitNumstatOutputs([numstatStdout]);
         }),
@@ -1539,7 +1569,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
-        const statusStdout = yield* runGitStdout("GitCore.statusDetails.status", cwd, [
+        const statusStdout = yield* runGitNulMetadata("GitCore.statusDetails.status", cwd, [
           "status",
           "--porcelain=2",
           "--branch",
@@ -1639,8 +1669,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         const numstatOutputs = yield* Effect.all(
           [
-            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat", "-z"]),
-            runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
+            runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
+              "diff",
+              "--numstat",
+              "-z",
+            ]),
+            runGitNulMetadata("GitCore.statusDetails.stagedNumstat", cwd, [
               "diff",
               "--cached",
               "--numstat",
@@ -1704,6 +1738,47 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       });
 
     const statusDetails: GitCoreShape["statusDetails"] = (cwd) => readStatusDetails(cwd, true);
+
+    const readActionStatus: GitCoreShape["readActionStatus"] = (cwd) =>
+      Effect.gen(function* () {
+        yield* refreshStatusUpstreamIfStale(cwd).pipe(Effect.ignoreCause({ log: true }));
+        const headers: string[] = [];
+        let hasWorkingTreeChanges = false;
+        yield* executeGit(
+          "GitCore.readActionStatus",
+          cwd,
+          ["status", "--porcelain=2", "--branch", "-z"],
+          {
+            outputMode: "truncate",
+            progress: {
+              stdoutLineDelimiter: "\0",
+              onStdoutLine: (record) =>
+                Effect.sync(() => {
+                  // Headers precede all file records. Rename source paths must
+                  // never be interpreted as headers, even if their names match.
+                  if (hasWorkingTreeChanges) return;
+                  if (record.startsWith("# ")) headers.push(record);
+                  else hasWorkingTreeChanges = true;
+                }),
+            },
+          },
+        );
+        const parsed = parseGitStatusPorcelain(headers.join("\0"));
+        const aheadCount =
+          !parsed.upstreamRef && parsed.branch
+            ? yield* computeAheadCountAgainstBase(cwd, parsed.branch).pipe(
+                Effect.catch(() => Effect.succeed(0)),
+              )
+            : parsed.aheadCount;
+        return {
+          branch: parsed.branch,
+          upstreamRef: parsed.upstreamRef,
+          hasUpstream: parsed.upstreamRef !== null,
+          aheadCount,
+          behindCount: parsed.behindCount,
+          hasWorkingTreeChanges,
+        };
+      });
 
     const readBranchContext: GitCoreShape["readBranchContext"] = (cwd) =>
       Effect.gen(function* () {
@@ -2531,34 +2606,74 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (cwd, filePaths) =>
       Effect.gen(function* () {
         if (filePaths && filePaths.length > 0) {
-          yield* runGit("GitCore.prepareCommitContext.reset", cwd, ["reset"]).pipe(
-            Effect.catch(() => Effect.void),
+          if (filePaths.some((filePath) => filePath.includes("\0"))) {
+            return yield* createGitCommandError(
+              "GitCore.prepareCommitContext.addSelected",
+              cwd,
+              ["add", "-A"],
+              "Selected file paths cannot contain NUL characters.",
+            );
+          }
+          yield* executeGit(
+            "GitCore.prepareCommitContext.reset",
+            cwd,
+            ["reset"],
+            GIT_MUTATION_OPTIONS,
+          ).pipe(Effect.catch(() => Effect.void));
+          // A pathspec file avoids OS argument-size limits for large selections.
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const directory = yield* fileSystem.makeTempDirectoryScoped({
+                prefix: "synara-git-pathspec-",
+              });
+              const pathspec = nodePath.join(directory, "paths");
+              yield* fileSystem.writeFileString(pathspec, `${filePaths.join("\0")}\0`);
+              yield* executeGit(
+                "GitCore.prepareCommitContext.addSelected",
+                cwd,
+                ["add", "-A", `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"],
+                GIT_MUTATION_OPTIONS,
+              );
+            }),
+          ).pipe(
+            Effect.mapError(
+              toGitCommandError(
+                {
+                  operation: "GitCore.prepareCommitContext.addSelected",
+                  cwd,
+                  args: ["add", "-A"],
+                },
+                "failed to stage selected files.",
+              ),
+            ),
           );
-          yield* runGit("GitCore.prepareCommitContext.addSelected", cwd, [
-            "add",
-            "-A",
-            "--",
-            ...filePaths,
-          ]);
         } else {
-          yield* runGit("GitCore.prepareCommitContext.addAll", cwd, ["add", "-A"]);
+          yield* executeGit(
+            "GitCore.prepareCommitContext.addAll",
+            cwd,
+            ["add", "-A"],
+            GIT_MUTATION_OPTIONS,
+          );
         }
 
-        const stagedSummary = yield* runGitStdout(
+        const stagedSummary = yield* executeGit(
           "GitCore.prepareCommitContext.stagedSummary",
           cwd,
           ["diff", "--cached", "--name-status"],
-        ).pipe(Effect.map((stdout) => stdout.trim()));
+          GIT_MUTATION_OPTIONS,
+        ).pipe(Effect.map((result) => result.stdout.trim()));
         if (stagedSummary.length === 0) {
           return null;
         }
 
-        const stagedPatch = yield* runGitStdout("GitCore.prepareCommitContext.stagedPatch", cwd, [
-          "diff",
-          "--cached",
-          "--patch",
-          "--minimal",
-        ]);
+        // Message generation only needs a bounded preview. A large patch must
+        // not prevent committing the complete staged contents.
+        const stagedPatch = yield* executeGit(
+          "GitCore.prepareCommitContext.stagedPatch",
+          cwd,
+          ["diff", "--cached", "--patch", "--minimal"],
+          GIT_MUTATION_OPTIONS,
+        ).pipe(Effect.map((result) => result.stdout));
 
         return {
           stagedSummary,
@@ -2594,6 +2709,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             }
           : null;
         yield* executeGit("GitCore.commit.commit", cwd, args, {
+          ...GIT_MUTATION_OPTIONS,
           ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
           ...(progress ? { progress } : {}),
         }).pipe(Effect.asVoid);
@@ -2607,7 +2723,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const pushCurrentBranch: GitCoreShape["pushCurrentBranch"] = (cwd, fallbackBranch) =>
       Effect.gen(function* () {
-        const details = yield* statusDetails(cwd);
+        const details = yield* readActionStatus(cwd);
         const branch = details.branch ?? fallbackBranch;
         if (!branch) {
           return yield* createGitCommandError(
@@ -2664,12 +2780,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               "Cannot push because no git remote is configured for this repository.",
             );
           }
-          yield* runGit("GitCore.pushCurrentBranch.pushWithUpstream", cwd, [
-            "push",
-            "-u",
-            publishRemoteName,
-            branch,
-          ]);
+          yield* executeGit(
+            "GitCore.pushCurrentBranch.pushWithUpstream",
+            cwd,
+            ["push", "-u", publishRemoteName, branch],
+            GIT_MUTATION_OPTIONS,
+          );
           return {
             status: "pushed" as const,
             branch,
@@ -2682,11 +2798,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           Effect.catch(() => Effect.succeed(null)),
         );
         if (currentUpstream) {
-          yield* runGit("GitCore.pushCurrentBranch.pushUpstream", cwd, [
-            "push",
-            currentUpstream.remoteName,
-            `HEAD:${currentUpstream.upstreamBranch}`,
-          ]);
+          yield* executeGit(
+            "GitCore.pushCurrentBranch.pushUpstream",
+            cwd,
+            ["push", currentUpstream.remoteName, `HEAD:${currentUpstream.upstreamBranch}`],
+            GIT_MUTATION_OPTIONS,
+          );
           return {
             status: "pushed" as const,
             branch,
@@ -2695,7 +2812,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           };
         }
 
-        yield* runGit("GitCore.pushCurrentBranch.push", cwd, ["push"]);
+        yield* executeGit("GitCore.pushCurrentBranch.push", cwd, ["push"], GIT_MUTATION_OPTIONS);
         return {
           status: "pushed" as const,
           branch,
@@ -3815,7 +3932,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           input.cwd,
           ["push", "-u", remoteName, input.branch],
           {
-            timeoutMs: 30_000,
+            ...GIT_MUTATION_OPTIONS,
             fallbackErrorMessage: "git branch publish failed",
           },
         );
@@ -4167,6 +4284,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       status,
       statusDetails,
       readBranchContext,
+      readActionStatus,
       readWorkingTreePatch,
       readUnstagedPatch,
       readStagedPatch,

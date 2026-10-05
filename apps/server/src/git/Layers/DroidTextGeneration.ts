@@ -170,6 +170,7 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         input,
         (input) =>
           buildCommitMessagePrompt({
+            writingPreferences: input.writingPreferences,
             branch: input.branch,
             stagedSummary: input.stagedSummary,
             stagedPatch: input.stagedPatch,
@@ -192,6 +193,7 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         input,
         (input) =>
           buildPrContentPrompt({
+            writingPreferences: input.writingPreferences,
             baseBranch: input.baseBranch,
             headBranch: input.headBranch,
             commitSummary: input.commitSummary,

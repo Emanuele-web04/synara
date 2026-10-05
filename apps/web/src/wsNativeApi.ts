@@ -33,7 +33,7 @@ import {
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
-  type ServerVoiceTranscriptionResult,
+  ServerVoiceTranscriptionResult,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -55,6 +55,7 @@ import {
   type ComputerEvent,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
+import { Schema } from "effect";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { TASKS_OFFERED_BY_BUILD } from "./tasksSurface";
@@ -277,15 +278,17 @@ async function requestVoiceTranscriptionUpload(
     void response.body?.cancel().catch(() => undefined);
     throw new VoiceUploadRouteUnavailableError();
   }
-  const payload = (await response.json().catch(() => null)) as
-    | ServerVoiceTranscriptionResult
-    | { readonly error?: unknown }
-    | null;
-  if (!response.ok || !payload || !("text" in payload)) {
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok || !Schema.is(ServerVoiceTranscriptionResult)(payload)) {
     const message =
-      payload && "error" in payload && typeof payload.error === "string"
+      payload !== null &&
+      typeof payload === "object" &&
+      "error" in payload &&
+      typeof payload.error === "string"
         ? payload.error
-        : `Voice transcription failed with status ${response.status}.`;
+        : response.ok
+          ? "The voice transcription service returned an invalid response. Please try again."
+          : `Voice transcription failed with status ${response.status}.`;
     throw new Error(message);
   }
   return payload;

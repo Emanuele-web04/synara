@@ -332,6 +332,7 @@ describe("ChatTranscriptPane", () => {
       await expect.element(unblockButton).toBeInTheDocument();
       await unblockButton.click();
       expect(onUnblockThread).toHaveBeenCalledTimes(1);
+      expect(onUnblockThread).toHaveBeenCalledWith();
 
       const dismissButton = page.getByRole("button", { name: "Dismiss error" });
       await expect.element(dismissButton).toBeInTheDocument();
@@ -343,104 +344,148 @@ describe("ChatTranscriptPane", () => {
     }
   });
 
-  it("keeps hidden message-trail ticks out of the tab order", async () => {
-    const host = document.createElement("div");
-    host.style.cssText = "display:flex;width:600px;height:520px;";
-    document.body.append(host);
+  it.each([
+    { width: 600, chatWidth: "46rem", inset: 0, visible: false },
+    { width: 1000, chatWidth: "46rem", inset: 0, visible: true },
+    { width: 1000, chatWidth: "72rem", inset: 0, visible: false },
+    { width: 1000, chatWidth: "100%", inset: 0, visible: false },
+    { width: 1500, chatWidth: "72rem", inset: 0, visible: true },
+    { width: 1000, chatWidth: "46rem", inset: 300, visible: false },
+  ])(
+    "keeps message navigation clear of content ($width / $chatWidth / inset $inset)",
+    async ({ width, chatWidth, inset, visible }) => {
+      await page.viewport(1600, 800);
+      const host = document.createElement("div");
+      host.style.cssText = `display:flex;width:${width}px;height:520px;--app-chat-max-width:${chatWidth};`;
+      document.body.append(host);
 
-    const screen = await render(
-      <ChatTranscriptPane
-        activeThreadId="thread-hidden-trail"
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        chatFontSizePx={15}
-        emptyStateProjectName={undefined}
-        hasMessages
-        isRevertingCheckpoint={false}
-        isWorking={false}
-        worktreeSetup={null}
-        followLiveOutput={false}
-        listRef={{ current: null }}
-        markdownCwd={undefined}
-        onExpandTimelineImage={NOOP}
-        onMessagesClickCapture={NOOP}
-        onMessagesMouseUp={NOOP}
-        onMessagesPointerCancel={NOOP}
-        onMessagesPointerDown={NOOP}
-        onMessagesPointerUp={NOOP}
-        onMessagesScroll={NOOP}
-        onMessagesTouchEnd={NOOP}
-        onMessagesTouchMove={NOOP}
-        onMessagesTouchStart={NOOP}
-        onMessagesWheel={NOOP}
-        onIsAtEndChange={NOOP}
-        onOpenTurnDiff={NOOP}
-        onOpenThread={NOOP}
-        onRevertUserMessage={NOOP}
-        onScrollToBottom={NOOP}
-        resolvedTheme="dark"
-        revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
-        scrollButtonVisible={false}
-        terminalWorkspaceTerminalTabActive={false}
-        timelineEntries={[
-          {
-            id: "user-message-entry-1",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("user-message-trail-1"),
-              role: "user",
-              text: "First turn",
+      const transcript = (rightInset: number) => (
+        <ChatTranscriptPane
+          activeThreadId="thread-hidden-trail"
+          contentInsetRightPx={rightInset}
+          isLocalDraft
+          activeTurnInProgress={false}
+          activeTurnStartedAt={null}
+          chatFontSizePx={15}
+          emptyStateProjectName={undefined}
+          hasMessages
+          isRevertingCheckpoint={false}
+          isWorking={false}
+          worktreeSetup={null}
+          followLiveOutput={false}
+          listRef={{ current: null }}
+          markdownCwd={undefined}
+          onExpandTimelineImage={NOOP}
+          onMessagesClickCapture={NOOP}
+          onMessagesMouseUp={NOOP}
+          onMessagesPointerCancel={NOOP}
+          onMessagesPointerDown={NOOP}
+          onMessagesPointerUp={NOOP}
+          onMessagesScroll={NOOP}
+          onMessagesTouchEnd={NOOP}
+          onMessagesTouchMove={NOOP}
+          onMessagesTouchStart={NOOP}
+          onMessagesWheel={NOOP}
+          onIsAtEndChange={NOOP}
+          onOpenTurnDiff={NOOP}
+          onOpenThread={NOOP}
+          onRevertUserMessage={NOOP}
+          onScrollToBottom={NOOP}
+          resolvedTheme="dark"
+          revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
+          scrollButtonVisible={false}
+          terminalWorkspaceTerminalTabActive={false}
+          timelineEntries={[
+            {
+              id: "user-message-entry-1",
+              kind: "message",
               createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
+              message: {
+                id: MessageId.makeUnsafe("user-message-trail-1"),
+                role: "user",
+                text: "First turn",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                streaming: false,
+              },
             },
-          },
-          {
-            id: "assistant-message-entry-1",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("assistant-message-trail-1"),
-              role: "assistant",
-              text: "First reply",
+            {
+              id: "assistant-message-entry-1",
+              kind: "message",
               createdAt: "2026-03-17T19:12:29.000Z",
-              streaming: false,
+              message: {
+                id: MessageId.makeUnsafe("assistant-message-trail-1"),
+                role: "assistant",
+                text: "First reply",
+                createdAt: "2026-03-17T19:12:29.000Z",
+                streaming: false,
+              },
             },
-          },
-          {
-            id: "user-message-entry-2",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:30.000Z",
-            message: {
-              id: MessageId.makeUnsafe("user-message-trail-2"),
-              role: "user",
-              text: "Second turn",
+            {
+              id: "user-message-entry-2",
+              kind: "message",
               createdAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
+              message: {
+                id: MessageId.makeUnsafe("user-message-trail-2"),
+                role: "user",
+                text: "Second turn",
+                createdAt: "2026-03-17T19:12:30.000Z",
+                streaming: false,
+              },
             },
-          },
-        ]}
-        timestampFormat="locale"
-        turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
-        workspaceRoot={undefined}
-      />,
-      { container: host },
-    );
-    try {
-      await vi.waitFor(() => {
-        const trail = screen.container.querySelector('nav[aria-label="Message navigation"]');
-        expect(trail?.getAttribute("aria-hidden")).toBe("true");
-      });
-
-      const ticks = Array.from(
-        screen.container.querySelectorAll<HTMLButtonElement>(
-          'nav[aria-label="Message navigation"] button',
-        ),
+          ]}
+          timestampFormat="locale"
+          turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
+          workspaceRoot={undefined}
+        />
       );
-      expect(ticks).toHaveLength(2);
-      expect(ticks.every((tick) => tick.tabIndex === -1)).toBe(true);
-    } finally {
-      await screen.unmount();
-    }
-  });
+      const screen = await render(transcript(inset), { container: host });
+      try {
+        await vi.waitFor(() => {
+          const trail = screen.container.querySelector('nav[aria-label="Message navigation"]');
+          expect(trail?.getAttribute("aria-hidden")).toBe(String(!visible));
+        });
+
+        const ticks = Array.from(
+          screen.container.querySelectorAll<HTMLButtonElement>(
+            'nav[aria-label="Message navigation"] button',
+          ),
+        );
+        expect(ticks).toHaveLength(2);
+        expect(ticks.filter((tick) => tick.tabIndex === 0)).toHaveLength(visible ? 1 : 0);
+        if (visible) {
+          const rail = screen.container.querySelector('nav[aria-label="Message navigation"]')!;
+          const message = screen.container.querySelector('[data-message-role="assistant"]')!;
+          expect(message.getBoundingClientRect().left).toBeGreaterThan(
+            rail.getBoundingClientRect().right,
+          );
+          ticks[0]!.focus();
+          const tooltip = screen.container.querySelector('[role="tooltip"]')!;
+          await vi.waitFor(() => expect(getComputedStyle(tooltip).visibility).toBe("visible"));
+          // Changing the width preference must also hide the already-mounted rail.
+          host.style.setProperty("--app-chat-max-width", "100%");
+          await vi.waitFor(() => expect(rail.getAttribute("aria-hidden")).toBe("true"));
+          expect(ticks.every((tick) => tick.tabIndex === -1)).toBe(true);
+          expect(getComputedStyle(tooltip).visibility).toBe("hidden");
+          expect(ticks).not.toContain(document.activeElement);
+        } else if (inset > 0) {
+          const rail = screen.container.querySelector('nav[aria-label="Message navigation"]')!;
+          const message = screen.container.querySelector('[data-message-role="assistant"]')!;
+          await settleLayout();
+          await screen.rerender(transcript(0));
+          for (let frame = 0; frame < 20; frame += 1) {
+            await new Promise(requestAnimationFrame);
+            if (rail.getAttribute("aria-hidden") === "false") {
+              expect(message.getBoundingClientRect().left).toBeGreaterThan(
+                rail.getBoundingClientRect().right,
+              );
+            }
+          }
+          await expect.poll(() => rail.getAttribute("aria-hidden")).toBe("false");
+        }
+      } finally {
+        await screen.unmount();
+        host.remove();
+      }
+    },
+  );
 });

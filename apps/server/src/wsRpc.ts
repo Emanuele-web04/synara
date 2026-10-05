@@ -1,3 +1,4 @@
+import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
 import { execFile } from "node:child_process";
 
@@ -24,7 +25,6 @@ import {
   PullRequestsUnavailableError,
   type DeviceEvent,
   type ComputerEvent,
-  type GitActionProgressEvent,
   type GitRemoveWorktreeInput,
   type GitHubProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
@@ -532,6 +532,25 @@ const makeWsRpcHandlersLayer = () =>
       const computerHandlers = makeWsComputerHandlers(
         computerService,
         Option.getOrUndefined(yield* Effect.serviceOption(AgentGatewaySessionRegistry)),
+      );
+      const runGitAction = yield* makeGitActionRunner((input, publish) =>
+        Effect.gen(function* () {
+          const settings = yield* serverSettings.getSettings;
+          const routing = resolveTextGenerationRouting(settings, input);
+          yield* gitManager.runStackedAction(
+            {
+              ...input,
+              ...(routing.modelSelection
+                ? { textGenerationModelSelection: routing.modelSelection }
+                : {}),
+              ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
+            },
+            { actionId: input.actionId, progressReporter: { publish } },
+          );
+          yield* refreshGitStatusInBackground(input.cwd);
+        }).pipe(
+          Effect.catchCause((cause) => Effect.fail(toWsRpcError(cause, "Git action failed"))),
+        ),
       );
       const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
         homeDir: config.homeDir,
@@ -1881,37 +1900,7 @@ const makeWsRpcHandlersLayer = () =>
             ),
             "Failed to pull branch",
           ),
-        [WS_METHODS.gitRunStackedAction]: (input) =>
-          bufferLiveUiStream(
-            Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              Effect.gen(function* () {
-                const settings = yield* serverSettings.getSettings;
-                const routing = resolveTextGenerationRouting(settings, input);
-                return {
-                  ...input,
-                  ...(routing.modelSelection
-                    ? { textGenerationModelSelection: routing.modelSelection }
-                    : {}),
-                  ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
-                };
-              }).pipe(
-                Effect.flatMap((runInput) =>
-                  gitManager.runStackedAction(runInput, {
-                    actionId: input.actionId,
-                    progressReporter: {
-                      publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
-                    },
-                  }),
-                ),
-                Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
-                Effect.matchCauseEffect({
-                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
-                }),
-              ),
-            ),
-            { label: "git.stacked-action" },
-          ),
+        [WS_METHODS.gitRunStackedAction]: runGitAction,
         // Summary lookups gate cache misses inside GitHubCli so fresh badge data stays available.
         [WS_METHODS.gitResolvePullRequest]: (input) =>
           rpcEffect(
@@ -3088,16 +3077,24 @@ const makeWsRpcHandlersLayer = () =>
 export const makeWsRpcLayer = () =>
   Layer.merge(makeWsRpcHandlersLayer(), wsRequestAdmissionMiddlewareLayer);
 
-const makeRpcWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(AdmittedWsFeatureRpcGroup, {
-  spanPrefix: "ws.rpc",
-  spanAttributes: {
-    "rpc.transport": "websocket",
-    "rpc.system": "effect-rpc",
-  },
-  // JSON keeps the wire format symmetric with any web build. A serialization
-  // mismatch on this single multiplexed socket is a hard connect failure, and the
-  // desktop/dev setup routinely runs server and web on independently-built copies.
-}).pipe(Effect.provide(makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson))));
+const makeRpcWebSocketHttpEffect = Effect.gen(function* () {
+  // Keep handler-owned jobs alive for the HTTP server lifetime. Effect.provide
+  // with a Layer would close its build scope as soon as this constructor returns.
+  const handlers = yield* Layer.buildWithScope(
+    makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson)),
+    yield* Effect.scope,
+  );
+  return yield* RpcServer.toHttpEffectWebsocket(AdmittedWsFeatureRpcGroup, {
+    spanPrefix: "ws.rpc",
+    spanAttributes: {
+      "rpc.transport": "websocket",
+      "rpc.system": "effect-rpc",
+    },
+    // JSON keeps the wire format symmetric with any web build. A serialization
+    // mismatch on this single multiplexed socket is a hard connect failure, and the
+    // desktop/dev setup routinely runs server and web on independently-built copies.
+  }).pipe(Effect.provide(handlers));
+});
 
 const makeBootstrapWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(WsBootstrapRpcGroup, {
   spanPrefix: "ws.bootstrap",

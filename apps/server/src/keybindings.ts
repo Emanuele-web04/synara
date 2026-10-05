@@ -125,11 +125,6 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+8", command: "space.jump.8", when: "!terminalFocus || isMac" },
   { key: "mod+alt+9", command: "space.jump.9", when: "!terminalFocus || isMac" },
   { key: "mod+j", command: "terminal.toggle" },
-  { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
-  { key: "mod+shift+arrowright", command: "terminal.splitRight", when: "terminalFocus" },
-  { key: "mod+shift+arrowleft", command: "terminal.splitLeft", when: "terminalFocus" },
-  { key: "mod+shift+arrowdown", command: "terminal.splitDown", when: "terminalFocus" },
-  { key: "mod+shift+arrowup", command: "terminal.splitUp", when: "terminalFocus" },
   // Reserve Cmd/Ctrl+T for the terminal workspace's "new tab" action while focused.
   { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },

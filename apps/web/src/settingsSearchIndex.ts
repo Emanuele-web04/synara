@@ -474,6 +474,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Models ────────────────────────────────────────────────────────────────────
   {
+    id: "models:source-control-writing-style",
+    section: "models",
+    title: "Source control writing style",
+    keywords:
+      "Repository conventions Conventional Commits custom instructions commit messages PR titles descriptions",
+  },
+  {
     id: "models:git-writing-model",
     section: "models",
     title: "Git writing model",

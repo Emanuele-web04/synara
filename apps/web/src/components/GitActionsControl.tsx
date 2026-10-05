@@ -90,7 +90,8 @@ import {
 } from "~/components/ui/menu";
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
-import { toastManager } from "~/components/ui/toast";
+import { toastManager, reportToastIssue } from "~/components/ui/toast";
+import { diagnosticIssueReason } from "~/lib/rendererErrorDiagnostics";
 import { openInPreferredEditor } from "~/editorPreferences";
 import {
   gitBranchesQueryOptions,
@@ -772,6 +773,7 @@ export default function GitActionsControl({
         shouldPushBeforePr,
       });
       const actionId = randomUUID();
+      const diagnosticStartedAt = performance.now();
       const resolvedProgressToastId =
         progressToastId ??
         toastManager.add({
@@ -941,15 +943,22 @@ export default function GitActionsControl({
         if (activeGitActionProgressRef.current === actionProgress) {
           activeGitActionProgressRef.current = null;
         }
-        toastManager.update(
+        const failureToast = buildGitActionFailureToast({
+          message:
+            actionProgress.failure?.message ??
+            (err instanceof Error ? err.message : "An error occurred."),
+          phase: actionProgress.failure?.phase ?? actionProgress.phase,
+          threadId: activeThreadId,
+        });
+        toastManager.update(resolvedProgressToastId, failureToast);
+        reportToastIssue(
           resolvedProgressToastId,
-          buildGitActionFailureToast({
-            message:
-              actionProgress.failure?.message ??
-              (err instanceof Error ? err.message : "An error occurred."),
-            phase: actionProgress.failure?.phase ?? actionProgress.phase,
-            threadId: activeThreadId,
-          }),
+          {
+            code: `git.${actionProgress.failure?.phase ?? actionProgress.phase ?? "request"}.failed`,
+            reason: diagnosticIssueReason(actionProgress.failure?.message ?? err),
+            durationMs: performance.now() - diagnosticStartedAt,
+          },
+          failureToast.data,
         );
       }
     },

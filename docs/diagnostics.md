@@ -42,6 +42,72 @@ message keeps the original port so it can still help diagnosis.
 Crash events exclude clean process exits and known app shutdowns, including
 backend processes deliberately stopped for an updater handoff. An unexpected
 `killed` process remains reportable; a signal alone does not prove shutdown.
+Renderer crash log tails include the triggering reason and exit code. A closed
+launcher stdout/stderr pipe is handled on that stream without quitting the app
+or reporting an uncaught exception; other stream errors still propagate.
+
+### Handled failures and diagnostic IDs
+
+Beta also records handled Git action failures (request, branch, commit, push,
+and PR stages), voice recording/transcription failures, Claude compaction request
+failures or uncertain acceptance, failed/uncertain Claude cache reviews, and
+backend startup blocks. These use the existing `app.error` envelope with a fixed
+`Handled issue: <code> (<reason>)` message. They are not crash reports. The issue
+allowlist lives in `DesktopDiagnosticIssue` in `packages/contracts/src/ipc.ts`.
+No new event names or ingest fields are required by this change.
+
+The reason is a coarse local classification (authentication, invalid response,
+timeout, output limit, live database owner, unknown owner, or unknown). It does
+not prove a root cause. Reports may include elapsed operation time, rounded to
+milliseconds, in the existing bounded context field. They never serialize the
+original exception, command arguments, Git output, voice/audio/transcript data,
+chat or project identifiers, database paths, or lock-owner PIDs. Existing activity
+and memory context still passes through the shared redactor.
+
+Git and cache-review terminal failures are reported by the Beta backend through
+a bounded, validated desktop log marker, even when the affected chat is not open.
+Renderer failures are reported when the UI observes them; opening an already
+failed cache review can therefore report an older failure. Cancellations and
+pending compaction/approval states do not generate these reports. No operation
+deadline or automatic retry is added.
+
+Error toasts and cache-review errors offer **Copy diagnostic ID** when a report
+was queued successfully. Beta startup-block dialogs also expose the ID. It is
+the existing top-level event UUID, not a user or thread identifier. Identical
+code/reason pairs share an ID for ten minutes, including backend/UI duplicates,
+and use the existing shared 30-errors-per-hour cap. This ID identifies a grouped
+report, not every occurrence. Rate-limited or unwritable reports offer no new ID.
+
+**Report queued locally** means upload has not been confirmed; offline reports
+retry through the existing bounded queue. **Report sent** means the ingest HTTP
+endpoint returned success, not that a maintainer reviewed it or that storage was
+independently verified. **Upload not confirmed** covers expired in-memory status
+or a report removed by queue trimming. Status is bounded to 128 recent issue
+reports and does not survive desktop restarts. New issue reports request a
+nonblocking flush; regular retry and shutdown behavior remain unchanged.
+
+Stable and ordinary browser clients expose no issue-reporting bridge. Stable
+desktop starts no backend issue detector, and Stable backends emit no issue
+markers. These additions do not enable diagnostics for Stable.
+
+Beta also keeps a small action history in main-process memory: the last 24
+allowlisted activity entries within 10 minutes, with timestamps and
+started/succeeded/failed phases. Categories cover sending/stopping/opening chats,
+unblocking, creating/importing projects, workspace searches/reads/changes,
+browser opening/navigation/resizing, window resizing, and RPC reconnect interruptions.
+They describe observed operations, including background requests, not guaranteed
+user clicks. Browser actions record their start; RPC actions also record their outcome.
+No RPC arguments, prompts, identifiers, project names, file paths, URLs, DOM text,
+or arbitrary action labels are included. Resize activity is throttled.
+
+Every 30 seconds Beta samples aggregate Electron working-set memory (MiB) for
+main, renderer, GPU, and utility processes, retaining four samples. This does
+not measure the separate backend's Node heap. Recent activity and memory samples
+are attached to existing error stacks and crash log tails within their existing
+size limits and pass through the shared redactor. Actions and memory samples do
+not create their own uploads or disk records; Stable exposes no collection bridge
+and starts no sampler. Context can help correlate failures with preceding work,
+but is not a proof of causation and cannot reconstruct older reports.
 
 `update.check` records the start of a check, not a successful result. Its
 `outcome: "ok"` means the attempt started. Failures emit `update.error` with the

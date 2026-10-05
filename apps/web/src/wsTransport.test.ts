@@ -20,6 +20,7 @@ import {
   WS_PROTOCOL_MIN_REVISION,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
+  WS_GIT_ACTION_RECOVERY_CAPABILITY,
   WsCompatibilityError,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
@@ -216,6 +217,7 @@ function makeBareTransport(): {
     projectAgentSubscriptions: new Map(),
     threadStreamFailureListeners: new Set(),
     disposed: false,
+    lifetime: new AbortController(),
     sessionVersion: 1,
     getClientRuntime: () => ({
       runCallback: (
@@ -295,6 +297,143 @@ afterEach(() => {
 });
 
 describe("WsTransport", () => {
+  it.each(["completed", "rejected", "older-server", "downgraded-server"])(
+    "recovers an interrupted Git action safely: %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      bindWindowTimersToCurrentGlobals();
+      try {
+        const { transport, internals } = makeBareTransport();
+        const params = { actionId: "push-once", cwd: "/repo", action: "push" };
+        const result = { action: "push", push: { status: "pushed" } };
+        const run = vi
+          .fn()
+          .mockImplementationOnce(() => Stream.fromEffect(Effect.interrupt))
+          .mockImplementation(() =>
+            outcome === "rejected"
+              ? Stream.fail(new Error("remote rejected push"))
+              : Stream.make({ ...params, kind: "action_finished", result }),
+          );
+        const client = { [WS_METHODS.gitRunStackedAction]: run };
+        let connections = 0;
+        Object.assign(internals, {
+          emit: vi.fn(),
+          compatibility: {
+            ...NEGOTIATION_RESULT,
+            capabilities: outcome === "older-server" ? [] : [WS_GIT_ACTION_RECOVERY_CAPABILITY],
+          },
+          getClient: async () => {
+            if (++connections > 1 && outcome === "downgraded-server") {
+              Object.assign(internals, { compatibility: NEGOTIATION_RESULT });
+            }
+            return client;
+          },
+          getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+        });
+        const request = transport.request(WS_METHODS.gitRunStackedAction, params, {
+          timeoutMs: null,
+        });
+        const verdict =
+          outcome === "completed"
+            ? expect(request).resolves.toEqual(result)
+            : expect(request).rejects.toThrow(
+                outcome === "rejected"
+                  ? "remote rejected push"
+                  : outcome === "older-server"
+                    ? "transport reconnect"
+                    : "cannot recover",
+              );
+        await vi.advanceTimersByTimeAsync(1000);
+        await verdict;
+        expect(run).toHaveBeenCalledTimes(
+          outcome === "completed" || outcome === "rejected" ? 2 : 1,
+        );
+        expect(run).toHaveBeenNthCalledWith(
+          1,
+          outcome === "older-server" ? params : { ...params, recoverable: true },
+        );
+        if (run.mock.calls.length === 2)
+          expect(run).toHaveBeenNthCalledWith(2, { ...params, recoverable: true, resume: true });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["caller", "transport"])(
+    "stops Git recovery when the %s stops waiting",
+    async (source) => {
+      vi.useFakeTimers();
+      bindWindowTimersToCurrentGlobals();
+      try {
+        const { transport, internals } = makeBareTransport();
+        const lifetime = new AbortController();
+        const caller = new AbortController();
+        const run = vi.fn(() => Stream.fromEffect(Effect.interrupt));
+        Object.assign(internals, {
+          lifetime,
+          compatibility: {
+            ...NEGOTIATION_RESULT,
+            capabilities: [WS_GIT_ACTION_RECOVERY_CAPABILITY],
+          },
+          getClient: async () => ({ [WS_METHODS.gitRunStackedAction]: run }),
+          getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+        });
+        const request = transport.request(
+          WS_METHODS.gitRunStackedAction,
+          { actionId: "cancel-wait", cwd: "/repo", action: "push" },
+          { signal: caller.signal, timeoutMs: null },
+        );
+        const verdict = expect(request).rejects.toThrow();
+        await vi.advanceTimersByTimeAsync(1000);
+        (source === "caller" ? caller : lifetime).abort();
+        await verdict;
+        const attempts = run.mock.calls.length;
+        expect(attempts).toBeGreaterThan(1);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(run).toHaveBeenCalledTimes(attempts);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("records the outcome of a Beta import without changing its result or rejection", async () => {
+    const recordActivity = vi.fn();
+    Object.assign(window, { desktopBridge: { betaDiagnostics: { recordActivity } } });
+    const { transport, internals } = makeBareTransport();
+    const failure = new Error("import rejected");
+    let reject = false;
+    Object.assign(internals, {
+      getClient: async () => ({
+        [ORCHESTRATION_WS_METHODS.importProject]: () =>
+          reject ? Effect.fail(failure) : Effect.succeed({ imported: 3 }),
+      }),
+      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+    });
+    const params = { path: "/private/project", prompt: "never collect", id: "private-id" };
+    await expect(
+      transport.request(ORCHESTRATION_WS_METHODS.importProject, params),
+    ).resolves.toEqual({ imported: 3 });
+    reject = true;
+    await expect(transport.request(ORCHESTRATION_WS_METHODS.importProject, params)).rejects.toThrow(
+      "import rejected",
+    );
+    expect(recordActivity.mock.calls).toEqual([
+      [{ activity: "project.import", phase: "started" }],
+      [{ activity: "project.import", phase: "succeeded" }],
+      [{ activity: "project.import", phase: "started" }],
+      [{ activity: "project.import", phase: "failed" }],
+    ]);
+    recordActivity.mockImplementation(() => {
+      throw new Error("broken diagnostics bridge");
+    });
+    reject = false;
+    await expect(
+      transport.request(ORCHESTRATION_WS_METHODS.importProject, params),
+    ).resolves.toEqual({ imported: 3 });
+  });
+
   it.each(["caller", "transport"])(
     "keeps an unacknowledged send pending through settlement failures until %s cancellation",
     async (cancelSource) => {
@@ -498,6 +637,7 @@ describe("WsTransport", () => {
             capabilities: [
               ...NEGOTIATION_RESULT.capabilities,
               WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
+              WS_GIT_ACTION_RECOVERY_CAPABILITY,
             ],
           }),
         ),

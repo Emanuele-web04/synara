@@ -6,8 +6,10 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   GIT_TEXT_GENERATION_PROVIDERS,
   PROVIDER_DISPLAY_NAMES,
+  MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH,
   type GitTextGenerationProvider,
   type ProviderKind,
+  type SourceControlWritingStyle,
 } from "@synara/contracts";
 import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
 import { useQuery } from "@tanstack/react-query";
@@ -43,6 +45,30 @@ import {
   useSettingsRestoreSignal,
 } from "./SettingControls";
 import { SettingsRow, SettingsSection, SettingsSelectPopup } from "./SettingsPanelPrimitives";
+import { DebouncedSettingTextarea } from "./DebouncedSettingTextInput";
+
+const SOURCE_CONTROL_WRITING_OPTIONS: readonly {
+  value: SourceControlWritingStyle;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "repository",
+    label: "Repository conventions",
+    description: "In each project, matches recent change descriptions and change request titles.",
+  },
+  {
+    value: "conventional",
+    label: "Conventional Commits",
+    description: "Use Conventional Commit prefixes and keep change request text concise.",
+  },
+  {
+    value: "custom",
+    label: "Custom instructions",
+    description:
+      "Use your instructions for change descriptions and change requests in every project.",
+  },
+];
 
 type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
@@ -263,9 +289,65 @@ export function ModelsSettingsPanel({
 
   if (!active) return null;
 
+  const writingOption = SOURCE_CONTROL_WRITING_OPTIONS.find(
+    (option) => option.value === settings.sourceControlWritingStyle,
+  )!;
+  const isWritingStyleDirty =
+    settings.sourceControlWritingStyle !== defaults.sourceControlWritingStyle ||
+    settings.sourceControlCustomInstructions !== defaults.sourceControlCustomInstructions;
+
   return (
     <div className="space-y-6">
       <SettingsSection title="Generation defaults">
+        <SettingsRow
+          title="Source control writing style"
+          description={writingOption.description}
+          resetAction={
+            isWritingStyleDirty ? (
+              <SettingResetButton
+                label="source control writing style"
+                onClick={() =>
+                  updateSettings({
+                    sourceControlWritingStyle: defaults.sourceControlWritingStyle,
+                    sourceControlCustomInstructions: defaults.sourceControlCustomInstructions,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.sourceControlWritingStyle}
+              onValueChange={(value) => {
+                const option = SOURCE_CONTROL_WRITING_OPTIONS.find(
+                  (option) => option.value === value,
+                );
+                if (option) updateSettings({ sourceControlWritingStyle: option.value });
+              }}
+              ariaLabel="Source control writing style"
+              triggerClassName="w-full sm:w-60"
+              valueContent={writingOption.label}
+            >
+              {SOURCE_CONTROL_WRITING_OPTIONS.map((option) => (
+                <SelectItem hideIndicator key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        >
+          <DisclosureRegion open={settings.sourceControlWritingStyle === "custom"}>
+            <DebouncedSettingTextarea
+              key={resetEpoch}
+              className="mt-3 [&_textarea]:min-h-28 [&_textarea]:resize-y"
+              aria-label="Custom source control writing instructions"
+              placeholder="Keep titles concise. Use short bullet points in descriptions."
+              maxLength={MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH}
+              value={settings.sourceControlCustomInstructions}
+              onCommit={(value) => updateSettings({ sourceControlCustomInstructions: value })}
+            />
+          </DisclosureRegion>
+        </SettingsRow>
         <SettingsRow
           title="Git writing model"
           description="Used for generated commit messages, PR titles, and branch names."

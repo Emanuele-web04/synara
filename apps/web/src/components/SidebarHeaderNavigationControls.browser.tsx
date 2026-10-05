@@ -46,11 +46,15 @@ function RailShell() {
   return (
     <SidebarLeadingControlsDock railSlot={rail} routeColumn={route}>
       <div ref={setRail} style={{ width: 48, flexShrink: 0 }} />
-      <div className="app-rail-panel" aria-label="Thread panel">
+      <div
+        className="app-rail-panel"
+        aria-label="Thread panel"
+        style={{ width: open ? 272 : 0, flexShrink: 0 }}
+      >
         <div data-slot="sidebar" data-side="left" data-state={open ? "expanded" : "collapsed"} />
       </div>
       {open && !isMobile ? (
-        <header style={{ position: "absolute", left: 90, top: 12 }}>
+        <header className="drag-region" style={{ position: "absolute", left: 90, top: 12 }}>
           <SidebarLeadingControlsSlot />
         </header>
       ) : null}
@@ -75,6 +79,44 @@ async function renderShell(vertical = false) {
 }
 
 describe("sidebar leading controls dock", () => {
+  it("excludes the docked toggle from the host header's native drag region", async () => {
+    await page.viewport(1280, 800);
+    const screen = await render(
+      <SidebarProvider defaultOpen data-sidebar-layout="rail">
+        <RailShell />
+      </SidebarProvider>,
+    );
+    try {
+      const toggle = page.getByRole("button", { name: "Toggle thread sidebar" });
+      for (let count = 0; count < 3; count += 1) {
+        await expect
+          .poll(() => {
+            const rect = toggle.element().getBoundingClientRect();
+            const x = rect.left + rect.width / 2;
+            const y = rect.top + rect.height / 2;
+            // Electron folds overlapping drag/no-drag rectangles in document order.
+            let region = "";
+            for (const element of screen.container.querySelectorAll<HTMLElement>("*")) {
+              const appRegion = getComputedStyle(element).getPropertyValue("app-region");
+              if (appRegion !== "drag" && appRegion !== "no-drag") continue;
+              const bounds = element.getBoundingClientRect();
+              if (x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom) {
+                region = appRegion;
+              }
+            }
+            return region;
+          })
+          .toBe("no-drag");
+        await toggle.click();
+        await expect
+          .element(screen.container.querySelector<HTMLElement>('[data-slot="sidebar"]')!)
+          .toHaveAttribute("data-state", count % 2 === 0 ? "collapsed" : "expanded");
+      }
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("settles header controls, corners, and panel edges immediately with reduced motion", async () => {
     // Vitest's provider-neutral CDP type is empty; type only the Playwright
     // protocol operation used here without loading its global DOM augmentation.

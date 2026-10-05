@@ -66,20 +66,26 @@ async function smoke(): Promise<void> {
       await waitForViewport(bounds);
       console.log(`Viewport ${width}x600 recovered to 700x500 and 900x650 without reloading.`);
     }
+    // The real window's closed handler calls setWindow(null) after Electron has
+    // destroyed its native contentView. Automation pages must still be released.
+    await manager.getAutomationRuntime({ threadId, tabId: state.activeTabId! }, { restore: false });
+    window.destroy();
+    assert.doesNotThrow(() => manager.setWindow(null));
+    assert.equal(webContents.isDestroyed(), true);
+    console.log("Closed-window automation teardown released its page without touching dead views.");
   } finally {
     manager.dispose();
-    window.destroy();
+    if (!window.isDestroyed()) window.destroy();
   }
 }
 
-void smoke().then(
-  () => {
+void smoke()
+  .then(() => {
     clearTimeout(deadline);
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     app.exit(0);
-  },
-  (error) => {
+  })
+  .catch((error) => {
     console.error(error);
     app.exit(1);
-  },
-);
+  });

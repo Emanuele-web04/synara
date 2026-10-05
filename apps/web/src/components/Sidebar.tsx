@@ -297,6 +297,7 @@ import { GroupSettingsDialog } from "./chat/group/GroupSettingsDialog";
 import { SidebarGroupsSurface } from "./SidebarGroupsSurface";
 import {
   activateThreadWhenHydrated,
+  isGroupThreadRoute,
   resolveGroupChatTargetProjectId,
 } from "./SidebarGroupsSurface.logic";
 
@@ -1793,7 +1794,7 @@ export default function Sidebar() {
       hasUnreadActivityOutsideActiveThread(visibleNonGroupSidebarThreads, activeSidebarThreadId),
     [activeSidebarThreadId, visibleNonGroupSidebarThreads],
   );
-  // Inbox is Beta-only: its rail item and page stay hidden on Stable.
+  // Inbox is available in both Stable and Beta.
   const inboxAvailable = INBOX_ON;
   const inboxBadge = useMemo(() => {
     if (!inboxAvailable) return null;
@@ -2022,16 +2023,15 @@ export default function Sidebar() {
   const activeRouteProject = activeRouteProjectId
     ? (projectById.get(activeRouteProjectId) ?? null)
     : null;
-  // Same predicate the Groups collectors use — trusting `kind` alone here would let a drifted
-  // group-kind row (root outside the configured Groups root) activate the Groups segment while
-  // every Groups list excludes it, stranding the active thread in neither segment.
+  // Use the list's validated containers and member index: a hub worker's projectId
+  // points at its execution repo, which must not move its chat out of Hubs.
   const isOnGroups =
     isOnGroupsRoute ||
-    isGroupContainerProject(activeRouteProject, {
-      homeDir,
-      chatWorkspaceRoot,
-      studioWorkspaceRoot,
-      groupsWorkspaceRoot,
+    isGroupThreadRoute({
+      threadId: routeThreadId,
+      projectId: activeRouteProjectId,
+      groupProjectIds: groupProjectIdSet,
+      summariesByProjectId,
     });
   useEffect(() => {
     reconcileRailShell({
@@ -3593,35 +3593,24 @@ export default function Sidebar() {
           threadId,
         );
 
-        // Reuse the active terminal when one is already open and idle so that
-        // repeatedly invoking "Open Path in Terminal" doesn't pile up tabs.
-        // Only spawn a fresh tab when there is no terminal yet, the active id
-        // is stale (no longer in the layout), or the active terminal is busy
-        // running a subprocess.
-        const candidateBaseTerminalId =
-          currentTerminalState.activeTerminalId ||
-          currentTerminalState.terminalIds[0] ||
-          DEFAULT_THREAD_TERMINAL_ID;
-        const baseTerminalAvailable =
-          currentTerminalState.terminalOpen &&
-          currentTerminalState.terminalIds.includes(candidateBaseTerminalId) &&
-          !currentTerminalState.runningTerminalIds.includes(candidateBaseTerminalId);
-        const shouldCreateNewTerminal = !baseTerminalAvailable;
-        const targetTerminalId = shouldCreateNewTerminal
-          ? `terminal-${randomUUID()}`
-          : candidateBaseTerminalId;
+        const targetTerminalId = currentTerminalState.activeTerminalId;
+        if (currentTerminalState.runningTerminalIds.includes(targetTerminalId)) {
+          toastManager.add({
+            type: "error",
+            title: "Terminal is busy",
+            description: "Stop its command before opening another path.",
+          });
+          return;
+        }
+        const shouldCreateNewTerminal = !currentTerminalState.terminalOpen;
 
         const previousTerminalOpen = currentTerminalState.terminalOpen;
         const previousPresentationMode = currentTerminalState.presentationMode;
         const previousActiveTerminalId = currentTerminalState.activeTerminalId;
 
-        terminalStore.setTerminalPresentationMode(threadId, "drawer");
+        terminalStore.setTerminalPresentationMode(threadId, "workspace");
         terminalStore.setTerminalOpen(threadId, true);
-        if (shouldCreateNewTerminal) {
-          terminalStore.newTerminal(threadId, targetTerminalId);
-        } else {
-          terminalStore.setActiveTerminal(threadId, targetTerminalId);
-        }
+        terminalStore.setActiveTerminal(threadId, targetTerminalId);
 
         const cdCommand = `cd ${quotePosixShellArgument(threadWorkspacePath)}\r`;
         try {
@@ -3643,11 +3632,11 @@ export default function Sidebar() {
             threadId,
             terminalId: targetTerminalId,
             data: cdCommand,
+            onlyIfIdle: true,
           });
         } catch (error) {
-          if (shouldCreateNewTerminal) {
-            terminalStore.closeTerminal(threadId, targetTerminalId);
-          }
+          // Open may already have created a PTY, even if navigation or its
+          // acknowledgement failed. Keep its identity available for reattach.
           terminalStore.setTerminalPresentationMode(threadId, previousPresentationMode);
           terminalStore.setTerminalOpen(threadId, previousTerminalOpen);
           if (previousActiveTerminalId) {

@@ -16,6 +16,7 @@ export function shouldUseCompactToast(toast: {
         readonly compactContextual?: boolean;
         readonly copyItems?: ReadonlyArray<unknown>;
         readonly copyText?: string;
+        readonly diagnosticId?: string;
         readonly secondaryActionProps?: unknown;
       }
     | undefined;
@@ -26,6 +27,7 @@ export function shouldUseCompactToast(toast: {
   return (
     !toast.description &&
     !toast.data?.copyText &&
+    !toast.data?.diagnosticId &&
     !toast.data?.copyItems?.length &&
     !toast.actionProps &&
     !toast.data?.secondaryActionProps

@@ -23,7 +23,7 @@ export type BetaOnlyFeature = string;
 /** Groups: the coordinator, its threads, the Group panel and the Library. */
 export const GROUPS_BETA_FEATURE = "groups";
 
-/** Inbox: the Inbox page and its `stats.getRecap` RPC. */
+/** Inbox (Stable and Beta): the Inbox page and its `stats.getRecap` RPC. */
 export const INBOX_BETA_FEATURE = "inbox";
 
 /**
@@ -32,15 +32,10 @@ export const INBOX_BETA_FEATURE = "inbox";
  */
 export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
 
-/** Auto-fix CI: the PR menu checkbox, its RPCs, and the server check watcher. */
+/** Auto-fix CI (Stable and Beta): the PR menu checkbox, RPCs, and check watcher. */
 export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
-  GROUPS_BETA_FEATURE,
-  INBOX_BETA_FEATURE,
-  "tasks",
-  PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
-];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [GROUPS_BETA_FEATURE, "tasks"];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

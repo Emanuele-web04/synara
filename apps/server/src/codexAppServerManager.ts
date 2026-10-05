@@ -64,7 +64,10 @@ import {
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
   SYNARA_MCP_SERVER_NAME,
 } from "./agentGateway/mcpInjection.ts";
-import { shouldAllowSynaraComputerProviderTool } from "./agentGateway/computerToolPermission.ts";
+import {
+  isSynaraGatewayToolName,
+  shouldAllowSynaraComputerProviderTool,
+} from "./agentGateway/computerToolPermission.ts";
 import {
   SYNARA_GATEWAY_HARNESS_POLICY,
   renderSynaraHarnessPolicy,
@@ -195,6 +198,7 @@ type CodexSessionApprovalOverride = {
 };
 
 interface CodexSessionContext {
+  readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   /** Set once this runtime's bearer is permanently fenced to a terminal turn. */
@@ -352,6 +356,7 @@ export interface CodexAppServerSendTurnInput {
 type CodexAppServerReviewTarget = ProviderStartReviewInput["target"];
 
 export interface CodexAppServerStartSessionInput {
+  readonly autoApproveSynaraTools?: boolean;
   readonly threadId: ThreadId;
   readonly provider?: "codex";
   readonly providerInstanceId?: string;
@@ -1389,6 +1394,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
 
       context = {
+        autoApproveSynaraTools: input.autoApproveSynaraTools === true,
         enableComputerControl:
           gatewaySessionLease !== undefined &&
           input.agentGatewayCapabilityInput.enableComputerControl === true,
@@ -4317,6 +4323,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const isMcpToolCallApproval =
       request.method === MCP_SERVER_ELICITATION_REQUEST_METHOD &&
       this.isMcpToolCallApprovalRequest(request.params);
+    const activeSynaraToolTurn =
+      context.session.status === "running" &&
+      rawRoute.turnId !== undefined &&
+      rawRoute.turnId === context.session.activeTurnId &&
+      providerThreadId === readResumeCursorThreadId(context.session.resumeCursor);
+    const synaraToolName = isMcpToolCallApproval
+      ? this.readSynaraMcpApprovalToolName(request.params)
+      : undefined;
     if (
       isMcpToolCallApproval &&
       this.readString(request.params, "serverName") === SYNARA_MCP_SERVER_NAME &&
@@ -4324,22 +4338,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context.gatewayCredentialRetired !== true &&
       !context.stopping &&
       context.activeInteractionMode === "default" &&
-      shouldAllowSynaraComputerProviderTool({
-        computerControlEnabled: context.enableComputerControl === true,
-        activeTurn:
-          context.session.status === "running" &&
-          rawRoute.turnId !== undefined &&
-          rawRoute.turnId === context.session.activeTurnId &&
-          providerThreadId === readResumeCursorThreadId(context.session.resumeCursor),
-        interactionMode: context.activeInteractionMode,
-        runtimeMode: context.session.runtimeMode,
-        permission: {
-          name: this.readSynaraMcpApprovalToolName(request.params),
-        },
-      })
+      ((activeSynaraToolTurn &&
+        (context.autoApproveSynaraTools === true ||
+          context.session.runtimeMode === "full-access") &&
+        isSynaraGatewayToolName(synaraToolName)) ||
+        shouldAllowSynaraComputerProviderTool({
+          computerControlEnabled: context.enableComputerControl === true,
+          activeTurn: activeSynaraToolTurn,
+          interactionMode: context.activeInteractionMode,
+          runtimeMode: context.session.runtimeMode,
+          permission: {
+            name: synaraToolName,
+          },
+        }))
     ) {
-      // This exact call still passes through the gateway's task consent and
-      // revocation checks. Never grant persistence to unrelated MCP tools.
+      // Codex MCP approvals are separate from its command approvalPolicy.
+      // Honor Full Access and the coordinator grant for our gateway catalog;
+      // each call still passes gateway authorization, consent, and revocation.
+      // Accept only this call so a later mode change cannot inherit persistence.
       await this.writeMessage(context, {
         id: request.id,
         result: { action: "accept", content: null, _meta: null },

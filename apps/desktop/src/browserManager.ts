@@ -2765,7 +2765,7 @@ export class DesktopBrowserManager {
   }
 
   private detachAttachedRuntime(): void {
-    if (!this.window || !this.attachedRuntimeKey) {
+    if (!this.window || this.window.isDestroyed() || !this.attachedRuntimeKey) {
       this.attachedRuntimeKey = null;
       this.attachedBoundsSignature = null;
       return;
@@ -2783,7 +2783,7 @@ export class DesktopBrowserManager {
   }
 
   private setRuntimeViewHidden(runtime: LiveTabRuntime, hidden: boolean): void {
-    if (!runtime.view) {
+    if (!runtime.view || runtime.webContents.isDestroyed()) {
       return;
     }
     const keepRenderingInBackground = hidden && this.automationRuntimeKeys.has(runtime.key);
@@ -2800,7 +2800,8 @@ export class DesktopBrowserManager {
 
   private parkHiddenRuntime(runtime: LiveTabRuntime, bounds: BrowserPanelBounds): void {
     const window = this.window;
-    if (!window || !runtime.view) return;
+    if (!window || window.isDestroyed() || !runtime.view || runtime.webContents.isDestroyed())
+      return;
     // A hidden in-bounds view can produce its first capture; an off-window view
     // may never paint. Hide before attaching or moving to prevent a visible flash.
     runtime.view.setVisible(false);
@@ -3323,8 +3324,7 @@ export class DesktopBrowserManager {
     // interrupted renderer transition must not be able to leave an untracked
     // WebContentsView over the canonical renderer WebView. Remove it from the
     // window hierarchy defensively before closing its WebContents.
-    if (runtime.view && this.window) {
-      this.setRuntimeViewHidden(runtime, true);
+    if (runtime.view && this.window && !this.window.isDestroyed()) {
       try {
         this.window.contentView.removeChildView(runtime.view);
       } catch {

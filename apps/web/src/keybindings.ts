@@ -549,7 +549,9 @@ export function findEffectiveKeybindingForCommand(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding || isUnassignedKeybinding(binding)) continue;
+    // Retired split bindings must not consume shell shortcuts from older configs.
+    if (!binding || isUnassignedKeybinding(binding) || binding.command.startsWith("terminal.split"))
+      continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
 
     const conflictKey = shortcutConflictKey(binding.shortcut, platform);
@@ -610,7 +612,9 @@ function resolveShortcutCommandFromBindings(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding || isUnassignedKeybinding(binding)) continue;
+    // Retired split bindings must not consume shell shortcuts from older configs.
+    if (!binding || isUnassignedKeybinding(binding) || binding.command.startsWith("terminal.split"))
+      continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
     if (!matchesShortcut(event, binding.shortcut, platform)) continue;
     return binding.command;

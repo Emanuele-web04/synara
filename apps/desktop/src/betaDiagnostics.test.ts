@@ -8,7 +8,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { BackendIssueDetector } from "./backendIssueDetector";
+import { DESKTOP_DIAGNOSTIC_ISSUE_PREFIX } from "@synara/contracts";
 
 import {
   BetaDiagnostics,
@@ -255,6 +258,88 @@ describe("BetaDiagnostics error tracking", () => {
           .split("\n")
       : []
     ).map((line) => JSON.parse(line));
+
+  it("keeps only bounded, recent allowlisted actions and redacts before adding crash context", () => {
+    const root = makeRoot();
+    let now = new Date("2026-10-04T20:00:00Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.0-beta.1",
+      platform: "linux",
+      arch: "x64",
+      now: () => now,
+    });
+    diag.recordActivity({
+      activity: "chat.send",
+      phase: "started",
+      prompt: "private prompt",
+      threadId: "private-thread",
+    });
+    diag.recordActivity({ activity: "private action name", phase: "started" });
+    expect(readQueue(root)).toEqual([]);
+    diag.track("app.renderer-crash", {
+      kind: "crash",
+      processType: "renderer",
+      reason: "crashed",
+      logTail:
+        "-----BEGIN PRIVATE KEY-----\n" +
+        "SyntheticKeyPart+/12\n".repeat(2000) +
+        "-----END PRIVATE KEY-----\nexitCode=5",
+    });
+    const first = readQueue(root)[0].payload.logTail;
+    expect(first).toContain("chat.send started");
+    expect(first).toContain("exitCode=5");
+    expect(first).not.toMatch(/private prompt|private-thread|private action name|SyntheticKeyPart/);
+    expect(first.length).toBeLessThanOrEqual(16 * 1024);
+    now = new Date(now.getTime() + 11 * 60_000);
+    for (let i = 0; i < 30; i++) {
+      diag.recordActivity({ activity: "project.import", phase: i % 2 ? "failed" : "started" });
+    }
+    diag.trackError("renderer", new Error("import failed"));
+    const stack = readQueue(root)[1].payload.stack;
+    expect(stack).not.toContain("chat.send");
+    expect(stack.match(/project.import/g)).toHaveLength(24);
+    expect(stack).toContain("import failed");
+    now = new Date(now.getTime() + 11 * 60_000);
+    diag.trackError("renderer", new Error("later failure"));
+    expect(readQueue(root)[2].payload.stack).not.toContain("Beta diagnostic context");
+  });
+
+  it("samples bounded numeric memory history and stops its timer on disposal", async () => {
+    vi.useFakeTimers();
+    const root = makeRoot();
+    let value = 1;
+    const sampleMemory = vi.fn(() => ({
+      mainRssMb: value++,
+      rendererRssMb: 20,
+      gpuRssMb: 30,
+      utilityRssMb: 40,
+      privateName: "never send",
+    }));
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.0-beta.1",
+      platform: "linux",
+      arch: "x64",
+      sampleMemory,
+    });
+    try {
+      diag.start();
+      vi.advanceTimersByTime(90_000);
+      diag.trackError("main", new Error("memory context"));
+      const stack = readQueue(root)[0].payload.stack;
+      expect(stack.match(/memory MiB/g)).toHaveLength(4);
+      expect(stack).toContain("main=4 renderer=20 gpu=30 utility=40");
+      expect(stack).not.toContain("never send");
+      await diag.dispose(0);
+      const calls = sampleMemory.mock.calls.length;
+      vi.advanceTimersByTime(90_000);
+      expect(sampleMemory).toHaveBeenCalledTimes(calls);
+    } finally {
+      await diag.dispose(0);
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["check", "download", "install"] as const)(
     "reports %s failures once per attempt even when the updater keeps a retryable status",
@@ -799,5 +884,125 @@ describe("resolveBetaDiagnosticsEndpoint", () => {
         BETA_DIAGNOSTICS_ENDPOINT,
       );
     }
+  });
+});
+
+describe("handled issue reports", () => {
+  it("keeps a searchable ID through offline retry and deduplicates backend/UI reports", async () => {
+    let accept = false;
+    let requests = 0;
+    const received: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += String(chunk);
+      });
+      request.on("end", () => {
+        requests += 1;
+        if (accept)
+          received.push(
+            ...body
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line)),
+          );
+        response.writeHead(accept ? 204 : 503).end();
+      });
+    });
+    servers.push(server);
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, `http://127.0.0.1:${await listen(server)}`);
+    const id = diagnostics.trackIssue("main", { code: "git.push.failed", reason: "timeout" });
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    await vi.waitFor(() => expect(diagnostics.getReportStatus(id)).toBe("queued"));
+    await vi.waitFor(() => expect(requests).toBe(1));
+    expect(
+      diagnostics.trackIssue("renderer", {
+        code: "git.push.failed",
+        reason: "timeout",
+        durationMs: 1234,
+      }),
+    ).toBe(id);
+    expect(
+      readFileSync(join(root, "diagnostics/events.jsonl"), "utf8").trim().split("\n"),
+    ).toHaveLength(1);
+    accept = true;
+    await vi.waitFor(async () => {
+      await diagnostics.flush();
+      expect(diagnostics.getReportStatus(id)).toBe("sent");
+    });
+    expect(received).toEqual([
+      expect.objectContaining({
+        id,
+        event: "app.error",
+        payload: expect.objectContaining({ message: "Handled issue: git.push.failed (timeout)" }),
+      }),
+    ]);
+    expect(existsSync(join(root, "diagnostics/events.jsonl"))).toBe(false);
+    await diagnostics.dispose();
+  });
+
+  it("validates fragmented backend reports and never uploads arbitrary fields or oversized lines", async () => {
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, "http://127.0.0.1:1");
+    const detector = new BackendIssueDetector((issue) => {
+      diagnostics.trackIssue("main", issue);
+    });
+    const line =
+      DESKTOP_DIAGNOSTIC_ISSUE_PREFIX +
+      JSON.stringify({
+        code: "claude.cache.uncertain",
+        reason: "timeout",
+        durationMs: 120000,
+        prompt: "private chat text",
+        path: "/Users/person/private",
+        token: "private credentials",
+      }) +
+      "\n";
+    detector.push(Buffer.from(line.slice(0, 12)), "stdout");
+    detector.push(Buffer.from("ordinary error\n"), "stderr");
+    detector.push(Buffer.from(line.slice(12)), "stdout");
+    detector.push(Buffer.from(DESKTOP_DIAGNOSTIC_ISSUE_PREFIX + "x".repeat(4096) + line), "stdout");
+    detector.push(
+      Buffer.from(DESKTOP_DIAGNOSTIC_ISSUE_PREFIX + '{"code":"private payload"}\n'),
+      "stdout",
+    );
+    expect(
+      diagnostics.trackIssue("renderer", { code: "voice.transcribe.failed", durationMs: Infinity }),
+    ).toBeNull();
+    expect(
+      diagnostics.trackIssue("renderer", {
+        code: "voice.transcribe.failed",
+        reason: "private text",
+      }),
+    ).toBeNull();
+    const queued = readFileSync(join(root, "diagnostics/events.jsonl"), "utf8");
+    expect(queued.trim().split("\n")).toHaveLength(1);
+    expect(queued).not.toMatch(/private|credentials|person/);
+    expect(JSON.parse(queued).payload).toMatchObject({
+      message: "Handled issue: claude.cache.uncertain (timeout)",
+      stack: "durationMs=120000",
+    });
+    await diagnostics.dispose();
+  });
+
+  it("offers an ID after a transient queue write failure without consuming its rate limit", async () => {
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, "http://127.0.0.1:1");
+    rmSync(join(root, "diagnostics"), { recursive: true });
+    writeFileSync(join(root, "diagnostics"), "not a directory");
+    expect(
+      diagnostics.trackIssue("main", { code: "startup.database-locked", reason: "unknown-owner" }),
+    ).toBeNull();
+    expect(diagnostics.getReportStatus("made-up-id")).toBe("unavailable");
+    rmSync(join(root, "diagnostics"));
+    const id = diagnostics.trackIssue("main", {
+      code: "startup.database-locked",
+      reason: "unknown-owner",
+    });
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(diagnostics.getReportStatus(id)).toBe("queued");
+    expect(JSON.parse(readFileSync(join(root, "diagnostics/events.jsonl"), "utf8")).id).toBe(id);
+    await diagnostics.dispose();
   });
 });

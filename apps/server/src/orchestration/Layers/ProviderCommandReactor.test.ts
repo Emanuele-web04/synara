@@ -3,6 +3,7 @@
 // Layer: Orchestration integration tests
 // Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
 
+import * as betaOperationalIssue from "../../betaOperationalIssue";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +34,7 @@ import {
 } from "@synara/contracts";
 import {
   formatProviderDeliveryBlockDetail,
+  isProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
 import type { DeepPartial } from "@synara/shared/Struct";
@@ -1320,6 +1322,7 @@ describe("ProviderCommandReactor", () => {
       readonly messageId: string;
       readonly text: string;
       readonly createdAt: string;
+      readonly threadId?: ThreadId;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
     },
   ) {
@@ -1327,7 +1330,7 @@ describe("ProviderCommandReactor", () => {
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.makeUnsafe(`cmd-${input.messageId}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId: input.threadId ?? ThreadId.makeUnsafe("thread-1"),
         message: {
           messageId: asMessageId(input.messageId),
           role: "user",
@@ -1440,6 +1443,7 @@ describe("ProviderCommandReactor", () => {
         ProviderServiceShape["cancelClaudeCompactionDiscovery"]
       >,
       ingestRuntimeEvents = false,
+      commandEventTimeout?: Duration.Duration,
     ) {
       let observation = expiredCacheObservation();
       const startClaudeCompaction = vi.fn<
@@ -1451,6 +1455,7 @@ describe("ProviderCommandReactor", () => {
         getClaudeCacheObservation,
         startClaudeCompaction,
         ingestRuntimeEvents,
+        ...(commandEventTimeout ? { commandEventTimeout } : {}),
         ...(cancelClaudeCompactionDiscovery ? { cancelClaudeCompactionDiscovery } : {}),
       });
       return {
@@ -2315,7 +2320,18 @@ describe("ProviderCommandReactor", () => {
           }),
         ),
       );
-      await respondToReview(harness, review, "compact");
+      const issueReport = vi
+        .spyOn(betaOperationalIssue, "reportBetaOperationalIssue")
+        .mockImplementation(() => {});
+      try {
+        await respondToReview(harness, review, "compact");
+        expect(issueReport).toHaveBeenCalledWith({
+          code: "claude.cache.failed",
+          reason: "unknown",
+        });
+      } finally {
+        issueReport.mockRestore();
+      }
       const blocker = await Effect.runPromise(
         harness.deliveryRepository.firstBlockingDeliveryForThread({
           consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -2494,6 +2510,422 @@ describe("ProviderCommandReactor", () => {
             turnId: null,
           }),
         );
+      },
+    );
+
+    it.each(["expired", "safely-retryable"] as const)(
+      "does not send a cancelled Continue when recovering a %s inflight claim",
+      async (settlement) => {
+        const observation = expiredCacheObservation();
+        const harness = await createCacheHarness(() => observation, false);
+        const threadId = ThreadId.makeUnsafe("thread-1");
+        const now = new Date().toISOString();
+        const source = await dispatchHarnessUserTurn(harness, {
+          messageId: "cancelled-recovery-message",
+          text: "Do not send after recovery cancellation",
+          createdAt: now,
+        });
+        const review = {
+          reviewId: "cancelled-recovery-review",
+          messageId: asMessageId("cancelled-recovery-message"),
+          sourceEventSequence: source.sequence,
+          assessment: observation,
+          status: "pending" as const,
+          createdAt: now,
+        };
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.claude-cache.set",
+            commandId: CommandId.makeUnsafe("cmd-recovery-review"),
+            threadId,
+            review,
+            expectedReviewId: null,
+            createdAt: now,
+          }),
+        );
+        await Effect.runPromise(
+          harness.deliveryRepository.claim({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: source.sequence,
+            threadId,
+            claimOwner: "previous-process",
+            claimedAt: now,
+            claimExpiresAt: now,
+          }),
+        );
+        await Effect.runPromise(
+          harness.deliveryRepository.complete({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: source.sequence,
+            claimOwner: "previous-process",
+            completedAt: now,
+          }),
+        );
+        const response = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-recovery-continue"),
+            threadId,
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "continue",
+            createdAt: now,
+          }),
+        );
+        await Effect.runPromise(
+          harness.deliveryRepository.claim({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: response.sequence,
+            threadId,
+            claimOwner: "previous-process",
+            claimedAt: now,
+            claimExpiresAt:
+              settlement === "expired" ? now : new Date(Date.now() + 1_000).toISOString(),
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("cmd-recovery-interrupt"),
+            threadId,
+            createdAt: now,
+          }),
+        );
+        const getDelivery = harness.deliveryRepository.getDelivery;
+        let reads = 0;
+        Object.assign(harness.deliveryRepository, {
+          getDelivery: (input: Parameters<typeof getDelivery>[0]) => {
+            if (input.eventSequence === response.sequence) reads++;
+            return getDelivery(input);
+          },
+        });
+        const starting = harness.startReactor();
+        if (settlement === "safely-retryable") {
+          await waitFor(() => reads >= 3);
+          const requeued = await Effect.runPromise(
+            harness.deliveryRepository.markRetryable({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: response.sequence,
+              expectedClaimOwner: "previous-process",
+              error: "Prior owner confirmed pre-dispatch rejection",
+              updatedAt: new Date().toISOString(),
+            }),
+          );
+          expect(requeued).toBe(true);
+        }
+        await starting;
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        const delivery = await Effect.runPromise(
+          getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: response.sequence,
+          }),
+        );
+        expect(delivery.pipe(Option.getOrThrow).state).toBe(
+          settlement === "expired" ? "uncertain" : "succeeded",
+        );
+      },
+    );
+
+    it("fences a Continue interrupted before cache worker registration", async () => {
+      const cancelDiscovery = vi.fn(() => Effect.void);
+      const { harness } = await createCompactionHarness(cancelDiscovery);
+      const review = await sendHeldMessage(harness);
+      const sequence = (await Effect.runPromise(harness.engine.getEventHighWaterSequence)) + 2;
+      const entered = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const readDelivery = harness.deliveryRepository.getDelivery;
+      let gated = false;
+      Object.assign(harness.deliveryRepository, {
+        getDelivery: (input: Parameters<typeof readDelivery>[0]) => {
+          if (input.eventSequence !== sequence || gated) return readDelivery(input);
+          gated = true;
+          return Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(readDelivery(input)),
+          );
+        },
+      });
+      try {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-gap-continue"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "continue",
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await Effect.runPromise(Deferred.await(entered));
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("cmd-gap-interrupt"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await waitFor(() => cancelDiscovery.mock.calls.length === 1);
+      } finally {
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+      }
+      await harness.drain();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    });
+
+    it.each(["model", "runtime", "handoff"] as const)(
+      "preserves the session during same-thread %s reconfiguration with a cache worker",
+      async (change) => {
+        const { harness, getClaudeCacheObservation, startClaudeCompaction } =
+          await createCompactionHarness();
+        const review = await sendHeldMessage(harness);
+        const releaseObservation = Deferred.makeUnsafe<void>();
+        getClaudeCacheObservation.mockImplementationOnce(() =>
+          Deferred.await(releaseObservation).pipe(Effect.as(review.assessment)),
+        );
+        try {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.respond",
+              commandId: CommandId.makeUnsafe("cmd-reconfigure-compact"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              reviewId: review.reviewId,
+              messageId: review.messageId,
+              decision: "compact",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+          await waitFor(() => getClaudeCacheObservation.mock.calls.length === 2);
+          const update = await Effect.runPromise(
+            harness.engine.dispatch(
+              change !== "runtime"
+                ? {
+                    type: "thread.meta.update",
+                    commandId: CommandId.makeUnsafe("cmd-change-provider-during-compaction"),
+                    threadId: ThreadId.makeUnsafe("thread-1"),
+                    modelSelection: { provider: "codex", model: "gpt-5-codex" },
+                    ...(change === "handoff" ? { providerHandoff: true } : {}),
+                  }
+                : {
+                    type: "thread.runtime-mode.set",
+                    commandId: CommandId.makeUnsafe("cmd-change-runtime-during-compaction"),
+                    threadId: ThreadId.makeUnsafe("thread-1"),
+                    runtimeMode: "full-access",
+                    createdAt: new Date().toISOString(),
+                  },
+            ),
+          );
+          await waitFor(async () => {
+            const state = await Effect.runPromise(
+              harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+            );
+            return state.pipe(Option.getOrThrow).lastAckedSequence >= update.sequence;
+          });
+          expect(harness.startSession).toHaveBeenCalledTimes(1);
+          expect(harness.stopSession).not.toHaveBeenCalled();
+          if (change === "handoff") {
+            expect((await readHarnessThread(harness))?.activities).toContainEqual(
+              expect.objectContaining({ kind: "provider.handoff.failed" }),
+            );
+          }
+        } finally {
+          await Effect.runPromise(Deferred.succeed(releaseObservation, undefined));
+        }
+        await harness.drain();
+        expect(startClaudeCompaction).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("keeps an operator retried slow cache response alive beyond the command deadline", async () => {
+      const { harness, startClaudeCompaction } = await createCompactionHarness(
+        undefined,
+        false,
+        Duration.millis(100),
+      );
+      const review = await sendHeldMessage(harness);
+      startClaudeCompaction.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderSessionDirectoryPersistenceError({
+            operation: "startClaudeCompaction.persist",
+            detail: "Accepted but persistence failed",
+            cause: new PersistenceSqlError({
+              operation: "persistCompaction",
+              detail: "SQL unavailable",
+            }),
+          }),
+        ),
+      );
+      await respondToReview(harness, review, "compact");
+      const uncertain = (await readHarnessThread(harness))!.claudeCacheReview!;
+      const release = Deferred.makeUnsafe<void>();
+      startClaudeCompaction.mockImplementation((input) =>
+        Deferred.await(release).pipe(Effect.as(input)),
+      );
+      const retry = Effect.runPromise(
+        harness.reactor.reconcileDelivery({
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          eventSequence: uncertain.compactionResponseEventSequence!,
+          expectedState: "uncertain",
+          outcome: "safe_retry",
+          reconciledBy: "operator-confirmed-never-executed",
+        }),
+      );
+      try {
+        await waitFor(() => startClaudeCompaction.mock.calls.length === 2);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("compacting");
+        const threadId = ThreadId.makeUnsafe("thread-during-retried-compaction");
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("cmd-create-during-retried-compaction"),
+            threadId,
+            projectId: asProjectId("project-1"),
+            title: "Independent chat",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await dispatchHarnessUserTurn(harness, {
+          threadId,
+          messageId: "during-retried-compaction",
+          text: "Work during the operator retry",
+          createdAt: new Date().toISOString(),
+        });
+        await waitFor(() =>
+          harness.sendTurn.mock.calls.some(([input]) => input.threadId === threadId),
+        );
+      } finally {
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+        await retry;
+      }
+      await harness.drain();
+    });
+
+    it.each(["compaction", "follow-up", "cancel-follow-up"] as const)(
+      "keeps slow %s alive beyond the command deadline while another chat sends",
+      async (phase) => {
+        const { harness, startClaudeCompaction, setObservation } = await createCompactionHarness(
+          undefined,
+          false,
+          Duration.millis(100),
+        );
+        const review = await sendHeldMessage(harness);
+        const releaseDispatch = Deferred.makeUnsafe<void>();
+        if (phase === "compaction") {
+          startClaudeCompaction.mockImplementation(({ threadId, turnId }) =>
+            Deferred.await(releaseDispatch).pipe(Effect.as({ threadId, turnId })),
+          );
+        } else {
+          harness.sendTurn.mockImplementationOnce(({ threadId }) =>
+            Deferred.await(releaseDispatch).pipe(
+              Effect.as({ threadId, turnId: asTurnId("after-compaction") }),
+            ),
+          );
+        }
+        let terminal: Promise<void> | undefined;
+        try {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.respond",
+              commandId: CommandId.makeUnsafe("cmd-slow-compact"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              reviewId: review.reviewId,
+              messageId: review.messageId,
+              decision: "compact",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+          await waitFor(() => startClaudeCompaction.mock.calls.length === 1);
+          if (phase !== "compaction") {
+            await harness.drain();
+            setObservation({ ...review.assessment, contextTokens: 16_000, state: "likely-warm" });
+            terminal = emitCompactionTerminal(
+              harness,
+              startClaudeCompaction.mock.calls[0]![0].turnId,
+              {
+                state: "completed",
+                contextCompacted: true,
+              },
+            );
+            await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          }
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          const expectedStatus = phase === "compaction" ? "compacting" : "responding";
+          expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe(
+            expectedStatus,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-during-compaction");
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.create",
+              commandId: CommandId.makeUnsafe("cmd-create-during-compaction"),
+              threadId,
+              projectId: asProjectId("project-1"),
+              title: "Independent chat",
+              modelSelection: { provider: "codex", model: "gpt-5-codex" },
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              runtimeMode: "approval-required",
+              branch: null,
+              worktreePath: null,
+              createdAt: new Date().toISOString(),
+            }),
+          );
+          await dispatchHarnessUserTurn(harness, {
+            threadId,
+            messageId: "during-compaction",
+            text: "Work while Claude compacts",
+            createdAt: new Date().toISOString(),
+          });
+          await waitFor(() =>
+            harness.sendTurn.mock.calls.some(([input]) => input.threadId === threadId),
+          );
+          expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe(
+            expectedStatus,
+          );
+          if (phase === "cancel-follow-up") {
+            await Effect.runPromise(
+              harness.engine.dispatch({
+                type: "thread.session.stop",
+                commandId: CommandId.makeUnsafe("cmd-stop-pending-cache-send"),
+                threadId: ThreadId.makeUnsafe("thread-1"),
+                createdAt: new Date().toISOString(),
+              }),
+            );
+            await waitFor(() => harness.stopRuntimeSession.mock.calls.length === 1);
+            await Effect.runPromise(
+              harness.reactor.drain.pipe(Effect.timeout(Duration.seconds(1))),
+            );
+            expect((await readHarnessThread(harness))?.claudeCacheReview).toBeNull();
+            expect((await readHarnessThread(harness))?.session?.status).toBe("stopped");
+          }
+        } finally {
+          await Effect.runPromise(Deferred.succeed(releaseDispatch, undefined));
+          await terminal;
+        }
+        await harness.drain();
+        if (phase === "compaction") {
+          setObservation({ ...review.assessment, contextTokens: 16_000, state: "likely-warm" });
+          await emitCompactionTerminal(harness, startClaudeCompaction.mock.calls[0]![0].turnId, {
+            state: "completed",
+            contextCompacted: true,
+          });
+        }
+        await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+        await harness.drain();
+        const savedSends = harness.sendTurn.mock.calls.filter(
+          ([input]) => input.threadId === "thread-1",
+        );
+        expect(savedSends).toHaveLength(1);
+        expect(savedSends[0]?.[0].input).toBe("Continue with this exact message");
+        expect((await readHarnessThread(harness))?.claudeCacheReview).toBeNull();
       },
     );
 
@@ -3208,6 +3640,8 @@ describe("ProviderCommandReactor", () => {
     it.each([
       "confirmed",
       "confirmed-after-reconciliation",
+      "confirmed-inflight-behind-cursor",
+      "inflight-behind-cursor",
       "cancelled-confirmed",
       "cancelled-missing",
       "confirmed-unacknowledged",
@@ -3217,6 +3651,7 @@ describe("ProviderCommandReactor", () => {
       "uncertain-missing",
       "failed-recovery-interrupted",
       "uncertain-user-delivery",
+      "inflight-user-delivery",
       "missing",
       "failed",
     ] as const)(
@@ -3307,6 +3742,24 @@ describe("ProviderCommandReactor", () => {
               claimExpiresAt: now,
             }),
           );
+          if (
+            evidence.endsWith("inflight-behind-cursor") &&
+            eventSequence === compactResponse.sequence
+          ) {
+            const events = await Effect.runPromise(
+              Stream.runCollect(harness.engine.readEventsThrough(0, compactResponse.sequence)),
+            );
+            for (const event of events) {
+              await Effect.runPromise(
+                harness.deliveryRepository.advanceCursor({
+                  consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                  eventSequence: event.sequence,
+                  updatedAt: now,
+                }),
+              );
+            }
+            continue;
+          }
           await Effect.runPromise(
             (evidence === "uncertain-missing" ||
               evidence === "failed-recovery-interrupted" ||
@@ -3329,7 +3782,7 @@ describe("ProviderCommandReactor", () => {
           );
         }
         let uncertainUserDeliverySequence: number | undefined;
-        if (evidence === "uncertain-user-delivery") {
+        if (evidence === "uncertain-user-delivery" || evidence === "inflight-user-delivery") {
           // A confirmed compaction may have released the user's message before
           // its acknowledgement was lost and the old terminal was pruned.
           const continued = await Effect.runPromise(
@@ -3353,16 +3806,31 @@ describe("ProviderCommandReactor", () => {
               claimExpiresAt: now,
             }),
           );
-          await Effect.runPromise(
-            harness.deliveryRepository.markTerminalFailure({
-              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-              eventSequence: continued.sequence,
-              expectedClaimOwner: "previous-process",
-              state: "uncertain",
-              error: "Lost user message acknowledgement",
-              updatedAt: now,
-            }),
-          );
+          if (evidence === "uncertain-user-delivery")
+            await Effect.runPromise(
+              harness.deliveryRepository.markTerminalFailure({
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: continued.sequence,
+                expectedClaimOwner: "previous-process",
+                state: "uncertain",
+                error: "Lost user message acknowledgement",
+                updatedAt: now,
+              }),
+            );
+          if (evidence === "inflight-user-delivery") {
+            const events = await Effect.runPromise(
+              Stream.runCollect(harness.engine.readEventsThrough(0, continued.sequence)),
+            );
+            for (const event of events) {
+              await Effect.runPromise(
+                harness.deliveryRepository.advanceCursor({
+                  consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                  eventSequence: event.sequence,
+                  updatedAt: now,
+                }),
+              );
+            }
+          }
           await Effect.runPromise(
             harness.engine.dispatch({
               type: "thread.claude-cache.set",
@@ -3384,8 +3852,10 @@ describe("ProviderCommandReactor", () => {
           evidence !== "missing" &&
           evidence !== "cancelled-missing" &&
           evidence !== "uncertain-missing" &&
+          evidence !== "inflight-behind-cursor" &&
           evidence !== "failed-recovery-interrupted" &&
-          evidence !== "uncertain-user-delivery"
+          evidence !== "uncertain-user-delivery" &&
+          evidence !== "inflight-user-delivery"
         ) {
           const terminal = await Effect.runPromise(
             harness.runtimeEventRepository.append({
@@ -3544,7 +4014,7 @@ describe("ProviderCommandReactor", () => {
           ).toEqual([]);
           return;
         }
-        if (evidence === "uncertain-user-delivery") {
+        if (evidence === "uncertain-user-delivery" || evidence === "inflight-user-delivery") {
           expect(harness.sendTurn).not.toHaveBeenCalled();
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("uncertain");
           expect(
@@ -3580,6 +4050,7 @@ describe("ProviderCommandReactor", () => {
         if (
           evidence === "confirmed" ||
           evidence === "confirmed-after-reconciliation" ||
+          evidence === "confirmed-inflight-behind-cursor" ||
           evidence === "confirmed-unacknowledged"
         ) {
           await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -3593,7 +4064,11 @@ describe("ProviderCommandReactor", () => {
         } else {
           expect(harness.sendTurn).not.toHaveBeenCalled();
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("failed");
-          if (evidence === "uncertain-missing" || evidence === "failed-recovery-interrupted") {
+          if (
+            evidence === "uncertain-missing" ||
+            evidence === "failed-recovery-interrupted" ||
+            evidence === "inflight-behind-cursor"
+          ) {
             expect(
               await Effect.runPromise(
                 harness.reactor.listBlockingDeliveries({ threadId, limit: 10 }),
@@ -6034,6 +6509,288 @@ describe("ProviderCommandReactor", () => {
         outcome: "abandon",
         note: expect.stringContaining("without replay"),
       });
+  });
+
+  // The quarantine alone does not reach the UI: "Unblock thread" only renders
+  // for the provider-delivery block contract, which used to be written lazily
+  // by the first skipped turn start. A terminal settle must surface it at once.
+  it.each(["uncertain", "dead"] as const)(
+    "REL-01B gate: surfaces the delivery block when a provider command settles %s",
+    async (terminalState) => {
+      const failure =
+        terminalState === "dead"
+          ? new PersistenceSqlError({
+              operation: "ProviderService.interruptTurn",
+              detail: "durability probe failed",
+            })
+          : new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "turn/interrupt",
+              detail: "connection closed after request write",
+            });
+      const harness = await createHarness({
+        interruptTurn: () => Effect.fail(failure),
+      });
+      const now = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      await seedRollbackTarget(harness, {
+        messageId: asMessageId(`user-message-settle-${terminalState}`),
+        turnId: asTurnId(`turn-settle-${terminalState}`),
+        createdAt: now,
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`cmd-settle-${terminalState}-session`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId(`turn-settle-${terminalState}`),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.conversation.rollback",
+          commandId: CommandId.makeUnsafe(`cmd-settle-${terminalState}-rollback`),
+          threadId,
+          messageId: asMessageId(`user-message-settle-${terminalState}`),
+          numTurns: 1,
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(async () =>
+        Effect.runPromise(
+          harness.deliveryRepository
+            .firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId,
+            })
+            .pipe(
+              Effect.map(
+                (blocker) => Option.isSome(blocker) && blocker.value.state === terminalState,
+              ),
+            ),
+        ),
+      );
+      await waitFor(async () =>
+        isProviderDeliveryBlockDetail((await readHarnessThread(harness))?.session?.lastError),
+      );
+      const thread = await readHarnessThread(harness);
+      // The block detail merges over the session as it stands: quarantining a
+      // delivery must not flatten a live turn's status or activeTurnId.
+      expect(thread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId(`turn-settle-${terminalState}`),
+      });
+      expect(thread?.session?.lastError).toContain(PROVIDER_DELIVERY_BLOCK_SUMMARY);
+      expect(thread?.session?.lastError).toContain(
+        terminalState === "dead" ? "durability probe failed" : "connection closed",
+      );
+    },
+  );
+
+  // A blocker that survives startup recovery keeps the thread quarantined but
+  // stayed invisible until a later turn start was skipped. Surface the block
+  // once per thread so a restart still offers "Unblock thread".
+  it("REL-01B gate: surfaces a surviving startup blocker once per thread", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = "2026-10-04T10:00:00.000Z";
+    const failedAt = "2026-10-04T10:00:01.000Z";
+
+    const seedSurvivingBlocker = async (commandId: string, lastError: string) => {
+      const requested = await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.task.stop",
+          commandId: CommandId.makeUnsafe(commandId),
+          threadId,
+          taskId: `task-${commandId}`,
+          createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.claim({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          threadId,
+          claimOwner: "old-process",
+          claimedAt: createdAt,
+          claimExpiresAt: createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.markTerminalFailure({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          expectedClaimOwner: "old-process",
+          state: "uncertain",
+          error: lastError,
+          updatedAt: failedAt,
+        }),
+      );
+      return requested;
+    };
+    const first = await seedSurvivingBlocker(
+      "blocker-earlier",
+      "Provider process tree did not prove exit.",
+    );
+    const second = await seedSurvivingBlocker("blocker-later", "Provider acceptance is unknown.");
+    for (const event of await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)))) {
+      await Effect.runPromise(
+        harness.deliveryRepository.advanceCursor({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: event.sequence,
+          updatedAt: failedAt,
+        }),
+      );
+    }
+
+    await harness.startReactor();
+    await harness.drain();
+
+    const delivery = (sequence: number) =>
+      Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: sequence,
+        }),
+      );
+    expect(Option.getOrThrow(await delivery(first.sequence)).state).toBe("uncertain");
+    expect(Option.getOrThrow(await delivery(second.sequence)).state).toBe("uncertain");
+    const thread = await readHarnessThread(harness);
+    // Exactly one surfacing write per thread: the earliest surviving blocker's
+    // detail wins and a second blocker must not rewrite or double it.
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.lastError).toBe(
+      formatProviderDeliveryBlockDetail("Provider process tree did not prove exit."),
+    );
+    const blockDetailWrites = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).filter(
+      (event) =>
+        event.type === "thread.session-set" &&
+        isProviderDeliveryBlockDetail(event.payload.session.lastError),
+    );
+    expect(blockDetailWrites).toHaveLength(1);
+  });
+
+  // The lazy skip path already wrote the block detail; the settle-time write
+  // must not regress it — a skipped turn start still surfaces the same contract.
+  it("REL-01B gate: keeps skipped turn starts surfacing the block after settle-time writes", async () => {
+    const harness = await createHarness({
+      interruptTurn: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/interrupt",
+            detail: "connection closed after request write",
+          }),
+        ),
+    });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-skip-block"),
+      turnId: asTurnId("turn-skip-block"),
+      createdAt: now,
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-skip-block"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-rollback"),
+        threadId,
+        messageId: asMessageId("user-message-skip-block"),
+        numTurns: 1,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () =>
+      Effect.runPromise(
+        harness.deliveryRepository
+          .firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId,
+          })
+          .pipe(Effect.map(Option.isSome)),
+      ),
+    );
+
+    // Settle the session so the follow-up message starts a turn instead of queueing.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-session-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    const skippedTurn = await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-skip-block-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("skip-block-user"),
+          role: "user",
+          text: "Message sent while the thread was blocked",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const state = await Effect.runPromise(
+        harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+      );
+      return state.pipe(Option.getOrThrow).lastAckedSequence >= skippedTurn.sequence;
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.status).toBe("error");
+    expect(isProviderDeliveryBlockDetail(thread?.session?.lastError)).toBe(true);
+    expect(
+      thread?.activities.some(
+        (activity) =>
+          activity.kind === "provider.turn.start.failed" &&
+          activity.summary === PROVIDER_DELIVERY_BLOCK_SUMMARY,
+      ),
+    ).toBe(true);
   });
 
   it("REL-01D gate: resumes an operator-authorized retry after process loss", async () => {

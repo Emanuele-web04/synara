@@ -231,7 +231,7 @@ const DEFAULT_BINDINGS = compile([
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
-    command: "terminal.split",
+    command: "terminal.workspace.terminal",
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
@@ -405,12 +405,23 @@ const DEFAULT_BINDINGS = compile([
   },
 ]);
 
-describe("split/new/close terminal shortcuts", () => {
+describe("terminal shortcuts", () => {
+  it("ignores retired split shortcuts so they cannot consume shell keys", () => {
+    const keybindings = compile([{ shortcut: modShortcut("d"), command: "terminal.split" }]);
+    assert.equal(
+      resolveShortcutCommand(event({ key: "d", ctrlKey: true }), keybindings, {
+        platform: "Win32",
+        context: { terminalOpen: true, terminalFocus: true },
+      }),
+      null,
+    );
+  });
+
   it("supports when expressions", () => {
     const keybindings = compile([
       {
         shortcut: modShortcut("\\"),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenAnd(whenIdentifier("terminalOpen"), whenNot(whenIdentifier("terminalFocus"))),
       },
       {
@@ -425,14 +436,14 @@ describe("split/new/close terminal shortcuts", () => {
         platform: "Win32",
         context: { terminalOpen: true, terminalFocus: false },
       }),
-      "terminal.split",
+      "terminal.workspace.terminal",
     );
     assert.notEqual(
       resolveShortcutCommand(event({ key: "\\", ctrlKey: true }), keybindings, {
         platform: "Win32",
         context: { terminalOpen: false, terminalFocus: false },
       }),
-      "terminal.split",
+      "terminal.workspace.terminal",
     );
     assert.equal(
       resolveShortcutCommand(event({ key: "n", ctrlKey: true, shiftKey: true }), keybindings, {
@@ -738,17 +749,17 @@ describe("shortcutLabelForCommand", () => {
     const bindings = compile([
       {
         shortcut: modShortcut("\\"),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenIdentifier("terminalFocus"),
       },
       {
         shortcut: modShortcut("\\", { shiftKey: true }),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenNot(whenIdentifier("terminalFocus")),
       },
     ]);
     assert.strictEqual(
-      shortcutLabelForCommand(bindings, "terminal.split", "Linux"),
+      shortcutLabelForCommand(bindings, "terminal.workspace.terminal", "Linux"),
       "Ctrl+Shift+\\",
     );
   });

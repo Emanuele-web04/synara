@@ -3,6 +3,8 @@
 // Layer: Web transport
 // Exports: WsTransport plus stream-selection helpers used by tests.
 
+import { recordRendererActivity, rendererRpcActivity } from "./lib/rendererErrorDiagnostics";
+
 import {
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -19,6 +21,7 @@ import {
   WS_PROTOCOL_MIN_REVISION,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
+  WS_GIT_ACTION_RECOVERY_CAPABILITY,
   type ClientOrchestrationCommand,
   type OrchestrationSettleTurnDispatchResult,
   DEVICE_WS_CHANNELS,
@@ -849,6 +852,24 @@ export class WsTransport {
     params?: unknown,
     options?: WsRequestOptions,
   ): Promise<T> {
+    const activity = rendererRpcActivity(method, params);
+    if (!activity) return this.requestInternal<T>(method, params, options);
+    recordRendererActivity(activity, "started");
+    try {
+      const result = await this.requestInternal<T>(method, params, options);
+      recordRendererActivity(activity, "succeeded");
+      return result;
+    } catch (error) {
+      recordRendererActivity(activity, "failed");
+      throw error;
+    }
+  }
+
+  private async requestInternal<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: WsRequestOptions,
+  ): Promise<T> {
     if (this.disposed) throw new Error("Transport disposed");
     const requestOptions: WsRequestOptions =
       options?.timeoutMs === undefined ? { ...options, timeoutMs: REQUEST_TIMEOUT_MS } : options;
@@ -926,7 +947,7 @@ export class WsTransport {
       }
 
       if (method === WS_METHODS.gitRunStackedAction) {
-        return (await this.runGitActionStream(client, params, abortScope.signal)) as T;
+        return (await this.runRecoverableGitAction(client, params, abortScope.signal)) as T;
       }
       if (method === WS_METHODS.gitCreateDetachedWorktree) {
         return (await this.runWorktreeSetupStream(client, params, abortScope.signal)) as T;
@@ -990,6 +1011,7 @@ export class WsTransport {
         isRuntimeInterruptFailure(error) ||
         Schema.is(RpcClientError.RpcClientError)(error)
       ) {
+        recordRendererActivity("transport.reconnect", "started");
         failure = new WsTransportRequestInterruptedError({
           message: `WebSocket RPC ${method} was interrupted by a transport reconnect.`,
           code: "WS_REQUEST_RECONNECTED",
@@ -2162,23 +2184,74 @@ export class WsTransport {
     return settled;
   }
 
+  private async runRecoverableGitAction(
+    initialClient: RpcClientInstance,
+    params: unknown,
+    callerSignal?: AbortSignal,
+  ): Promise<GitRunStackedActionResult> {
+    const canRecover = this.compatibility?.capabilities.includes(WS_GIT_ACTION_RECOVERY_CAPABILITY);
+    const command = canRecover ? { ...(params as object), recoverable: true } : params;
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, this.lifetime.signal])
+      : this.lifetime.signal;
+    let client = initialClient;
+    let resume = false;
+    let attempt = 0;
+    for (;;) {
+      signal.throwIfAborted();
+      try {
+        if (resume) {
+          client = await awaitWithAbort(this.getClient(), signal);
+          // An older server would ignore `resume` and execute the mutation again.
+          if (!this.compatibility?.capabilities.includes(WS_GIT_ACTION_RECOVERY_CAPABILITY)) {
+            throw new WsTransportRpcError({
+              message:
+                "This server cannot recover the Git action. Check the repository status before trying again.",
+            });
+          }
+        }
+        return await this.runGitActionStream(
+          client,
+          resume ? { ...(command as object), resume: true } : command,
+          signal,
+        );
+      } catch (error) {
+        if (
+          !canRecover ||
+          signal.aborted ||
+          this.disposed ||
+          !(isRuntimeInterruptFailure(error) || Schema.is(RpcClientError.RpcClientError)(error))
+        ) {
+          throw error;
+        }
+        resume = true;
+        await delayMs(Math.max(500, getReconnectRetryDelayMs(attempt++)), signal);
+      }
+    }
+  }
+
   private async runGitActionStream(
     client: RpcClientInstance,
     params: unknown,
     signal?: AbortSignal,
   ): Promise<GitRunStackedActionResult> {
     let result: GitRunStackedActionResult | null = null;
-    await this.getClientRuntime(client).runPromise(
-      Stream.runForEach(client[WS_METHODS.gitRunStackedAction](params as never), (event) =>
-        Effect.sync(() => {
-          this.emit(WS_CHANNELS.gitActionProgress, event as GitActionProgressEvent);
-          if ((event as GitActionProgressEvent).kind === "action_finished") {
-            result = (event as Extract<GitActionProgressEvent, { kind: "action_finished" }>).result;
-          }
-        }),
-      ),
-      signal ? { signal } : undefined,
-    );
+    try {
+      await this.getClientRuntime(client).runPromise(
+        Stream.runForEach(client[WS_METHODS.gitRunStackedAction](params as never), (event) =>
+          Effect.sync(() => {
+            this.emit(WS_CHANNELS.gitActionProgress, event as GitActionProgressEvent);
+            if ((event as GitActionProgressEvent).kind === "action_finished") {
+              result = (event as Extract<GitActionProgressEvent, { kind: "action_finished" }>)
+                .result;
+            }
+          }),
+        ),
+        signal ? { signal } : undefined,
+      );
+    } catch (error) {
+      if (!result) throw error;
+    }
     if (!result) throw new Error("Git action stream completed without a final result.");
     return result;
   }

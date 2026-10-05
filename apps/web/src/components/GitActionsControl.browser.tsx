@@ -66,6 +66,14 @@ it("owns failure details per action when the retained control changes workspace"
     },
   };
   const previousApi = window.nativeApi;
+  const previousBridge = window.desktopBridge;
+  const reportIssue = vi.fn(async () => "12345678-1234-4234-8234-123456789012");
+  Object.defineProperty(window, "desktopBridge", {
+    configurable: true,
+    value: {
+      betaDiagnostics: { reportIssue, getReportStatus: async () => "sent" },
+    },
+  });
   Object.defineProperty(window, "nativeApi", { configurable: true, value: api });
   const previousShell = useStore.getState().threadShellById ?? {};
   useStore.setState({ threadShellById: {} });
@@ -145,6 +153,18 @@ it("owns failure details per action when the retained control changes workspace"
     }
     pending[1]!.reject(new Error("Git action stream failed"));
     await expectFailure("Second workspace push failed", "Push failed");
+    await vi.waitFor(() =>
+      expect(reportIssue).toHaveBeenLastCalledWith(
+        expect.objectContaining({ code: "git.push.failed" }),
+      ),
+    );
+    await expect
+      .element(page.getByRole("button", { name: "Copy diagnostic ID", exact: true }).last())
+      .toBeVisible();
+    await expect.element(page.getByText("Report sent", { exact: true }).last()).toBeVisible();
+    expect(JSON.stringify(reportIssue.mock.calls)).not.toMatch(
+      /repo\/|workspace|User supplied message/,
+    );
   } finally {
     for (const action of pending) action.reject(new Error("Test finished"));
     flushSync(() => root.unmount());
@@ -152,6 +172,7 @@ it("owns failure details per action when the retained control changes workspace"
     await queryClient.cancelQueries();
     queryClient.clear();
     Object.defineProperty(window, "nativeApi", { configurable: true, value: previousApi });
+    Object.defineProperty(window, "desktopBridge", { configurable: true, value: previousBridge });
     useStore.setState({ threadShellById: previousShell });
   }
 });

@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-// Additive: Stable never reads this table (Auto-fix CI is Beta-only). One row per watched
+// Additive: Auto-fix CI is opt-in in Stable and Beta. One row per watched
 // pull request of a chat, so a chat can watch every PR of a stack.
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

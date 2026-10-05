@@ -58,6 +58,8 @@ export type TerminalOpenInput = Schema.Codec.Encoded<typeof TerminalOpenInput>;
 export const TerminalWriteInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   data: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
+  // Navigation commands must not become input to a running program.
+  onlyIfIdle: Schema.optional(Schema.Boolean),
 });
 export type TerminalWriteInput = Schema.Codec.Encoded<typeof TerminalWriteInput>;
 
@@ -90,6 +92,9 @@ export const TerminalCloseInput = Schema.Struct({
   ...TerminalThreadInput.fields,
   terminalId: Schema.optional(TerminalIdSchema),
   deleteHistory: Schema.optional(Schema.Boolean),
+  // Automatic replacement/retirement must verify inactivity on the server.
+  // Requires a terminalId; an unavailable process snapshot rejects the close.
+  onlyIfIdle: Schema.optional(Schema.Boolean),
 });
 export type TerminalCloseInput = Schema.Codec.Encoded<typeof TerminalCloseInput>;
 

@@ -13,7 +13,7 @@ export class PullRequestAutoFixError extends Schema.TaggedErrorClass<PullRequest
 ) {}
 
 /**
- * Auto-fix CI (Beta-only): the per-PR switches behind the Environment panel's pull request
+ * Auto-fix CI (Stable and Beta): the per-PR switches behind the Environment panel's pull request
  * rows. The live layer also runs the watcher that polls each watched PR's checks and starts a
  * fix turn in the chat when one fails.
  */

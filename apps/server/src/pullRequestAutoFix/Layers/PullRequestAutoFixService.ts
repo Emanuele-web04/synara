@@ -4,7 +4,7 @@
 //          that chat, one fix per chat at a time (like Claude Code's CI monitor, which wakes
 //          the one session for every bound PR). All decisions live in
 //          `pullRequestAutoFixDecision.ts`.
-// Layer: Server background service (Beta-only; the loop never starts on Stable)
+// Layer: Server background service (Stable and Beta; each PR watch is opt-in)
 
 import {
   CommandId,
@@ -91,7 +91,7 @@ const make = Effect.gen(function* () {
 
   const requireEnabled = enabled
     ? Effect.void
-    : Effect.fail(fail("Auto-fix CI is available in Synara Beta."));
+    : Effect.fail(fail("Auto-fix CI is unavailable on this host."));
 
   const resolveThreadCwd = Effect.fnUntraced(function* (thread: OrchestrationThreadShell) {
     const project = Option.getOrUndefined(

@@ -470,15 +470,23 @@ export function SurfaceTabStrip({
   // Wheel mice only emit vertical deltas; route them sideways while the strip overflows.
   // The listener stays passive: a cancelable one makes every wheel event, sideways trackpad
   // swipes included, wait for the main thread, so the strip stalls whenever a chat is
-  // rendering. Events that carry a sideways delta are a trackpad gesture the browser is
-  // already scrolling; adding their vertical drift on top would fight it.
+  // rendering. Once a gesture carries sideways movement, leave its remaining samples to
+  // the browser too: a trackpad can briefly emit deltaX === 0, and writing scrollLeft for
+  // that sample fights the native scroll. WheelEvent has no gesture-end signal, so a quiet
+  // gap lets the next vertical-only gesture use the mouse-wheel fallback again.
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip) {
       return;
     }
+    let lastWheelAt = -Infinity;
+    let nativeHorizontalGesture = false;
     const onWheel = (event: WheelEvent) => {
-      if (event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0) return;
+      if (event.ctrlKey) return;
+      if (event.timeStamp - lastWheelAt > 250) nativeHorizontalGesture = false;
+      lastWheelAt = event.timeStamp;
+      if (event.deltaX !== 0) nativeHorizontalGesture = true;
+      if (nativeHorizontalGesture || event.deltaY === 0) return;
       strip.scrollLeft += event.deltaY;
     };
     strip.addEventListener("wheel", onWheel, { passive: true });

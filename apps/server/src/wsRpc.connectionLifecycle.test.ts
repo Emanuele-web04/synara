@@ -1,7 +1,10 @@
+import { makeGitActionRunner } from "./git/gitActionRunner";
 import http from "node:http";
 
 import {
   WS_BOOTSTRAP_METHOD,
+  WS_METHODS,
+  WsGitRunStackedActionRpc,
   WS_BOOTSTRAP_PATH,
   WS_COMPATIBILITY_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
@@ -14,7 +17,7 @@ import {
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
+import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,7 +54,7 @@ const SlowRpc = Rpc.make("test.slow", {
   payload: Schema.Struct({}),
   success: Schema.String,
 });
-const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc);
+const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -59,6 +62,8 @@ interface RunningTestServer {
   readonly logout: (sessionId: AuthSessionId) => Promise<boolean>;
   readonly transportFinalizers: { count: number };
   readonly observedRpc: { decoderCalls: number; handlerCalls: number };
+  readonly observedGitAction: { started: number; finalized: number };
+  readonly releaseGitAction: () => Promise<void>;
   readonly observedSlowRpc: { started: number; completed: number; finalized: number };
   readonly connectionSessions: WsConnectionSessionsShape;
   readonly observedConnectionSessionKeys: string[];
@@ -250,32 +255,65 @@ async function startTestServer(): Promise<RunningTestServer> {
       };
     },
   });
+  const observedGitAction = { started: 0, finalized: 0 };
+  const gitRelease = await Effect.runPromise(Deferred.make<void>());
   const handlerLayer = PingRpcGroup.toLayer(
-    Effect.succeed({
-      "test.ping": (_input: { readonly label: string }) =>
-        Effect.sync(() => {
-          observedRpc.handlerCalls += 1;
-          return "ok";
-        }),
-      "test.slow": () =>
+    Effect.gen(function* () {
+      const runGitAction = yield* makeGitActionRunner((input, publish) =>
         Effect.gen(function* () {
-          observedSlowRpc.started += 1;
-          yield* Effect.sleep(Duration.seconds(30));
-          observedSlowRpc.completed += 1;
-          return "ok";
+          observedGitAction.started++;
+          yield* Deferred.await(gitRelease);
+          yield* publish({
+            ...input,
+            kind: "action_finished",
+            result: {
+              action: "push",
+              branch: { status: "skipped_not_requested" },
+              commit: { status: "skipped_not_requested" },
+              push: { status: "pushed" },
+              pr: { status: "skipped_not_requested" },
+            },
+          });
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              observedSlowRpc.finalized += 1;
+              observedGitAction.finalized++;
             }),
           ),
         ),
+      );
+      return {
+        [WS_METHODS.gitRunStackedAction]: runGitAction,
+        "test.ping": (_input: { readonly label: string }) =>
+          Effect.sync(() => {
+            observedRpc.handlerCalls += 1;
+            return "ok";
+          }),
+        "test.slow": () =>
+          Effect.gen(function* () {
+            observedSlowRpc.started += 1;
+            yield* Effect.sleep(Duration.seconds(30));
+            observedSlowRpc.completed += 1;
+            return "ok";
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                observedSlowRpc.finalized += 1;
+              }),
+            ),
+          ),
+      };
     }),
   );
   const connectionSessions = await Effect.runPromise(makeWsConnectionSessions);
   const observedConnectionSessionKeys: string[] = [];
-  const rpcHttpEffectSource = RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(
-    Effect.provide(handlerLayer.pipe(Layer.provideMerge(serializationLayer))),
+  const rpcHttpEffectSource = Effect.gen(function* () {
+    const handlers = yield* Layer.buildWithScope(
+      handlerLayer.pipe(Layer.provideMerge(serializationLayer)),
+      yield* Effect.scope,
+    );
+    return yield* RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(Effect.provide(handlers));
+  }).pipe(
     Effect.map((httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
@@ -334,6 +372,9 @@ async function startTestServer(): Promise<RunningTestServer> {
     transportFinalizers,
     observedRpc,
     observedSlowRpc,
+    observedGitAction,
+    releaseGitAction: () =>
+      Effect.runPromise(Deferred.succeed(gitRelease, undefined).pipe(Effect.asVoid)),
     connectionSessions,
     observedConnectionSessionKeys,
     close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
@@ -846,6 +887,68 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       await server.close();
     }
   }, 4_000);
+
+  it("reattaches to one Git action after the actual WebSocket closes", async () => {
+    const server = await startTestServer();
+    try {
+      const first = await connectSession(server);
+      const input = {
+        actionId: "socket-reconnect",
+        cwd: "/repo",
+        action: "push",
+        recoverable: true,
+      };
+      first.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "300",
+          tag: WS_METHODS.gitRunStackedAction,
+          payload: input,
+          headers: [],
+        }),
+      );
+      await waitForObserved(() => server.observedGitAction.started === 1);
+      const closed = waitForClose(first.socket);
+      first.socket.terminate();
+      await closed;
+      await waitForObserved(() => server.transportFinalizers.count >= 1);
+      expect(server.observedGitAction.finalized).toBe(0);
+
+      // Finish while no socket is observing, then recover the retained result.
+      await server.releaseGitAction();
+      await waitForObserved(() => server.observedGitAction.finalized === 1);
+      const second = await connectExistingSession(server, first.sessionId);
+      const events: unknown[] = [];
+      second.socket.on("message", (data: RawData) => {
+        const frame = JSON.parse(data.toString());
+        if (frame._tag === "Chunk") {
+          events.push(...frame.values);
+          second.socket.send(JSON.stringify({ _tag: "Ack", requestId: frame.requestId }));
+        }
+      });
+      const exit = waitForRpcExit(second.socket, "301");
+      second.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "301",
+          tag: WS_METHODS.gitRunStackedAction,
+          payload: { ...input, resume: true },
+          headers: [],
+        }),
+      );
+      await exit;
+      expect(events).toEqual([
+        expect.objectContaining({
+          actionId: input.actionId,
+          kind: "action_finished",
+          result: expect.objectContaining({ push: { status: "pushed" } }),
+        }),
+      ]);
+      expect(server.observedGitAction).toEqual({ started: 1, finalized: 1 });
+    } finally {
+      await server.close();
+    }
+  });
 
   it("closes with an established socket and finalizes its RPC work", async () => {
     const server = await startTestServer();

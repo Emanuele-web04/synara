@@ -25,6 +25,25 @@ gh auth status
 
 When several GitHub accounts are configured, confirm which account and host the CLI will use before changing remote state.
 
+## Source control writing style
+
+In **Settings → Models & writing**, choose **Source control writing style**:
+
+| Option                 | Generated writing                                                                                           |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Repository conventions | Matches recent commit subjects and pull request titles from each project. This is the default.              |
+| Conventional Commits   | Uses `type(scope): description` or `type: description` prefixes and keeps pull request content concise.     |
+| Custom instructions    | Applies your saved writing guidance to generated commit messages and pull request content in every project. |
+
+Selecting **Custom instructions** reveals a multiline editor. Changes save automatically;
+switching styles preserves the text. The row's reset button restores repository conventions
+and clears the custom instructions. These settings are stored with the server and survive restarts.
+They do not change the model selected by **Git writing model** or rewrite manually entered text.
+
+Repository examples are optional: an empty Git history, missing GitHub CLI, or unavailable
+GitHub connection falls back to concise writing. Custom instructions affect wording;
+the required generation response format still applies.
+
 ## Find pull requests
 
 The pull-request workspace can aggregate results across available projects or focus on one repository. Use search, state filters, involvement groups, and pins to keep active work visible.

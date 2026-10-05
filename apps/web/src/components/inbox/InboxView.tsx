@@ -1,5 +1,5 @@
 // FILE: InboxView.tsx
-// Purpose: The Inbox page (Beta-only): a task column (what needs the user, what is running,
+// Purpose: The Inbox page (Stable and Beta): a task column (what needs the user, what is running,
 //          what finished, and today's to-dos) beside the day told as short written cards ("Your best model
 //          was ..."). Cards and groups exist only when the user's data does, and the grid
 //          closes the gaps they leave. Colors come from the theme.
@@ -736,7 +736,7 @@ export default function InboxView() {
                     {isRecapUnavailableError(recapQuery.error) ? (
                       <Tile className="p-5 @lg:px-7 @lg:py-6">
                         <span className="text-ui text-muted-foreground">
-                          The day recap needs a server running Synara Beta.
+                          The day recap needs a newer Synara server.
                         </span>
                       </Tile>
                     ) : (

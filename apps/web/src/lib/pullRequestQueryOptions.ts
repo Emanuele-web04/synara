@@ -76,7 +76,7 @@ export function pullRequestDiffQueryOptions(input: PullRequestDetailInput | null
   });
 }
 
-/** Auto-fix CI state for a thread (Beta-only). The server watcher changes it every minute at most. */
+/** Auto-fix CI state for a thread. The server watcher changes it every minute at most. */
 export function pullRequestAutoFixQueryOptions(threadId: ThreadId | null, enabled: boolean) {
   return queryOptions({
     queryKey: pullRequestQueryKeys.autoFix(threadId),

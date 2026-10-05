@@ -318,6 +318,11 @@ export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 // pointer), the one terminal glyph, open-outside-the-app, and the schedule clock that doubles as the automation glyph everywhere it appears (meta chip,
 // Automations nav, slash command, created card, environment section) (Hugeicons, inlined).
 export {
+  AiBrain01Icon as ThinkingIcon,
+  HammerIcon as WorkingIcon,
+  Loading03Icon as ActivityLoadingIcon,
+  MessageSearch01Icon as MessageDeliveryCheckIcon,
+  BookOpen01Icon as WorkDetailsIcon,
   AppleReminderIcon as TasksIcon,
   ArrowDataTransferHorizontalIcon as HandoffIcon,
   CheckmarkSquare02Icon as CheckboxCheckedIcon,

@@ -22,6 +22,7 @@ import {
   OrchestrationProposedPlanId,
   type OrchestrationReadModel,
   type ProjectId,
+  type ProjectAgentOverview,
   type ServerConfig,
   SpaceId,
   ThreadId,
@@ -57,6 +58,7 @@ import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
 } from "../chat-scroll";
+import { useGroupPanelClosedStore } from "../groupPanelClosedStore";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import {
@@ -108,7 +110,9 @@ import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
+import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
+import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
@@ -1311,6 +1315,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       truncated: false,
     };
   }
+  if (tag === WS_METHODS.projectAgentListTasks) return { tasks: [], nextCursor: null };
+  if (tag === WS_METHODS.projectAgentListActivity) return { activity: [], nextCursor: null };
+  if (tag === WS_METHODS.projectAgentListDocuments) return { documents: [] };
+  if (tag === WS_METHODS.projectAgentListThreadIndex) return { threads: [] };
   if (tag === WS_METHODS.projectAgentGetOverview) {
     const projectId = typeof body.projectId === "string" ? body.projectId : "";
     return fixture.projectAgentOverviews[projectId] ?? {};
@@ -1328,7 +1336,11 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       updatedAt: NOW_ISO,
     };
   }
-  if (tag === WS_METHODS.shellOpenInEditor || tag === WS_METHODS.terminalWrite) {
+  if (
+    tag === WS_METHODS.shellOpenInEditor ||
+    tag === WS_METHODS.terminalWrite ||
+    tag === WS_METHODS.terminalClose
+  ) {
     return null;
   }
   return {};
@@ -2865,6 +2877,93 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["surviving", "closing"] as const)(
+    "closes a source pane into a survivor that anchors its own split (%s pane focused)",
+    async (focused) => {
+      const snapshot = withHomeChatProject(
+        addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = {
+            ...nextFixture.welcome,
+            homeDir: "/Users/tester",
+            chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          };
+        },
+      });
+      try {
+        // The survivor already anchors its own split, so it cannot take over this one.
+        const survivorSplitId = useSplitViewStore.getState().createFromThread({
+          sourceThreadId: THREAD_ID,
+          ownerProjectId: PROJECT_ID,
+        });
+        const splitViewId = useSplitViewStore.getState().createFromDrop({
+          sourceThreadId: OTHER_THREAD_ID,
+          ownerProjectId: PROJECT_ID,
+          droppedThreadId: THREAD_ID,
+          direction: "horizontal",
+          side: "second",
+        });
+        await mounted.router.navigate({
+          to: "/$threadId",
+          params: { threadId: THREAD_ID },
+          search: () => ({ splitViewId }),
+        });
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
+        );
+        await waitForLayout();
+        const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+        const editorForThread = (threadId: ThreadId) => {
+          const scope = splitViewPaneScopeId(
+            splitViewId,
+            resolveSplitViewPaneIdForThread(split, threadId)!,
+          );
+          return document.querySelector<HTMLElement>(
+            `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+          )!;
+        };
+        const survivingEditor = editorForThread(THREAD_ID);
+        const closingEditor = editorForThread(OTHER_THREAD_ID);
+        // The dropped pane (the survivor) starts focused, so only the closing variant needs to
+        // move focus. Pane focus follows mousedown, so that variant clicks the closing editor.
+        if (focused === "closing") {
+          await userEvent.click(closingEditor);
+        }
+        await vi.waitFor(() => {
+          const focusedThreadId = focused === "surviving" ? THREAD_ID : OTHER_THREAD_ID;
+          const current = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+          expect(current.focusedPaneId).toBe(
+            resolveSplitViewPaneIdForThread(current, focusedThreadId),
+          );
+          expect(mounted.router.state.location.pathname).toBe(`/${focusedThreadId}`);
+        });
+        await userEvent.click(
+          closingEditor
+            .closest('[data-slot="sidebar-inset"]')!
+            .querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
+        );
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+          expect(mounted.router.state.location.search.splitViewId).toBeUndefined();
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(1);
+          expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeUndefined();
+        });
+        await waitForLayout();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+        expect(document.querySelector('[contenteditable="true"]')).toBe(survivingEditor);
+        expect(useSplitViewStore.getState().splitViewIdBySourceThreadId[THREAD_ID]).toBe(
+          survivorSplitId,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("keeps the surviving non-route chat mounted when a split collapses", async () => {
     const snapshot = addThreadToSnapshot(
@@ -6988,6 +7087,73 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("retains the opened terminal identity when path navigation fails", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("path-terminal-retry"),
+        targetText: "Path navigation",
+      }),
+    });
+    const previousNativeApi = window.nativeApi;
+    const nativeApi = readNativeApi()!;
+    const writes: Array<Parameters<typeof nativeApi.terminal.write>[0]> = [];
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...nativeApi,
+        terminal: {
+          ...nativeApi.terminal,
+          write: async (input: Parameters<typeof nativeApi.terminal.write>[0]) => {
+            if (input.onlyIfIdle) {
+              writes.push(input);
+              throw new Error("Activity check unavailable");
+            }
+            return nativeApi.terminal.write(input);
+          },
+        },
+      },
+    });
+    try {
+      const row = await waitForElement<HTMLElement>(
+        () => document.querySelector("[data-thread-item] [data-thread-entry-point]"),
+        "Expected sidebar thread row",
+      );
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
+      );
+      (
+        await waitForElement<HTMLButtonElement>(
+          () =>
+            contextMenuRows().find((button) =>
+              button.textContent?.includes("Open Path in Terminal"),
+            ) ?? null,
+          "Expected path action",
+        )
+      ).click();
+      await expect.poll(() => writes.length).toBe(1);
+      await expect
+        .element(page.getByText("Unable to open terminal", { exact: true }))
+        .toBeVisible();
+      const state = useTerminalStateStore.getState().terminalStateByThreadId[THREAD_ID]!;
+      expect(state.terminalOpen).toBe(false);
+      expect(state.activeTerminalId).toBe(writes[0]!.terminalId);
+      expect(state.hasSession).toBe(true);
+      useTerminalStateStore.getState().setTerminalOpen(THREAD_ID, true);
+      expect(
+        useTerminalStateStore.getState().terminalStateByThreadId[THREAD_ID]?.activeTerminalId,
+      ).toBe(writes[0]!.terminalId);
+    } finally {
+      if (previousNativeApi)
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      else Reflect.deleteProperty(window, "nativeApi");
+      await mounted.cleanup();
+    }
+  });
+
   it("runs project scripts from worktree draft threads at the worktree cwd", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {
@@ -7958,6 +8124,57 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("marks a chat back from snooze as seen once it is opened", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: "msg-snooze-return" as MessageId,
+      targetText: "Snoozed chat",
+    });
+    const finishedTurn = {
+      turnId: TurnId.makeUnsafe("turn-snooze-return"),
+      state: "completed" as const,
+      requestedAt: isoAt(-700),
+      startedAt: isoAt(-690),
+      completedAt: isoAt(-600),
+      assistantMessageId: null,
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(
+        {
+          ...base,
+          threads: base.threads.map((thread) =>
+            thread.id === THREAD_ID ? { ...thread, latestTurn: finishedTurn } : thread,
+          ),
+        },
+        OTHER_THREAD_ID,
+      ),
+      initialEntry: `/${OTHER_THREAD_ID}`,
+    });
+    try {
+      await waitForLayout();
+      // The reminder fires while another chat is open: THREAD_ID returns unread. The server
+      // clock is ahead of this one, so a visit stamped with this clock's now stays before it.
+      const reminderAt = new Date(Date.now() + 60_000).toISOString();
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? { ...thread, snoozedUntil: null, snoozeReminderAt: reminderAt, updatedAt: reminderAt }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+      const returnedChat = () => useStore.getState().sidebarThreadSummaryById[THREAD_ID]!;
+      expect(hasUnseenSnoozeReturn(returnedChat())).toBe(true);
+
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await vi.waitFor(() => expect(hasUnseenSnoozeReturn(returnedChat())).toBe(false));
     } finally {
       await mounted.cleanup();
     }
@@ -9136,6 +9353,136 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("keeps hub suggestions above the composer as image attachments change", async () => {
+    const previousSummaries = useProjectAgentSummariesStore.getState();
+    const previousClosedPanels = useGroupPanelClosedStore.getState();
+    const snapshot = withStudioProject(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-hub-welcome" as MessageId,
+        targetText: "Welcome to your Hub",
+      }),
+    );
+    const hubSnapshot = {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? {
+              ...thread,
+              projectId: STUDIO_PROJECT_ID,
+              messages: [
+                createAssistantMessage({
+                  id: "msg-hub-welcome" as MessageId,
+                  text: "Welcome to your Hub. Connect repositories, set a goal, or add instructions to get started.",
+                  offsetSeconds: 0,
+                }),
+              ],
+            }
+          : thread,
+      ),
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: hubSnapshot,
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = {
+          projectId: STUDIO_PROJECT_ID,
+          configured: true,
+          config: {
+            projectId: STUDIO_PROJECT_ID,
+            coordinatorThreadId: THREAD_ID,
+            coordinatorName: "Studio lead",
+            coordinatorModelSelection: { provider: "codex", model: "gpt-5" },
+            workerRouting: {
+              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-5" },
+              providerOptions: { claudeAgent: { enableArtifacts: true } },
+            },
+            limits: {
+              maxConcurrentWorkers: 8,
+              maxNewWorkersPerTurn: 8,
+              maxWorkerCreationsPerGoal: 40,
+              maxAutomaticContinuationsPerGoal: 20,
+              maxRepairRoundsPerTask: 2,
+            },
+            captureEnabled: true,
+            enabled: true,
+            automationId: null,
+            revision: 1,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+            disabledAt: null,
+          },
+          linkedProjectIds: [],
+          goal: null,
+          digest: null,
+          blockers: [],
+          recentOutcomes: [],
+          coordinatorStatus: "idle",
+        };
+      },
+    });
+    try {
+      useProjectAgentSummariesStore
+        .getState()
+        .applyOverview(fixture.projectAgentOverviews[STUDIO_PROJECT_ID] as ProjectAgentOverview);
+      await page.getByRole("button", { name: "Close hub panel", exact: true }).click();
+      for (const viewport of [DEFAULT_VIEWPORT, { name: "narrow", width: 480, height: 640 }]) {
+        await mounted.setViewport(viewport);
+        for (const count of [0, 1, 4, 0]) {
+          useComposerDraftStore.getState().clearComposerContent(THREAD_ID);
+          for (let index = 0; index < count; index += 1) {
+            useComposerDraftStore.getState().addImage(
+              THREAD_ID,
+              createComposerImage({
+                id: `hub-image-${index}`,
+                name: `reference-${index + 1}.png`,
+                previewUrl: `data:image/svg+xml,${encodeURIComponent(ATTACHMENT_SVG)}`,
+              }),
+            );
+          }
+          await vi.waitFor(() => {
+            expect(document.querySelectorAll('img[alt^="reference-"]')).toHaveLength(count);
+            const surface = document.querySelector(".chat-composer-surface")!;
+            const top = surface.getBoundingClientRect().top;
+            for (const label of ["Connect repositories", "Add a goal", "Write instructions"]) {
+              const button = [...document.querySelectorAll("button")].find(
+                (node) => node.textContent === label,
+              );
+              expect(button).toBeDefined();
+              const rect = button!.getBoundingClientRect();
+              expect(rect.top).toBeGreaterThanOrEqual(0);
+              expect(rect.bottom).toBeLessThanOrEqual(top - 4);
+              expect(
+                button!.contains(
+                  document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+                ),
+              ).toBe(true);
+            }
+          });
+          if (count === 4) {
+            for (const label of ["Connect repositories", "Add a goal", "Write instructions"]) {
+              const button = page.getByRole("button", { name: label, exact: true });
+              (button.element() as HTMLButtonElement).focus();
+              expect(document.activeElement).toBe(button.element());
+              if (label === "Connect repositories") await button.click();
+              else await userEvent.keyboard("{Enter}");
+              await expect.element(page.getByRole("dialog")).toBeVisible();
+              await userEvent.keyboard("{Escape}");
+              await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+            }
+          }
+        }
+      }
+    } finally {
+      await mounted.cleanup();
+      useProjectAgentSummariesStore.setState(previousSummaries);
+      useGroupPanelClosedStore.setState(previousClosedPanels);
+    }
+  });
 
   it("seeds a fresh hub chat draft from the hub's workerRouting", async () => {
     useComposerDraftStore.setState({
@@ -12094,6 +12441,42 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("closing the last visible tab returns to an unsent draft hidden from the strip", async () => {
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("last-tab-hidden-draft"),
+        targetText: "Completed conversation",
+      }),
+    });
+    try {
+      await waitForLayout();
+      const draftId = ThreadId.makeUnsafe("hidden-unsent-draft");
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, draftId, {});
+      useComposerDraftStore.getState().setPrompt(draftId, "Unsent text behind the only tab");
+      // The draft is open but has no tab, so the saved chat is the last one in the strip.
+      useOpenThreadTabsStore.setState({ threadIds: [draftId, THREAD_ID] });
+      const close = await waitForElement<HTMLButtonElement>(
+        () => document.querySelector('nav[aria-label="Open threads"] button[aria-label^="Close "]'),
+        "The active thread should have a closeable tab.",
+      );
+      close.click();
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${draftId}`,
+        "Closing the last visible tab should return to the open draft.",
+      );
+      expect(useComposerDraftStore.getState().draftsByThreadId[draftId]?.prompt).toBe(
+        "Unsent text behind the only tab",
+      );
+      expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(THREAD_ID);
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
 
   it.each(["home", "project"] as const)(
     "closing the last %s tab opens a fresh draft in the same project",

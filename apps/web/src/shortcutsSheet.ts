@@ -199,39 +199,14 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Show or hide the terminal surface for the active thread.",
   },
   {
-    command: "terminal.split",
-    label: "Split terminal",
-    description: "Split the focused terminal, adding a new pane beside it.",
-  },
-  {
-    command: "terminal.splitRight",
-    label: "Split terminal right",
-    description: "Split the focused terminal, placing the new pane to the right.",
-  },
-  {
-    command: "terminal.splitLeft",
-    label: "Split terminal left",
-    description: "Split the focused terminal, placing the new pane to the left.",
-  },
-  {
-    command: "terminal.splitDown",
-    label: "Split terminal down",
-    description: "Split the focused terminal, placing the new pane below.",
-  },
-  {
-    command: "terminal.splitUp",
-    label: "Split terminal up",
-    description: "Split the focused terminal, placing the new pane above.",
-  },
-  {
     command: "terminal.new",
-    label: "New terminal tab",
-    description: "Open a new tab in the focused terminal.",
+    label: "Focus terminal",
+    description: "Open or focus the terminal panel for this thread.",
   },
   {
     command: "terminal.close",
-    label: "Close terminal tab",
-    description: "Close the focused terminal tab.",
+    label: "Close terminal",
+    description: "Close the terminal session for this thread.",
   },
   {
     command: "diff.toggle",
@@ -405,7 +380,7 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
 
   const covered = new Set(definitions.flatMap((definition) => definition.commands));
   for (const command of STATIC_KEYBINDING_COMMANDS) {
-    if (covered.has(command)) continue;
+    if (covered.has(command) || command.startsWith("terminal.split")) continue;
     definitions.push({
       id: command,
       label: command,

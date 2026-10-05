@@ -2490,6 +2490,13 @@ label:has(> select#reasoning-effort) select {
   --truncate-fade-size: --value([length], [percentage]);
 }
 
+/* Match the transcript's animated right inset before revealing its message rail. */
+@property --message-trail-content-inset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 /* Text shimmer utility — vendored verbatim from shadcn 4.12.0
    (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
    imported because it would clash with this project's custom theme, so the
@@ -3259,9 +3266,14 @@ diffs-container {
    layer's text readable through it, so it goes near-opaque there (`data-glass-backed`,
    glassOverlayCutout.ts). The same holds for an overlay rendered inside the page instead of
    portaled (the message trail's turn preview): the cutout cannot remove the page from under
-   something that is part of it. */
+   something that is part of it. Hover cards also use this backing: opening one must not
+   re-clip and re-composite the entire app every time the pointer crosses a sidebar row. */
 :root[data-window-material="translucent"]
-  :is(.app-popup-surface, .composer-picker-menu-surface)[data-glass-backed],
+  :is(.app-popup-surface, .composer-picker-menu-surface):is(
+    [data-glass-backed],
+    [data-slot="tooltip-popup"],
+    [data-slot="preview-card-popup"]
+  ),
 :root[data-window-material="translucent"]
   #root
   :is(.app-popup-surface, .composer-picker-menu-surface) {

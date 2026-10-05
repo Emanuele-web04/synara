@@ -8,7 +8,17 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
+import {
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  PlatformError,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { describe, expect, vi } from "vitest";
 import { TestClock } from "effect/testing";
 
@@ -3237,6 +3247,55 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    for (const method of ["statusDetails", "readActionStatus"] as const) {
+      it.effect(`bounds ${method} when a filesystem monitor stalls Git status`, () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const hook = path.join(tmp, ".git/hooks/fsmonitor");
+          const started = path.join(tmp, ".git/fsmonitor-started");
+          yield* writeTextFile(
+            hook,
+            "#!/bin/sh\ntouch .git/fsmonitor-started\nwhile :; do sleep 0.05; done\n",
+          );
+          yield* Effect.promise(() => fs.chmod(hook, 0o755));
+          yield* git(tmp, ["config", "core.fsmonitor", hook]);
+          const core = yield* GitCore;
+          const query = yield* core[method](tmp).pipe(
+            Effect.result,
+            Effect.timeoutOption("35 seconds"),
+            Effect.forkChild,
+          );
+          yield* Effect.promise(async () => {
+            const deadline = Date.now() + 5000;
+            while (!existsSync(started)) {
+              if (Date.now() > deadline) throw new Error("Filesystem monitor did not start");
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+          });
+          yield* TestClock.adjust("30 seconds");
+          // Process teardown uses real I/O; let it settle before advancing the
+          // outer guard, which must catch a missing command deadline.
+          yield* Effect.promise(async () => {
+            const deadline = Date.now() + 2000;
+            while (!query.pollUnsafe() && Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+          });
+          yield* TestClock.adjust("5 seconds");
+          const result = yield* Fiber.join(query);
+          expect(result._tag).toBe("Some");
+          if (result._tag === "Some") {
+            expect(result.value._tag).toBe("Failure");
+            if (result.value._tag === "Failure") {
+              expect(result.value.failure.command).toContain("git status");
+              expect(result.value.failure.detail).toContain("timed out");
+            }
+          }
+        }),
+      );
+    }
+
     it.effect("prepares commit context by auto-staging and creates commit", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -3278,7 +3337,22 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("pushes with upstream setup and then skips when up to date", () =>
+    it.effect("rejects NUL in selected paths before modifying the index", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a.txt"), "a\n");
+        yield* writeTextFile(path.join(tmp, "b.txt"), "b\n");
+        yield* git(tmp, ["add", "a.txt"]);
+        const result = yield* Effect.result(
+          (yield* GitCore).prepareCommitContext(tmp, ["a.txt\0b.txt"]),
+        );
+        expect(result._tag).toBe("Failure");
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("a.txt");
+      }),
+    );
+
+    it.effect("commits and pushes a large diff, then skips when up to date", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
         const remote = yield* makeTmpDir();
@@ -3288,10 +3362,21 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "feature/core-push" });
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "feature/core-push" });
 
-        yield* writeTextFile(path.join(tmp, "feature.txt"), "push me\n");
+        const contents = `${"large change ".repeat(8)}\n`.repeat(12_000);
+        expect(Buffer.byteLength(contents)).toBeGreaterThan(1_000_000);
+        yield* writeTextFile(path.join(tmp, "feature.txt"), contents);
+        const expectedBlob = yield* git(tmp, ["hash-object", "feature.txt"]);
         const core = yield* GitCore;
         const context = yield* core.prepareCommitContext(tmp);
         expect(context).not.toBeNull();
+        expect(context!.stagedSummary).toContain("feature.txt");
+        expect(context!.stagedPatch).toContain("+large change");
+        expect(Buffer.byteLength(context!.stagedPatch)).toBeLessThanOrEqual(1_000_000);
+        yield* writeTextFile(
+          path.join(tmp, ".git/hooks/pre-commit"),
+          '#!/bin/sh\nhead -c 1100000 /dev/zero | tr "\\000" x\n',
+        );
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, ".git/hooks/pre-commit"), 0o755));
         yield* core.commit(tmp, "Add feature file", "");
 
         const pushed = yield* core.pushCurrentBranch(tmp, null);
@@ -3300,9 +3385,32 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(yield* git(tmp, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
           "origin/feature/core-push",
         );
+        expect(yield* git(remote, ["rev-parse", "feature/core-push:feature.txt"])).toBe(
+          expectedBlob,
+        );
 
         const skipped = yield* core.pushCurrentBranch(tmp, null);
         expect(skipped.status).toBe("skipped_up_to_date");
+      }),
+    );
+
+    it.effect("lets a slow push finish beyond the default command deadline", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const remote = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* writeTextFile(
+          path.join(tmp, ".git/hooks/pre-push"),
+          '#!/bin/sh\nsleep 31\nhead -c 1100000 /dev/zero | tr "\\000" x >&2\n',
+        );
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, ".git/hooks/pre-push"), 0o755));
+        const result = yield* TestClock.withLive((yield* GitCore).pushCurrentBranch(tmp, null));
+        expect(result.status).toBe("pushed");
+        expect(yield* git(remote, ["rev-parse", initialBranch])).toBe(
+          yield* git(tmp, ["rev-parse", "HEAD"]),
+        );
       }),
     );
 

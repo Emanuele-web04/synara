@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./diagnosticIssue": {
+      "types": "./src/diagnosticIssue.ts",
+      "import": "./src/diagnosticIssue.ts"
+    },
     "./betaFeatures": {
       "types": "./src/betaFeatures.ts",
       "import": "./src/betaFeatures.ts"

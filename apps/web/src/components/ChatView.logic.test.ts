@@ -62,7 +62,6 @@ import {
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveGitRepoUiState,
-  resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
   resolveSettledThreadBranchMismatch,
@@ -1610,63 +1609,6 @@ describe("deriveComposerSendState", () => {
     });
 
     expect(state.hasSendableContent).toBe(true);
-  });
-});
-
-describe("resolveProjectScriptTerminalTarget", () => {
-  it("reuses the base terminal only when no terminal is open or running", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "new-terminal",
-      hasRunningTerminal: false,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: false,
-      terminalId: "default",
-    });
-  });
-
-  it("creates a fresh terminal when a live terminal could keep stale cwd or env", () => {
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "visible-script-terminal",
-        hasRunningTerminal: false,
-        terminalOpen: true,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "visible-script-terminal",
-    });
-
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "running-script-terminal",
-        hasRunningTerminal: true,
-        terminalOpen: false,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "running-script-terminal",
-    });
-  });
-
-  it("honors explicit requests for a new terminal", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "forced-script-terminal",
-      hasRunningTerminal: false,
-      preferNewTerminal: true,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "forced-script-terminal",
-    });
   });
 });
 
