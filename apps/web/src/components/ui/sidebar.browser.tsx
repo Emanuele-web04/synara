@@ -129,6 +129,27 @@ describe("sidebar toggles", () => {
       expect(panel.getBoundingClientRect().width).toBe(rail.getBoundingClientRect().width);
       await page.getByRole("button", { name: "codex thread", exact: true }).hover();
       await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
+      expect(panel.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        rail.getBoundingClientRect().right,
+      );
+      const expectNavigationUncovered = () => {
+        for (const name of ["Home", "Settings"]) {
+          const button = page.getByRole("button", { name, exact: true }).element();
+          const bounds = button.getBoundingClientRect();
+          expect(
+            button.contains(
+              document.elementFromPoint(
+                bounds.left + bounds.width / 2,
+                bounds.top + bounds.height / 2,
+              ),
+            ),
+          ).toBe(true);
+        }
+      };
+      expectNavigationUncovered();
+      await userEvent.hover(slot);
+      await new Promise((resolve) => setTimeout(resolve, DISCLOSURE_TRANSITION_MS * 2));
+      expect(panel.getBoundingClientRect().width).toBe(256);
       await expect
         .element(thread.querySelector<HTMLElement>('[data-slot="sidebar-thread-title"]')!)
         .toBeVisible();
@@ -153,6 +174,7 @@ describe("sidebar toggles", () => {
       await page.viewport(1280, 800);
       await page.getByRole("button", { name: "Toggle integrated sidebar" }).click();
       await expect.poll(() => gap.getBoundingClientRect().width).toBe(256);
+      expectNavigationUncovered();
       expect(page.getByRole("button", { name: "codex thread", exact: true }).element()).toBe(
         thread,
       );

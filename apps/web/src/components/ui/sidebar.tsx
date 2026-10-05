@@ -335,7 +335,9 @@ function Sidebar({
     // while using them, then close after the pointer/focus returns to the chat.
     const isInside = (target: EventTarget | null) =>
       target instanceof Element &&
-      (panelRef.current?.contains(target) || target.closest(SIDEBAR_PREVIEW_PORTAL_SELECTOR));
+      (panelRef.current?.contains(target) ||
+        (compactInRail && compactAnchor?.contains(target)) ||
+        target.closest(SIDEBAR_PREVIEW_PORTAL_SELECTOR));
     const handlePointer = (event: PointerEvent) => {
       const active = document.activeElement;
       if (isInside(event.target) || (isInside(active) && active?.matches(":focus-visible")))
@@ -366,7 +368,14 @@ function Sidebar({
       document.removeEventListener("focusin", handleFocus);
       document.removeEventListener("keydown", handleEscape, true);
     };
-  }, [compactCollapsed, previewOpen, clearPreviewTimer, schedulePreview]);
+  }, [
+    compactCollapsed,
+    compactInRail,
+    compactAnchor,
+    previewOpen,
+    clearPreviewTimer,
+    schedulePreview,
+  ]);
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(
     () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
     [collapsible, isMobile, resizable],
@@ -453,7 +462,15 @@ function Sidebar({
           if (previewOpen) clearPreviewTimer();
           else if (previewTimerTarget.current !== true) schedulePreview(true);
         }}
-        onPointerLeave={() => {
+        onPointerLeave={(event) => {
+          if (
+            compactInRail &&
+            event.relatedTarget instanceof Node &&
+            compactAnchor?.contains(event.relatedTarget)
+          ) {
+            clearPreviewTimer();
+            return;
+          }
           const active = document.activeElement;
           if (
             compactCollapsed &&
@@ -525,7 +542,10 @@ function Sidebar({
             compactCollapsed && compactInRail
               ? {
                   ...props.style,
-                  left: compactBounds?.left ?? "calc(-1 * var(--app-rail-width))",
+                  // The full preview opens beside the rail so navigation stays usable.
+                  left: previewOpen
+                    ? 0
+                    : (compactBounds?.left ?? "calc(-1 * var(--app-rail-width))"),
                   ...(!previewOpen
                     ? {
                         top: compactBounds?.top ?? 0,
