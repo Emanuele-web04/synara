@@ -3053,7 +3053,7 @@ diffs-container {
 }
 
 /* A compact list reserves its icon column; its hover preview overlays the chat.
-   Keep rows mounted and preserve their line heights, section state and scroll. */
+   Keep rows mounted and preserve section state and scroll. */
 :is(
   [data-slot="activity-completion-status"],
   [data-slot="sidebar-thread-status"]
@@ -3110,9 +3110,12 @@ diffs-container {
   display: none;
 }
 
-[data-sidebar-compact="true"]
-  :is([data-slot="sidebar-thread-title"], [data-slot="sidebar-thread-metadata"]) {
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-title"] {
   visibility: hidden;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-metadata"] {
+  display: none;
 }
 
 [data-sidebar-compact="true"] [data-slot="sidebar-thread-title"] {
@@ -3121,7 +3124,17 @@ diffs-container {
 }
 
 [data-sidebar-compact="true"] [data-slot="activity-thread-button"] {
-  padding-inline: 8px;
+  width: 36px;
+  height: 36px;
+  margin-inline: auto;
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+
+[data-sidebar-compact="true"] [data-thread-item]:has(> [data-slot="activity-thread-button"]) {
+  width: 36px;
+  margin-inline: auto;
 }
 
 [data-sidebar-compact="true"] [data-slot="activity-thread-identity"] {

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
@@ -186,6 +187,8 @@ describe("SidebarActivityView", () => {
     await page.viewport(1280, 800);
     const running = makeThread(41);
     const review = makeThread(42, { modelSelection: { provider: "claudeAgent", model: "sonnet" } });
+    const draft = makeThread(44);
+    useComposerDraftStore.getState().setPrompt(draft.id, "Unsent draft");
     const snoozed = makeThread(43, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
     const onReturnSnoozedThread = vi.fn();
     const onOpenThread = vi.fn();
@@ -194,7 +197,8 @@ describe("SidebarActivityView", () => {
         <Sidebar collapsible="compact">
           <SidebarContent>
             {renderActivity({
-              threads: [running, review, snoozed],
+              threads: [running, review, draft, snoozed],
+              activeThreadId: draft.id,
               pinnedThreadIdSet: new Set([running.id]),
               onOpenThread,
               onReturnSnoozedThread,
@@ -231,6 +235,17 @@ describe("SidebarActivityView", () => {
       const provider = button.querySelector<HTMLElement>('[data-slot="sidebar-thread-provider"]')!;
       expect(getComputedStyle(title).visibility).toBe("hidden");
       expect(provider.getBoundingClientRect().width).toBe(20);
+      for (const thread of [running, review, draft]) {
+        const row = mounted.getByTestId(`activity-thread-${thread.id}`).element();
+        const bounds = row.getBoundingClientRect();
+        const logo = row
+          .querySelector<HTMLElement>('[data-slot="sidebar-thread-provider"]')!
+          .getBoundingClientRect();
+        expect(bounds.height).toBeCloseTo(bounds.width, 1);
+        expect(bounds.height).toBe(36);
+        expect(logo.left - bounds.left).toBeCloseTo(bounds.right - logo.right, 1);
+        expect(logo.top - bounds.top).toBeCloseTo(bounds.bottom - logo.bottom, 1);
+      }
       expect(button.getBoundingClientRect().right).toBeLessThanOrEqual(
         mounted.container
           .querySelector<HTMLElement>('[data-slot="sidebar-container"]')!
@@ -242,6 +257,9 @@ describe("SidebarActivityView", () => {
       await expect
         .element(mounted.getByRole("img", { name: "Pending Approval", exact: true }))
         .toBeVisible();
+      await expect
+        .element(mounted.getByRole("img", { name: "Unsent draft", exact: true }))
+        .toBeVisible();
       const positions = [running, review].map(
         (thread) =>
           (
@@ -252,14 +270,10 @@ describe("SidebarActivityView", () => {
       const contentLeft = main.getBoundingClientRect().left;
       await first.hover();
       await expect.poll(() => getComputedStyle(title).visibility).toBe("visible");
-      expect(
-        [running, review].map(
-          (thread) =>
-            (
-              mounted.getByTestId(`activity-thread-${thread.id}`).element() as HTMLElement
-            ).getBoundingClientRect().top,
-        ),
-      ).toEqual(positions);
+      expect(positions[0]).toBeLessThan(positions[1]!);
+      expect(button.getBoundingClientRect().top).toBeLessThan(
+        mounted.getByTestId(`activity-thread-${review.id}`).element().getBoundingClientRect().top,
+      );
       expect(main.getBoundingClientRect().left).toBe(contentLeft);
       await first.click();
       expect(onOpenThread).toHaveBeenCalledWith(running.id);
@@ -271,6 +285,7 @@ describe("SidebarActivityView", () => {
       expect(onReturnSnoozedThread).toHaveBeenCalledWith(snoozed.id);
     } finally {
       await mounted.unmount();
+      useComposerDraftStore.getState().setPrompt(draft.id, "");
     }
   }, 20_000);
 

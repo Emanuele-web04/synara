@@ -27,6 +27,8 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_WIDTH_COMPACT = 64;
+// Give pointer users time to select an icon or open its menu before expanding.
+const SIDEBAR_PREVIEW_HOVER_DELAY_MS = 650;
 const SIDEBAR_PREVIEW_PORTAL_SELECTOR =
   '[role="menu"], [role="dialog"], [data-slot="popover-popup"], [data-slot="preview-card-popup"], [data-slot="tooltip-popup"]';
 type SidebarCollapsible = "offcanvas" | "icon" | "compact" | "none";
@@ -317,11 +319,14 @@ function Sidebar({
     (open: boolean) => {
       clearPreviewTimer();
       previewTimerTarget.current = open;
-      previewTimer.current = setTimeout(() => {
-        previewTimer.current = null;
-        previewTimerTarget.current = null;
-        setPreviewOpen(open);
-      }, DISCLOSURE_TRANSITION_MS);
+      previewTimer.current = setTimeout(
+        () => {
+          previewTimer.current = null;
+          previewTimerTarget.current = null;
+          setPreviewOpen(open);
+        },
+        open ? SIDEBAR_PREVIEW_HOVER_DELAY_MS : DISCLOSURE_TRANSITION_MS,
+      );
     },
     [clearPreviewTimer],
   );
@@ -459,6 +464,9 @@ function Sidebar({
         data-sidebar-compact={compactCollapsed && !previewOpen ? "true" : undefined}
         data-sidebar-preview={compactCollapsed && previewOpen ? "true" : undefined}
         data-sidebar-compact-rail={compactInRail ? "true" : undefined}
+        onPointerDownCapture={() => {
+          if (compactCollapsed && !previewOpen) clearPreviewTimer();
+        }}
         onPointerMove={(event) => {
           if (!compactCollapsed || event.pointerType === "touch") return;
           // Portal navigation shares React ancestors but is outside the panel.
@@ -491,8 +499,9 @@ function Sidebar({
           // its focus belongs to the shell, outside this panel's DOM boundary.
           if (
             !compactCollapsed ||
-            !(event.target instanceof Node) ||
-            !panelRef.current?.contains(event.target)
+            !(event.target instanceof Element) ||
+            !panelRef.current?.contains(event.target) ||
+            !event.target.matches(":focus-visible")
           )
             return;
           clearPreviewTimer();

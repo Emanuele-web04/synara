@@ -96,6 +96,39 @@ function IntegratedRailShell() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("sidebar toggles", () => {
+  it("lets users click compact icons and cross the rail before a sustained hover opens it", async () => {
+    await page.viewport(1280, 800);
+    const onSelect = vi.fn();
+    const screen = await render(
+      <SidebarProvider defaultOpen={false}>
+        <Sidebar collapsible="compact">
+          <button type="button" className="w-full" onClick={onSelect}>
+            Quick conversation
+          </button>
+        </Sidebar>
+        <main className="flex-1" data-testid="quick-hover-main">
+          Chat
+        </main>
+      </SidebarProvider>,
+    );
+    try {
+      const sidebar = screen.container.querySelector<HTMLElement>('[data-slot="sidebar"]')!;
+      const button = screen.getByRole("button", { name: "Quick conversation" });
+      await button.hover();
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(sidebar.dataset.sidebarPreview).not.toBe("true");
+      await button.click();
+      expect(onSelect).toHaveBeenCalledOnce();
+      expect(sidebar.dataset.sidebarPreview).not.toBe("true");
+      await screen.getByTestId("quick-hover-main").hover();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(sidebar.dataset.sidebarPreview).not.toBe("true");
+      await button.hover();
+      await expect.poll(() => sidebar.dataset.sidebarPreview).toBe("true");
+    } finally {
+      await screen.unmount();
+    }
+  });
   it.each([
     { dark: false, scope: "none" },
     { dark: true, scope: "none" },
@@ -361,7 +394,8 @@ describe("sidebar toggles", () => {
     const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
     const sidebar = screen.container.querySelector<HTMLElement>('[data-slot="sidebar"]')!;
     try {
-      screen.container.querySelector<HTMLButtonElement>("button")!.focus();
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(screen.container.querySelector("button"));
       await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
       await userEvent.keyboard("{Escape}");
       await expect.poll(() => panel.getBoundingClientRect().width).toBe(64);

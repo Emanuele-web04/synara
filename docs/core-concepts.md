@@ -143,8 +143,10 @@ On desktop, collapsing the Home or Spaces sidebar moves the conversation list
 into the outer navigation rail, with provider icons and status markers arranged
 vertically between navigation and the activity controls. Opening the sidebar
 returns those same rows to the full list; there is no second compact column.
-Hover or focus the icons to preview the full
-list without moving the chat; use the sidebar toggle to keep it open. Navigation
+Leave the pointer over the icons briefly, or focus them with the keyboard, to
+preview the full list without moving the chat. Clicking an icon or opening its
+context menu cancels the pending hover preview so the compact list stays usable;
+use the sidebar toggle to keep it open. Navigation
 stays visible beside both the full sidebar and its hover preview. The preview
 uses the sidebar's configured theme and transparency. Escape closes
 the preview. The left rail summarizes working conversations, conversations needing
