@@ -37,13 +37,12 @@ are retained in summaries and the next warning. `stallWindowCount` counts sample
 windows with a qualifying stall, not individual operations: several stalls can
 share a window. The first sample is discarded to exclude startup work. Samples
 whose delay exceeds ELU active time (allowing 20 ms or 0.2% for histogram quantization) are
-excluded as possible system sleep and restart the summary window; this follows T3 Code's sleep filter. It is a
+excluded as possible system sleep and restart the summary window. This is a
 best-effort distinction, not proof that every unreported delay was sleep.
 
-The threshold and summary cadence align with T3 Code's monitor at 5eb87730. Its
-1 second histogram resolution and 30 second reads trade precision for fewer
-wakeups; Synara uses two 20 ms native timers (at most 100 native callbacks/s) and one JS read/s so stalls
-close to 2 seconds are measurable and operators hear promptly after recovery.
+Two 20 ms native timers (at most 100 native callbacks/s) and one JavaScript
+read/s make stalls close to 2 seconds measurable and notify operators promptly
+after recovery.
 No worker watchdog or continuous profiler runs in normal operation.
 
 ## Client behavior and RPC deadlines
