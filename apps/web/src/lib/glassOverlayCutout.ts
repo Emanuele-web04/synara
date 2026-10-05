@@ -1,6 +1,6 @@
 // FILE: glassOverlayCutout.ts
 // Purpose: On a translucent window, cuts the page out from under floating overlays so a
-//          translucent menu, picker, tooltip, or toast shows the window's glass rather than
+//          translucent menu, picker, or toast shows the window's glass rather than
 //          the text it covers.
 // Layer: Desktop window material helper
 // Exports: installGlassOverlayCutout, registerInPageGlassOverlay, computedColorAlpha
@@ -14,8 +14,13 @@
 
 import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 
+// Hover cards appear on every row crossing. Re-clipping the entire app for each one
+// changes its compositing while the pointer moves; give them a dense fill in index.css
+// instead, without touching the page's clip or hit-testing.
+const HOVER_OVERLAY_SELECTOR = '[data-slot="tooltip-popup"], [data-slot="preview-card-popup"]';
+
 /** Portaled overlays (rendered outside the app root): the root is cut out from under them. */
-const OVERLAY_SELECTOR = `.${FLOATING_OVERLAY_SURFACE_CLASS_NAME}, .composer-picker-menu-surface, .chat-composer-surface`;
+const OVERLAY_SELECTOR = `:is(.${FLOATING_OVERLAY_SURFACE_CLASS_NAME}, .composer-picker-menu-surface, .chat-composer-surface):not(${HOVER_OVERLAY_SELECTOR})`;
 
 /** An overlay fading in or out is cut out only once it covers more than it reveals. */
 const MIN_OVERLAY_OPACITY = 0.5;
