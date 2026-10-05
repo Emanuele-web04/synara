@@ -31,7 +31,6 @@ import { detectPrTemplate } from "../PrTemplateDetection.ts";
 import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { ServerConfig } from "../../config.ts";
 
-const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const OPEN_PR_LOOKUP_LIMIT = 10;
 // Any-state lookups scan more PRs so the newest merged/closed PR still surfaces.
@@ -1210,10 +1209,12 @@ export const makeGitManager = Effect.gen(function* () {
               },
             }
           : null;
-      const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-        timeoutMs: COMMIT_TIMEOUT_MS,
-        ...(commitProgress ? { progress: commitProgress } : {}),
-      });
+      const { commitSha } = yield* gitCore.commit(
+        cwd,
+        suggestion.subject,
+        suggestion.body,
+        commitProgress ? { progress: commitProgress } : undefined,
+      );
       if (currentHookName !== null) {
         yield* emit({
           kind: "hook_finished",
@@ -2669,7 +2670,7 @@ The local stash entry was kept for recovery.`,
       let currentPhase: GitActionProgressPhase | null = null;
 
       const runAction = Effect.gen(function* () {
-        const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        const initialStatus = yield* gitCore.readActionStatus(input.cwd);
         const textGenerationParams: GitTextGenerationParams = {
           textGenerationModel: input.textGenerationModel,
           textGenerationModelSelection: input.textGenerationModelSelection,

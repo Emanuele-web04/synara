@@ -45,7 +45,8 @@ export interface ExecuteGitInput {
   readonly args: ReadonlyArray<string>;
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
-  readonly timeoutMs?: number;
+  /** null waits for completion or caller interruption without a wall-clock deadline. */
+  readonly timeoutMs?: number | null;
   readonly maxOutputBytes?: number;
   readonly outputMode?: "error" | "truncate";
   readonly progress?: ExecuteGitProgress;
@@ -71,6 +72,11 @@ export interface GitBranchContext {
   readonly branch: string | null;
   readonly upstreamRef: string | null;
 }
+
+export type GitActionStatus = Pick<
+  GitStatusDetails,
+  "branch" | "upstreamRef" | "hasUpstream" | "aheadCount" | "behindCount" | "hasWorkingTreeChanges"
+>;
 
 export type GitDiffScope = "branch" | "staged" | "unstaged" | "workingTree" | "ref";
 
@@ -106,7 +112,7 @@ export interface GitCommitProgress {
 }
 
 export interface GitCommitOptions {
-  readonly timeoutMs?: number;
+  readonly timeoutMs?: number | null;
   readonly progress?: GitCommitProgress;
 }
 
@@ -224,6 +230,9 @@ export interface GitCoreShape {
    * Read detailed working tree / branch status for a repository.
    */
   readonly statusDetails: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
+
+  /** Read action preconditions without collecting file paths, contents, or diff statistics. */
+  readonly readActionStatus: (cwd: string) => Effect.Effect<GitActionStatus, GitCommandError>;
 
   /** Read only branch identity, without diff stats or remote refresh work. */
   readonly readBranchContext: (cwd: string) => Effect.Effect<GitBranchContext, GitCommandError>;
