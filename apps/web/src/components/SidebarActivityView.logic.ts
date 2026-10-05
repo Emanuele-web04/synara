@@ -122,6 +122,8 @@ export interface ActivityViewModel {
 export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
+  /** Compact Activity shows current work, never settled or archived conversations. */
+  compact?: boolean;
   draftThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
@@ -137,6 +139,8 @@ export function buildActivityViewModel(input: {
 
   for (const thread of input.threads) {
     if (!isActivityThread(thread)) continue;
+    if (input.compact && isThreadSettledForActivity(thread, input.settledOverrideByThreadId))
+      continue;
     if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
     // The server clears snooze on expiry. Client clocks must not surface a thread
     // before that durable update, and pins cannot bypass the user's snooze.

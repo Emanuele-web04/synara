@@ -1342,8 +1342,16 @@ export function SidebarSurfacePicker({
   );
 }
 
-export default function Sidebar() {
-  const { setOpen: setSidebarOpen, setOpenMobile: setMobileSidebarOpen } = useSidebar();
+export default function Sidebar({
+  onActivityViewEnabledChange,
+}: {
+  onActivityViewEnabledChange?: (enabled: boolean) => void;
+}) {
+  const {
+    setOpen: setSidebarOpen,
+    setOpenMobile: setMobileSidebarOpen,
+    state: sidebarState,
+  } = useSidebar();
   const [snoozedRevealRequest, setSnoozedRevealRequest] = useState(0);
   const githubProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
@@ -1694,6 +1702,10 @@ export default function Sidebar() {
   const [activityViewEnabled, setActivityViewEnabled] = useState(
     () => readSidebarUiState().activityViewEnabled,
   );
+  // The shell follows the displayed mode even when UI-state persistence is unavailable.
+  useEffect(() => {
+    onActivityViewEnabledChange?.(activityViewEnabled);
+  }, [activityViewEnabled, onActivityViewEnabledChange]);
   // Lives here, not in SidebarActivityView, so it survives the view unmounting
   // (opening Settings swaps the sidebar surface) and reloads.
   const [activityScope, setActivityScope] = useState<ActivityScopeSelection>(
@@ -7205,6 +7217,7 @@ export default function Sidebar() {
                   ) : activityViewEnabled ? (
                     <SidebarGroup className="px-1.5 py-1.5">
                       <SidebarActivityView
+                        compact={!isMobile && sidebarState === "collapsed"}
                         snoozedRevealRequest={snoozedRevealRequest}
                         threads={activityNonGroupSidebarThreads}
                         projectById={projectById}

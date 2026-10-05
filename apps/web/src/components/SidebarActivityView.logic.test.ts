@@ -87,6 +87,31 @@ function completedTurn(completedAt: string): SidebarThreadSummary["latestTurn"] 
   } as SidebarThreadSummary["latestTurn"];
 }
 
+describe("compact Activity", () => {
+  it("excludes settled pins and archived threads while keeping the full model intact", () => {
+    const active = makeThread({ id: "active", hasLiveTailWork: true });
+    const done = makeThread({
+      id: "done",
+      latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+      settledAt: "2026-08-01T11:00:00.000Z",
+    });
+    const archived = makeThread({
+      id: "archived",
+      hasLiveTailWork: true,
+      archivedAt: "2026-08-01T11:00:00.000Z",
+    });
+    const input = {
+      threads: [done, archived, active],
+      pinnedThreadIdSet: new Set([done.id]),
+    };
+    const compact = buildActivityViewModel({ ...input, compact: true });
+    expect(compact.pinned).toEqual([]);
+    expect(compact.settled).toEqual([]);
+    expect(compact.active.map((thread) => thread.id)).toEqual([active.id]);
+    expect(buildActivityViewModel(input).pinned.map((thread) => thread.id)).toEqual([done.id]);
+  });
+});
+
 describe("countSidebarActivity", () => {
   const resolveStatus = (thread: SidebarThreadSummary) =>
     resolveThreadStatusPill({

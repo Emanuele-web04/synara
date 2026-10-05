@@ -17,6 +17,7 @@ import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
+import { readSidebarUiState } from "../components/Sidebar.uiState";
 import { isElectron } from "../env";
 import { matchesFixedShortcut } from "../fixedShortcuts";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
@@ -570,9 +571,14 @@ function ChatRouteLayout() {
   const railActiveItem = useRailShellStore((store) => store.activeItem);
   const railPanelView = useRailShellStore((store) => store.panelView);
   const selectRailPanelItem = useRailShellStore((store) => store.selectPanelItem);
+  const [activityViewEnabled, setActivityViewEnabled] = useState(
+    () => readSidebarUiState().activityViewEnabled,
+  );
   const railHidesPanel = !railItemShowsPanel(railActiveItem);
   const compactThreadSidebar =
-    !isEditorView && (railActiveItem === "home" || railActiveItem === "spaces");
+    activityViewEnabled &&
+    !isEditorView &&
+    (railActiveItem === "home" || railActiveItem === "spaces");
   const resolvedSidebarOpen = isEditorView || railHidesPanel ? false : sidebarOpen;
   // Toggling the panel open on a full-width route brings back the current panel item.
   const handleSidebarOpenChange = useCallback(
@@ -609,7 +615,7 @@ function ChatRouteLayout() {
       transparentSurface
       resizable={THREAD_SIDEBAR_RESIZABLE}
     >
-      <ThreadSidebar />
+      <ThreadSidebar onActivityViewEnabledChange={setActivityViewEnabled} />
     </Sidebar>
   );
 

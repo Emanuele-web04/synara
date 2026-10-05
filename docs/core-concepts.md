@@ -139,10 +139,15 @@ and attention badges until the reminder is due. **Return now** cancels the snooz
 choosing another time reschedules it. Snoozing preserves any running agent work.
 Sending a new message also returns the thread to the list.
 
-On desktop, collapsing the Home or Spaces sidebar moves the conversation list
-into the outer navigation rail, with provider icons and status markers arranged
+On desktop, collapsing the sidebar in Activity view moves the conversation list
+into the outer navigation rail, preserving Activity's section and conversation order,
+filters, and expanded sections, with provider icons and status markers arranged
 vertically between navigation and the activity controls. Opening the sidebar
 returns those same rows to the full list; there is no second compact column.
+Compact Activity omits **Done** and archived conversations, including settled pins;
+opening the full list restores Done. The remaining rows keep Activity's order.
+The classic view and other sidebar surfaces collapse fully instead of showing
+compact conversation icons.
 Hover an icon to see its conversation's information without expanding the sidebar.
 The compact list remains usable for selecting chats and opening their context menus;
 use the sidebar toggle to open the full list. Navigation stays visible beside the

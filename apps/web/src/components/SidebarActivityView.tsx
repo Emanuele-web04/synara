@@ -585,6 +585,7 @@ function ActivityFilterMenu({
 
 export function SidebarActivityView({
   threads,
+  compact = false,
   projectById,
   activeThreadId,
   pinnedThreadIdSet,
@@ -613,6 +614,7 @@ export function SidebarActivityView({
   snoozedRevealRequest,
 }: {
   threads: readonly SidebarThreadSummary[];
+  compact?: boolean;
   projectById: ReadonlyMap<ProjectId, Project>;
   activeThreadId: ThreadId | null;
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
@@ -695,12 +697,20 @@ export function SidebarActivityView({
     () =>
       buildActivityViewModel({
         threads,
+        compact,
         pinnedThreadIdSet,
         draftThreadIdSet,
         settledOverrideByThreadId,
         projectFilterIds,
       }),
-    [draftThreadIdSet, pinnedThreadIdSet, projectFilterIds, settledOverrideByThreadId, threads],
+    [
+      compact,
+      draftThreadIdSet,
+      pinnedThreadIdSet,
+      projectFilterIds,
+      settledOverrideByThreadId,
+      threads,
+    ],
   );
   const scopedPinnedThreads = model.pinned;
   const draftThreads = model.drafts;

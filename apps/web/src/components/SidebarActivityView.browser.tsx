@@ -16,7 +16,7 @@ import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppe
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
-import { Sidebar, SidebarContent, SidebarProvider } from "./ui/sidebar";
+import { Sidebar, SidebarContent, SidebarProvider, SidebarTrigger, useSidebar } from "./ui/sidebar";
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
@@ -83,6 +83,7 @@ function makeThread(
 
 function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
+  compact?: boolean;
   projects?: readonly Project[];
   activeThreadId?: ThreadId | null;
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
@@ -115,6 +116,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
   return (
     <SidebarActivityView
+      compact={input.compact ?? false}
       snoozedRevealRequest={input.snoozedRevealRequest ?? 0}
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
@@ -146,6 +148,11 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   );
 }
 
+function CollapsibleActivityHarness(input: Parameters<typeof renderActivity>[0]) {
+  const { state, isMobile } = useSidebar();
+  return renderActivity({ ...input, compact: !isMobile && state === "collapsed" });
+}
+
 describe("SidebarActivityView", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-02T12:00:00.000Z"));
@@ -153,6 +160,51 @@ describe("SidebarActivityView", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
+  });
+
+  it("excludes Done and archived chats from compact rows and navigation while keeping Done in the full list", async () => {
+    await page.viewport(1280, 800);
+    const active = makeThread(81);
+    const done = makeThread(82, { settledAt: "2026-08-02T12:00:00.000Z" });
+    const archived = makeThread(83, { archivedAt: "2026-08-02T12:00:00.000Z" });
+    const unpinnedDone = makeThread(84, { settledAt: "2026-08-02T12:00:00.000Z" });
+    const onVisibleThreadIdsChange = vi.fn();
+    const mounted = await render(
+      <SidebarProvider defaultOpen={false}>
+        <Sidebar collapsible="compact" compactPreview={false}>
+          <SidebarContent>
+            <CollapsibleActivityHarness
+              threads={[archived, done, active, unpinnedDone]}
+              pinnedThreadIdSet={new Set([done.id])}
+              activeThreadId={unpinnedDone.id}
+              onVisibleThreadIdsChange={onVisibleThreadIdsChange}
+            />
+          </SidebarContent>
+        </Sidebar>
+        <main>
+          <SidebarTrigger aria-label="Toggle filtered activity" />
+        </main>
+      </SidebarProvider>,
+    );
+    try {
+      const doneRow = mounted.getByTestId(`activity-thread-${done.id}`);
+      const archivedRow = mounted.getByTestId(`activity-thread-${archived.id}`);
+      const unpinnedDoneRow = mounted.getByTestId(`activity-thread-${unpinnedDone.id}`);
+      await expect.element(doneRow).not.toBeInTheDocument();
+      await expect.element(unpinnedDoneRow).not.toBeInTheDocument();
+      await expect.element(archivedRow).not.toBeInTheDocument();
+      await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([active.id]);
+      await mounted.getByRole("button", { name: "Toggle filtered activity" }).click();
+      await expect.element(doneRow).toBeVisible();
+      await expect.element(unpinnedDoneRow).toBeVisible();
+      await expect.element(archivedRow).not.toBeInTheDocument();
+      await mounted.getByRole("button", { name: "Toggle filtered activity" }).click();
+      await expect.element(doneRow).not.toBeInTheDocument();
+      await expect.element(unpinnedDoneRow).not.toBeInTheDocument();
+      await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([active.id]);
+    } finally {
+      await mounted.unmount();
+    }
   });
 
   it("scrolls the first snoozed conversation into view when requested from the rail", async () => {
@@ -183,7 +235,7 @@ describe("SidebarActivityView", () => {
     }
   });
 
-  it("keeps compact conversation identities, status markers, order and snooze actions through hover", async () => {
+  it("keeps Activity order, identities, status markers and snooze actions when expanding the compact list", async () => {
     await page.viewport(1280, 800);
     const running = makeThread(41);
     const review = makeThread(42, { modelSelection: { provider: "claudeAgent", model: "sonnet" } });
@@ -194,7 +246,7 @@ describe("SidebarActivityView", () => {
     const onOpenThread = vi.fn();
     const mounted = await render(
       <SidebarProvider defaultOpen={false} className="h-svh">
-        <Sidebar collapsible="compact">
+        <Sidebar collapsible="compact" compactPreview={false}>
           <SidebarContent>
             {renderActivity({
               threads: [running, review, draft, snoozed],
@@ -224,6 +276,7 @@ describe("SidebarActivityView", () => {
           </SidebarContent>
         </Sidebar>
         <main className="flex-1" data-testid="activity-compact-main">
+          <SidebarTrigger aria-label="Toggle activity list" />
           Conversation
         </main>
       </SidebarProvider>,
@@ -260,23 +313,24 @@ describe("SidebarActivityView", () => {
       await expect
         .element(mounted.getByRole("img", { name: "Unsent draft", exact: true }))
         .toBeVisible();
-      const positions = [running, review].map(
-        (thread) =>
-          (
-            mounted.getByTestId(`activity-thread-${thread.id}`).element() as HTMLElement
-          ).getBoundingClientRect().top,
+      const renderedOrder = () =>
+        Array.from(
+          mounted.container.querySelectorAll('[data-slot="activity-thread-button"]'),
+          (row) => row.getAttribute("data-testid"),
+        );
+      const expectedOrder = [running, draft, review, snoozed].map(
+        (thread) => `activity-thread-${thread.id}`,
       );
-      const main = mounted.getByTestId("activity-compact-main").element() as HTMLElement;
-      const contentLeft = main.getBoundingClientRect().left;
-      await first.hover();
+      expect(renderedOrder()).toEqual(expectedOrder);
+      await mounted.getByRole("button", { name: "Toggle activity list" }).click();
       await expect.poll(() => getComputedStyle(title).visibility).toBe("visible");
-      expect(positions[0]).toBeLessThan(positions[1]!);
-      expect(button.getBoundingClientRect().top).toBeLessThan(
-        mounted.getByTestId(`activity-thread-${review.id}`).element().getBoundingClientRect().top,
-      );
-      expect(main.getBoundingClientRect().left).toBe(contentLeft);
+      expect(renderedOrder()).toEqual(expectedOrder);
+      await mounted.getByRole("button", { name: "Toggle activity list" }).click();
+      await expect.poll(() => getComputedStyle(title).visibility).toBe("hidden");
+      expect(renderedOrder()).toEqual(expectedOrder);
       await first.click();
       expect(onOpenThread).toHaveBeenCalledWith(running.id);
+      await mounted.getByRole("button", { name: "Toggle activity list" }).click();
       await mounted.getByRole("button", { name: "Snoozed", exact: true }).click();
       await expect.element(mounted.getByTestId(`activity-thread-${snoozed.id}`)).toBeVisible();
       await expect.element(mounted.getByText(/^Returns /)).toBeVisible();
