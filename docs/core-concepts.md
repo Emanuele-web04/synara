@@ -139,6 +139,13 @@ and attention badges until the reminder is due. **Return now** cancels the snooz
 choosing another time reschedules it. Snoozing preserves any running agent work.
 Sending a new message also returns the thread to the list.
 
+On desktop, collapsing the Home or Spaces sidebar keeps a compact conversation
+list with provider icons and status markers. Hover or focus it to preview the full
+list without moving the chat; use the sidebar toggle to keep it open. Escape closes
+the preview. The left rail summarizes working conversations, conversations needing
+review, and snoozed conversations. Selecting **Snoozed** opens its section; postponed
+conversations stay out of the work and review counts until they return.
+
 When due, the thread returns to recent activity and Synara shows a reminder using
 your notification settings. If Synara and its server are closed, the overdue
 reminder is recovered when they start again.

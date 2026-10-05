@@ -15,6 +15,7 @@ import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppe
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
+import { Sidebar, SidebarContent, SidebarProvider } from "./ui/sidebar";
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
@@ -96,6 +97,8 @@ function renderActivity(input: {
   onThreadContextMenu?: (threadId: ThreadId, position: { x: number; y: number }) => void;
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
+  threadJumpLabelByThreadId?: ReadonlyMap<ThreadId, string>;
+  snoozedRevealRequest?: number;
   threadsHydrated?: boolean;
   /** Controlled scope (the sidebar's role); omitted, the harness keeps it in local state. */
   scope?: {
@@ -111,6 +114,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
   return (
     <SidebarActivityView
+      snoozedRevealRequest={input.snoozedRevealRequest ?? 0}
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
       activeThreadId={input.activeThreadId ?? null}
@@ -120,7 +124,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       scopeSelection={input.scope ? input.scope.selection : localScope}
       onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
       prByThreadId={input.prByThreadId ?? new Map()}
-      threadJumpLabelByThreadId={new Map()}
+      threadJumpLabelByThreadId={input.threadJumpLabelByThreadId ?? new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
@@ -149,6 +153,126 @@ describe("SidebarActivityView", () => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
   });
+
+  it("scrolls the first snoozed conversation into view when requested from the rail", async () => {
+    const snoozed = makeThread(55, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const threads = [...Array.from({ length: 12 }, (_, index) => makeThread(index)), snoozed];
+    const view = (request: number) => (
+      <div data-testid="snoozed-scroll-container" style={{ height: 160, overflowY: "auto" }}>
+        {renderActivity({ threads, snoozedRevealRequest: request })}
+      </div>
+    );
+    const mounted = await render(view(0));
+    try {
+      await mounted.rerender(view(1));
+      await expect.element(mounted.getByTestId(`activity-thread-${snoozed.id}`)).toBeVisible();
+      const viewport = mounted.getByTestId("snoozed-scroll-container").element() as HTMLElement;
+      const row = mounted.getByTestId(`activity-thread-${snoozed.id}`).element() as HTMLElement;
+      await expect
+        .poll(
+          () => row.getBoundingClientRect().bottom <= viewport.getBoundingClientRect().bottom + 1,
+        )
+        .toBe(true);
+      expect(row.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        viewport.getBoundingClientRect().top,
+      );
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("keeps compact conversation identities, status markers, order and snooze actions through hover", async () => {
+    await page.viewport(1280, 800);
+    const running = makeThread(41);
+    const review = makeThread(42, { modelSelection: { provider: "claudeAgent", model: "sonnet" } });
+    const snoozed = makeThread(43, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const onReturnSnoozedThread = vi.fn();
+    const onOpenThread = vi.fn();
+    const mounted = await render(
+      <SidebarProvider defaultOpen={false} className="h-svh">
+        <Sidebar collapsible="compact">
+          <SidebarContent>
+            {renderActivity({
+              threads: [running, review, snoozed],
+              pinnedThreadIdSet: new Set([running.id]),
+              onOpenThread,
+              onReturnSnoozedThread,
+              threadJumpLabelByThreadId: new Map([[running.id, "⌘1"]]),
+              resolveThreadStatus: (thread) =>
+                thread.id === running.id
+                  ? {
+                      label: "Working",
+                      pulse: true,
+                      dotClass: "bg-sky-500",
+                      colorClass: "text-sky-500",
+                    }
+                  : thread.id === review.id
+                    ? {
+                        label: "Pending Approval",
+                        pulse: false,
+                        dismissible: true,
+                        dotClass: "bg-amber-500",
+                        colorClass: "text-amber-500",
+                      }
+                    : null,
+            })}
+          </SidebarContent>
+        </Sidebar>
+        <main className="flex-1" data-testid="activity-compact-main">
+          Conversation
+        </main>
+      </SidebarProvider>,
+    );
+    try {
+      const first = mounted.getByTestId(`activity-thread-${running.id}`);
+      const button = first.element() as HTMLElement;
+      const title = button.querySelector<HTMLElement>('[data-slot="sidebar-thread-title"]')!;
+      const provider = button.querySelector<HTMLElement>('[data-slot="sidebar-thread-provider"]')!;
+      expect(getComputedStyle(title).visibility).toBe("hidden");
+      expect(provider.getBoundingClientRect().width).toBe(20);
+      expect(button.getBoundingClientRect().right).toBeLessThanOrEqual(
+        mounted.container
+          .querySelector<HTMLElement>('[data-slot="sidebar-container"]')!
+          .getBoundingClientRect().right,
+      );
+      await expect
+        .element(mounted.getByRole("img", { name: "Working", exact: true }))
+        .toBeVisible();
+      await expect
+        .element(mounted.getByRole("img", { name: "Pending Approval", exact: true }))
+        .toBeVisible();
+      const positions = [running, review].map(
+        (thread) =>
+          (
+            mounted.getByTestId(`activity-thread-${thread.id}`).element() as HTMLElement
+          ).getBoundingClientRect().top,
+      );
+      const main = mounted.getByTestId("activity-compact-main").element() as HTMLElement;
+      const contentLeft = main.getBoundingClientRect().left;
+      await first.hover();
+      await expect.poll(() => getComputedStyle(title).visibility).toBe("visible");
+      expect(
+        [running, review].map(
+          (thread) =>
+            (
+              mounted.getByTestId(`activity-thread-${thread.id}`).element() as HTMLElement
+            ).getBoundingClientRect().top,
+        ),
+      ).toEqual(positions);
+      expect(main.getBoundingClientRect().left).toBe(contentLeft);
+      await first.click();
+      expect(onOpenThread).toHaveBeenCalledWith(running.id);
+      await mounted.getByRole("button", { name: "Snoozed", exact: true }).click();
+      await expect.element(mounted.getByTestId(`activity-thread-${snoozed.id}`)).toBeVisible();
+      await expect.element(mounted.getByText(/^Returns /)).toBeVisible();
+      await mounted.getByTestId(`activity-thread-${snoozed.id}`).hover();
+      await mounted.getByRole("button", { name: "Return now", exact: true }).click();
+      expect(onReturnSnoozedThread).toHaveBeenCalledWith(snoozed.id);
+    } finally {
+      await mounted.unmount();
+    }
+  }, 20_000);
 
   it("keeps a snoozed pin out of normal rows and returns it through its own section", async () => {
     const thread = makeThread(40, { snoozedUntil: "2026-08-02T13:00:00.000Z" });

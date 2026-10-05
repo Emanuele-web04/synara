@@ -252,6 +252,7 @@ import {
 } from "./SidebarCustomizeList";
 import { AppRailMoreMenu } from "./AppRailMoreMenu";
 import { AppRailUsage } from "./AppRailUsage";
+import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -269,6 +270,7 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-
 import {
   type ActivityScopeSelection,
   buildActivityViewModel,
+  countSidebarActivity,
   hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
 } from "./SidebarActivityView.logic";
 import {
@@ -379,6 +381,8 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
+  SidebarHeaderTrigger,
+  useSidebar,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
@@ -1339,6 +1343,8 @@ export function SidebarSurfacePicker({
 }
 
 export default function Sidebar() {
+  const { setOpen: setSidebarOpen, setOpenMobile: setMobileSidebarOpen } = useSidebar();
+  const [snoozedRevealRequest, setSnoozedRevealRequest] = useState(0);
   const githubProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
     readGitHubProvisioningCapability,
@@ -5019,14 +5025,15 @@ export default function Sidebar() {
     timestampToneClassName?: string;
     hoverActions: ReactNode;
   }) {
-    // The jump shortcut owns the slot while it is visible; otherwise the shared
-    // rule decides which status glyph shows here.
+    // Shortcut hints own this slot in the full list; compact mode keeps the status.
     const trailingStatus = resolveThreadStatusTrailingIndicator({
       status: input.threadStatus,
-      slotOccupied: Boolean(input.threadJumpLabel),
     });
     return (
-      <div className="relative flex min-w-0 items-center justify-end gap-[3px] group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
+      <div
+        data-slot="sidebar-thread-trailing"
+        className="relative flex min-w-0 items-center justify-end gap-[3px] group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12"
+      >
         {input.rightMetaChips.length > 0 ? (
           <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
@@ -5044,6 +5051,8 @@ export default function Sidebar() {
           // slot only carries the live status/loader glyph; when idle it
           // collapses and the hover action icons sit flush at the end.
           <span
+            data-slot="sidebar-thread-status"
+            data-shortcut-hidden={input.threadJumpLabel ? "true" : undefined}
             title={trailingStatus.label}
             className={threadRowStatusSlotClassName(
               input.isSubagentThread,
@@ -5067,7 +5076,7 @@ export default function Sidebar() {
   // so spacing/typography stay in lockstep; only the label and toolbar contents vary.
   function renderListSectionHeader(label: string, toolbar: ReactNode) {
     return (
-      <div className="group/project-header relative my-1">
+      <div data-slot="sidebar-list-section-header" className="group/project-header relative my-1">
         <div
           className={cn(
             "flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]",
@@ -5090,7 +5099,10 @@ export default function Sidebar() {
     }
     return (
       <div className="mb-3">
-        <div className="my-1 flex items-center justify-between px-2 py-1">
+        <div
+          data-slot="activity-section-label"
+          className="my-1 flex items-center justify-between px-2 py-1"
+        >
           <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
         </div>
         <div className="flex flex-col gap-0.5">
@@ -6922,11 +6934,67 @@ export default function Sidebar() {
   const projectContextMenuHasOpenServer =
     projectContextMenuServer !== null && firstLocalServerUrl(projectContextMenuServer) !== null;
 
+  const activityCounts = useMemo(
+    () =>
+      countSidebarActivity(
+        activityNonGroupSidebarThreads,
+        resolveThreadStatusForSidebar,
+        visualActiveSidebarThreadId,
+      ),
+    [activityNonGroupSidebarThreads, resolveThreadStatusForSidebar, visualActiveSidebarThreadId],
+  );
+  const openRailActivity = (snoozed: boolean) => {
+    selectRailPanelItem("home");
+    if (!isOnThreadsSection) handleSidebarViewChange("threads");
+    setActivityViewEnabledSmoothly(true);
+    setActivityScope(null);
+    if (snoozed) setSnoozedRevealRequest((request) => request + 1);
+    if (isMobile) setMobileSidebarOpen(true);
+    else setSidebarOpen(true);
+  };
+  const activityItems: AppRailItem[] = [
+    {
+      id: "activity-working",
+      glyphs: { idle: ThreadRunningSpinner, active: ThreadRunningSpinner },
+      label: "Working",
+      count: activityCounts.working,
+      badgeClassName: "text-sky-500 dark:text-sky-300",
+      snoozed: false,
+    },
+    {
+      id: "activity-review",
+      glyphs: railCentralGlyphs("eye-open"),
+      label: "Needs review",
+      count: activityCounts.review,
+      badgeClassName: "text-amber-600 dark:text-amber-300",
+      snoozed: false,
+    },
+    {
+      id: "activity-snoozed",
+      glyphs: railItemGlyphs("automations"),
+      label: "Snoozed",
+      count: activityCounts.snoozed,
+      badgeClassName: "text-info",
+      snoozed: true,
+    },
+  ]
+    .filter((item) => item.count > 0)
+    .map((item) => ({
+      ...item,
+      badge: {
+        text: item.count > 99 ? "99+" : String(item.count),
+        accessibleLabel: `${item.count} ${item.count === 1 ? "conversation" : "conversations"}`,
+      },
+      showBadgeCount: true,
+      active: false,
+      onSelect: () => openRailActivity(item.snoozed),
+    }));
   const appRailProps = {
     items: railItems,
     shortcuts: railShortcutItems,
     moreSlot: railMoreMenu,
     bottomItems: railBottomItems,
+    activityItems,
     bottomSlot: (
       <>
         <AppRailUsage
@@ -7045,11 +7113,17 @@ export default function Sidebar() {
             ) : (
               <>
                 <div
+                  data-slot="sidebar-panel-controls"
                   // The panel has no header above it, so the title row gets breathing room from
                   // the panel's top edge. pt-1.5 puts the title's cap height as far from the top
                   // edge as its first letter is from the side.
                   className="flex items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5"
                 >
+                  <SidebarHeaderTrigger
+                    aria-label="Toggle compact sidebar"
+                    data-slot="sidebar-compact-trigger"
+                    className="hidden"
+                  />
                   <SidebarSurfacePicker
                     views={["threads", ...(groupsSectionVisible ? (["groups"] as const) : [])]}
                     activeView={isOnGroups ? "groups" : "threads"}
@@ -7131,6 +7205,7 @@ export default function Sidebar() {
                   ) : activityViewEnabled ? (
                     <SidebarGroup className="px-1.5 py-1.5">
                       <SidebarActivityView
+                        snoozedRevealRequest={snoozedRevealRequest}
                         threads={activityNonGroupSidebarThreads}
                         projectById={projectById}
                         activeThreadId={visualActiveSidebarThreadId}
@@ -7307,6 +7382,7 @@ export default function Sidebar() {
             snoozedSidebarThreads.length > 0 ? (
               <SidebarGroup className="px-1.5 pt-1 pb-2">
                 <SidebarSnoozedThreadsSection
+                  revealRequest={snoozedRevealRequest}
                   threads={snoozedSidebarThreads}
                   renderThreadRow={renderSnoozedThreadRow}
                   onVisibleThreadIdsChange={setClassicSnoozedVisibleThreadIds}

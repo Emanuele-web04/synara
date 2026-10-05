@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
+import { resolveThreadStatusPill } from "./Sidebar.logic";
 
 import {
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
+  countSidebarActivity,
   groupActivityThreadsByProject,
   hasUnreadActivity,
   resolveActivityDateBucket,
@@ -84,6 +86,88 @@ function completedTurn(completedAt: string): SidebarThreadSummary["latestTurn"] 
     completedAt,
   } as SidebarThreadSummary["latestTurn"];
 }
+
+describe("countSidebarActivity", () => {
+  const resolveStatus = (thread: SidebarThreadSummary) =>
+    resolveThreadStatusPill({
+      thread,
+      hasPendingApprovals: thread.hasPendingApprovals,
+      hasPendingUserInput: thread.hasPendingUserInput,
+    });
+
+  it("counts current work and review while keeping snoozed work out of both", () => {
+    const working = makeThread({ id: "working", hasLiveTailWork: true });
+    const connecting = makeThread({ id: "connecting", session: makeSession("connecting") });
+    const approval = makeThread({
+      id: "approval",
+      session: makeSession("running"),
+      hasPendingApprovals: true,
+    });
+    const completed = makeThread({
+      id: "completed",
+      latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+    });
+    const snoozed = {
+      ...working,
+      id: ThreadId.makeUnsafe("snoozed"),
+      snoozedUntil: "2026-08-02T12:00:00.000Z",
+    };
+    const archived = {
+      ...working,
+      id: ThreadId.makeUnsafe("archived"),
+      archivedAt: "2026-08-01T10:00:00.000Z",
+    };
+    const child = { ...working, id: ThreadId.makeUnsafe("child"), parentThreadId: working.id };
+    expect(
+      countSidebarActivity(
+        [working, connecting, approval, completed, snoozed, archived, child],
+        resolveStatus,
+        null,
+      ),
+    ).toEqual({ working: 2, review: 2, snoozed: 1 });
+  });
+
+  it("uses dismissed/read status rules and still counts requests on the active thread", () => {
+    const active = makeThread({
+      id: "active",
+      latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+    });
+    const read = {
+      ...active,
+      id: ThreadId.makeUnsafe("read"),
+      lastVisitedAt: "2026-08-01T11:00:00.000Z",
+    };
+    const dead = makeThread({
+      id: "dead",
+      session: makeSession("error"),
+      hasPendingApprovals: true,
+    });
+    expect(countSidebarActivity([active, read, dead], resolveStatus, active.id)).toEqual({
+      working: 0,
+      review: 0,
+      snoozed: 0,
+    });
+    const approval = { ...active, session: makeSession("running"), hasPendingApprovals: true };
+    expect(countSidebarActivity([approval], resolveStatus, approval.id).review).toBe(1);
+    expect(countSidebarActivity([approval], () => null, null).review).toBe(0);
+  });
+
+  it("turns a durable snooze return into review, without relying on the client clock", () => {
+    const thread = { ...makeThread({ id: "reminder" }), snoozedUntil: "2026-07-01T10:00:00.000Z" };
+    expect(countSidebarActivity([thread], resolveStatus, null)).toEqual({
+      working: 0,
+      review: 0,
+      snoozed: 1,
+    });
+    expect(
+      countSidebarActivity(
+        [{ ...thread, snoozedUntil: null, snoozeReminderAt: "2026-08-02T10:00:00.000Z" }],
+        resolveStatus,
+        null,
+      ),
+    ).toEqual({ working: 0, review: 1, snoozed: 0 });
+  });
+});
 
 describe("buildActivityViewModel", () => {
   it("keeps snoozed empty top-level threads accessible and restores them after expiry", () => {

@@ -8,7 +8,32 @@ import {
   hasUnseenCompletion,
   hasUnseenSnoozeReturn,
   isThreadActivelyWorking,
+  resolveThreadStatusTrailingIndicator,
+  type ThreadStatusPill,
 } from "./Sidebar.logic";
+
+/** The rail summarizes the same resolved statuses as the rows, including dismissals. */
+export function countSidebarActivity(
+  threads: readonly SidebarThreadSummary[],
+  resolveStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null,
+  activeThreadId: ThreadId | null,
+): { working: number; review: number; snoozed: number } {
+  const counts = { working: 0, review: 0, snoozed: 0 };
+  for (const thread of threads) {
+    if (thread.archivedAt != null || thread.parentThreadId != null) continue;
+    if (thread.snoozedUntil != null) {
+      counts.snoozed += 1;
+      continue;
+    }
+    const status = resolveThreadStatusTrailingIndicator({
+      status: resolveStatus(thread),
+      isActive: thread.id === activeThreadId,
+    });
+    if (status?.pulse || status?.label === "In Background") counts.working += 1;
+    else if (status?.dismissible) counts.review += 1;
+  }
+  return counts;
+}
 
 export function isThreadRunningForActivity(
   thread: Pick<SidebarThreadSummary, "hasLiveTailWork" | "session" | "latestTurn">,

@@ -4,6 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { LayoutAlignLeftIcon, LayoutLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { DISCLOSURE_TRANSITION_MS, DISCLOSURE_WIDTH_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -24,6 +25,10 @@ import { Schema } from "effect";
 const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
+const SIDEBAR_WIDTH_COMPACT = 64;
+const SIDEBAR_PREVIEW_PORTAL_SELECTOR =
+  '[role="menu"], [role="dialog"], [data-slot="popover-popup"], [data-slot="preview-card-popup"], [data-slot="tooltip-popup"]';
+type SidebarCollapsible = "offcanvas" | "icon" | "compact" | "none";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 
 /**
@@ -166,6 +171,7 @@ function SidebarProvider({
           {
             "--sidebar-width": SIDEBAR_WIDTH,
             "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
+            "--sidebar-width-compact": `${SIDEBAR_WIDTH_COMPACT}px`,
             ...style,
           } as React.CSSProperties
         }
@@ -182,7 +188,7 @@ function SidebarProvider({
 // detached content-seam rail so both agree on identical resize behavior.
 function resolveSidebarResizable(
   resizable: boolean | SidebarResizableOptions,
-  { collapsible, isMobile }: { collapsible: "offcanvas" | "icon" | "none"; isMobile: boolean },
+  { collapsible, isMobile }: { collapsible: SidebarCollapsible; isMobile: boolean },
 ): SidebarResolvedResizableOptions | null {
   if (isMobile || collapsible === "none" || !resizable) {
     return null;
@@ -210,7 +216,7 @@ function SidebarInstanceProvider({
 }: {
   side: "left" | "right";
   resizable: boolean | SidebarResizableOptions;
-  collapsible?: "offcanvas" | "icon" | "none";
+  collapsible?: SidebarCollapsible;
   children: React.ReactNode;
 }) {
   const collapsible = collapsibleProp ?? "offcanvas";
@@ -243,7 +249,7 @@ function Sidebar({
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right";
   variant?: "sidebar" | "floating" | "inset";
-  collapsible?: "offcanvas" | "icon" | "none";
+  collapsible?: SidebarCollapsible;
   resizable?: boolean | SidebarResizableOptions;
   gapClassName?: string;
   innerClassName?: string;
@@ -257,6 +263,67 @@ function Sidebar({
   const resizable = resizableProp ?? false;
   const transparentSurface = transparentSurfaceProp ?? false;
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+  const compactCollapsed = collapsible === "compact" && !isMobile && state === "collapsed";
+  const [previewOpen, setPreviewOpen] = React.useState(false);
+  const previewTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const clearPreviewTimer = React.useCallback(() => {
+    if (previewTimer.current !== null) clearTimeout(previewTimer.current);
+    previewTimer.current = null;
+  }, []);
+  const schedulePreview = React.useCallback(
+    (open: boolean) => {
+      clearPreviewTimer();
+      previewTimer.current = setTimeout(() => {
+        previewTimer.current = null;
+        setPreviewOpen(open);
+      }, DISCLOSURE_TRANSITION_MS);
+    },
+    [clearPreviewTimer],
+  );
+  React.useEffect(() => {
+    clearPreviewTimer();
+    setPreviewOpen(false);
+    return clearPreviewTimer;
+  }, [compactCollapsed, clearPreviewTimer]);
+  React.useEffect(() => {
+    if (!compactCollapsed || !previewOpen) return;
+    // Menus and dialogs opened by a row live in portals. Keep the preview available
+    // while using them, then close after the pointer/focus returns to the chat.
+    const isInside = (target: EventTarget | null) =>
+      target instanceof Element &&
+      (panelRef.current?.contains(target) || target.closest(SIDEBAR_PREVIEW_PORTAL_SELECTOR));
+    const handlePointer = (event: PointerEvent) => {
+      const active = document.activeElement;
+      if (isInside(event.target) || (isInside(active) && active?.matches(":focus-visible")))
+        clearPreviewTimer();
+      else if (previewTimer.current === null) schedulePreview(false);
+    };
+    const handleFocus = (event: FocusEvent) => {
+      if (isInside(event.target)) clearPreviewTimer();
+      else schedulePreview(false);
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        (event.target instanceof Element && event.target.closest(SIDEBAR_PREVIEW_PORTAL_SELECTOR))
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearPreviewTimer();
+      setPreviewOpen(false);
+    };
+    document.addEventListener("pointermove", handlePointer);
+    document.addEventListener("focusin", handleFocus);
+    document.addEventListener("keydown", handleEscape, true);
+    return () => {
+      document.removeEventListener("pointermove", handlePointer);
+      document.removeEventListener("focusin", handleFocus);
+      document.removeEventListener("keydown", handleEscape, true);
+    };
+  }, [compactCollapsed, previewOpen, clearPreviewTimer, schedulePreview]);
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(
     () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
     [collapsible, isMobile, resizable],
@@ -318,23 +385,63 @@ function Sidebar({
   return (
     <SidebarInstanceContext.Provider value={instanceContextValue}>
       <div
-        className="group peer hidden text-sidebar-foreground md:block"
+        ref={panelRef}
+        className={cn(
+          "group peer hidden text-sidebar-foreground md:block",
+          collapsible === "compact" && "relative self-stretch",
+          compactCollapsed && previewOpen && "z-40",
+        )}
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side={side}
         data-slot="sidebar"
         data-state={state}
         data-variant={variant}
+        data-sidebar-compact={compactCollapsed && !previewOpen ? "true" : undefined}
+        data-sidebar-preview={compactCollapsed && previewOpen ? "true" : undefined}
+        onPointerEnter={(event) => {
+          if (
+            !compactCollapsed ||
+            event.pointerType === "touch" ||
+            !(event.target instanceof Node) ||
+            !panelRef.current?.contains(event.target)
+          )
+            return;
+          if (previewOpen) clearPreviewTimer();
+          else schedulePreview(true);
+        }}
+        onPointerLeave={() => {
+          const active = document.activeElement;
+          if (
+            compactCollapsed &&
+            !(panelRef.current?.contains(active) && active?.matches(":focus-visible"))
+          )
+            schedulePreview(false);
+        }}
+        onFocusCapture={(event) => {
+          // The navigation rail is a React portal owned by these children, but
+          // its focus belongs to the shell, outside this panel's DOM boundary.
+          if (
+            !compactCollapsed ||
+            !(event.target instanceof Node) ||
+            !panelRef.current?.contains(event.target)
+          )
+            return;
+          clearPreviewTimer();
+          setPreviewOpen(true);
+        }}
       >
         {/* This is what handles the sidebar gap on desktop */}
         <div
           className={cn(
             "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear motion-reduce:transition-none",
             "group-data-[collapsible=offcanvas]:w-0",
+            "group-data-[collapsible=compact]:w-(--sidebar-width-compact)",
             "group-data-[side=right]:rotate-180",
             variant === "floating" || variant === "inset"
               ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
               : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)",
             gapClassName,
+            collapsible === "compact" && DISCLOSURE_WIDTH_MOTION_CLASS,
           )}
           data-slot="sidebar-gap"
         />
@@ -359,6 +466,12 @@ function Sidebar({
                     "group-data-[side=left]:border-r group-data-[side=right]:border-l",
                 ),
             className,
+            collapsible === "compact" &&
+              cn(
+                "absolute h-full",
+                DISCLOSURE_WIDTH_MOTION_CLASS,
+                compactCollapsed && !previewOpen && "w-(--sidebar-width-compact)",
+              ),
           )}
           data-slot="sidebar-container"
           {...props}
@@ -1113,6 +1226,7 @@ export {
   SidebarTrigger,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
   SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
+  SIDEBAR_WIDTH_COMPACT,
   useSidebar,
 };
 

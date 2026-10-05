@@ -132,6 +132,8 @@ export type AppRailItem = {
   readonly onSelect: () => void;
   readonly onMouseEnter?: (() => void) | undefined;
   readonly onFocus?: (() => void) | undefined;
+  readonly showBadgeCount?: boolean;
+  readonly badgeClassName?: string;
 };
 
 type AppRailProps = {
@@ -141,6 +143,8 @@ type AppRailProps = {
   /** The "…" menu trigger, after the shortcuts. */
   moreSlot?: ReactNode;
   bottomItems: ReadonlyArray<AppRailItem>;
+  /** Thread activity summaries, above usage and help. */
+  activityItems?: ReadonlyArray<AppRailItem>;
   /** Rendered above the bottom items (the usage rings, then the Help menu like Codex's rail). */
   bottomSlot?: ReactNode;
   /** Right-click on the rail (offers "Customize"). */
@@ -183,8 +187,16 @@ function AppRailButton({ item }: { item: AppRailItem }) {
       {item.badge ? (
         <span
           aria-hidden
-          className="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-[var(--color-text-accent)]"
-        />
+          className={cn(
+            "pointer-events-none absolute rounded-full",
+            item.showBadgeCount
+              ? "-top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center bg-[var(--app-rail-panel-background)] px-0.5 text-ui-xs font-medium tabular-nums ring-1 ring-[var(--app-rail-inset-border)]"
+              : "top-1 right-1 size-1.5 bg-[var(--color-text-accent)]",
+            item.badgeClassName,
+          )}
+        >
+          {item.showBadgeCount ? item.badge.text : null}
+        </span>
       ) : null}
     </div>
   );
@@ -195,6 +207,7 @@ export function AppRail({
   shortcuts,
   moreSlot,
   bottomItems,
+  activityItems,
   bottomSlot,
   onContextMenu,
 }: AppRailProps) {
@@ -222,6 +235,12 @@ export function AppRail({
         {moreSlot}
       </div>
       <div className="flex shrink-0 flex-col items-center gap-1.5">
+        {activityItems?.map((item) => (
+          <AppRailButton key={item.id} item={item} />
+        ))}
+        {activityItems && activityItems.length > 0 ? (
+          <div aria-hidden className="my-0.5 h-px w-5 shrink-0 bg-[var(--app-rail-inset-border)]" />
+        ) : null}
         {bottomSlot}
         {bottomItems.map((item) => (
           <AppRailButton key={item.id} item={item} />

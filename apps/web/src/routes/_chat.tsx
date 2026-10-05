@@ -60,6 +60,7 @@ import { toastManager } from "~/components/ui/toast";
 import {
   Sidebar,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
+  SIDEBAR_WIDTH_COMPACT,
   SidebarInstanceProvider,
   SidebarProvider,
   SidebarRail,
@@ -571,6 +572,8 @@ function ChatRouteLayout() {
   const railPanelView = useRailShellStore((store) => store.panelView);
   const selectRailPanelItem = useRailShellStore((store) => store.selectPanelItem);
   const railHidesPanel = !railItemShowsPanel(railActiveItem);
+  const compactThreadSidebar =
+    !isEditorView && (railActiveItem === "home" || railActiveItem === "spaces");
   const resolvedSidebarOpen = isEditorView || railHidesPanel ? false : sidebarOpen;
   // Toggling the panel open on a full-width route brings back the current panel item.
   const handleSidebarOpenChange = useCallback(
@@ -592,11 +595,14 @@ function ChatRouteLayout() {
   const sidebarElement = (
     <Sidebar
       side="left"
-      collapsible="offcanvas"
+      collapsible={compactThreadSidebar ? "compact" : "offcanvas"}
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
-      className={cn("h-full text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
-      gapClassName={SIDEBAR_OFFCANVAS_MOTION_CLASS}
+      className={cn(
+        "h-full text-foreground",
+        !compactThreadSidebar && SIDEBAR_OFFCANVAS_MOTION_CLASS,
+      )}
+      gapClassName={compactThreadSidebar ? "" : SIDEBAR_OFFCANVAS_MOTION_CLASS}
       transparentSurface
       resizable={THREAD_SIDEBAR_RESIZABLE}
     >
@@ -636,11 +642,16 @@ function ChatRouteLayout() {
       style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
       data-sidebar-side="left"
       data-sidebar-layout="rail"
+      data-sidebar-compact-mode={compactThreadSidebar ? "true" : undefined}
     >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
       <AppRailSlotProvider value={railSlot}>
-        <SidebarLeadingControlsDock routeColumn={routeColumn} railSlot={railSlot}>
+        <SidebarLeadingControlsDock
+          routeColumn={routeColumn}
+          railSlot={railSlot}
+          collapsedPanelWidth={compactThreadSidebar ? SIDEBAR_WIDTH_COMPACT : 0}
+        >
           {isMobile ? (
             // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
             // so the shell keeps no left column.
@@ -650,7 +661,12 @@ function ChatRouteLayout() {
               <AppShellTopStrip />
               <div className="flex min-h-0 flex-1">
                 <div ref={setRailSlot} className="flex shrink-0" />
-                <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
+                <div
+                  className={cn(
+                    "app-rail-panel relative flex shrink-0",
+                    compactThreadSidebar ? "overflow-visible" : "overflow-hidden [contain:paint]",
+                  )}
+                >
                   {sidebarElement}
                 </div>
               </div>

@@ -31,6 +31,7 @@ import {
 } from "~/lib/icons";
 import { beginThreadDrag, endThreadDrag } from "~/lib/threadDrag";
 import { cn } from "~/lib/utils";
+import { DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
@@ -170,7 +171,6 @@ export function ActivityThreadRow({
   const trailingStatus = resolveThreadStatusTrailingIndicator({
     status,
     isActive,
-    slotOccupied: Boolean(threadJumpLabel),
   });
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
   // they also fire over the trailing status and hover-action cluster, which are
@@ -204,6 +204,8 @@ export function ActivityThreadRow({
           onDragStart={(event) => beginThreadDrag(event, thread.id)}
           onDragEnd={endThreadDrag}
           data-testid={`activity-thread-${thread.id}`}
+          data-slot="activity-thread-button"
+          aria-label={thread.title}
           className={cn(
             "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
             SIDEBAR_ROW_FOCUS_CLASS_NAME,
@@ -215,6 +217,7 @@ export function ActivityThreadRow({
           )}
         >
           <span
+            data-slot="activity-thread-identity"
             className={cn(
               "flex min-w-0 items-center gap-1.5 overflow-hidden transition-[padding] duration-150 ease-out",
               !threadJumpLabel && "pr-5",
@@ -222,14 +225,20 @@ export function ActivityThreadRow({
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
             )}
           >
-            <ProviderIcon
-              provider={provider}
-              className="size-3 shrink-0"
-              fallback={
-                <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
-              }
-            />
             <span
+              data-slot="sidebar-thread-provider"
+              className="inline-flex shrink-0 items-center justify-center"
+            >
+              <ProviderIcon
+                provider={provider}
+                className="size-3 shrink-0"
+                fallback={
+                  <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
+                }
+              />
+            </span>
+            <span
+              data-slot="sidebar-thread-title"
               className={cn(
                 "min-w-0 flex-1 truncate text-ui leading-5 font-normal",
                 isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
@@ -252,7 +261,7 @@ export function ActivityThreadRow({
               />
             ) : null}
           </span>
-          <span className="flex min-w-0 items-center gap-1.5">
+          <span data-slot="sidebar-thread-metadata" className="flex min-w-0 items-center gap-1.5">
             {project?.cwd ? (
               <ProjectSidebarIcon
                 cwd={project.cwd}
@@ -293,7 +302,10 @@ export function ActivityThreadRow({
             </span>
           </span>
           {thread.snoozedUntil != null ? (
-            <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
+            <span
+              data-slot="sidebar-thread-metadata"
+              className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80"
+            >
               <span className="truncate">
                 <SnoozeCountdown snoozedUntil={thread.snoozedUntil} />
               </span>
@@ -303,6 +315,7 @@ export function ActivityThreadRow({
         {trailingStatus ? (
           <span
             data-slot="activity-completion-status"
+            data-shortcut-hidden={threadJumpLabel ? "true" : undefined}
             className={cn(
               "pointer-events-none absolute top-1 right-1 inline-flex size-5 items-center justify-center",
               sidebarHoverRevealHideClassName("activity-row"),
@@ -312,6 +325,7 @@ export function ActivityThreadRow({
           </span>
         ) : null}
         <span
+          data-slot="sidebar-thread-actions"
           className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
           // Double-clicking an action button toggles it twice; it must not also open
           // the row's rename dialog. Pointer-up is the touch/pen double-tap signal,
@@ -358,13 +372,28 @@ export function SidebarSnoozedThreadsSection({
   threads,
   renderThreadRow,
   onVisibleThreadIdsChange,
+  revealRequest = 0,
 }: {
   threads: readonly SidebarThreadSummary[];
   renderThreadRow: (thread: SidebarThreadSummary) => ReactNode;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
+  revealRequest?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [extraPages, setExtraPages] = useState(0);
+  const sectionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (revealRequest === 0) return;
+    setOpen(true);
+    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? 0
+      : DISCLOSURE_TRANSITION_MS;
+    const timer = window.setTimeout(() => {
+      const row = sectionRef.current?.querySelector<HTMLElement>("[data-thread-item]");
+      (row ?? sectionRef.current)?.scrollIntoView({ block: "nearest" });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [revealRequest]);
   const paging = resolveSidebarThreadListPaging({
     totalCount: threads.length,
     baseLimit: ACTIVITY_LIST_BASE_LIMIT,
@@ -389,19 +418,27 @@ export function SidebarSnoozedThreadsSection({
   );
   if (threads.length === 0) return null;
   return (
-    <SidebarCollapsibleSection
-      label="Snoozed"
-      open={open}
-      onToggle={() => setOpen((current) => !current)}
-    >
-      {threads.slice(0, paging.previewLimit).map(renderThreadRow)}
-      <SidebarShowMoreRow
-        canShowMore={paging.canShowMore}
-        canShowLess={paging.canShowLess}
-        onShowMore={() => setExtraPages(paging.effectiveExtraPages + 1)}
-        onShowLess={() => setExtraPages(Math.max(0, paging.effectiveExtraPages - 1))}
-      />
-    </SidebarCollapsibleSection>
+    <div ref={sectionRef}>
+      <SidebarCollapsibleSection
+        label="Snoozed"
+        compactLabel={
+          <>
+            <ClockIcon className="size-3" aria-hidden />
+            {threads.length}
+          </>
+        }
+        open={open}
+        onToggle={() => setOpen((current) => !current)}
+      >
+        {threads.slice(0, paging.previewLimit).map(renderThreadRow)}
+        <SidebarShowMoreRow
+          canShowMore={paging.canShowMore}
+          canShowLess={paging.canShowLess}
+          onShowMore={() => setExtraPages(paging.effectiveExtraPages + 1)}
+          onShowLess={() => setExtraPages(Math.max(0, paging.effectiveExtraPages - 1))}
+        />
+      </SidebarCollapsibleSection>
+    </div>
   );
 }
 
@@ -573,6 +610,7 @@ export function SidebarActivityView({
   onVisibleThreadIdsChange,
   onCreateChat,
   onAddProject,
+  snoozedRevealRequest,
 }: {
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -614,6 +652,7 @@ export function SidebarActivityView({
   onCreateChat: () => void;
   /** Same "Add project" action the Projects section header runs. */
   onAddProject: () => void;
+  snoozedRevealRequest?: number;
 }) {
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const [pinnedOpen, setPinnedOpen] = useState(true);
@@ -878,7 +917,10 @@ export function SidebarActivityView({
 
       {/* `group/project-header` is the marker SidebarSectionToolbar reveals on, so
           the header's create actions fade in exactly like a project row's. */}
-      <div className="group/project-header relative flex h-7 items-center gap-1 px-2 py-0.5">
+      <div
+        data-slot="activity-scope-header"
+        className="group/project-header relative flex h-7 items-center gap-1 px-2 py-0.5"
+      >
         <ActivityScopeMenu
           options={scopeOptions}
           projectById={projectById}
@@ -1023,6 +1065,7 @@ export function SidebarActivityView({
       ) : null}
       <SidebarSnoozedThreadsSection
         threads={model.snoozed}
+        revealRequest={snoozedRevealRequest ?? 0}
         renderThreadRow={(thread) => renderRow(thread, false)}
         onVisibleThreadIdsChange={setSnoozedVisibleThreadIds}
       />
