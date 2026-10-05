@@ -2490,6 +2490,13 @@ label:has(> select#reasoning-effort) select {
   --truncate-fade-size: --value([length], [percentage]);
 }
 
+/* Match the transcript's animated right inset before revealing its message rail. */
+@property --message-trail-content-inset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 /* Text shimmer utility — vendored verbatim from shadcn 4.12.0
    (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
    imported because it would clash with this project's custom theme, so the

@@ -465,6 +465,7 @@ export function ChatTranscriptPane({
         {!agentActivityDetail ? (
           <MessageTrail
             items={trailItems}
+            contentInsetRightPx={contentInsetRightPx}
             activeStore={activeTrailStore}
             onSelect={handleTrailSelect}
             subscribeAudioLevel={

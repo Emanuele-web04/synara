@@ -20,6 +20,7 @@ import {
   useState,
   useSyncExternalStore,
   type FocusEvent as ReactFocusEvent,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -50,14 +51,14 @@ interface MessageTrailProps {
   /** Stable holder for current + visible highlights; only this component re-renders on change. */
   activeStore: ActiveTrailStore;
   onSelect: (messageId: MessageId) => void;
+  contentInsetRightPx?: number | undefined;
   /** Source of audio levels (0..1); omitted, the rail ignores sound. */
   subscribeAudioLevel?: ((listener: (level: number) => void) => () => void) | undefined;
 }
 
-// Rail only renders once the centered transcript column (max 46rem) leaves a left
-// gutter wide enough for the rail to sit clear of message text. Measured off the
-// pane so a docked side panel / the sidebar is accounted for.
-const MIN_PANE_WIDTH_PX = 864;
+// Leave breathing room between the rail and the selected chat column, including
+// the space reserved by the transcript scrollbar.
+const RAIL_CONTENT_CLEARANCE_PX = 16;
 // Fixed rail box. Ticks grow rightward inside it (left-aligned, like the Dock).
 const RAIL_WIDTH_PX = 56;
 // Cap the scrollable tick viewport a bit below the full pane height so the rail
@@ -96,6 +97,7 @@ export function MessageTrail({
   items,
   activeStore,
   onSelect,
+  contentInsetRightPx = 0,
   subscribeAudioLevel,
 }: MessageTrailProps) {
   const rootRef = useRef<HTMLElement | null>(null);
@@ -424,14 +426,13 @@ export function MessageTrail({
   // so observing size never feeds back into the layout.
   useEffect(() => {
     const root = rootRef.current;
-    const pane = root?.parentElement;
-    if (!pane || typeof ResizeObserver === "undefined") {
+    if (!root || typeof ResizeObserver === "undefined") {
       return;
     }
     let pendingRaf: number | null = null;
     const measure = () => {
       pendingRaf = null;
-      setHasGutter(pane.clientWidth >= MIN_PANE_WIDTH_PX);
+      setHasGutter(root.clientWidth >= RAIL_WIDTH_PX);
     };
     const schedule = () => {
       if (pendingRaf === null) {
@@ -440,7 +441,7 @@ export function MessageTrail({
     };
     schedule();
     const observer = new ResizeObserver(schedule);
-    observer.observe(pane);
+    observer.observe(root);
     return () => {
       if (pendingRaf !== null) {
         cancelAnimationFrame(pendingRaf);
@@ -504,6 +505,10 @@ export function MessageTrail({
   // Going inert (narrow pane / N<=1): stop the loop and clear transient state.
   useEffect(() => {
     if (!visible) {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement && rootRef.current?.contains(activeElement)) {
+        activeElement.blur();
+      }
       cancelFrame();
       latestPointerClientYRef.current = null;
       focusOverrideIndexRef.current = null;
@@ -651,9 +656,18 @@ export function MessageTrail({
       className={cn(
         "absolute inset-y-0 left-0 z-20 hidden flex-col justify-center sm:flex",
         DISCLOSURE_CONTENT_MOTION_CLASS,
+        "transition-[opacity,translate,--message-trail-content-inset]",
         visible ? "opacity-100" : "pointer-events-none opacity-0",
       )}
-      style={{ width: RAIL_WIDTH_PX }}
+      style={
+        {
+          "--message-trail-content-inset": `${contentInsetRightPx}px`,
+          width: RAIL_WIDTH_PX,
+          // CSS resolves rem, percentage/full-width, and live preference changes.
+          // Observe this constrained box, rather than assuming a fixed 46rem column.
+          maxWidth: `max(0px, calc((100% - var(--app-chat-max-width, 46rem) - var(--message-trail-content-inset)) / 2 - ${RAIL_CONTENT_CLEARANCE_PX}px))`,
+        } as CSSProperties
+      }
     >
       {/* Capped, centered, scrollable viewport. `scroll-fade-y` masks the top/bottom
           edges only while there is overflow to scroll (auto-off when it all fits). */}
@@ -709,7 +723,13 @@ export function MessageTrail({
           APP_TOOLTIP_SURFACE_CLASS_NAME,
           "pointer-events-none invisible absolute z-30 w-64 -translate-y-1/2 rounded-xl p-2",
         )}
-        style={{ left: RAIL_WIDTH_PX + TOOLTIP_OFFSET_X_PX, top: 0 }}
+        style={{
+          left: RAIL_WIDTH_PX + TOOLTIP_OFFSET_X_PX,
+          top: 0,
+          // This inline preview sits inside the transcript's compositing layer;
+          // backdrop blur alone cannot reliably obscure the message beneath it.
+          backgroundColor: "var(--popover)",
+        }}
       >
         {/* The sent message: dark, max two lines (matches the projects/threads card title). */}
         <div
