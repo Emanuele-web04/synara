@@ -643,6 +643,26 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       return;
     }
 
+    // Closing one of two panes collapses to the survivor and discards the split. Keep the
+    // tree until navigation commits, because the store drops a split at once when its
+    // survivor already anchors another split, which would leave no chat to land on.
+    const remainingLeaves = collectLeaves(activeSplitView.root).filter(
+      (leaf) => leaf.id !== paneId,
+    );
+    const survivingThreadId = remainingLeaves.length === 1 ? remainingLeaves[0]!.threadId : null;
+    if (survivingThreadId) {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: survivingThreadId },
+        replace: true,
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: undefined,
+        }),
+      }).then(() => removeSplitView(activeSplitView.id));
+      return;
+    }
+
     const closed = removePaneFromSplitView({
       splitViewId: activeSplitView.id,
       paneId,
