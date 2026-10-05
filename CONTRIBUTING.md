@@ -99,6 +99,13 @@ Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
 strip that inherited flag, so relying on inheritance can launch the desktop GUI
 instead of the proxy. Keep the provider environment filtering intact.
 
+Database lifecycle locks publish their owner metadata atomically. Startup may
+recover an empty lock directory or one containing only Finder's `.DS_Store`,
+including the stale-lock recovery guard. It must preserve live owners, malformed
+owner metadata, links, and unrecognized files. An unknown owner is not proof of
+another running server; the desktop lock dialog provides **Open logs** to inspect
+the underlying error. Never remove a populated lock to work around a startup block.
+
 ## Be Realistic
 
 Opening a PR does not create an obligation on our side.
