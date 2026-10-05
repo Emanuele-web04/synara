@@ -316,13 +316,17 @@ const makeRepository = Effect.gen(function* () {
             WHERE consumer_name = ${consumerName}
           )
           AND state IN ('retry', 'inflight')
-          AND EXISTS (
+          AND (EXISTS (
             SELECT 1
             FROM provider_delivery_reconciliations r
             WHERE r.consumer_name = orchestration_event_deliveries.consumer_name
               AND r.event_sequence = orchestration_event_deliveries.event_sequence
               AND r.outcome = 'safe_retry'
-          )
+          ) OR EXISTS (
+            SELECT 1 FROM orchestration_events e
+            WHERE e.sequence = orchestration_event_deliveries.event_sequence
+              AND e.event_type = 'thread.claude-cache-response-requested'
+          ))
         ORDER BY event_sequence ASC
       `.pipe(
         Effect.mapError(
