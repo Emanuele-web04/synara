@@ -531,6 +531,9 @@ function SettingsRouteView() {
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
+      ? ["Agent CPU priority"]
+      : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
       ? ["Open pull requests and issues"]

@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ExecutableNotFoundError, prepareProcess } from "./platformProcess";
+import { spawnProcess } from "./processRuntime";
+import os from "node:os";
 
 let root: string;
 
@@ -26,6 +28,51 @@ function windowsEnv(pathValue = root): NodeJS.ProcessEnv {
 }
 
 describe("prepareProcess", () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "sets WSL guest priority before exec and tolerates failure (reniceFails=%s)",
+    async (reniceFails) => {
+      if (reniceFails)
+        writeFileSync(path.join(root, "renice"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const plan = prepareProcess(
+        process.execPath,
+        [
+          "-e",
+          "console.log(JSON.stringify({ priority: require('node:os').getPriority(), args: process.argv.slice(1) }))",
+          "--",
+          "a b",
+          "quote'\"$",
+          "--flag",
+        ],
+        { platform: "win32", cwd: "\\\\wsl.localhost\\Ubuntu\\home\\agent", lowerPriority: true },
+      );
+      // Execute the guest-side argv locally; Windows/WSL host launch remains platform-specific.
+      const guestArgs = plan.args.slice(plan.args.indexOf("--exec") + 1);
+      expect(guestArgs[0]).toBe("/bin/sh");
+      const child = spawnProcess(guestArgs[0]!, guestArgs.slice(1), {
+        stdio: "pipe",
+        env: { ...process.env, PATH: reniceFails ? root : process.env.PATH },
+      });
+      let stdout = "",
+        stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) =>
+          code === 0 ? resolve() : reject(new Error(`exit ${code}: ${stderr}`)),
+        );
+      });
+      expect(JSON.parse(stdout)).toEqual({
+        priority: reniceFails ? os.getPriority() : Math.max(5, os.getPriority()),
+        args: ["a b", "quote'\"$", "--flag"],
+      });
+      if (reniceFails) expect(stderr).toContain("failed to lower agent process priority");
+    },
+  );
   it.skipIf(process.platform === "win32")(
     "keeps the POSIX path shell-free and resolves through the supplied environment",
     () => {

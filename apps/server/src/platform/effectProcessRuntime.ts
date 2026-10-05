@@ -2,10 +2,33 @@
 // Purpose: Builds Effect child-process commands from the shared platform planner.
 // Layer: Server platform runtime
 
-import { prepareProcess, type ProcessLaunchInput } from "@synara/shared/platformProcess";
-import { ChildProcess } from "effect/unstable/process";
+import {
+  lowerProcessPriority,
+  prepareProcess,
+  type ProcessLaunchInput,
+} from "@synara/shared/platformProcess";
+import { Effect } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { providerProcessPriorityEnabled } from "../providerProcessPriority";
 
-type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform">;
+/** Keep agent CPU scheduling in the same boundary as process launch planning. */
+export function spawnProviderProcess(
+  spawner: Pick<ChildProcessSpawner.ChildProcessSpawner["Service"], "spawn">,
+  command: string,
+  args: ReadonlyArray<string>,
+  options: EffectProcessRuntimeOptions = {},
+): ReturnType<ChildProcessSpawner.ChildProcessSpawner["Service"]["spawn"]> {
+  return Effect.gen(function* () {
+    const enabled = yield* providerProcessPriorityEnabled;
+    const child = yield* spawner.spawn(
+      makeEffectProcessCommand(command, args, { ...options, lowerPriority: enabled }),
+    );
+    if (enabled) lowerProcessPriority(child.pid);
+    return child;
+  });
+}
+
+type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "lowerPriority">;
 
 // The pinned Effect revision predates these Node-only Windows options. The
 // tracked platform-node-shared patch reads them from the command at runtime.
@@ -34,7 +57,7 @@ export function makeEffectProcessCommand(
   args: ReadonlyArray<string>,
   options: EffectProcessRuntimeOptions = {},
 ): ReturnType<typeof ChildProcess.make> {
-  const { platform, ...commandOptions } = options;
+  const { platform, lowerPriority, ...commandOptions } = options;
   const effectivePlatform = platform ?? process.platform;
 
   // Effect's ChildProcessSpawner is injectable. Keep executable existence and
@@ -53,6 +76,7 @@ export function makeEffectProcessCommand(
   const env = commandOptions.env as NodeJS.ProcessEnv | undefined;
   const plan = prepareProcess(command, args, {
     platform: effectivePlatform,
+    ...(lowerPriority ? { lowerPriority: true } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
     ...(env !== undefined ? { env } : {}),
   });

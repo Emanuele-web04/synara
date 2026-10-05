@@ -280,6 +280,7 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        lowerProviderProcessPriority: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         githubInboxIncludeUpstreams: false,

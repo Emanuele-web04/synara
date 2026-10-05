@@ -51,6 +51,29 @@ beside the provider label. Settings → Usage uses the same account-specific sna
 Usage checks follow each account's configured credentials; unassigned thread telemetry and
 provider-wide local totals are not used as a fallback for an individual account.
 
+## Agent CPU priority
+
+Settings → Providers → **Keep Synara responsive** is enabled by default in Stable and Beta.
+Synara gives newly launched local agent processes a moderate CPU scheduling priority:
+nice +5 on macOS/Linux and Below Normal on Windows. Their children normally inherit it,
+including tests, compilers, and browsers. Processes that explicitly change their own priority
+can override that inheritance. This does not use background I/O or network throttling.
+WSL workspaces apply nice +5 inside the Linux guest before executing the agent; changing
+only the Windows launcher would not change guest scheduling. Native priority is set immediately
+after spawn, so a launcher that spawns children before that call can race the adjustment.
+
+The setting is read at process launch; already running agents and their children are not
+reprioritized. Restart existing sessions after changing it to apply consistently. Providers
+that launch a process per turn pick it up on the next launch. Pi's SDK runs inside the server,
+so its supervised shell commands receive the priority selected when that session started.
+An externally managed OpenCode server must be configured by its operator.
+
+The Synara server, terminals opened by the user, Git checkpoint helpers, and brief version,
+authentication, and model-list probes keep their existing priority. Auxiliary Codex/Claude
+model-generation processes use the agent priority. Priority changes are best effort: an OS
+failure is logged and the agent launch continues. Lower CPU priority improves scheduling
+under contention; it does not impose a CPU quota or guarantee response times under overload.
+
 ## What remains provider-owned
 
 The provider still controls:

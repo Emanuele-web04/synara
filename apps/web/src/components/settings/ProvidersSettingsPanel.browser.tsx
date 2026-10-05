@@ -114,6 +114,29 @@ function activityRow(provider: string) {
     .closest('[data-slot="settings-row"]')!;
 }
 
+it("saves provider CPU priority opt-out and exposes reset to the default", async () => {
+  const updateSettings = vi.fn();
+  const result = await render(
+    <ProvidersSettingsPanel {...props} updateSettings={updateSettings} />,
+  );
+  const control = page.getByRole("switch", { name: "Keep Synara responsive" });
+  await expect.element(control).toBeChecked();
+  await control.click();
+  expect(updateSettings).toHaveBeenCalledWith({ lowerProviderProcessPriority: false });
+  await result.rerender(
+    <ProvidersSettingsPanel
+      {...props}
+      settings={{ ...props.settings, lowerProviderProcessPriority: false }}
+      updateSettings={updateSettings}
+    />,
+  );
+  await page.getByRole("button", { name: "Reset agent CPU priority to default" }).click();
+  expect(updateSettings).toHaveBeenLastCalledWith({ lowerProviderProcessPriority: true });
+  expect(control.element().closest('[data-slot="settings-row"]')?.textContent).toContain(
+    "Restart existing sessions",
+  );
+});
+
 it("shows installation and auth beside activity switches with visible setup guides", async () => {
   await render(<ProvidersSettingsPanel {...props} />);
   expect(activityRow("OpenCode").textContent).toContain("Unavailable");

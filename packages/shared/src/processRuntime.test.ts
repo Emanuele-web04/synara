@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import os from "node:os";
 
 import { execShellCommandSync, spawnProcess } from "./processRuntime";
 
@@ -26,6 +27,46 @@ function run(
 }
 
 describe("processRuntime", () => {
+  it.each([false, true])(
+    "applies opt-in priority before descendants launch (enabled=%s)",
+    async (enabled) => {
+      const serverPriority = os.getPriority();
+      const expectedPriority = enabled
+        ? Math.max(serverPriority, process.platform === "win32" ? 10 : 5)
+        : serverPriority;
+      const child = spawnProcess(
+        process.execPath,
+        [
+          "-e",
+          `
+      const os = require('node:os');
+      const { spawnSync } = require('node:child_process');
+      process.stdin.resume();
+      process.stdin.once('end', () => {
+        const descendant = spawnSync(process.execPath, ['-e', 'console.log(require("node:os").getPriority())']);
+        console.log(JSON.stringify({ parent: os.getPriority(), descendant: Number(descendant.stdout) }));
+      });
+    `,
+        ],
+        { stdio: "pipe", lowerPriority: enabled },
+      );
+      let stdout = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      const exited = new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+      });
+      child.stdin.end();
+      await exited;
+      expect(JSON.parse(stdout)).toEqual({
+        parent: expectedPriority,
+        descendant: expectedPriority,
+      });
+      expect(os.getPriority()).toBe(serverPriority);
+    },
+  );
   it("runs a normal process and preserves UTF-8 stdout/stderr", async () => {
     await expect(
       run(["-e", "process.stdout.write('ok 日本語'); process.stderr.write('diagnostic €')"]),
