@@ -337,7 +337,7 @@ scaling beyond one task.
 `mod` means Command on macOS and Ctrl on Windows or Linux.
 
 - `mod+n` — create a task
-- `mod+j` — toggle the terminal drawer
+- `mod+j` — toggle the terminal panel
 - `mod+d` — toggle the diff view
 - `mod+shift+b` — toggle the browser
 - `mod+\` — split the current view
@@ -381,3 +381,17 @@ uses an alias. Include the extension for other files, such as `[[guide.pdf]]`.
 Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
+
+### Terminal panels
+
+Each chat has one terminal panel, shown in the main view or in its right dock.
+Terminals have no nested tabs, groups, splits, or bottom drawer. Opening the
+terminal again focuses the existing session. Project actions replace an idle
+session with the requested working directory and environment; a busy terminal
+must be stopped before another action runs in that chat. On upgrade, the last
+active terminal is retained. Retired nested sessions are closed only when the
+server verifies they are idle, preserving their saved history. Busy sessions or
+sessions whose activity cannot be checked remain pending for the next mount.
+Project actions use the same server check, including after reloading the app.
+Opening a workspace path verifies on the server that the shell is idle before sending navigation input.
+A failed explicit close keeps the terminal visible and usable. Reopening after close or shell exit uses a new session identity so delayed cleanup cannot terminate the new shell.

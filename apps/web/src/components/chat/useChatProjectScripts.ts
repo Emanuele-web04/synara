@@ -5,7 +5,7 @@ import {
   type ProjectScript,
 } from "@synara/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
@@ -19,16 +19,15 @@ import {
 } from "~/projectScripts";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { isElectron } from "../../env";
-import type { ThreadTerminalState } from "../../terminalStateStore";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import type { Project, Thread } from "../../types";
 import { DEFAULT_THREAD_TERMINAL_ID } from "../../types";
 import {
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
-  resolveProjectScriptTerminalTarget,
 } from "../ChatView.logic";
 import { type NewProjectScriptInput } from "../ProjectScriptsControl";
+import { disposeAndCloseTerminalSession } from "../terminal/terminalSession";
 import { randomTerminalId } from "../terminal/terminalIds";
 import { toastManager } from "../ui/toast";
 const EMPTY_LAST_INVOKED_SCRIPT_BY_PROJECT: Record<string, string> = {};
@@ -38,7 +37,6 @@ interface ChatProjectScriptsInput {
   activeProject: Project | undefined;
   gitCwd: string | null;
   isGroupContainer: boolean;
-  terminalState: ThreadTerminalState;
   requestTerminalFocus: () => void;
   setTerminalOpen: (open: boolean) => void;
   setThreadError: (threadId: ThreadId, error: string | null) => void;
@@ -50,14 +48,13 @@ export function useChatProjectScripts({
   activeProject,
   gitCwd,
   isGroupContainer,
-  terminalState,
   requestTerminalFocus,
   setTerminalOpen,
   setThreadError,
 }: ChatProjectScriptsInput) {
   const queryClient = useQueryClient();
+  const pendingScriptThreads = useRef(new Set<ThreadId>());
   const storeNewTerminal = useTerminalStateStore((state) => state.newTerminal);
-  const storeSetActiveTerminal = useTerminalStateStore((state) => state.setActiveTerminal);
   const storeSetTerminalMetadata = useTerminalStateStore((state) => state.setTerminalMetadata);
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -79,26 +76,21 @@ export function useChatProjectScripts({
         });
       }
       const targetCwd = options?.cwd ?? gitCwd ?? activeProject.cwd;
-      const baseTerminalId =
-        terminalState.activeTerminalId ||
-        terminalState.terminalIds[0] ||
-        DEFAULT_THREAD_TERMINAL_ID;
-      const { shouldCreateNewTerminal, terminalId: targetTerminalId } =
-        resolveProjectScriptTerminalTarget({
-          baseTerminalId,
-          createTerminalId: randomTerminalId,
-          hasRunningTerminal: terminalState.runningTerminalIds.length > 0,
-          preferNewTerminal: options?.preferNewTerminal,
-          terminalOpen: terminalState.terminalOpen,
-        });
-
-      setTerminalOpen(true);
-      if (shouldCreateNewTerminal) {
-        storeNewTerminal(activeThreadId, targetTerminalId);
-      } else {
-        storeSetActiveTerminal(activeThreadId, targetTerminalId);
+      const terminalState =
+        useTerminalStateStore.getState().terminalStateByThreadId[activeThreadId];
+      const baseTerminalId = terminalState?.activeTerminalId ?? DEFAULT_THREAD_TERMINAL_ID;
+      if (
+        pendingScriptThreads.current.has(activeThreadId) ||
+        terminalState?.runningTerminalIds.includes(baseTerminalId)
+      ) {
+        const error = new Error(
+          "The terminal is busy. Stop its command or use another chat before running this action.",
+        );
+        setThreadError(activeThreadId, error.message);
+        if (options?.throwOnError) throw error;
+        return null;
       }
-      requestTerminalFocus();
+      const targetTerminalId = randomTerminalId();
 
       // React Compiler cannot lower value blocks directly inside `try`; keep
       // those expressions in the nested function while retaining error handling.
@@ -123,10 +115,26 @@ export function useChatProjectScripts({
         }
       };
 
+      pendingScriptThreads.current.add(activeThreadId);
       try {
+        // Persisted client activity is intentionally empty after reload. Always
+        // ask the server, even for a legacy default session hidden in the UI.
+        await disposeAndCloseTerminalSession({
+          api,
+          threadId: activeThreadId,
+          terminalId: baseTerminalId,
+          onlyIfIdle: true,
+          deleteHistory: false,
+        });
+        useTerminalStateStore.getState().closeTerminal(activeThreadId, baseTerminalId);
+        storeNewTerminal(activeThreadId, targetTerminalId);
+        setTerminalOpen(true);
+        requestTerminalFocus();
         await runScriptInTargetTerminal();
+        pendingScriptThreads.current.delete(activeThreadId);
         return { terminalId: targetTerminalId };
       } catch (error) {
+        pendingScriptThreads.current.delete(activeThreadId);
         setThreadError(
           activeThreadId,
           error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
@@ -149,13 +157,8 @@ export function useChatProjectScripts({
       setTerminalOpen,
       setThreadError,
       storeNewTerminal,
-      storeSetActiveTerminal,
       storeSetTerminalMetadata,
       setLastInvokedScriptByProjectId,
-      terminalState.activeTerminalId,
-      terminalState.terminalOpen,
-      terminalState.runningTerminalIds,
-      terminalState.terminalIds,
     ],
   );
 

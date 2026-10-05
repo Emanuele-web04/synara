@@ -1336,7 +1336,11 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       updatedAt: NOW_ISO,
     };
   }
-  if (tag === WS_METHODS.shellOpenInEditor || tag === WS_METHODS.terminalWrite) {
+  if (
+    tag === WS_METHODS.shellOpenInEditor ||
+    tag === WS_METHODS.terminalWrite ||
+    tag === WS_METHODS.terminalClose
+  ) {
     return null;
   }
   return {};
@@ -7079,6 +7083,73 @@ describe("ChatView transcript geometry (full app)", () => {
       );
     } finally {
       restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
+
+  it("retains the opened terminal identity when path navigation fails", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("path-terminal-retry"),
+        targetText: "Path navigation",
+      }),
+    });
+    const previousNativeApi = window.nativeApi;
+    const nativeApi = readNativeApi()!;
+    const writes: Array<Parameters<typeof nativeApi.terminal.write>[0]> = [];
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...nativeApi,
+        terminal: {
+          ...nativeApi.terminal,
+          write: async (input: Parameters<typeof nativeApi.terminal.write>[0]) => {
+            if (input.onlyIfIdle) {
+              writes.push(input);
+              throw new Error("Activity check unavailable");
+            }
+            return nativeApi.terminal.write(input);
+          },
+        },
+      },
+    });
+    try {
+      const row = await waitForElement<HTMLElement>(
+        () => document.querySelector("[data-thread-item] [data-thread-entry-point]"),
+        "Expected sidebar thread row",
+      );
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
+      );
+      (
+        await waitForElement<HTMLButtonElement>(
+          () =>
+            contextMenuRows().find((button) =>
+              button.textContent?.includes("Open Path in Terminal"),
+            ) ?? null,
+          "Expected path action",
+        )
+      ).click();
+      await expect.poll(() => writes.length).toBe(1);
+      await expect
+        .element(page.getByText("Unable to open terminal", { exact: true }))
+        .toBeVisible();
+      const state = useTerminalStateStore.getState().terminalStateByThreadId[THREAD_ID]!;
+      expect(state.terminalOpen).toBe(false);
+      expect(state.activeTerminalId).toBe(writes[0]!.terminalId);
+      expect(state.hasSession).toBe(true);
+      useTerminalStateStore.getState().setTerminalOpen(THREAD_ID, true);
+      expect(
+        useTerminalStateStore.getState().terminalStateByThreadId[THREAD_ID]?.activeTerminalId,
+      ).toBe(writes[0]!.terminalId);
+    } finally {
+      if (previousNativeApi)
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      else Reflect.deleteProperty(window, "nativeApi");
       await mounted.cleanup();
     }
   });

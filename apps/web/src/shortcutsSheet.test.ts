@@ -225,10 +225,15 @@ describe("listShortcutEditorDefinitions", () => {
     expect(unlabeledCommands).toEqual([]);
   });
 
-  it("lists every built-in command exactly once", () => {
+  it("lists every active built-in command exactly once", () => {
     const listed = listShortcutEditorDefinitions().flatMap((definition) => definition.commands);
 
-    expect(listed.toSorted()).toEqual([...STATIC_KEYBINDING_COMMANDS].toSorted());
+    expect(listed.toSorted()).toEqual(
+      STATIC_KEYBINDING_COMMANDS.filter(
+        (command) => !command.startsWith("terminal.split"),
+      ).toSorted(),
+    );
+    expect(listed.some((command) => command.startsWith("terminal.split"))).toBe(false);
   });
 
   it("gives each numbered family one member per number key", () => {

@@ -449,8 +449,8 @@ import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
 import { isSidechatThread, isStandaloneSidechatThread } from "@synara/shared/sidechatThread";
 
-// The terminal drawer drags in xterm plus its addons (~223 KB gzip). Both mount points
-// are conditional, so loading it lazily keeps the terminal stack out of the initial
+// The terminal panel loads xterm plus its addons (~223 KB gzip). Its mount point
+// is conditional, so loading it lazily keeps the terminal stack out of the initial
 // chat bundle and defers the cost to the first time a terminal is actually opened.
 const ThreadTerminalDrawer = lazy(() => import("./ThreadTerminalDrawer"));
 
@@ -1105,26 +1105,13 @@ export default function ChatView({
     setTerminalPresentationMode,
     setTerminalWorkspaceLayout,
     setTerminalWorkspaceTab,
-    setTerminalHeight,
     setTerminalMetadataInStore: storeSetTerminalMetadata,
     setTerminalActivityInStore: storeSetTerminalActivity,
     openChatThreadPageInStore: storeOpenChatThreadPage,
     openTerminalThreadPageInStore: storeOpenTerminalThreadPage,
-    closeTerminalGroupInStore: storeCloseTerminalGroup,
-    resizeTerminalSplitInStore: storeResizeTerminalSplit,
     toggleTerminalVisibility,
-    expandTerminalWorkspace,
-    collapseTerminalWorkspace,
-    splitTerminalLeft,
-    splitTerminalRight,
-    splitTerminalDown,
-    splitTerminalUp,
-    createNewTerminal,
-    createNewTerminalTab,
     createTerminalFromShortcut,
-    moveTerminalToNewGroup,
     openNewFullWidthTerminal,
-    activateTerminal,
     closeTerminal,
     handleTerminalSessionExited,
     closeActiveWorkspaceView,
@@ -2526,28 +2513,6 @@ export default function ChatView({
       }),
     [activeLatestTurn?.turnId, turnDiffSummaries, workLogEntries],
   );
-  const splitTerminalShortcutLabel = useMemo(
-    () =>
-      shortcutLabelForCommand(keybindings, "terminal.splitRight") ??
-      shortcutLabelForCommand(keybindings, "terminal.split"),
-    [keybindings],
-  );
-  const splitTerminalDownShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "terminal.splitDown"),
-    [keybindings],
-  );
-  const newTerminalShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "terminal.new"),
-    [keybindings],
-  );
-  const closeTerminalShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "terminal.close"),
-    [keybindings],
-  );
-  const closeWorkspaceShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "terminal.workspace.closeActive"),
-    [keybindings],
-  );
   const diffPanelShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "diff.toggle"),
     [keybindings],
@@ -3102,52 +3067,16 @@ export default function ChatView({
       modelSelection: selectedModelSelection,
     }),
   });
-  const hasRightDockPanes = useRightDockStore(
-    (store) => selectRightDockState(threadId)(store).panes.length > 0,
-  );
-  const setRightDockOpen = useRightDockStore((store) => store.setDockOpen);
-  const toggleRightDock = useCallback(() => {
-    setRightDockOpen(threadId, !rightDockOpen);
-  }, [rightDockOpen, setRightDockOpen, threadId]);
   const terminalDrawerProps = {
     threadId,
-    onTogglePanel: hasRightDockPanes ? toggleRightDock : undefined,
-    isPanelOpen: hasRightDockPanes ? rightDockOpen : undefined,
     cwd: gitCwd ?? activeProject?.cwd ?? "",
     runtimeEnv: threadTerminalRuntimeEnv,
-    height: terminalState.terminalHeight,
-    terminalIds: terminalState.terminalIds,
     terminalLabelsById: terminalState.terminalLabelsById,
     terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
     terminalCliKindsById: terminalState.terminalCliKindsById,
-    terminalAttentionStatesById: terminalState.terminalAttentionStatesById ?? {},
-    runningTerminalIds: terminalState.runningTerminalIds,
     activeTerminalId: terminalState.activeTerminalId,
-    terminalGroups: terminalState.terminalGroups,
-    activeTerminalGroupId: terminalState.activeTerminalGroupId,
     focusRequestId: terminalFocusRequestId,
-    onSplitTerminal: splitTerminalRight,
-    onSplitTerminalDown: splitTerminalDown,
-    onNewTerminal: createNewTerminal,
-    onNewTerminalTab: createNewTerminalTab,
-    onMoveTerminalToGroup: moveTerminalToNewGroup,
-    splitShortcutLabel: splitTerminalShortcutLabel ?? undefined,
-    splitDownShortcutLabel: splitTerminalDownShortcutLabel ?? undefined,
-    newShortcutLabel: newTerminalShortcutLabel ?? undefined,
-    closeShortcutLabel: closeTerminalShortcutLabel ?? undefined,
-    workspaceCloseShortcutLabel: closeWorkspaceShortcutLabel ?? undefined,
-    onActiveTerminalChange: activateTerminal,
-    onCloseTerminal: closeTerminal,
     onTerminalSessionExited: handleTerminalSessionExited,
-    onCloseTerminalGroup: (groupId: string) => {
-      if (!activeThreadId) return;
-      storeCloseTerminalGroup(activeThreadId, groupId);
-    },
-    onHeightChange: setTerminalHeight,
-    onResizeTerminalSplit: (groupId: string, splitId: string, weights: number[]) => {
-      if (!activeThreadId) return;
-      storeResizeTerminalSplit(activeThreadId, groupId, splitId, weights);
-    },
     onTerminalMetadataChange: (
       terminalId: string,
       metadata: {
@@ -3182,7 +3111,6 @@ export default function ChatView({
     activeProject,
     gitCwd,
     isGroupContainer,
-    terminalState,
     requestTerminalFocus,
     setTerminalOpen,
     setThreadError,
@@ -3903,10 +3831,6 @@ export default function ChatView({
     cycleEffort: handleCycleEffort,
     toggleTerminalVisibility,
     setTerminalOpen,
-    splitTerminalRight,
-    splitTerminalLeft,
-    splitTerminalDown,
-    splitTerminalUp,
     closeTerminal,
     createTerminalFromShortcut,
     openNewFullWidthTerminal,
@@ -6432,9 +6356,9 @@ export default function ChatView({
           activeTab={terminalState.workspaceActiveTab}
           isWorking={isWorking}
           terminalHasRunningActivity={terminalState.runningTerminalIds.length > 0}
-          terminalCount={terminalState.terminalIds.length}
           workspaceLayout={terminalState.workspaceLayout}
           onSelectTab={setTerminalWorkspaceTab}
+          onClose={onCloseEditorTerminal}
         />
       ) : null}
       {/* Main content area with optional plan sidebar */}
@@ -6739,11 +6663,7 @@ export default function ChatView({
                 <ThreadTerminalDrawer
                   key={`${activeThread.id}-workspace`}
                   {...terminalDrawerProps}
-                  presentationMode="workspace"
                   isVisible={terminalWorkspaceTerminalTabActive}
-                  onTogglePresentationMode={
-                    terminalState.workspaceLayout === "both" ? collapseTerminalWorkspace : undefined
-                  }
                 />
               </Suspense>
             </div>
@@ -6824,22 +6744,6 @@ export default function ChatView({
         ) : null}
       </div>
       {/* end horizontal flex container */}
-
-      {(() => {
-        if (!terminalState.terminalOpen || terminalWorkspaceOpen) {
-          return null;
-        }
-        return (
-          <Suspense fallback={null}>
-            <ThreadTerminalDrawer
-              key={activeThread.id}
-              {...terminalDrawerProps}
-              presentationMode="drawer"
-              onTogglePresentationMode={expandTerminalWorkspace}
-            />
-          </Suspense>
-        );
-      })()}
 
       <ComposerSlashStatusDialog
         open={isSlashStatusDialogOpen}

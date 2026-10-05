@@ -3593,35 +3593,24 @@ export default function Sidebar() {
           threadId,
         );
 
-        // Reuse the active terminal when one is already open and idle so that
-        // repeatedly invoking "Open Path in Terminal" doesn't pile up tabs.
-        // Only spawn a fresh tab when there is no terminal yet, the active id
-        // is stale (no longer in the layout), or the active terminal is busy
-        // running a subprocess.
-        const candidateBaseTerminalId =
-          currentTerminalState.activeTerminalId ||
-          currentTerminalState.terminalIds[0] ||
-          DEFAULT_THREAD_TERMINAL_ID;
-        const baseTerminalAvailable =
-          currentTerminalState.terminalOpen &&
-          currentTerminalState.terminalIds.includes(candidateBaseTerminalId) &&
-          !currentTerminalState.runningTerminalIds.includes(candidateBaseTerminalId);
-        const shouldCreateNewTerminal = !baseTerminalAvailable;
-        const targetTerminalId = shouldCreateNewTerminal
-          ? `terminal-${randomUUID()}`
-          : candidateBaseTerminalId;
+        const targetTerminalId = currentTerminalState.activeTerminalId;
+        if (currentTerminalState.runningTerminalIds.includes(targetTerminalId)) {
+          toastManager.add({
+            type: "error",
+            title: "Terminal is busy",
+            description: "Stop its command before opening another path.",
+          });
+          return;
+        }
+        const shouldCreateNewTerminal = !currentTerminalState.terminalOpen;
 
         const previousTerminalOpen = currentTerminalState.terminalOpen;
         const previousPresentationMode = currentTerminalState.presentationMode;
         const previousActiveTerminalId = currentTerminalState.activeTerminalId;
 
-        terminalStore.setTerminalPresentationMode(threadId, "drawer");
+        terminalStore.setTerminalPresentationMode(threadId, "workspace");
         terminalStore.setTerminalOpen(threadId, true);
-        if (shouldCreateNewTerminal) {
-          terminalStore.newTerminal(threadId, targetTerminalId);
-        } else {
-          terminalStore.setActiveTerminal(threadId, targetTerminalId);
-        }
+        terminalStore.setActiveTerminal(threadId, targetTerminalId);
 
         const cdCommand = `cd ${quotePosixShellArgument(threadWorkspacePath)}\r`;
         try {
@@ -3643,11 +3632,11 @@ export default function Sidebar() {
             threadId,
             terminalId: targetTerminalId,
             data: cdCommand,
+            onlyIfIdle: true,
           });
         } catch (error) {
-          if (shouldCreateNewTerminal) {
-            terminalStore.closeTerminal(threadId, targetTerminalId);
-          }
+          // Open may already have created a PTY, even if navigation or its
+          // acknowledgement failed. Keep its identity available for reattach.
           terminalStore.setTerminalPresentationMode(threadId, previousPresentationMode);
           terminalStore.setTerminalOpen(threadId, previousTerminalOpen);
           if (previousActiveTerminalId) {
