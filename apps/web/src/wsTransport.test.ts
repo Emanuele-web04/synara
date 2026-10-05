@@ -1,3 +1,4 @@
+import { ServerBusyController } from "./serverBusyState";
 // FILE: wsTransport.test.ts
 // Purpose: Verifies browser WebSocket construction around the Effect RPC transport.
 // Layer: Web transport tests
@@ -21,6 +22,7 @@ import {
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
+  WS_SERVER_RUNTIME_STATUS_CAPABILITY,
   WsCompatibilityError,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
@@ -2358,3 +2360,81 @@ describe("WsTransport", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+it("tracks the real unary wait while keeping the heartbeat out of pending counts", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const { transport, internals } = makeBareTransport();
+  const serverBusy = new ServerBusyController();
+  const client = {
+    [WS_METHODS.serverGetRuntimeStatus]: () =>
+      Effect.succeed({
+        available: false,
+        sampleWindowMs: 0,
+        sampleCount: 0,
+        delayP50Ms: 0,
+        delayP99Ms: 0,
+        delayMaxMs: 0,
+        utilization: 0,
+        stallWindowCount: 0,
+        maxStallMs: 0,
+        lastStall: null,
+      }),
+    [WS_METHODS.gitStatus]: () => Effect.never,
+  };
+  Object.assign(internals, {
+    serverBusy,
+    state: "connecting",
+    stateListeners: new Set(),
+    compatibility: { ...NEGOTIATION_RESULT, capabilities: [WS_SERVER_RUNTIME_STATUS_CAPABILITY] },
+    getClient: async () => client,
+    getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+  });
+  (transport as unknown as { setState(state: string): void }).setState("open");
+  const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(serverBusy.getSnapshot()).toMatchObject({
+    reason: null,
+    pendingRequests: 1,
+    slowRequests: 1,
+  });
+  await vi.advanceTimersByTimeAsync(45000);
+  expect(await verdict).toMatchObject({
+    message: expect.stringContaining("Check the result before retrying"),
+  });
+  expect(serverBusy.getSnapshot()).toMatchObject({
+    reason: null,
+    pendingRequests: 0,
+    slowRequests: 0,
+  });
+  serverBusy.dispose();
+  vi.useRealTimers();
+});
+
+it.each([true, false])(
+  "uses busy liveness only when the optional capability is present (%s)",
+  async (supported) => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const { transport, internals } = makeBareTransport();
+    const serverBusy = new ServerBusyController();
+    Object.assign(internals, {
+      serverBusy,
+      state: "connecting",
+      stateListeners: new Set(),
+      compatibility: {
+        ...NEGOTIATION_RESULT,
+        capabilities: supported ? [WS_SERVER_RUNTIME_STATUS_CAPABILITY] : [],
+      },
+      getClient: async () => ({ [WS_METHODS.serverGetRuntimeStatus]: () => Effect.never }),
+      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+    });
+    (transport as unknown as { setState(state: string): void }).setState("open");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(serverBusy.getSnapshot().reason).toBe(supported ? "unresponsive" : null);
+    (transport as unknown as { setState(state: string): void }).setState("connecting");
+    expect(serverBusy.getSnapshot().reason).toBe(null);
+    serverBusy.dispose();
+    vi.useRealTimers();
+  },
+);

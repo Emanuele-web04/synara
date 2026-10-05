@@ -1,3 +1,5 @@
+import { ServerEventLoopMonitor, unavailableEventLoopStatus } from "./eventLoopMonitor";
+import type { ServerRuntimeStatus } from "@synara/contracts";
 import http from "node:http";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -132,7 +134,11 @@ const healthyOrchestrationEngine = {
 } as unknown as OrchestrationEngineShape;
 
 type TestedRoute =
-  | { readonly kind: "health"; readonly readiness: typeof readiness }
+  | {
+      readonly kind: "health";
+      readonly readiness: typeof readiness;
+      readonly eventLoop?: ServerRuntimeStatus;
+    }
   | { readonly kind: "shutdown"; readonly controller: ServerShutdownController }
   | {
       readonly kind: "emergency-stop";
@@ -189,6 +195,9 @@ async function withEffectServer(
               ...(route.kind === "emergency-stop" && route.computerService
                 ? [Layer.succeed(ComputerService, route.computerService)]
                 : []),
+              ...(route.kind === "health" && route.eventLoop
+                ? [Layer.succeed(ServerEventLoopMonitor, { getSnapshot: () => route.eventLoop! })]
+                : []),
               NodeHttpServer.layerHttpServices,
             ),
           ),
@@ -239,6 +248,7 @@ describe("production Effect HTTP routes", () => {
         startupReady: false,
         pushBusReady: true,
         projection: { state: "healthy", hasFailure: false },
+        eventLoop: { available: false, sampleCount: 0, lastStall: null },
       });
       // /health is unauthenticated: failure detail (which can embed raw event
       // payloads via pretty-printed decode causes) must never cross this route.
@@ -732,4 +742,42 @@ describe("production Effect HTTP routes", () => {
       await expect(response.text()).resolves.toBe("Missing id parameter");
     });
   });
+});
+
+it("exposes only aggregate stall metrics in unauthenticated health", async () => {
+  await withEffectServer(
+    makeConfig(),
+    {
+      kind: "health",
+      readiness,
+      eventLoop: {
+        ...unavailableEventLoopStatus,
+        available: true,
+        stallWindowCount: 2,
+        maxStallMs: 5200,
+        lastStall: { durationMs: 5200, ageMs: 1000 },
+      },
+    },
+    async (origin) => {
+      const response = await fetch(`${origin}/health`);
+      const body = (await response.json()) as { eventLoop: ServerRuntimeStatus };
+      expect(body.eventLoop).toMatchObject({
+        available: true,
+        stallWindowCount: 2,
+        lastStall: { durationMs: 5200, ageMs: 1000 },
+      });
+      expect(Object.keys(body.eventLoop).sort()).toEqual([
+        "available",
+        "delayMaxMs",
+        "delayP50Ms",
+        "delayP99Ms",
+        "lastStall",
+        "maxStallMs",
+        "sampleCount",
+        "sampleWindowMs",
+        "stallWindowCount",
+        "utilization",
+      ]);
+    },
+  );
 });

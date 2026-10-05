@@ -1,3 +1,4 @@
+import { ServerBusyIndicator } from "../components/ServerBusyIndicator";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -310,6 +311,7 @@ function RootRouteView() {
   const desktopChrome = (
     <>
       <RunningChatsQuitCoordinator />
+      <ServerBusyIndicator />
       {desktopWindowControls}
     </>
   );

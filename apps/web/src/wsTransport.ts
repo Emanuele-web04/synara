@@ -1,3 +1,4 @@
+import { ServerBusyController, publishServerBusySnapshot } from "./serverBusyState";
 // FILE: wsTransport.ts
 // Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
 // Layer: Web transport
@@ -22,6 +23,8 @@ import {
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
+  WS_SERVER_RUNTIME_STATUS_CAPABILITY,
+  type ServerRuntimeStatus,
   type ClientOrchestrationCommand,
   type OrchestrationSettleTurnDispatchResult,
   DEVICE_WS_CHANNELS,
@@ -779,6 +782,7 @@ export function shouldKeepServerLifecycleStream(activeChannels: ReadonlySet<stri
 }
 
 export class WsTransport {
+  private readonly serverBusy = new ServerBusyController({ onChange: publishServerBusySnapshot });
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
   private readonly stateListeners = new Set<(state: WsTransportState) => void>();
@@ -836,6 +840,8 @@ export class WsTransport {
 
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
+    if (typeof document !== "undefined")
+      document.addEventListener("visibilitychange", this.serverBusy.visibilityChanged);
     this.clientPromise = this.createSession().clientPromise;
     void this.clientPromise.catch((error) => {
       if (this.disposed || isTerminalCompatibilityFailure(error)) return;
@@ -852,16 +858,18 @@ export class WsTransport {
     params?: unknown,
     options?: WsRequestOptions,
   ): Promise<T> {
+    const finish = this.serverBusy?.trackRequest(method);
     const activity = rendererRpcActivity(method, params);
-    if (!activity) return this.requestInternal<T>(method, params, options);
-    recordRendererActivity(activity, "started");
+    if (activity) recordRendererActivity(activity, "started");
     try {
       const result = await this.requestInternal<T>(method, params, options);
-      recordRendererActivity(activity, "succeeded");
+      if (activity) recordRendererActivity(activity, "succeeded");
       return result;
     } catch (error) {
-      recordRendererActivity(activity, "failed");
+      if (activity) recordRendererActivity(activity, "failed");
       throw error;
+    } finally {
+      finish?.();
     }
   }
 
@@ -992,7 +1000,7 @@ export class WsTransport {
       let failure = error;
       if (abortScope.didTimeout()) {
         failure = new WsTransportRequestInterruptedError({
-          message: `WebSocket RPC ${method} timed out after ${requestOptions.timeoutMs}ms.`,
+          message: `WebSocket RPC ${method} timed out after ${requestOptions.timeoutMs}ms. ${this.serverBusy?.getSnapshot().reason === "unresponsive" ? "Synara server is not responding. " : "The server did not finish this request in time. "}Check the result before retrying; it may have been applied.`,
           code: "WS_REQUEST_TIMEOUT",
           method,
           ...(requestOptions.timeoutMs !== undefined && requestOptions.timeoutMs !== null
@@ -1211,6 +1219,9 @@ export class WsTransport {
     // than resolve later and build a runtime this teardown will not see.
     this.lifetime.abort(new Error("Transport disposed"));
     this.setState("disposed");
+    this.serverBusy?.dispose();
+    if (typeof document !== "undefined" && this.serverBusy)
+      document.removeEventListener("visibilitychange", this.serverBusy.visibilityChanged);
     this.resetAllStreamCapacityRetries();
     this.resetAllStreamCompletionRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
@@ -1442,6 +1453,19 @@ export class WsTransport {
   private setState(state: WsTransportState): void {
     if (this.state === state) return;
     this.state = state;
+    this.serverBusy?.stopHeartbeat();
+    if (
+      state === "open" &&
+      this.compatibility?.capabilities.includes(WS_SERVER_RUNTIME_STATUS_CAPABILITY)
+    ) {
+      this.serverBusy?.startHeartbeat((signal) =>
+        this.request<ServerRuntimeStatus>(
+          WS_METHODS.serverGetRuntimeStatus,
+          {},
+          { signal, timeoutMs: null },
+        ),
+      );
+    }
     for (const listener of this.stateListeners) {
       try {
         listener(state);
