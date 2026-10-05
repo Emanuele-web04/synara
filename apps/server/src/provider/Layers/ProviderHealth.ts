@@ -720,7 +720,19 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     };
   }
   if (result.code === 0) {
-    return { status: "ready", authStatus: "authenticated" };
+    // Current Codex CLI prints login status as plain text (on stderr), not JSON.
+    // Only explicit login methods establish voice capability; unknown successful
+    // output remains authenticated without advertising ChatGPT-only dictation.
+    const voiceTranscriptionAvailable = /^logged in using chatgpt\s*$/m.test(lowerOutput)
+      ? true
+      : /^logged in using an api key\b/m.test(lowerOutput)
+        ? false
+        : undefined;
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(voiceTranscriptionAvailable !== undefined ? { voiceTranscriptionAvailable } : {}),
+    };
   }
 
   const detail = detailFromResult(result);
