@@ -2,6 +2,194 @@
 
 ## Unreleased
 
+## [1.0.0] — 2026-10-05
+
+**Synara 1.0.0 Stable brings the new workspace rail, multi-account providers, same-chat handoffs, Inbox, Auto-fix CI and Oh My Pi to Stable, together with a redesigned review workflow and one terminal pane per chat.**
+
+This release inventory covers **496 commits**, including merges, from **v0.9.2** through **84daea248**. It incorporates the Stable-compatible changes introduced in **v1.0.0-beta.1** and all subsequent fixes through the terminal workspace merge. **Hubs and the Tasks to-do list remain Beta-only.** Stable keeps Kanban and does not send Beta diagnostics. Stable and Beta retain separate apps, data homes and update feeds; Beta data is not copied back to Stable.
+
+Computer Use, Kanban, remote connections, project import, split panes, dictation and separate-chat provider handoffs existed before this release; the notes below describe their improvements. Oh My Pi was previously available in Beta and is new to Stable.
+
+### Added
+
+#### Oh My Pi comes to Stable
+
+- Use Oh My Pi alongside the other supported coding providers in the Stable app.
+- Configure the OMP executable and account, sign in from provider settings, and choose models and thinking levels advertised by its runtime.
+
+#### Inbox: today’s work in one place
+
+- See running work, chats needing attention, review requests and a daily activity recap together in Stable.
+- Recaps use recorded local activity and provider-attributed usage; missing token data is not invented. The separate Tasks to-do list and its Inbox task cards remain Beta-only.
+
+#### Multiple accounts, clearly separated
+
+- Name and configure several accounts for the same provider, then choose their models from separate account tabs.
+- Provider account identity follows supported sessions, favorites, imports, forks and handoffs. Account-specific executable paths and environments keep the selected runtime and credentials together.
+
+#### Sign in from provider settings
+
+- Open the provider’s native sign-in flow in a managed terminal using the selected account’s environment.
+- Check authentication before starting work. Pi and Oh My Pi offer their native login choices; external OpenCode servers must be authenticated on that server. Closing sign-in stops its terminal; credentials already saved by the provider remain.
+
+#### Usage for each account
+
+- Inspect usage for the active provider’s enabled accounts separately, and choose which provider rings appear in the rail.
+- Expandable details keep the compact view readable. Codex credits are shown as a count, not a dollar amount; missing account telemetry is not replaced with another account’s figures.
+
+#### Change providers in the same conversation
+
+- Use the model picker to hand work to another supported provider while keeping the same chat and workspace context.
+- A divider marks the handoff. Available targets respect account availability, and a failed transition is not reported as successful. Separate-thread handoff remains available.
+
+#### A new workspace rail
+
+- Reach chats, projects and tools from a compact rail with independently customizable destinations.
+- Show, hide and reorder rail items; Customize also works on narrow screens. The update action shows download progress, and project icons make recent work easier to recognize.
+
+#### Keep open chats within reach
+
+- Move between open-chat tabs with provider icons, running indicators, context menus and keyboard navigation.
+- Tabs remain scrollable while chats stream. Unsent new-chat drafts stay out of the strip. Use Cmd+Ctrl+Left/Right on macOS, or Ctrl+PageUp/PageDown on other platforms outside terminal focus. Small vertical trackpad movements no longer reorder tabs.
+
+#### Make the workspace yours
+
+- Choose full-window or sidebar-only translucency, adjust blur and opacity, and customize project names, icons and colors.
+- Supported desktop materials extend through editors, panes, menus and dialogs. The new appearance default uses full-window glass, blur 64 and 90% opacity. Native glass availability depends on platform.
+
+#### Auto-fix CI
+
+- Enable Auto-fix CI on an open pull request to ask its chat to address failing checks.
+- This opt-in feature waits for active work, approvals and questions, respects chat permissions, and limits retries. Uncertain dispatch or lack of progress pauses the watcher with an explanation. It does not automatically merge.
+
+#### Snooze a chat until you need it
+
+- Hide a chat from ordinary activity until a preset or custom reminder time, then bring it back automatically.
+- Choose 30 minutes, one hour, two hours, tomorrow at 9am or a custom time. Reminders persist across restart; Return now cancels the snooze. Running work continues. Snoozed chats are excluded from inactivity cleanup and are marked seen when opened after returning.
+
+#### Let the message trail follow sound
+
+- On supported macOS desktops, animate the trail from system audio, a selected microphone, or both.
+- The opt-in feature uses loudness levels rather than recording audio. System-audio levels require macOS 14.2+; microphone access requires permission. Choose a built-in microphone while using Bluetooth headphones; an unavailable selected device does not silently switch to another input.
+
+#### A tour of what changed
+
+- A feature tour introduces the new workspace, provider accounts and review workflow.
+- Synara 1.0.0 is a Stable release. Hubs and the Tasks to-do list remain exclusive to Synara Beta, with separate data and update feeds. Stable does not send Beta diagnostics.
+
+#### Choose how Git changes are written
+
+- Use repository conventions, Conventional Commits or your own instructions for generated commit messages and pull requests.
+- Set Source control writing style in Settings → Models & writing. The preference applies across projects and retains your custom instructions when switching styles.
+
+### Changed
+
+#### One terminal pane per chat
+
+- Use a single terminal in the main workspace or right dock, with no nested terminal tabs, groups, splits or bottom drawer.
+- Opening it again focuses the existing session. Project actions reuse an idle terminal; busy or unverifiable sessions are protected. Upgrading keeps the last active session and retires old nested sessions only after an idle check. Failed closes leave the terminal usable.
+
+#### Code review, issues and agents together
+
+- Browse pull requests and issues in a redesigned list, inspect details, and discuss the item in a side chat.
+- Remember filters and sorting, include merged PRs, preview images fullscreen, and send an item to an agent in the correct project and environment. GitHub links have configurable destinations and their own context menu.
+
+#### A more actionable Kanban board
+
+- Choose an Attention board with Draft, In Progress, Awaiting you and Done columns, or retain Classic.
+- See failed, stuck, approval, input and review attention; reorder drafts and send work as a persistent goal. Agents gain eight scoped board tools for durable chat cards. These tools do not expose unsent local drafts or manipulate Tasks to-do records.
+
+#### Send work as a goal
+
+- Start a Kanban task as a persistent goal or set a goal on an existing chat card.
+- Long goals are delivered through managed file references instead of being silently truncated. Shared send ownership preserves account choice, attachments and edits when work is dispatched.
+
+#### Smoother split-pane work
+
+- Resize panes continuously, close each pane directly, and spot the focused composer at a glance.
+- Chats stay mounted across single/split transitions and rearrangements, preserving the split tree, focus and conversation state. Closing a split keeps the surviving chat; closing the last open tab returns to the unsent draft.
+
+#### Side chats that keep their context
+
+- Side chats inherit the primary workspace, and GitHub discussions stay discoverable across checkouts.
+- Choose an inactivity expiry of one hour, 24 hours or never. Idle expired side chats become read-only and release their provider session. Cmd+Option+S toggles Side chat on macOS.
+
+#### Edit shortcuts individually
+
+- Record and edit shortcuts in a searchable command list with conflict handling.
+- Shift+Tab cycles the selected model’s supported reasoning effort. Thread menus group related handoff, fork and copy actions into compact submenus.
+
+#### Dictation that fits the conversation
+
+- Use Enter to stop/transcribe or stop/send, and dictate while an agent is working.
+- Capture waits for real microphone audio before proceeding. ChatGPT login detection accepts Codex plain-text status; invalid transcription responses produce a useful error.
+
+#### Clearer long-running conversations
+
+- Keep background subagent replies visible and wait for all workers before showing completion.
+- Choose whether finished turns fold and whether sending anchors the new message at the top. Wide code blocks scroll horizontally without widening the transcript. Full error, approval, progress and warning details remain available. Clearer thinking and startup icons distinguish activity states. Message navigation stays clear of the text, and batched updates no longer leave overlapping rows.
+
+#### More useful Claude progress
+
+- See provider-supplied reasoning, tool summaries and execution status in the transcript.
+- Native compaction waits for initialization; prompt-cache warnings avoid false expiry reports. Account-specific CLI paths are retained when Artifacts is enabled. Cache-recovery answers remain pending through slow compaction, with visible delivery status and retry after failure.
+
+#### Current models without disruptive refreshes
+
+- Model catalogs refresh on demand for the account you are viewing while keeping usable choices visible.
+- Interactive requests take priority, actionable failures offer retry, Claude catalog changes follow CLI updates, and OpenCode custom-provider models remain selectable.
+
+#### Better import recovery and history browsing
+
+- Import conversations from supported Codex and Claude accounts with clearer diagnostics, bounded history pages and recovery for interrupted work.
+- Original provider context remains in independent session copies. Earlier text loads on demand; historical tools, reasoning and attachments are not reconstructed as live messages. New ordinary chats skip imported-history requests.
+
+#### Less repeated rendering and fetching
+
+- Streaming and typing avoid repeated shell, header and composer work; GitHub reads share a queue and rate-limit pause.
+- These are targeted changes, not a universal speed or battery-life claim. PR preparation retains the intended environment and unrelated worktrees; Git failures identify the action that failed.
+
+#### Large Git actions survive reconnects
+
+- Keep long pushes and other Git actions running while Synara reconnects, then resume their progress without launching them twice.
+- Git transfer progress remains visible. Recovery requires the same running server; if the result is unavailable after a restart, Synara asks you to check the repository before retrying.
+
+### Fixed
+
+#### Recover message delivery after disconnects
+
+- Synara checks whether an interrupted send was accepted before deciding what happens next.
+- Accepted commands are not blindly resent; rejected commands restore the draft. Delivery settlement requires a compatible server. HTTP fallback failures now settle and surface useful errors. Blocked provider delivery now includes the reason when a chat is quarantined, and its unblock action works reliably.
+
+#### More dependable provider sessions
+
+- Recover Codex gateway sessions after watchdog aborts, support current Codex rewind, and retain OpenCode background work.
+- Cursor and Droid avoid repeated OAuth prompts, cached Grok login is recognized, and desktop ACP tool proxies start in the correct runtime mode.
+
+#### Small fixes throughout the workspace
+
+- Keep unread chats unread across reloads, preserve drafts while browsing history, and remember Markdown preview per file.
+- Browser tabs support middle-click close, address suggestions stay visible and navigation preserves composer focus. Unicode image downloads, deleted-file search results, profile dates, notification clicks and app-icon persistence are corrected. Sidebar hover flicker, native sidebar-toggle hit testing and overflowing side-panel content are fixed.
+
+#### Quieter Windows sessions
+
+- Provider updates handle Windows PATH and stdin correctly, and process cleanup avoids flashing command windows.
+- Capture fallback produces valid JSON. Release installers must pass the new Defender scan as well as packaging, provenance and startup checks; Windows installers remain unsigned under the version-scoped release policy.
+
+#### Clearer close and quit confirmation
+
+- Confirm closing the desktop window or quitting Synara, with running work shown before you leave.
+- Startup also recovers stale database lock directories that contain only Finder metadata; a live database owner is still protected.
+
+### Verification
+
+- Passed locally with Node 24 and Bun 1.4.2: `bun run fmt:check`, `bun run lint` (842 warnings, zero errors), `bun run typecheck`, `bun run release:smoke`, `bun run build`, and the full `bun run test` suite.
+- Full suite: 15,215 tests passed and 37 skipped across six workspace packages; no failing tests or targeted reruns were needed.
+- Terminal browser verification: 5 tests passed in `ThreadTerminalPanel.browser.tsx` and `useChatProjectScripts.browser.tsx`.
+- Passed `bun run windows-runtime:check` and `bun run migrations:check`.
+- Public website: mirrored release notes; audited the full release range; updated Stable/Beta availability, terminal lifecycle and shortcuts, Git writing and reconnect recovery, Claude recovery, navigation and source evidence. Passed `npm run test:docs`, `npm run lint`, and `npm run build`.
+- Native packaging, macOS signing/notarization, Windows Defender scanning, startup smoke and public updater assets are checked by the tag publication workflow. Those results were not yet available when this release commit was prepared. Windows publication uses the unsigned exception scoped only to 1.0.0. Local tests do not demonstrate live-provider success or installed-app upgrade behavior.
+
 ## [1.0.0-beta.1] — 2026-10-04
 
 **Synara 1.0.0 starts in Beta: a new workspace rail, multi-account providers, Hubs, Tasks, Inbox, same-chat handoffs and a redesigned review workflow.** This is a Beta-only release. Stable remains **0.9.2**; its app, data directory and update feed are unchanged.
