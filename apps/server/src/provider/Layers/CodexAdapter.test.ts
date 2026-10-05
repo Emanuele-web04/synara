@@ -1579,6 +1579,37 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
+      assert.equal(firstEvent.value.payload.willRetry, true);
+    }),
+  );
+
+  it.effect("preserves overload identity on definitive Codex errors and failed completions", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      for (const method of ["error", "turn/completed"]) {
+        const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+        const error = { message: "Temporarily unavailable", codexErrorInfo: "serverOverloaded" };
+        lifecycleManager.emit("event", {
+          id: asEventId(`evt-overloaded-${method}`),
+          kind: "notification",
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          createdAt: new Date().toISOString(),
+          method,
+          payload:
+            method === "error"
+              ? { error, willRetry: false }
+              : { turn: { id: "turn-1", status: "failed", error } },
+        } satisfies ProviderEvent);
+        const event = yield* Fiber.join(eventFiber);
+        assert.equal(event._tag, "Some");
+        if (event._tag !== "Some") continue;
+        assert.equal(event.value.type, method === "error" ? "runtime.error" : "turn.completed");
+        if (event.value.type === "runtime.error" || event.value.type === "turn.completed") {
+          assert.equal(event.value.payload.errorCode, "server_overloaded");
+        }
+      }
     }),
   );
 

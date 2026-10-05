@@ -60,6 +60,13 @@ is cancelled, the task and its prompt remain available for retry.
   **All tasks** opens the complete backlog in Beta; Stable keeps these to-do controls hidden.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
+  A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
+  including when no final assistant reply arrives. The notice survives reopening and session
+  recovery; a ready connection does not mean the task finished or is being retried. An explicitly
+  announced provider retry remains active and shows **Provider retrying**. **Continue task** sends
+  a new instruction in the same conversation to verify prior operations and resume remaining work;
+  **Change model** opens the existing composer picker before sending. Earlier failure notices stay
+  in the transcript after later turns. User cancellation keeps its interrupted meaning.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared

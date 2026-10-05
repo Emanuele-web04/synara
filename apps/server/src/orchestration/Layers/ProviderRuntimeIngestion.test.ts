@@ -25,7 +25,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -664,6 +664,39 @@ describe("ProviderRuntimeIngestion", () => {
       } finally {
         await manager.dispose();
       }
+    },
+  );
+
+  it.each(["failed", "completed"] as const)(
+    "does not assign an ambiguous turnless %s completion to the active turn",
+    async (state) => {
+      const harness = await createHarness();
+      for (const turnId of ["overlapping-one", "overlapping-two"]) {
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId(`${turnId}-started`),
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId(turnId),
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+      }
+      const eventId = asEventId("ambiguous-completion");
+      harness.emit({
+        type: "turn.completed",
+        eventId,
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        payload: { state },
+      });
+      await harness.drain();
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+      expect(thread?.activities.find((activity) => activity.id === eventId)?.turnId).toBeNull();
+      expect(thread?.latestTurn?.state).not.toBe("error");
+      expect(thread?.session?.status).toBe("running");
     },
   );
 
@@ -5944,6 +5977,69 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("persists a turn-scoped failure through ready recovery and projected detail reopening", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("failed-turn");
+    const now = new Date().toISOString();
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("failure-start"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt: now,
+      payload: {},
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("failure-runtime"),
+      provider: "codex",
+      threadId,
+      createdAt: now,
+      payload: { message: "Selected model is at capacity.", class: "provider_error" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("failure-completed"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt: now,
+      payload: { state: "failed", errorMessage: "Selected model is at capacity." },
+    });
+    await waitForThread(harness.engine, (thread) =>
+      thread.activities.some((activity) => activity.id === "failure-completed"),
+    );
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("failure-ready"),
+      provider: "codex",
+      threadId,
+      createdAt: now,
+      payload: { state: "ready" },
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.status === "ready");
+    await vi.waitFor(async () => {
+      const reopened = await harness.readProjectedThread(threadId);
+      expect(reopened?.session).toMatchObject({ status: "ready", lastError: null });
+      expect(reopened?.latestTurn?.state).toBe("error");
+      expect(
+        reopened?.activities.find((activity) => activity.id === "failure-runtime"),
+      ).toMatchObject({
+        turnId,
+        payload: { message: "Selected model is at capacity." },
+      });
+      expect(
+        reopened?.activities.find((activity) => activity.id === "failure-completed"),
+      ).toMatchObject({
+        turnId,
+        payload: { state: "failed", errorMessage: "Selected model is at capacity." },
+      });
+    });
+  });
+
   it("keeps the session running when a runtime.warning arrives during an active turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -5986,6 +6082,27 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("running");
     expect(thread.session?.activeTurnId).toBe("turn-warning");
     expect(thread.session?.lastError).toBeNull();
+    expect(
+      thread.activities.find((activity) => activity.id === "evt-warning-runtime")?.payload,
+    ).toMatchObject({ willRetry: true });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-warning-success"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-warning"),
+      payload: { state: "completed" },
+    });
+    const recovered = await waitForThread(
+      harness.engine,
+      (entry) => entry.latestTurn?.state === "completed",
+    );
+    expect(recovered.session).toMatchObject({
+      status: "ready",
+      activeTurnId: null,
+      lastError: null,
+    });
   });
 
   it("maps session/thread lifecycle and item.started into session/activity projections", async () => {

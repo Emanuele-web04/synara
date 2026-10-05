@@ -1,16 +1,15 @@
 // FILE: ThreadErrorBanner.tsx
-// Purpose: Shows dismissible thread-level runtime errors above the transcript.
+// Purpose: Presents runtime errors and persistent turn failures with recovery actions.
 // Layer: Chat status presentation
 // Exports: ThreadErrorBanner
 //
-// The banner renders in flow at the top of the transcript pane so it can never
-// cover message content; the transcript shrinks to make room for it. This row
-// is the home for the visible thread's live error; threads off screen still
-// toast via useThreadErrorToast.
+// Live session errors sit above the transcript; durable turn failures reuse
+// the same banner inside the timeline. Threads off screen still toast live
+// session errors via useThreadErrorToast.
 
 import { isProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
 
-import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
@@ -18,12 +17,20 @@ import { cn } from "~/lib/utils";
 
 export function ThreadErrorBanner({
   error,
+  title,
+  onContinue,
+  onChangeModel,
+  recoveryDisabled,
   onDismiss,
   onUnblock,
   unblocking,
   className,
 }: {
   error: string | null;
+  title?: string;
+  onContinue?: () => void;
+  onChangeModel?: () => void;
+  recoveryDisabled?: boolean;
   onDismiss?: () => void;
   /** Recovery action offered only when the error is a provider-delivery quarantine. */
   onUnblock?: () => void;
@@ -35,8 +42,31 @@ export function ThreadErrorBanner({
   return (
     <Alert variant="error" className={cn("w-full max-w-[36rem] shadow-sm", className)}>
       <CircleAlertIcon />
-      <AlertDescription className="line-clamp-3" title={error}>
+      {title ? <AlertTitle>{title}</AlertTitle> : null}
+      <AlertDescription className={title ? undefined : "line-clamp-3"} title={error}>
         {error}
+        {onContinue ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="xs"
+              variant="destructive-outline"
+              disabled={recoveryDisabled}
+              onClick={onContinue}
+            >
+              Continue task
+            </Button>
+            {onChangeModel ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={recoveryDisabled}
+                onClick={onChangeModel}
+              >
+                Change model
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </AlertDescription>
       {canUnblock || onDismiss ? (
         <AlertAction className="items-center">

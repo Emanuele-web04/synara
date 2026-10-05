@@ -2328,6 +2328,108 @@ describe("ChatView transcript geometry (full app)", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps persistent turn failure visible after reopening and admits one manual continuation", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("failure-user"),
+      targetText: "Review the requested pull requests",
+    });
+    const turnId = TurnId.makeUnsafe("failed-turn");
+    const cause = "Selected model is at capacity. Please try a different model.";
+    const snapshot: OrchestrationReadModel = {
+      ...base,
+      threads: [
+        {
+          ...base.threads[0]!,
+          messages: [
+            createUserMessage({
+              id: MessageId.makeUnsafe("failure-user"),
+              text: "Review the requested pull requests",
+              offsetSeconds: 0,
+            }),
+            {
+              ...createAssistantMessage({
+                id: MessageId.makeUnsafe("progress"),
+                text: "I am checking the pull requests and their conflicts.",
+                offsetSeconds: 3,
+              }),
+              turnId,
+            },
+          ],
+          latestTurn: {
+            turnId,
+            state: "error",
+            requestedAt: NOW_ISO,
+            startedAt: NOW_ISO,
+            completedAt: isoAt(10),
+            assistantMessageId: null,
+          },
+          activities: [
+            {
+              id: EventId.makeUnsafe("fatal-error"),
+              turnId,
+              createdAt: isoAt(10),
+              sequence: 1,
+              kind: "runtime.error",
+              tone: "error",
+              summary: "Provider runtime error",
+              payload: { message: cause, class: "provider_error" },
+            },
+            {
+              id: EventId.makeUnsafe("failed-completed"),
+              turnId,
+              createdAt: isoAt(10),
+              sequence: 2,
+              kind: "turn.completed",
+              tone: "error",
+              summary: "Turn failed",
+              payload: { state: "failed", errorMessage: cause },
+            },
+          ],
+        },
+      ],
+    };
+    const first = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+    await first.cleanup();
+    const reopened = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    let releaseSend!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
+    try {
+      await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+      expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
+      await page.getByRole("button", { name: "Change model", exact: true }).click();
+      await expect.element(page.getByLabelText("Search models", { exact: true })).toBeVisible();
+      page
+        .getByLabelText("Search models", { exact: true })
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await page.getByRole("button", { name: "Continue task", exact: true }).click();
+      // Exercise a second click before the first dispatch settles.
+      document.querySelector<HTMLButtonElement>("[data-turn-failure] button")?.click();
+      await vi.waitFor(() => {
+        const starts = wsRequests.filter(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            "command" in request &&
+            (request.command as { type?: string }).type === "thread.turn.start",
+        );
+        expect(starts).toHaveLength(1);
+        expect(starts[0]?.command).toMatchObject({
+          threadId: THREAD_ID,
+          message: { text: expect.stringContaining("avoid repeating") },
+        });
+      });
+      expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
+    } finally {
+      releaseSend();
+      restoreApi();
+      await reopened.cleanup();
+    }
+  });
+
   it.each([
     { activityViewEnabled: false, customShortcut: false },
     { activityViewEnabled: true, customShortcut: false },

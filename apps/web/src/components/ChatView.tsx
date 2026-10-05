@@ -4417,6 +4417,7 @@ export default function ChatView({
 
   const {
     onSubmitPlanFollowUp,
+    onContinueFailedTurn,
     onEditUserMessage,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
@@ -6503,6 +6504,18 @@ export default function ChatView({
                     conversationOnly={isCoordinatorConversation}
                     hubWorkItemsByMessageId={hubWorkItemsByMessageId}
                     threadError={activeThread?.error ?? null}
+                    recoverableTurnId={
+                      activeLatestTurnState === "error" ? activeLatestTurnId : null
+                    }
+                    turnRecoveryDisabled={
+                      isSendBusy ||
+                      isConnecting ||
+                      isWorking ||
+                      pendingApprovals.length > 0 ||
+                      pendingUserInputs.length > 0
+                    }
+                    onContinueFailedTurn={onContinueFailedTurn}
+                    onChangeRecoveryModel={() => handleModelPickerOpenChange(true)}
                     unblockingThread={unblockingActiveThread}
                     onDismissThreadError={dismissActiveThreadError}
                     onUnblockThread={unblockThread}

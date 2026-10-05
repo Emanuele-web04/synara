@@ -80,6 +80,7 @@ import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
 import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
+import { ThreadErrorBanner } from "./ThreadErrorBanner";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -468,6 +469,10 @@ interface MessagesTimelineProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   /** Coordinator/bot chats hide tool rows and keep a text conversation. */
   conversationOnly?: boolean;
+  recoverableTurnId?: TurnId | null;
+  turnRecoveryDisabled?: boolean;
+  onContinueFailedTurn?: (turnId: TurnId) => Promise<boolean>;
+  onChangeRecoveryModel?: () => void;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
   onToggleWorkGroup?: (groupId: string) => void;
@@ -567,6 +572,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hubWorkItemsByMessageId,
   turnDiffSummaryByAssistantMessageId,
   conversationOnly: conversationOnlyProp,
+  recoverableTurnId,
+  turnRecoveryDisabled,
+  onContinueFailedTurn,
+  onChangeRecoveryModel,
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
@@ -1408,6 +1417,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
+        row.groupedEntries.map((entry) =>
+          entry.turnFailure ? (
+            <div key={entry.id} data-turn-failure={entry.turnId ?? entry.id}>
+              <ThreadErrorBanner
+                title="Task interrupted"
+                error={entry.turnFailure.message}
+                {...(entry.turnId && entry.turnId === recoverableTurnId && onContinueFailedTurn
+                  ? {
+                      onContinue: () => {
+                        void onContinueFailedTurn(entry.turnId!);
+                      },
+                      ...(onChangeRecoveryModel ? { onChangeModel: onChangeRecoveryModel } : {}),
+                    }
+                  : {})}
+                recoveryDisabled={turnRecoveryDisabled ?? false}
+              />
+            </div>
+          ) : null,
+        )}
+      {row.kind === "work" &&
         row.groupedEntries.map((workEntry) =>
           workEntry.providerHandoff ? (
             <ProviderHandoffDivider
@@ -1424,7 +1453,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // The provider's actual Synara MCP tool rows remain visible here.
           // Handoff boundaries render as the divider above, not as work rows.
           const groupedEntries = row.groupedEntries.filter(
-            (workEntry) => !workEntry.synaraThreadCreation && !workEntry.providerHandoff,
+            (workEntry) =>
+              !workEntry.synaraThreadCreation &&
+              !workEntry.providerHandoff &&
+              !workEntry.turnFailure,
           );
           if (groupedEntries.length === 0) {
             return null;
