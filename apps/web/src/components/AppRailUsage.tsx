@@ -191,7 +191,10 @@ function AppRailUsageRing({
 /** Sits above Help: a ring per provider, with the windows chosen in Settings → Usage. */
 export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () => void }) {
   const { settings } = useAppSettings();
-  const providers = resolveRailUsageProviders(settings.railUsageProviders);
+  const providers = resolveRailUsageProviders(
+    settings.railUsageProviders,
+    settings.disabledProviders,
+  );
   const usageQuery = useQuery(
     serverAllProviderUsageQueryOptions({ enabled: providers.length > 0 }),
   );

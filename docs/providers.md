@@ -83,6 +83,17 @@ provider feature is supported through Synara.
 5. **Start a small test task.** Use a harmless objective in a test repository before relying on a
    newly configured provider for important work.
 
+## Enable or disable providers
+
+In **Settings → Providers → Enabled providers**, turn a provider off to hide it
+from provider and model pickers, ordering, CLI tools, custom model settings, usage
+options, and the plugin library. Its accounts, saved configuration, custom models,
+starred models, and existing threads are preserved; running turns are not interrupted.
+
+Expand **Disabled providers** in the same section to turn it back on. Its saved
+preferences return, including its position and whether it was hidden from the
+provider picker. Enabling a provider does not install its CLI or sign it in.
+
 ## Models and effort options
 
 Providers expose different selection models:

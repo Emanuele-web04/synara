@@ -1098,6 +1098,26 @@ describe("mergeProviderStartOptions", () => {
 });
 
 describe("getProviderInstanceOptions", () => {
+  it("disables every account of a globally disabled provider and preserves account switches", () => {
+    const settings = {
+      ...AppSettingsSchema.makeUnsafe({}),
+      disabledProviders: ["codex" as const],
+      codexAccounts: [{ id: "work", label: "Work", homePath: "", shadowHomePath: "" }],
+      providerInstances: {
+        codex_personal: { driver: "codex", enabled: true },
+        codex_off: { driver: "codex", enabled: false },
+      },
+    };
+    const options = getProviderInstanceOptions(settings);
+    expect(
+      options.filter((option) => option.provider === "codex").map((option) => option.enabled),
+    ).toEqual([false, false, false, false]);
+    expect(options.find((option) => option.provider === "claudeAgent")?.enabled).toBe(true);
+    const restored = getProviderInstanceOptions({ ...settings, disabledProviders: [] });
+    expect(restored.find((option) => option.instanceId === "codex_personal")?.enabled).toBe(true);
+    expect(restored.find((option) => option.instanceId === "codex_off")?.enabled).toBe(false);
+  });
+
   it("keeps derived Codex account instance ids schema-valid for long account ids", () => {
     const accountId = `a${"b".repeat(63)}`;
     const options = getProviderInstanceOptions({

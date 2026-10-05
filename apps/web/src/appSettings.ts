@@ -982,7 +982,8 @@ export function getProviderInstanceOptions(
   settings: Pick<
     AppSettings,
     "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
-  >,
+  > &
+    Partial<Pick<AppSettings, "disabledProviders">>,
 ): ProviderInstanceOption[] {
   const optionsById = new Map<ProviderInstanceId, ProviderInstanceOption>();
 
@@ -1040,18 +1041,23 @@ export function getProviderInstanceOptions(
     });
   }
 
-  return Array.from(optionsById.values()).toSorted((left, right) => {
-    const providerDelta =
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
-    if (providerDelta !== 0) {
-      return providerDelta;
-    }
-    if (left.isDefault !== right.isDefault) {
-      return left.isDefault ? -1 : 1;
-    }
-    return left.label.localeCompare(right.label);
-  });
+  return Array.from(optionsById.values())
+    .map((option) => ({
+      ...option,
+      enabled: option.enabled && !settings.disabledProviders?.includes(option.provider),
+    }))
+    .toSorted((left, right) => {
+      const providerDelta =
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+      if (providerDelta !== 0) {
+        return providerDelta;
+      }
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    });
 }
 
 export function getUnsupportedProviderInstanceOptions(

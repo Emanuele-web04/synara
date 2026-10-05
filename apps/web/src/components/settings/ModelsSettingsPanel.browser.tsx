@@ -83,3 +83,42 @@ it("supports keyboard selection and keeps the custom editor within a narrow view
   expect(field.element().getBoundingClientRect().right).toBeLessThanOrEqual(360);
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(360);
 });
+
+it("hides disabled providers and their saved models without losing configuration", async () => {
+  const settings: AppSettings = {
+    ...defaults,
+    customCodexModels: ["private-codex-model"],
+    customClaudeModels: ["private-claude-model"],
+    disabledProviders: ["codex"],
+  };
+  const props = { defaults, settings, updateSettings: vi.fn(), resetEpoch: 0, active: true };
+  const screen = await render(<ModelsSettingsPanel {...props} />);
+  expect(document.body.textContent).not.toContain("private-codex-model");
+  expect(document.body.textContent).toContain("private-claude-model");
+  const picker = page.getByRole("combobox", { name: "Custom model provider", exact: true });
+  expect(picker.element().textContent).not.toContain("Codex");
+  await picker.click();
+  expect(page.getByRole("option", { name: "Codex", exact: true }).elements()).toHaveLength(0);
+  await userEvent.keyboard("{Escape}");
+  await screen.rerender(
+    <ModelsSettingsPanel {...props} settings={{ ...settings, disabledProviders: [] }} />,
+  );
+  expect(document.body.textContent).toContain("private-codex-model");
+  expect(picker.element().textContent).toContain("Codex");
+});
+
+it("removes the custom model editor when all its providers are disabled", async () => {
+  await render(
+    <ModelsSettingsPanel
+      defaults={defaults}
+      settings={{ ...defaults, disabledProviders: [...defaults.providerOrder] }}
+      updateSettings={vi.fn()}
+      resetEpoch={0}
+      active
+    />,
+  );
+  expect(
+    page.getByRole("combobox", { name: "Custom model provider", exact: true }).elements(),
+  ).toHaveLength(0);
+  expect(page.getByRole("button", { name: "Add", exact: true }).elements()).toHaveLength(0);
+});

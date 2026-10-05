@@ -10,7 +10,7 @@ import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { page, userEvent } from "vitest/browser";
 import { beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 
 const harness = vi.hoisted(() => ({
   statuses: [] as ServerProviderStatus[],
@@ -58,7 +58,7 @@ vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => harness.api,
 }));
 
-import { AppSettingsSchema } from "~/appSettings";
+import { AppSettingsSchema, type AppSettings } from "~/appSettings";
 import { ProvidersSettingsPanel } from "./ProvidersSettingsPanel";
 import TerminalViewport from "../terminal/TerminalViewport";
 import { terminalRuntimeRegistry } from "../terminal/terminalRuntimeRegistry";
@@ -120,6 +120,7 @@ it("shows installation and auth beside activity switches with visible setup guid
   expect(activityRow("OpenCode").textContent).toContain("not installed or not on PATH");
   expect(activityRow("Claude").textContent).toContain("Needs sign-in");
   expect(activityRow("Codex").textContent).toContain("Connected");
+  await page.getByRole("button", { name: /Disabled providers/u }).click();
   expect(
     page
       .getByRole("switch", { name: "Enable Grok", exact: true })
@@ -138,6 +139,81 @@ it("shows installation and auth beside activity switches with visible setup guid
     await expect.element(guide).toBeVisible();
     expect(guide.element().getAttribute("href")).toBe(descriptor.setupDocsHref);
   }
+});
+
+it("keeps disabled providers only in a collapsed recovery list", async () => {
+  await render(<ProvidersSettingsPanel {...props} />);
+  expect(page.getByRole("switch", { name: "Enable Grok", exact: true }).elements()).toHaveLength(0);
+  expect(page.getByRole("button", { name: "Reorder Grok", exact: true }).elements()).toHaveLength(
+    0,
+  );
+  expect(page.getByRole("button", { name: "Grok", exact: true }).elements()).toHaveLength(0);
+  const recovery = page.getByRole("button", { name: /Disabled providers/u });
+  await expect.element(recovery).toHaveAttribute("aria-expanded", "false");
+  await recovery.click();
+  await expect
+    .element(page.getByRole("switch", { name: "Enable Grok", exact: true }))
+    .toBeVisible();
+  expect(page.getByRole("button", { name: "Reorder Grok", exact: true }).elements()).toHaveLength(
+    0,
+  );
+  expect(page.getByRole("button", { name: "Grok", exact: true }).elements()).toHaveLength(0);
+});
+
+it("restores provider options and saved configuration after re-enabling", async () => {
+  function Harness() {
+    const [settings, setSettings] = useState<AppSettings>({
+      ...defaults,
+      codexBinaryPath: "/custom/codex",
+      hiddenProviders: ["codex"],
+    });
+    const updateSettings = (patch: Partial<AppSettings>) =>
+      setSettings((current) => ({ ...current, ...patch }));
+    return (
+      <ProvidersSettingsPanel
+        {...props}
+        settings={settings}
+        updateSettings={updateSettings}
+        updateSettingsAndWait={async (patch) => updateSettings(patch)}
+      />
+    );
+  }
+  await render(<Harness />);
+  await page.getByRole("switch", { name: "Disable Codex", exact: true }).click();
+  expect(page.getByRole("button", { name: "Reorder Codex", exact: true }).elements()).toHaveLength(
+    0,
+  );
+  expect(page.getByRole("button", { name: /Codex Custom/u }).elements()).toHaveLength(0);
+  await page.getByRole("button", { name: /Disabled providers/u }).click();
+  await page.getByRole("switch", { name: "Enable Codex", exact: true }).click();
+  await expect
+    .element(page.getByRole("button", { name: "Reorder Codex", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(page.getByRole("switch", { name: "Show Codex in the provider picker", exact: true }))
+    .not.toBeChecked();
+  await expect
+    .element(page.getByRole("button", { name: /Codex Custom/u }))
+    .toHaveAttribute("aria-expanded", "true");
+  const binaryPath = page
+    .getByRole("group", { name: "Codex account", exact: true })
+    .getByRole("textbox", { name: /^Codex binary path/u });
+  await expect.element(binaryPath).toHaveValue("/custom/codex");
+});
+
+it("allows recovering after every provider is disabled", async () => {
+  await render(
+    <ProvidersSettingsPanel
+      {...props}
+      settings={{ ...defaults, disabledProviders: [...defaults.providerOrder] }}
+    />,
+  );
+  expect(page.getByRole("button", { name: /^Reorder /u }).elements()).toHaveLength(0);
+  expect(page.getByRole("switch", { name: /^Disable /u }).elements()).toHaveLength(0);
+  await page.getByRole("button", { name: /Disabled providers/u }).click();
+  await expect
+    .element(page.getByRole("switch", { name: "Enable Codex", exact: true }))
+    .toBeVisible();
 });
 
 it("does not report cached provider health as connected before reconciliation", async () => {

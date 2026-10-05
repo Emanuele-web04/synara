@@ -122,47 +122,53 @@ describe("getVisibleProviderUpdateStatuses", () => {
     expect(result.map((provider) => provider.provider)).toEqual(["codex"]);
   });
 
-  it("uses exact provider-instance enabled state for custom instance updates", () => {
-    const settings = serverSettings({
-      claudeAgent: {
-        enabled: false,
-        binaryPath: "claude",
-        homePath: "",
-        launchArgs: "",
-        enableArtifacts: false,
-        customModels: [],
-      },
-    });
-    const result = getVisibleProviderUpdateStatuses({
-      providers: [
-        providerStatus("claudeAgent", {
-          instanceId: "claude_work",
-          driver: "claudeAgent",
-        }),
-        providerStatus("claudeAgent", {
-          instanceId: "claude_disabled",
-          driver: "claudeAgent",
-        }),
-      ],
-      serverSettings: {
-        ...settings,
-        providerInstances: {
-          claude_work: {
+  it.each([
+    { enabled: false, visible: [] },
+    { enabled: true, visible: ["claude_work"] },
+  ])(
+    "requires global and account enablement for custom instance updates ($enabled)",
+    ({ enabled, visible }) => {
+      const settings = serverSettings({
+        claudeAgent: {
+          enabled,
+          binaryPath: "claude",
+          homePath: "",
+          launchArgs: "",
+          enableArtifacts: false,
+          customModels: [],
+        },
+      });
+      const result = getVisibleProviderUpdateStatuses({
+        providers: [
+          providerStatus("claudeAgent", {
+            instanceId: "claude_work",
             driver: "claudeAgent",
-            enabled: true,
-            config: { homePath: "/tmp/claude-work" },
-          },
-          claude_disabled: {
+          }),
+          providerStatus("claudeAgent", {
+            instanceId: "claude_disabled",
             driver: "claudeAgent",
-            enabled: false,
-            config: { homePath: "/tmp/claude-disabled" },
+          }),
+        ],
+        serverSettings: {
+          ...settings,
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              enabled: true,
+              config: { homePath: "/tmp/claude-work" },
+            },
+            claude_disabled: {
+              driver: "claudeAgent",
+              enabled: false,
+              config: { homePath: "/tmp/claude-disabled" },
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(result.map((provider) => provider.instanceId)).toEqual(["claude_work"]);
-  });
+      expect(result.map((provider) => provider.instanceId)).toEqual(visible);
+    },
+  );
 
   it("waits for server settings before showing provider updates", () => {
     const result = getVisibleProviderUpdateStatuses({

@@ -162,7 +162,10 @@ function ProviderUsageCard({
 export function ProviderUsageSettingsPanel() {
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
-  const railUsageProviders = resolveRailUsageProviders(settings.railUsageProviders);
+  const railUsageProviders = resolveRailUsageProviders(
+    settings.railUsageProviders,
+    settings.disabledProviders,
+  );
   const railUsageFull = railUsageProviders.length >= MAX_RAIL_USAGE_PROVIDERS;
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const providerInstances = useMemo(
@@ -197,7 +200,9 @@ export function ProviderUsageSettingsPanel() {
         return instance?.enabled === true && instance.driver === snapshot.provider;
       })
     : (usageQuery.data ?? []);
-  const cards = selectVisibleProviderUsageSnapshots(activeSnapshots);
+  const cards = selectVisibleProviderUsageSnapshots(
+    activeSnapshots.filter((snapshot) => !settings.disabledProviders.includes(snapshot.provider)),
+  );
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
@@ -206,7 +211,9 @@ export function ProviderUsageSettingsPanel() {
   return (
     <>
       <SettingsSection title={`Sidebar · up to ${MAX_RAIL_USAGE_PROVIDERS}`}>
-        {PROVIDER_USAGE_PROVIDERS.map((provider) => {
+        {PROVIDER_USAGE_PROVIDERS.filter(
+          (provider) => !settings.disabledProviders.includes(provider),
+        ).map((provider) => {
           const checked = railUsageProviders.includes(provider);
           const name = providerUsageDisplayName(provider);
           return (
@@ -225,9 +232,10 @@ export function ProviderUsageSettingsPanel() {
                   onCheckedChange={(next) =>
                     updateSettings({
                       railUsageProviders: toggleRailUsageProvider(
-                        railUsageProviders,
+                        settings.railUsageProviders,
                         provider,
                         Boolean(next),
+                        settings.disabledProviders,
                       ),
                     })
                   }
@@ -262,19 +270,21 @@ export function ProviderUsageSettingsPanel() {
             />
           }
         />
-        <SettingsListRow
-          title="Banked resets"
-          description="Include Codex banked resets in the details."
-          actions={
-            <Switch
-              checked={settings.usagePopoverShowResetCredits}
-              onCheckedChange={(next) =>
-                updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
-              }
-              aria-label="Show banked resets in usage popovers"
-            />
-          }
-        />
+        {!settings.disabledProviders.includes("codex") ? (
+          <SettingsListRow
+            title="Banked resets"
+            description="Include Codex banked resets in the details."
+            actions={
+              <Switch
+                checked={settings.usagePopoverShowResetCredits}
+                onCheckedChange={(next) =>
+                  updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
+                }
+                aria-label="Show banked resets in usage popovers"
+              />
+            }
+          />
+        ) : null}
         <SettingsListRow
           title="Credits and token totals"
           description="Include credit balances and recent token totals (24h, 7d, 30d) in the details."

@@ -1662,7 +1662,9 @@ function ProviderAccountsControl(props: {
       <AddProviderAccountDialog
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
-        providers={PROVIDER_VISIBILITY_OPTIONS.map((option) => ({
+        providers={PROVIDER_VISIBILITY_OPTIONS.filter(
+          (option) => !props.settings.disabledProviders.includes(option.provider),
+        ).map((option) => ({
           provider: option.provider,
           label: option.title,
         }))}
@@ -1900,6 +1902,7 @@ export function ProvidersSettingsPanel({
   );
   const providerEnablementMutationInFlightRef = useRef(false);
   const [providerEnablementMutationPending, setProviderEnablementMutationPending] = useState(false);
+  const [disabledProvidersOpen, setDisabledProvidersOpen] = useState(false);
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],
@@ -1909,7 +1912,6 @@ export function ProvidersSettingsPanel({
     () => new Set<ProviderKind>(settings.disabledProviders),
     [settings.disabledProviders],
   );
-  const enabledProviderCount = PROVIDER_VISIBILITY_OPTIONS.length - disabledProviderSet.size;
   const providerVisibilityOptionsByProvider = useMemo(
     () => new Map(PROVIDER_VISIBILITY_OPTIONS.map((option) => [option.provider, option])),
     [],
@@ -1925,6 +1927,13 @@ export function ProvidersSettingsPanel({
   const providerVisibilitySensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
   );
+  const enabledProviderOptions = orderedProviderVisibilityOptions.filter(
+    (option) => !disabledProviderSet.has(option.provider),
+  );
+  const disabledProviderOptions = orderedProviderVisibilityOptions.filter((option) =>
+    disabledProviderSet.has(option.provider),
+  );
+  const enabledProviderCount = enabledProviderOptions.length;
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const providerStatusByProvider = useMemo(
     () =>
@@ -1945,19 +1954,17 @@ export function ProvidersSettingsPanel({
       ),
     [localProviderStatuses],
   );
-  const availableProviderCount = orderedProviderVisibilityOptions.filter(
+  const availableProviderCount = enabledProviderOptions.filter(
     (option) => providerStatusByProvider.get(option.provider)?.available === true,
   ).length;
-  const visibleAvailableProviderCount = orderedProviderVisibilityOptions.filter(
+  const visibleAvailableProviderCount = enabledProviderOptions.filter(
     (option) =>
       providerStatusByProvider.get(option.provider)?.available === true &&
       !hiddenProviderSet.has(option.provider),
   ).length;
   const hasPendingProviderStatuses =
     !providerStatusesReconciled ||
-    orderedProviderVisibilityOptions.some(
-      (option) => !providerStatusByProvider.has(option.provider),
-    );
+    enabledProviderOptions.some((option) => !providerStatusByProvider.has(option.provider));
   const providerUpdateServerSettings = useMemo(
     () =>
       serverSettingsQuery.data
@@ -1974,8 +1981,15 @@ export function ProvidersSettingsPanel({
         providers: serverConfigQuery.data?.providers ?? [],
         hiddenProviders: settings.hiddenProviders,
         serverSettings: providerUpdateServerSettings,
-      }),
-    [providerUpdateServerSettings, serverConfigQuery.data?.providers, settings.hiddenProviders],
+      }).filter(
+        (status) => !disabledProviderSet.has((status.driver ?? status.provider) as ProviderKind),
+      ),
+    [
+      disabledProviderSet,
+      providerUpdateServerSettings,
+      serverConfigQuery.data?.providers,
+      settings.hiddenProviders,
+    ],
   );
   const outdatedProviderCount = outdatedProviderStatuses.length;
   const installSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
@@ -1997,12 +2011,17 @@ export function ProvidersSettingsPanel({
 
   useSettingsRestoreSignal(resetEpoch, () => {
     setOpenInstallProviders(createClosedProviderInstallDisclosureState());
+    setDisabledProvidersOpen(false);
   });
 
   useEffect(() => {
     if (!active || !providerTarget) return;
-    setOpenInstallProviders((current) => ({ ...current, [providerTarget]: true }));
-  }, [active, providerTarget]);
+    if (disabledProviderSet.has(providerTarget)) {
+      setDisabledProvidersOpen(true);
+    } else {
+      setOpenInstallProviders((current) => ({ ...current, [providerTarget]: true }));
+    }
+  }, [active, disabledProviderSet, providerTarget]);
 
   const handleProviderOrderDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -2088,12 +2107,72 @@ export function ProvidersSettingsPanel({
     }
   };
 
+  const renderProviderActivityRow = (option: (typeof PROVIDER_VISIBILITY_OPTIONS)[number]) => {
+    const enabled = !disabledProviderSet.has(option.provider);
+    const providerStatus = providerStatusByProvider.get(option.provider);
+    return (
+      <SettingsListRow
+        key={option.provider}
+        title={
+          <span className="flex items-center gap-2">
+            <ProviderIcon provider={option.provider} className="size-4 shrink-0" />
+            <span>{option.title}</span>
+          </span>
+        }
+        description={
+          <>
+            <span className="block">
+              {providerSetupStatusLabel({
+                status: providerStatus,
+                reconciled: providerStatusesReconciled,
+                disabled: !enabled,
+              })}
+            </span>
+            {enabled &&
+            providerStatusesReconciled &&
+            providerStatus?.message &&
+            (providerStatus.status !== "ready" || providerStatus.authStatus !== "authenticated") ? (
+              <span className="mt-1 block">{providerStatus.message}</span>
+            ) : null}
+          </>
+        }
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="xs"
+              render={<a href={option.setupDocsHref} target="_blank" rel="noreferrer" />}
+              aria-label={`${option.title} setup guide`}
+            >
+              Setup guide
+              <ExternalLinkIcon className="size-3" />
+            </Button>
+            <Switch
+              checked={enabled}
+              disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
+              onCheckedChange={(checked) =>
+                void updateProviderEnablement(
+                  setProviderListMembership(
+                    settings.disabledProviders,
+                    option.provider,
+                    !Boolean(checked),
+                  ),
+                )
+              }
+              aria-label={`${enabled ? "Disable" : "Enable"} ${option.title}`}
+            />
+          </>
+        }
+      />
+    );
+  };
+
   return (
     <div className="space-y-6">
       <SettingsSection title="Provider activity">
         <SettingsRow
           title="Enabled providers"
-          description="Allow background checks and new turns. Enabling a provider does not install it or sign it in. Disabling keeps existing threads and does not interrupt a running turn."
+          description="Enable providers across Synara. Disabled providers are hidden from pickers and settings; their saved configuration and existing threads are kept, and running turns continue. Enabling does not install a CLI or sign it in."
           control={
             <Button
               variant="outline"
@@ -2119,74 +2198,43 @@ export function ProvidersSettingsPanel({
             ) : null
           }
         >
-          <div
-            className={cn(
-              "mt-4",
-              SETTINGS_INSET_LIST_CLASS_NAME,
-              SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
-            )}
-          >
-            {orderedProviderVisibilityOptions.map((option) => {
-              const enabled = !disabledProviderSet.has(option.provider);
-              const providerStatus = providerStatusByProvider.get(option.provider);
-              return (
-                <SettingsListRow
-                  key={option.provider}
-                  title={
-                    <span className="flex items-center gap-2">
-                      <ProviderIcon provider={option.provider} className="size-4 shrink-0" />
-                      <span>{option.title}</span>
-                    </span>
-                  }
-                  description={
-                    <>
-                      <span className="block">
-                        {providerSetupStatusLabel({
-                          status: providerStatus,
-                          reconciled: providerStatusesReconciled,
-                          disabled: !enabled,
-                        })}
-                      </span>
-                      {enabled &&
-                      providerStatusesReconciled &&
-                      providerStatus?.message &&
-                      (providerStatus.status !== "ready" ||
-                        providerStatus.authStatus !== "authenticated") ? (
-                        <span className="mt-1 block">{providerStatus.message}</span>
-                      ) : null}
-                    </>
-                  }
-                  actions={
-                    <>
-                      <Button
-                        variant="outline"
-                        size="xs"
-                        render={<a href={option.setupDocsHref} target="_blank" rel="noreferrer" />}
-                        aria-label={`${option.title} setup guide`}
-                      >
-                        Setup guide
-                        <ExternalLinkIcon className="size-3" />
-                      </Button>
-                      <Switch
-                        checked={enabled}
-                        disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
-                        onCheckedChange={(checked) =>
-                          void updateProviderEnablement(
-                            setProviderListMembership(
-                              settings.disabledProviders,
-                              option.provider,
-                              !Boolean(checked),
-                            ),
-                          )
-                        }
-                        aria-label={`${enabled ? "Disable" : "Enable"} ${option.title}`}
-                      />
-                    </>
-                  }
-                />
-              );
-            })}
-          </div>
+          {enabledProviderCount > 0 ? (
+            <div
+              className={cn(
+                "mt-4",
+                SETTINGS_INSET_LIST_CLASS_NAME,
+                SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
+              )}
+            >
+              {enabledProviderOptions.map(renderProviderActivityRow)}
+            </div>
+          ) : (
+            <p className="mt-4 text-ui text-muted-foreground">
+              No providers enabled. Open Disabled providers below to enable one.
+            </p>
+          )}
+          {disabledProviderOptions.length > 0 ? (
+            <Collapsible
+              open={disabledProvidersOpen}
+              onOpenChange={setDisabledProvidersOpen}
+              className="mt-3"
+            >
+              <CollapsibleTrigger className="flex w-full items-center gap-2 py-2 text-left text-ui text-muted-foreground">
+                <DisclosureChevron open={disabledProvidersOpen} className="size-4 shrink-0" />
+                <span>Disabled providers ({disabledProviderOptions.length})</span>
+              </CollapsibleTrigger>
+              <CollapsiblePanel>
+                <div
+                  className={cn(
+                    SETTINGS_INSET_LIST_CLASS_NAME,
+                    SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
+                  )}
+                >
+                  {disabledProviderOptions.map(renderProviderActivityRow)}
+                </div>
+              </CollapsiblePanel>
+            </Collapsible>
+          ) : null}
         </SettingsRow>
       </SettingsSection>
 
@@ -2226,11 +2274,11 @@ export function ProvidersSettingsPanel({
             onDragEnd={handleProviderOrderDragEnd}
           >
             <SortableContext
-              items={orderedProviderVisibilityOptions.map((option) => option.provider)}
+              items={enabledProviderOptions.map((option) => option.provider)}
               strategy={verticalListSortingStrategy}
             >
               <div className="mt-4 space-y-2">
-                {orderedProviderVisibilityOptions.map((option) => (
+                {enabledProviderOptions.map((option) => (
                   <SortableProviderVisibilityRow
                     key={option.provider}
                     option={option}
@@ -2359,7 +2407,9 @@ export function ProvidersSettingsPanel({
           >
             <div className="mt-4">
               <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                {VISIBLE_PROVIDER_INSTALL_SETTINGS.map((config) => (
+                {VISIBLE_PROVIDER_INSTALL_SETTINGS.filter(
+                  (config) => !disabledProviderSet.has(config.provider),
+                ).map((config) => (
                   <ProviderToolRow
                     key={config.provider}
                     config={config}

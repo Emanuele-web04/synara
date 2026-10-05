@@ -8,6 +8,7 @@ import { render } from "vitest-browser-react";
 
 const settings = vi.hoisted(() => ({
   codexHomePath: "",
+  disabledProviders: [] as string[],
   railUsageProviders: ["codex"],
   railUsageWindow: "both",
 }));
@@ -48,6 +49,14 @@ async function renderUsage(
 describe("AppRailUsage", () => {
   beforeEach(() => {
     settings.railUsageWindow = "both";
+    settings.disabledProviders = [];
+  });
+
+  it("hides a disabled provider immediately while preserving its saved sidebar selection", async () => {
+    settings.disabledProviders = ["codex"];
+    await renderUsage([{ window: "Weekly", usedPercent: 35 }]);
+    expect(page.getByRole("button", { name: /^Codex usage:/ }).elements()).toHaveLength(0);
+    expect(settings.railUsageProviders).toEqual(["codex"]);
   });
 
   it("shows independent weekly and five-hour rings even when a model sublimit is tighter", async () => {
