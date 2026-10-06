@@ -533,7 +533,7 @@ export function useChatTurnExecution({
             if (setupTerminal) {
               const setupActivityAbortController = new AbortController();
               const setupActivityWait = waitForSetupScriptTerminalActivity({
-                threadId: threadIdForSend,
+                threadId: setupTerminal.threadId,
                 terminalId: setupTerminal.terminalId,
                 signal: setupActivityAbortController.signal,
               });

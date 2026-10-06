@@ -384,12 +384,13 @@ navigation rather than full Obsidian support.
 
 ### Terminal panels
 
-Each chat has one terminal panel, shown in the main view or in its right dock.
+Terminal panels appear in a chat's main view or right dock, with independent sessions.
 Terminals have no nested tabs, groups, splits, or bottom drawer. Opening the
-terminal again focuses the existing session. Project actions replace an idle
-session with the requested working directory and environment; a busy terminal
-must be stopped before another action runs in that chat. On upgrade, the last
-active terminal is retained. Retired nested sessions are closed only when the
+terminal again focuses the existing session. Project actions open a fresh session
+in the right dock with the requested working directory and environment, keeping
+the center view unchanged, including in split chats. They replace only an idle right-dock session; a busy
+right-dock terminal must be stopped before another action runs in that chat.
+On upgrade, the last active terminal is retained. Retired nested sessions are closed only when the
 server verifies they are idle, preserving their saved history. Busy sessions or
 sessions whose activity cannot be checked remain pending for the next mount.
 Project actions use the same server check, including after reloading the app.

@@ -19,12 +19,14 @@ import ThreadTerminalDrawer from "../ThreadTerminalDrawer";
 export function DockTerminalPane(props: {
   hostThreadId: ThreadId;
   projectId: ProjectId | null;
+  paneScopeId?: string;
   // When false the pane stays mounted but hidden (another dock tab is active),
   // so the xterm runtime sleeps its visual work without detaching its DOM.
   isActive?: boolean;
   onClosePanel: () => void;
 }) {
   const scopeId = dockTerminalThreadId(props.hostThreadId);
+  const paneScopeId = props.paneScopeId ?? SINGLE_CHAT_PANE_SCOPE_ID;
   const threadWorkspace = useStore(
     useMemo(() => createThreadWorkspaceMetadataSelector(props.hostThreadId), [props.hostThreadId]),
   );
@@ -50,13 +52,12 @@ export function DockTerminalPane(props: {
   const { terminalState, openTerminalThreadPage } = terminal;
   const initializedScopeRef = useRef<ThreadId | null>(null);
   const subscribeToComposerTarget = useCallback(
-    (listener: () => void) =>
-      subscribeTerminalContextComposerTarget(SINGLE_CHAT_PANE_SCOPE_ID, listener),
-    [],
+    (listener: () => void) => subscribeTerminalContextComposerTarget(paneScopeId, listener),
+    [paneScopeId],
   );
   const readComposerTarget = useCallback(
-    () => getTerminalContextComposerTarget(SINGLE_CHAT_PANE_SCOPE_ID),
-    [],
+    () => getTerminalContextComposerTarget(paneScopeId),
+    [paneScopeId],
   );
   const composerTarget = useSyncExternalStore(
     subscribeToComposerTarget,
