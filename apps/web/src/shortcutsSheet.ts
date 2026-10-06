@@ -244,6 +244,21 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Copy the active thread's ID to the clipboard.",
   },
   {
+    command: "thread.archive",
+    label: "Archive thread",
+    description: "Archive the active chat, with the same confirmation and undo as the thread menu.",
+  },
+  {
+    command: "thread.snooze",
+    label: "Snooze thread",
+    description: "Open the snooze date and time picker for the active chat.",
+  },
+  {
+    command: "thread.markUnread",
+    label: "Mark thread unread",
+    description: "Mark the active chat unread and restore its dismissed notification.",
+  },
+  {
     command: "chat.visible.previous",
     label: "Previous visible thread",
     description: "Cycle to the previous thread that is currently visible in the sidebar.",

@@ -100,9 +100,20 @@ Removing a command's last shortcut in Settings writes this rule. It never matche
 - `sidechat.toggle`: open or hide the active main thread's side chat panel
 - `composer.focus.toggle`: focus or blur the chat prompt composer
 - `thread.copyId`: copy the active thread's ID to the clipboard
+- `thread.archive`: archive the active chat using the thread menu's confirmation and undo
+- `thread.snooze`: open the existing snooze date and time picker for the active chat
+- `thread.markUnread`: mark the active chat unread and restore its dismissed notification
 - `editor.openFavorite`: open current project/worktree in the last-used editor
 - `editor.file.save`: write the focused file editor's unsaved changes back to disk (editor view file and diff editors)
 - `script.{id}.run`: run a project script by id (for example `script.test.run`)
+
+The active-chat actions default to Mod+Alt+Shift+A (archive), Mod+Alt+Shift+S
+(snooze), and Mod+Alt+Shift+U (mark unread). Mod is ⌘ on macOS and Ctrl elsewhere.
+They target the focused chat pane in a split view and do nothing in an empty pane,
+Settings, or while a menu or dialog is open. Terminal focus yields these chords
+to the shell on Windows/Linux. Archive excludes subagent threads; snooze follows
+the thread menu's availability rules and opens its existing date and time picker.
+All three can be changed or unassigned in Settings → Keyboard shortcuts.
 
 `sidechat.toggle` defaults to ⌘⌥S on macOS and Ctrl+Alt+S elsewhere. In the single-chat view, it reopens an existing side chat (or creates one using `/side`) and focuses its composer. Pressing it again hides the panel and focuses the main composer without interrupting either chat. Escape also hides a visible side chat when no menu or dialog needs dismissal; terminal input keeps Escape. The shortcut can be changed in Settings → Keyboard shortcuts.
 

@@ -88,6 +88,21 @@ const whenModChordAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac")
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
+    command: "thread.archive",
+    shortcut: commandShortcut("a", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
+    command: "thread.snooze",
+    shortcut: commandShortcut("s", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
+    command: "thread.markUnread",
+    shortcut: commandShortcut("u", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
     command: "sidechat.toggle",
     shortcut: commandShortcut("s", { altKey: true }),
     whenAst: whenModChordAllowed,

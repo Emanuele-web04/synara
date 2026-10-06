@@ -2230,6 +2230,41 @@ async function mountChatView(options: {
 }
 
 describe("ChatView transcript geometry (full app)", () => {
+  it("keeps the active chat explicitly unread until the next visit", async () => {
+    const snapshot = createSnapshotWithInlineToolOverflow({ active: false });
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      const shell = () => useStore.getState().threadShellById?.[THREAD_ID];
+      const completedAt = snapshot.threads.find((thread) => thread.id === THREAD_ID)!.latestTurn!
+        .completedAt!;
+      await expect
+        .poll(() => Date.parse(shell()?.lastVisitedAt ?? ""))
+        .toBeGreaterThanOrEqual(Date.parse(completedAt));
+      const input = document.querySelector('[data-chat-composer-form="true"]')!;
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "u",
+          code: "KeyU",
+          metaKey: isMacNavigatorPlatform(),
+          ctrlKey: !isMacNavigatorPlatform(),
+          altKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await waitForLayout();
+      expect(Date.parse(shell()?.lastVisitedAt ?? "")).toBe(Date.parse(completedAt) - 1);
+      await mounted.router.navigate({ to: "/" });
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await expect
+        .poll(() => Date.parse(shell()?.lastVisitedAt ?? ""))
+        .toBeGreaterThanOrEqual(Date.parse(completedAt));
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   beforeAll(async () => {
     fixture = buildFixture(
       createSnapshotForTargetUser({

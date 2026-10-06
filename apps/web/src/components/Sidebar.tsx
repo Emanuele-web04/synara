@@ -488,6 +488,7 @@ import {
   useSidebarProjectRunController,
 } from "../hooks/useSidebarProjectRunController";
 import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
+import { useThreadActionShortcuts } from "../hooks/useThreadActionShortcuts";
 import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
@@ -1878,6 +1879,26 @@ export default function Sidebar({
       return next;
     });
   }, []);
+  const handleMarkThreadUnread = useCallback(
+    (threadId: ThreadId) => {
+      clearDismissedThreadStatus(threadId);
+      markThreadUnread(threadId);
+    },
+    [clearDismissedThreadStatus, markThreadUnread],
+  );
+  const canSnoozeThread = useCallback(
+    (
+      thread: Pick<
+        SidebarThreadSummary,
+        "id" | "projectId" | "parentThreadId" | "sidechatSourceThreadId" | "sidechatContext"
+      >,
+    ) =>
+      !thread.parentThreadId &&
+      !groupProjectIdSet.has(thread.projectId) &&
+      !coordinatorThreadIds.has(thread.id) &&
+      !isSidechatThread(thread),
+    [groupProjectIdSet, coordinatorThreadIds],
+  );
   const resolveThreadStatusForSidebar = useCallback(
     (thread: SidebarThreadSummary) =>
       resolveThreadStatusPill({
@@ -2004,6 +2025,18 @@ export default function Sidebar({
     sidebarTreeThreads,
     sidebarThreadSummaryById,
     threadsHydrated,
+  });
+  useThreadActionShortcuts({
+    enabled: !isOnSettings,
+    keybindings,
+    routeThreadId,
+    activeSplitView,
+    threadById: sidebarThreadSummaryById,
+    terminalStateByThreadId,
+    canSnooze: canSnoozeThread,
+    onArchive: confirmAndArchiveThread,
+    onSnooze: setSnoozeDialogThreadId,
+    onMarkUnread: handleMarkThreadUnread,
   });
   const snoozedSidebarThreads = useMemo(
     () =>
@@ -3329,11 +3362,7 @@ export default function Sidebar({
           hasPendingUserInput,
         });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
-      const canSnooze =
-        !thread.parentThreadId &&
-        !groupProjectIdSet.has(thread.projectId) &&
-        !coordinatorThreadIds.has(threadId) &&
-        !isSidechatThread(thread);
+      const canSnooze = canSnoozeThread(thread);
       const handoffTargets = canHandoff
         ? resolveAvailableHandoffTargets({
             sourceProvider: thread.modelSelection.provider,
@@ -3566,8 +3595,7 @@ export default function Sidebar({
       }
 
       if (clicked === "mark-unread") {
-        clearDismissedThreadStatus(threadId);
-        markThreadUnread(threadId);
+        handleMarkThreadUnread(threadId);
         return;
       }
       if (clicked === "clear-notification") {
@@ -3716,20 +3744,20 @@ export default function Sidebar({
     },
     [
       appSettings,
+      canSnoozeThread,
       confirmAndArchiveThread,
       confirmAndDeleteThread,
       coordinatorThreadIds,
       copyPathToClipboard,
       copyThreadIdToClipboard,
-      clearDismissedThreadStatus,
       clearThreadNotification,
       continueHandoffInThread,
       continueThreadAsGroup,
       forkThread,
       groupProjectIdSet,
       handoffThread,
-      markThreadUnread,
       moveThreadToGroup,
+      handleMarkThreadUnread,
       navigate,
       openRenameThreadDialog,
       pinnedThreadIdSet,
@@ -3775,8 +3803,7 @@ export default function Sidebar({
 
       if (clicked === "mark-unread") {
         for (const id of ids) {
-          clearDismissedThreadStatus(id);
-          markThreadUnread(id);
+          handleMarkThreadUnread(id);
         }
         clearSelection();
         return;
@@ -3847,9 +3874,8 @@ export default function Sidebar({
       appSettings.confirmThreadDelete,
       archiveThread,
       clearSelection,
-      clearDismissedThreadStatus,
       deleteThread,
-      markThreadUnread,
+      handleMarkThreadUnread,
       removeFromSelection,
       selectedThreadIds,
     ],
