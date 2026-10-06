@@ -7,7 +7,6 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
-import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
 import { SIDECHAT_INACTIVITY_EXPIRY_MS, sidechatExpiryMs } from "@synara/shared/sidechatExpiry";
 import {
@@ -119,8 +118,6 @@ interface EngineAdmissionState {
 
 type CommittedCommandResult = {
   readonly committedEvents: OrchestrationEvent[];
-  /** Sequences whose deferred phase was settled inside the commit transaction. */
-  readonly deferredSettledSequences: ReadonlySet<number>;
   readonly lastSequence: number;
   readonly nextCommandReadModel: OrchestrationReadModel;
 };
@@ -255,14 +252,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     envelope.settleOnly
       ? 0
       : { control: 0, user: 1, normal: 2 }[orchestrationCommandLane(envelope.command.type)];
-  const deferredProjectionLock = yield* Semaphore.make(1);
-  const deferredProjectionDirty = yield* Ref.make(false);
-  let deferredProjectionCoveredSequence = 0;
-  const deferredProjectionCatchUpInFlight = yield* Ref.make(false);
-  const deferredProjectionRetryAttempts = yield* Ref.make(0);
-  const deferredProjectionLastFailure = yield* Ref.make<string | null>(null);
-  const deferredProjectionScope = yield* Scope.make("sequential");
-  yield* Effect.addFinalizer(() => Scope.close(deferredProjectionScope, Exit.void));
+  const projectionDirty = yield* Ref.make(false);
+  const projectionCatchUpInFlight = yield* Ref.make(false);
+  const projectionRetryAttempts = yield* Ref.make(0);
+  const projectionLastFailure = yield* Ref.make<string | null>(null);
+  const projectionRecoveryScope = yield* Scope.make("sequential");
+  yield* Effect.addFinalizer(() => Scope.close(projectionRecoveryScope, Exit.void));
   // Full projection repair is multi-minute on large state DBs. Coalesce concurrent
   // callers onto one rebuild and skip thrash when a repair just completed.
   type ProjectionRepairError = OrchestrationDispatchError | OrchestrationEventStoreError;
@@ -396,47 +391,39 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       });
     });
 
-  // When deferred projection slips, supervise bootstrap retries while idle instead of waiting
+  // When persisted command reconciliation detects a projection gap, supervise retries while idle instead of waiting
   // for unrelated future traffic to rediscover the dirty cursor.
-  const scheduleDeferredProjectionCatchUp: (input: {
+  const scheduleProjectionCatchUp: (input: {
     readonly eventType: OrchestrationEvent["type"];
     readonly sequence: number;
   }) => Effect.Effect<void> = Effect.fn(function* (input) {
     const shouldStart = yield* Ref.modify(
-      deferredProjectionCatchUpInFlight,
+      projectionCatchUpInFlight,
       (inFlight): readonly [boolean, boolean] => [!inFlight, true],
     );
     if (!shouldStart) {
       return;
     }
 
-    yield* Effect.logWarning("scheduling deferred orchestration projection catch-up").pipe(
+    yield* Effect.logWarning("scheduling orchestration projection catch-up").pipe(
       Effect.annotateLogs({
         eventType: input.eventType,
         sequence: input.sequence,
       }),
     );
     const recoverUntilHealthy = Effect.gen(function* () {
-      while (yield* Ref.get(deferredProjectionDirty)) {
+      while (yield* Ref.get(projectionDirty)) {
         const outcome = yield* Effect.exit(
-          deferredProjectionLock.withPermits(1)(
-            maintenanceLock.withPermits(1)(
-              projectionPipeline.bootstrap.pipe(
-                Effect.andThen(eventStore.getHighWaterSequence()),
-                Effect.tap((sequence) =>
-                  Effect.sync(() => {
-                    deferredProjectionCoveredSequence = sequence;
-                  }),
-                ),
-                Effect.andThen(Ref.set(deferredProjectionDirty, false)),
-                Effect.andThen(Ref.set(deferredProjectionRetryAttempts, 0)),
-                Effect.andThen(Ref.set(deferredProjectionLastFailure, null)),
-              ),
+          maintenanceLock.withPermits(1)(
+            projectionPipeline.bootstrap.pipe(
+              Effect.andThen(Ref.set(projectionDirty, false)),
+              Effect.andThen(Ref.set(projectionRetryAttempts, 0)),
+              Effect.andThen(Ref.set(projectionLastFailure, null)),
             ),
           ),
         );
         if (outcome._tag === "Success") {
-          yield* Effect.log("deferred orchestration projection catch-up completed").pipe(
+          yield* Effect.log("orchestration projection catch-up completed").pipe(
             Effect.annotateLogs({
               eventType: input.eventType,
               sequence: input.sequence,
@@ -446,18 +433,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
 
         const retryAttempts = yield* Ref.updateAndGet(
-          deferredProjectionRetryAttempts,
+          projectionRetryAttempts,
           (attempts) => attempts + 1,
         );
         const failure = Cause.pretty(outcome.cause);
-        yield* Ref.set(deferredProjectionLastFailure, failure);
+        yield* Ref.set(projectionLastFailure, failure);
         const retryDelayMs =
           DEFERRED_PROJECTION_RETRY_DELAYS_MS[
             Math.min(retryAttempts - 1, DEFERRED_PROJECTION_RETRY_DELAYS_MS.length - 1)
           ] ?? 30_000;
-        yield* Effect.logWarning(
-          "deferred orchestration projection catch-up failed; retrying",
-        ).pipe(
+        yield* Effect.logWarning("orchestration projection catch-up failed; retrying").pipe(
           Effect.annotateLogs({
             eventType: input.eventType,
             sequence: input.sequence,
@@ -469,75 +454,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         yield* Effect.sleep(`${retryDelayMs} millis`);
       }
     }).pipe(
-      Effect.ensuring(Ref.set(deferredProjectionCatchUpInFlight, false)),
+      Effect.ensuring(Ref.set(projectionCatchUpInFlight, false)),
       // A dirty notification can arrive while the previous supervisor is
       // completing. Recheck after surrendering its claim; interruption skips
       // this tail so scope closure cannot launch another recovery fiber.
-      Effect.andThen(Ref.get(deferredProjectionDirty)),
-      Effect.flatMap((dirty) => (dirty ? scheduleDeferredProjectionCatchUp(input) : Effect.void)),
+      Effect.andThen(Ref.get(projectionDirty)),
+      Effect.flatMap((dirty) => (dirty ? scheduleProjectionCatchUp(input) : Effect.void)),
     );
 
-    yield* recoverUntilHealthy.pipe(Effect.forkIn(deferredProjectionScope), Effect.asVoid);
+    yield* recoverUntilHealthy.pipe(Effect.forkIn(projectionRecoveryScope), Effect.asVoid);
   });
-
-  const deferredProjectionWorker = yield* makeDrainableWorker(
-    (event: OrchestrationEvent) =>
-      deferredProjectionLock.withPermits(1)(
-        Effect.gen(function* () {
-          if (event.sequence <= deferredProjectionCoveredSequence) return;
-          if (yield* Ref.get(deferredProjectionDirty)) {
-            yield* scheduleDeferredProjectionCatchUp({
-              eventType: event.type,
-              sequence: event.sequence,
-            });
-            return;
-          }
-          const outcome = yield* Effect.exit(
-            Effect.suspend(() => projectionPipeline.projectDeferredEvent(event)),
-          );
-          if (outcome._tag === "Success") {
-            deferredProjectionCoveredSequence = event.sequence;
-            return;
-          }
-          yield* Ref.set(deferredProjectionDirty, true);
-          yield* Effect.logWarning("deferred orchestration projector failed", {
-            sequence: event.sequence,
-            eventType: event.type,
-            cause: Cause.pretty(outcome.cause),
-          });
-          yield* scheduleDeferredProjectionCatchUp({
-            eventType: event.type,
-            sequence: event.sequence,
-          });
-        }),
-      ),
-    { capacity: ORCHESTRATION_COMMAND_QUEUE_CAPACITY },
-  );
-
-  const enqueueDeferredProjection = (event: OrchestrationEvent) =>
-    deferredProjectionWorker.tryEnqueue(event).pipe(
-      Effect.catchTag("DrainableWorkerAdmissionError", () =>
-        Ref.set(deferredProjectionDirty, true).pipe(
-          Effect.andThen(
-            scheduleDeferredProjectionCatchUp({
-              eventType: event.type,
-              sequence: event.sequence,
-            }),
-          ),
-        ),
-      ),
-    );
 
   const getProjectionCatchUpStatus: OrchestrationEngineShape["getProjectionCatchUpStatus"] =
     Effect.gen(function* () {
       const [dirty, inFlight, retryAttempts, lastFailure] = yield* Effect.all([
-        Ref.get(deferredProjectionDirty),
-        Ref.get(deferredProjectionCatchUpInFlight),
-        Ref.get(deferredProjectionRetryAttempts),
-        Ref.get(deferredProjectionLastFailure),
+        Ref.get(projectionDirty),
+        Ref.get(projectionCatchUpInFlight),
+        Ref.get(projectionRetryAttempts),
+        Ref.get(projectionLastFailure),
       ]);
       // Lag is measured directly from the cursor table so a projector that
-      // stalled without tripping the deferred dirty flag (or whose cursor row
+      // stalled without tripping the recovery dirty flag (or whose cursor row
       // was deleted by an interrupted repair) is still visible here. Only the
       // snapshot-fence cursors are lag-scored: the live path advances each
       // per-projector cursor only when its predicate matches (checkpoints
@@ -610,13 +547,22 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const refreshCommandReadModelFromProjectionState = Effect.gen(function* () {
     const nextCommandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    // The snapshot fence includes the deferred cursor. Its lag must not roll
-    // back command state that is already durably committed and published.
-    if (nextCommandReadModel.snapshotSequence < commandReadModel.snapshotSequence) {
+    const hotRows = yield* sql<{ readonly sequence: number }>`
+      SELECT last_applied_sequence AS sequence FROM projection_state
+      WHERE projector = 'projection.hot'
+    `;
+    // Command rows belong to the hot phase. A lagging shell cursor must neither
+    // discard newer command state nor prevent a shell-only refresh from removing
+    // purged rows. The transport snapshot keeps its separate, conservative fence.
+    const commandSequence = Math.max(
+      nextCommandReadModel.snapshotSequence,
+      hotRows[0]?.sequence ?? 0,
+    );
+    if (commandSequence < commandReadModel.snapshotSequence) {
       return commandReadModel;
     }
-    commandReadModel = nextCommandReadModel;
-    return nextCommandReadModel;
+    commandReadModel = { ...nextCommandReadModel, snapshotSequence: commandSequence };
+    return commandReadModel;
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logError("failed to refresh orchestration command read model").pipe(
@@ -868,6 +814,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     let materializedGoalFilePath: string | undefined;
     let materializedGoalFileWrite: Promise<string> | undefined;
     let goalFileCommitted = false;
+    let commitAttempted = false;
+    let reconciliationAttempted = false;
     const discardUncommittedGoalFile = Effect.gen(function* () {
       if (goalFileCommitted) {
         return;
@@ -907,32 +855,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
       yield* Effect.promise(() => discardMaterializedThreadGoalFile(filePath));
     });
-    const reconcileCommandReadModelUnderLock = Effect.gen(function* () {
-      const persistedEvents = yield* Stream.runCollect(
-        eventStore.readFromSequence(commandReadModel.snapshotSequence),
-      ).pipe(Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)));
-      if (persistedEvents.length === 0) {
-        return;
-      }
+    const reconcileCommandReadModelUnderLock = Effect.suspend(() => {
+      if (!commitAttempted || reconciliationAttempted) return Effect.void;
+      reconciliationAttempted = true;
+      return Effect.gen(function* () {
+        const persistedEvents = yield* Stream.runCollect(
+          eventStore.readFromSequence(commandReadModel.snapshotSequence),
+        ).pipe(Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)));
+        if (persistedEvents.length === 0) {
+          return;
+        }
 
-      let nextCommandReadModel = commandReadModel;
-      for (const persistedEvent of persistedEvents) {
-        nextCommandReadModel = yield* projectEvent(nextCommandReadModel, persistedEvent);
-      }
-      commandReadModel = nextCommandReadModel;
+        let nextCommandReadModel = commandReadModel;
+        for (const persistedEvent of persistedEvents) {
+          nextCommandReadModel = yield* projectEvent(nextCommandReadModel, persistedEvent);
+        }
+        commandReadModel = nextCommandReadModel;
 
-      for (const persistedEvent of persistedEvents) {
-        yield* publishCommittedEvent(persistedEvent);
-      }
-      yield* Ref.set(deferredProjectionDirty, true);
-      const lastEvent = persistedEvents.at(-1)!;
-      yield* scheduleDeferredProjectionCatchUp({
-        eventType: lastEvent.type,
-        sequence: lastEvent.sequence,
+        for (const persistedEvent of persistedEvents) {
+          yield* publishCommittedEvent(persistedEvent);
+        }
+        yield* Ref.set(projectionDirty, true);
+        const lastEvent = persistedEvents.at(-1)!;
+        yield* scheduleProjectionCatchUp({
+          eventType: lastEvent.type,
+          sequence: lastEvent.sequence,
+        });
       });
     });
-    const reconcileCommandReadModelAfterDispatchFailure = maintenanceLock.withPermits(1)(
-      reconcileCommandReadModelUnderLock,
+    const reconcileCommandReadModelAfterDispatchFailure = Effect.suspend(() =>
+      !commitAttempted || reconciliationAttempted
+        ? Effect.void
+        : maintenanceLock.withPriority(commandPriority(envelope))(
+            reconcileCommandReadModelUnderLock,
+          ),
     );
 
     const runCommand = Effect.gen(function* () {
@@ -1237,7 +1193,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               }
             }
             const committedEvents: OrchestrationEvent[] = [];
-            const deferredSettledSequences = new Set<number>();
             let nextCommandReadModel = commandReadModel;
 
             if (command.type === "thread.turn.start") {
@@ -1267,9 +1222,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               if (isShellMetadataEvent(savedEvent)) {
                 yield* projectionPipeline.projectMetadataEvent(savedEvent);
               } else {
-                const { deferredPhaseSettled } =
-                  yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
-                if (deferredPhaseSettled) deferredSettledSequences.add(savedEvent.sequence);
+                yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
               }
               committedEvents.push(savedEvent);
             }
@@ -1302,7 +1255,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
             return {
               committedEvents,
-              deferredSettledSequences,
               lastSequence: lastSavedEvent.sequence,
               nextCommandReadModel,
             } as const;
@@ -1339,24 +1291,28 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }),
           );
 
-          const committed = yield* sql
-            .withTransaction(transactionalCommitEffect)
-            .pipe(
-              Effect.catchTag("SqlError", (sqlError) =>
-                Effect.fail(
-                  toPersistenceSqlError("OrchestrationEngine.processEnvelope:transaction")(
-                    sqlError,
+          // The transaction and bounded publication are one cancellation
+          // boundary. A committed model must not lose its publication after
+          // the model has advanced. Waiting for maintenance remains cancellable.
+          return yield* Effect.gen(function* () {
+            commitAttempted = true;
+            const committed = yield* sql
+              .withTransaction(transactionalCommitEffect)
+              .pipe(
+                Effect.catchTag("SqlError", (sqlError) =>
+                  Effect.fail(
+                    toPersistenceSqlError("OrchestrationEngine.processEnvelope:transaction")(
+                      sqlError,
+                    ),
                   ),
                 ),
-              ),
-            );
-          commandReadModel = committed.nextCommandReadModel;
-          for (const event of committed.committedEvents) {
-            yield* publishCommittedEvent(event);
-            if (!committed.deferredSettledSequences.has(event.sequence))
-              yield* enqueueDeferredProjection(event);
-          }
-          return committed;
+              );
+            commandReadModel = committed.nextCommandReadModel;
+            for (const event of committed.committedEvents) {
+              yield* publishCommittedEvent(event);
+            }
+            return committed;
+          }).pipe(Effect.uninterruptible);
         }).pipe(
           Effect.onExit((exit) =>
             exit._tag === "Failure"
@@ -1543,7 +1499,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
   lastPublishedSequence = yield* eventStore.getHighWaterSequence();
-  deferredProjectionCoveredSequence = lastPublishedSequence;
 
   const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
     const outstanding = Math.max(0, current.outstanding - 1);
@@ -1619,7 +1574,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         ),
       );
     },
-  ).pipe(Effect.andThen(deferredProjectionWorker.drain));
+  );
 
   const quiesce: OrchestrationEngineShape["quiesce"] = Ref.update(
     engineAdmissionState,
@@ -1645,7 +1600,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     ).pipe(
       Effect.andThen(worker.stop),
       Effect.andThen(drain),
-      Effect.andThen(deferredProjectionWorker.stop),
       Effect.andThen(
         Ref.update(
           engineAdmissionState,
@@ -1659,7 +1613,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   );
 
   // Registered after the workers so LIFO finalization gracefully drains accepted
-  // commands and deferred projections before interrupting the consumers. The event bus closes
+  // commands before interrupting the consumers. The event bus closes
   // only after the worker has finished every durable publication.
   yield* Effect.addFinalizer(() => stop.pipe(Effect.andThen(PubSub.shutdown(eventPubSub))));
   yield* Effect.log("orchestration engine started").pipe(
@@ -1782,6 +1736,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ] as const;
           },
         ).pipe(
+          // Engine reservations and worker closure have separate lifecycles.
+          // If worker admission loses that race, roll back our reservation once.
           Effect.flatMap((decision) =>
             decision.accepted
               ? worker.tryEnqueue(envelope).pipe(
@@ -1853,134 +1809,131 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // Used by the settings screen to rebuild local indexes without deleting chats.
   // Also invoked by empty-route / desktop recovery paths — those can stampede.
   const runProjectionRepair: OrchestrationEngineShape["repairState"] = () =>
-    deferredProjectionLock.withPermits(1)(
-      maintenanceLock.withPermits(1)(
-        Effect.gen(function* () {
-          yield* Effect.log("repairing orchestration projection state");
-          const previousCommandReadModel = commandReadModel;
-          const repairFence = yield* eventStore.getHighWaterSequence().pipe(
-            Effect.mapError(
-              (error) =>
-                new OrchestrationCommandInternalError({
-                  commandId: "repair-local-state",
-                  commandType: ORCHESTRATION_WS_METHODS.repairState,
-                  detail: `Failed to capture the durable event fence before repair: ${error.message}`,
-                }),
-            ),
-          );
+    maintenanceLock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* Effect.log("repairing orchestration projection state");
+        const previousCommandReadModel = commandReadModel;
+        const repairFence = yield* eventStore.getHighWaterSequence().pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestrationCommandInternalError({
+                commandId: "repair-local-state",
+                commandType: ORCHESTRATION_WS_METHODS.repairState,
+                detail: `Failed to capture the durable event fence before repair: ${error.message}`,
+              }),
+          ),
+        );
 
-          yield* backupDerivedProjectionState.pipe(
-            Effect.catchTag("SqlError", (sqlError) =>
-              Effect.logError("failed to back up derived orchestration projection state").pipe(
-                Effect.annotateLogs({
-                  cause: Cause.pretty(Cause.fail(sqlError)),
-                }),
-                Effect.flatMap(() =>
-                  Effect.fail(
-                    new OrchestrationCommandInternalError({
-                      commandId: "repair-local-state",
-                      commandType: ORCHESTRATION_WS_METHODS.repairState,
-                      detail: "Failed to stage the current local state before rebuilding it.",
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          );
-
-          yield* resetDerivedProjectionState.pipe(
-            Effect.catchTag("SqlError", (sqlError) =>
-              Effect.logError("failed to reset derived orchestration projection state").pipe(
-                Effect.annotateLogs({
-                  cause: Cause.pretty(Cause.fail(sqlError)),
-                }),
-                Effect.tap(() =>
-                  restoreDerivedProjectionState.pipe(
-                    Effect.catchCause(() =>
-                      Effect.logWarning(
-                        "failed to restore orchestration projection backup after reset failure",
-                      ),
-                    ),
-                  ),
-                ),
-                Effect.flatMap(() =>
-                  Effect.fail(
-                    new OrchestrationCommandInternalError({
-                      commandId: "repair-local-state",
-                      commandType: ORCHESTRATION_WS_METHODS.repairState,
-                      detail: "Failed to clear the local projection cache before rebuilding it.",
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          );
-
-          const rebuildResult = yield* Effect.exit(
-            projectionPipeline.bootstrap.pipe(
-              Effect.flatMap(() => verifyProjectionRepairFence(repairFence)),
-            ),
-          );
-          if (rebuildResult._tag === "Failure") {
-            const restoreResult = yield* Effect.exit(restoreDerivedProjectionState);
-            if (restoreResult._tag === "Failure") {
-              commandReadModel = previousCommandReadModel;
-              return yield* Effect.logError(
-                "failed to restore orchestration projection backup after rebuild failure",
-              ).pipe(
-                Effect.annotateLogs({
-                  rebuildCause: Cause.pretty(rebuildResult.cause),
-                  restoreCause: Cause.pretty(restoreResult.cause),
-                }),
-                Effect.flatMap(() =>
-                  Effect.fail(
-                    new OrchestrationCommandInternalError({
-                      commandId: "repair-local-state",
-                      commandType: ORCHESTRATION_WS_METHODS.repairState,
-                      detail:
-                        "Projection repair failed and its staged backup could not be restored. Restart Synara before retrying repair.",
-                    }),
-                  ),
-                ),
-              );
-            }
-
-            commandReadModel = previousCommandReadModel;
-            yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
-            const typedFailure = Cause.findErrorOption(rebuildResult.cause);
-            const repairError = Option.filter(
-              typedFailure,
-              (error): error is OrchestrationCommandInternalError =>
-                Schema.is(OrchestrationCommandInternalError)(error),
-            );
-            return yield* Effect.logError(
-              "failed to rebuild orchestration projections from event log",
-            ).pipe(
+        yield* backupDerivedProjectionState.pipe(
+          Effect.catchTag("SqlError", (sqlError) =>
+            Effect.logError("failed to back up derived orchestration projection state").pipe(
               Effect.annotateLogs({
-                cause: Cause.pretty(rebuildResult.cause),
+                cause: Cause.pretty(Cause.fail(sqlError)),
               }),
               Effect.flatMap(() =>
                 Effect.fail(
-                  Option.getOrElse(
-                    repairError,
-                    () =>
-                      new OrchestrationCommandInternalError({
-                        commandId: "repair-local-state",
-                        commandType: ORCHESTRATION_WS_METHODS.repairState,
-                        detail: "Failed to rebuild local projections from the saved event history.",
-                      }),
+                  new OrchestrationCommandInternalError({
+                    commandId: "repair-local-state",
+                    commandType: ORCHESTRATION_WS_METHODS.repairState,
+                    detail: "Failed to stage the current local state before rebuilding it.",
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        yield* resetDerivedProjectionState.pipe(
+          Effect.catchTag("SqlError", (sqlError) =>
+            Effect.logError("failed to reset derived orchestration projection state").pipe(
+              Effect.annotateLogs({
+                cause: Cause.pretty(Cause.fail(sqlError)),
+              }),
+              Effect.tap(() =>
+                restoreDerivedProjectionState.pipe(
+                  Effect.catchCause(() =>
+                    Effect.logWarning(
+                      "failed to restore orchestration projection backup after reset failure",
+                    ),
                   ),
+                ),
+              ),
+              Effect.flatMap(() =>
+                Effect.fail(
+                  new OrchestrationCommandInternalError({
+                    commandId: "repair-local-state",
+                    commandType: ORCHESTRATION_WS_METHODS.repairState,
+                    detail: "Failed to clear the local projection cache before rebuilding it.",
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        const rebuildResult = yield* Effect.exit(
+          projectionPipeline.bootstrap.pipe(
+            Effect.flatMap(() => verifyProjectionRepairFence(repairFence)),
+          ),
+        );
+        if (rebuildResult._tag === "Failure") {
+          const restoreResult = yield* Effect.exit(restoreDerivedProjectionState);
+          if (restoreResult._tag === "Failure") {
+            commandReadModel = previousCommandReadModel;
+            return yield* Effect.logError(
+              "failed to restore orchestration projection backup after rebuild failure",
+            ).pipe(
+              Effect.annotateLogs({
+                rebuildCause: Cause.pretty(rebuildResult.cause),
+                restoreCause: Cause.pretty(restoreResult.cause),
+              }),
+              Effect.flatMap(() =>
+                Effect.fail(
+                  new OrchestrationCommandInternalError({
+                    commandId: "repair-local-state",
+                    commandType: ORCHESTRATION_WS_METHODS.repairState,
+                    detail:
+                      "Projection repair failed and its staged backup could not be restored. Restart Synara before retrying repair.",
+                  }),
                 ),
               ),
             );
           }
 
-          const snapshot = yield* refreshCommandReadModelFromProjectionState;
-          deferredProjectionCoveredSequence = repairFence;
+          commandReadModel = previousCommandReadModel;
           yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
-          return snapshot;
-        }),
-      ),
+          const typedFailure = Cause.findErrorOption(rebuildResult.cause);
+          const repairError = Option.filter(
+            typedFailure,
+            (error): error is OrchestrationCommandInternalError =>
+              Schema.is(OrchestrationCommandInternalError)(error),
+          );
+          return yield* Effect.logError(
+            "failed to rebuild orchestration projections from event log",
+          ).pipe(
+            Effect.annotateLogs({
+              cause: Cause.pretty(rebuildResult.cause),
+            }),
+            Effect.flatMap(() =>
+              Effect.fail(
+                Option.getOrElse(
+                  repairError,
+                  () =>
+                    new OrchestrationCommandInternalError({
+                      commandId: "repair-local-state",
+                      commandType: ORCHESTRATION_WS_METHODS.repairState,
+                      detail: "Failed to rebuild local projections from the saved event history.",
+                    }),
+                ),
+              ),
+            ),
+          );
+        }
+
+        const snapshot = yield* refreshCommandReadModelFromProjectionState;
+        yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
+        return snapshot;
+      }),
     );
 
   const repairState: OrchestrationEngineShape["repairState"] = () =>

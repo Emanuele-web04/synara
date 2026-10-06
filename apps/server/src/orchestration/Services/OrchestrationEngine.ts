@@ -56,13 +56,13 @@ export interface OrchestrationEngineShape {
   /** Reject new normal mutations while retaining reserved lifecycle progress. */
   readonly quiesce: Effect.Effect<void>;
 
-  /** Resolve after admitted commands and their accepted deferred projection work settle. */
+  /** Resolve after admitted commands finish their hot commit and ordered publication. */
   readonly drain: Effect.Effect<void>;
 
-  /** Reject all admission, drain command lanes and deferred work, then stop the workers. */
+  /** Reject all admission, finish admitted commands, then stop the command workers. */
   readonly stop: Effect.Effect<void>;
 
-  /** Current deferred-projection recovery state for health and diagnostics. */
+  /** Current supervised projection-recovery state for health and diagnostics. */
   readonly getProjectionCatchUpStatus: Effect.Effect<OrchestrationProjectionCatchUpStatus>;
 
   /**
