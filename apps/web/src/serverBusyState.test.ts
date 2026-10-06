@@ -67,9 +67,9 @@ it("derives long-request thresholds from caller options and ignores subscription
   expect(controller.getSnapshot().slowRequests).toBe(1);
 });
 
-it("honors an explicit extended timeout for the slow-request threshold", async () => {
+it("explains an extended request before its explicit timeout expires", async () => {
   controller.trackRequest("custom.longOperation", { timeoutMs: 180_000 });
-  await vi.advanceTimersByTimeAsync(179_999);
+  await vi.advanceTimersByTimeAsync(134_999);
   expect(controller.getSnapshot().slowRequests).toBe(0);
   await vi.advanceTimersByTimeAsync(1);
   expect(controller.getSnapshot().slowRequests).toBe(1);

@@ -64,20 +64,13 @@ within the last 30 seconds produces a recovery notice, using server-relative age
 rather than comparing machine clocks.
 
 Unary requests get a **15 second** slow notice. Requests opting out with
-`timeoutMs: null` get **120 seconds**; explicit timeouts above 60 seconds become
-their slow-notice threshold. This uses caller options, without a fixed operation
+`timeoutMs: null` get **120 seconds**; explicit timeouts above 60 seconds use
+75% of their budget as the slow-notice threshold. This uses caller options, without a fixed operation
 list. Slow notices display only while the transport is open; interrupted
 connections use the reconnecting state. Tracking is capped
 at 256 requests per transport. Subscriptions and heartbeats are excluded. Older
 servers without the capability still get the slow-request explanation. The
 notice lives outside the transcript and does not affect message auto-follow.
-A retryable `ORCHESTRATION_STREAM_OVERFLOW` restarts only the failed subscription
-with exponential backoff from 250 ms to 16 seconds. It preserves the thread's
-last successfully applied `afterSequence`; explicit unsubscribe/disposal cancels
-its keyed retry. It does not clear cursors or reconnect unrelated subscriptions.
-The independently shipped server stream-budget change owns the corresponding
-strict count/byte bounds and removal of redundant buffers.
-
 One compact status surface covers busy, real reconnecting and recent recovery; there
 is no separate slow-request toast. A slow RPC alone says the request is waiting,
 without claiming the connection is broken. Visibility changes, delayed renderer
@@ -94,24 +87,13 @@ through fingerprint-bound receipt settlement; that path keeps waiting/retrying
 settlement until acceptance, rejection, caller cancellation or transport disposal.
 Known long operations already opt out of the default timeout in `wsNativeApi.ts`.
 The new indicator neither reconnects automatically on a slow heartbeat nor retries
-mutations. The installed Effect protocol otherwise tears down an open socket after one missed
-5 second pong (about 10 seconds of silence). Synara now reuses Effect's scoped
-socket, JSON parser and RPC protocol buffering/acknowledgements with informational
-5 second keepalives. Late pongs do not replace the connection. Actual browser socket
-errors/closures still enter the existing coalesced reconnect path and restore
-subscriptions. WebSocket upgrades have a bounded 90 second budget, covering the
-observed 45–60 second stalls plus startup/transfer overhead; failure to open still
-enters the reconnect ladder. The first feature-socket probe also waits for a reply instead of
-replacing an open socket every 10 seconds during startup/recovery. Its wait is
-included in the compact pending-request state. A close just after a reconnect
-probe succeeds is rechecked after the active recovery settles, avoiding a lost retry.
-
-This deliberately cannot distinguish a server stall from a half-open network path:
-an open socket that never errors or closes remains waiting, including its startup
-probe and explicitly unbounded requests. Ordinary unary requests still have their
-60 second deadline; reload/disposal can replace the connection if the network never
-reports failure. Inferring death from latency alone would reintroduce stall-driven
-reconnect storms. Existing cancellation and receipt settlement remain in charge. Timeout copy now tells users to check the result before retrying.
+mutations. Connection recovery continues to use the existing Effect socket protocol.
+Stall-tolerant keepalives and bounded stream-local overflow recovery ship separately
+from this monitoring change. A network failure and a server stall can both cause
+latency; the indicator reports observed responsiveness, without proving the cause.
+Existing cancellation and receipt settlement remain in charge. Timeout copy asks
+users to check mutation results before retrying; reads can be retried once the server
+responds.
 
 ## Attribution: measured limitation
 

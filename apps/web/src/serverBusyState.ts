@@ -96,7 +96,7 @@ export class ServerBusyController {
       options?.timeoutMs === null
         ? LONG_REQUEST_MS
         : options?.timeoutMs !== undefined && options.timeoutMs > 60_000
-          ? options.timeoutMs
+          ? options.timeoutMs * 0.75
           : SLOW_REQUEST_MS,
     );
     this.pending.set(token, { slow: false, timer });
