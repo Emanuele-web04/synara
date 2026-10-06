@@ -1248,19 +1248,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const fetchUpstreamRef = (
-      cwd: string,
-      upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
-    ): Effect.Effect<void, GitCommandError> => {
-      const refspec = `+refs/heads/${upstream.upstreamBranch}:refs/remotes/${upstream.upstreamRef}`;
-      return runGit(
-        "GitCore.fetchUpstreamRef",
-        cwd,
-        ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
-        true,
-      );
-    };
-
     const fetchUpstreamRefForStatus = (
       cwd: string,
       upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
@@ -1357,13 +1344,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         Effect.forkIn(statusRefreshScope),
         Effect.asVoid,
       );
-
-    const refreshCheckedOutBranchUpstream = (cwd: string): Effect.Effect<void, GitCommandError> =>
-      Effect.gen(function* () {
-        const upstream = yield* resolveCurrentUpstream(cwd);
-        if (!upstream) return;
-        yield* fetchUpstreamRef(cwd, upstream);
-      });
 
     const resolveDefaultBranchName = (
       cwd: string,
@@ -4122,7 +4102,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         // Refresh upstream refs in the background so checkout remains responsive.
         yield* Effect.forkScoped(
-          refreshCheckedOutBranchUpstream(input.cwd).pipe(Effect.ignoreCause({ log: true })),
+          refreshStatusUpstreamIfStale(input.cwd).pipe(Effect.ignoreCause({ log: true })),
         );
       });
 

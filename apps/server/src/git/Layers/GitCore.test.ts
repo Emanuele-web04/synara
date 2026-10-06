@@ -1149,7 +1149,7 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("refresh fetch is scoped to the checked out branch upstream refspec", () =>
+    it.effect("refreshes only the checked out upstream without changing FETCH_HEAD", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();
         const source = yield* makeTmpDir();
@@ -1170,12 +1170,21 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(source, ["push", "-u", "origin", featureBranch]);
         yield* git(source, ["checkout", defaultBranch]);
 
+        yield* git(source, ["fetch", "origin", defaultBranch]);
+        const userFetchHead = yield* git(source, ["rev-parse", "FETCH_HEAD"]);
         const realGitCore = yield* GitCore;
         let fetchArgs: readonly string[] | null = null;
+        let refreshCompleted = false;
         const core = yield* makeIsolatedGitCore((input) => {
           if (input.args[0] === "fetch") {
             fetchArgs = [...input.args];
-            return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+            return realGitCore.execute(input).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  refreshCompleted = true;
+                }),
+              ),
+            );
           }
           return realGitCore.execute(input);
         });
@@ -1183,14 +1192,17 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* Effect.promise(() =>
           vi.waitFor(() => {
             expect(fetchArgs).not.toBeNull();
+            expect(refreshCompleted).toBe(true);
           }),
         );
 
         expect(yield* git(source, ["branch", "--show-current"])).toBe(featureBranch);
+        expect(yield* git(source, ["rev-parse", "FETCH_HEAD"])).toBe(userFetchHead);
         expect(fetchArgs).toEqual([
           "fetch",
           "--quiet",
           "--no-tags",
+          "--no-write-fetch-head",
           "origin",
           `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
         ]);

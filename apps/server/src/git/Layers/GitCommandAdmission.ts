@@ -90,7 +90,9 @@ const admit = <A, E, R>(
             ? checkpointCommands
             : readCommands;
       // Opportunistic refreshes never enqueue or bypass a waiting user command.
-      if (onBusy && (group.running >= group.permits || group.queue.length > 0))
+      // Background network work leaves one long slot available for user actions.
+      const immediateLimit = group === longCommands ? group.permits - 1 : group.permits;
+      if (onBusy && (group.running >= immediateLimit || group.queue.length > 0))
         return yield* onBusy;
       if (group.queue.length >= GIT_COMMAND_MAX_QUEUED_PER_CLASS) {
         return yield* new GitCommandError({

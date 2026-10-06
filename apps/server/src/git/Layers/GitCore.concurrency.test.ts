@@ -80,6 +80,47 @@ it.layer(TestLayer)("GitCore command admission", (it) => {
     );
   }
 
+  for (const method of ["status", "checkout"] as const) {
+    it.effect(`reserves a long slot for user commands during background ${method} fetches`, () =>
+      withRelease((release) =>
+        Effect.gen(function* () {
+          const firstFetch = yield* Deferred.make<void>();
+          const secondProbe = yield* Deferred.make<void>();
+          const fetchCwds: string[] = [];
+          let probes = 0;
+          const core = yield* makeGitCore({
+            executeOverride: (input) => {
+              if (input.operation === "GitCore.resolveCurrentUpstream" && ++probes === 2)
+                Deferred.doneUnsafe(secondProbe, Effect.void);
+              if (input.args[0] === "fetch") {
+                fetchCwds.push(input.cwd);
+                Deferred.doneUnsafe(firstFetch, Effect.void);
+                return Deferred.await(release).pipe(Effect.as(success));
+              }
+              return statusResult(input);
+            },
+          });
+          const refresh = (cwd: string) =>
+            method === "status"
+              ? core.status({ cwd }).pipe(Effect.asVoid)
+              : core.checkoutBranch({ cwd, branch: "main" });
+          yield* refresh("/repo-one");
+          yield* Deferred.await(firstFetch);
+          yield* refresh("/repo-two");
+          yield* Deferred.await(secondProbe);
+          const foreground = yield* forkAndYield(
+            core
+              .execute({ ...command("user-commit", null), args: ["commit"] })
+              .pipe(Effect.timeoutOption("100 millis")),
+          );
+          yield* TestClock.adjust("100 millis");
+          expect((yield* Fiber.join(foreground))._tag).toBe("Some");
+          expect(fetchCwds).toEqual(["/repo-one"]);
+        }),
+      ),
+    );
+  }
+
   it.effect("skips busy background fetches without occupying the user long FIFO", () =>
     withRelease((release) =>
       Effect.gen(function* () {
