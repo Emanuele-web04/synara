@@ -611,6 +611,24 @@ export function useChatTurnExecution({
         // which returns the message to the composer.
         if (needsProviderHandoff && prepareProviderHandoffForSend) {
           await prepareProviderHandoffForSend(activeThread, dispatchSettings.modelSelection);
+          // The optimistic row predates provider startup. Position this send
+          // after its completed handoff, including when the server clock is ahead.
+          const handoffCreatedAt = getThreadFromState(
+            useStore.getState(),
+            threadIdForSend,
+          )?.activities.findLast((activity) => activity.kind === "provider.handoff")?.createdAt;
+          messageCreatedAt = new Date(
+            Math.max(Date.now(), Date.parse(handoffCreatedAt ?? messageCreatedAt) + 1),
+          ).toISOString();
+          if (activeThreadIdRef.current === threadIdForSend) {
+            setOptimisticUserMessages((messages) =>
+              messages.map((message) =>
+                message.id === messageIdForSend
+                  ? { ...message, createdAt: messageCreatedAt }
+                  : message,
+              ),
+            );
+          }
         }
         // Carry the expected message id so a snapshot rebuilt after an interim
         // reset (thread switch, ack effect) keeps the message-echo ack signal.
