@@ -236,8 +236,10 @@ describe("MessagesTimeline worktree setup card", () => {
       await expect.poll(() => workingRow() !== null).toBe(true);
       await expect.poll(() => setupRow() === null, { timeout: 2000 }).toBe(true);
       expect(workingRow()).not.toBeNull();
-      expect(workingRow()?.querySelector(".shimmer")?.classList).not.toContain("shimmer-once");
-      expect(workingRow()?.querySelector(".shimmer")?.getAnimations()[0]?.startTime).toBe(0);
+      expect(workingRow()?.querySelector(".shimmer-group")?.classList).not.toContain(
+        "shimmer-once",
+      );
+      expect(workingRow()?.querySelector(".shimmer-group")?.getAnimations()[0]?.startTime).toBe(0);
     } finally {
       await screen.unmount();
     }

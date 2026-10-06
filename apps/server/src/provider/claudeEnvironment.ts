@@ -117,31 +117,45 @@ export function buildClaudeInstanceProcessEnv(
     resolvedEnvironmentHomePath === undefined &&
     (selectedEnvironment !== undefined ||
       (providerInstanceId !== undefined && providerInstanceId !== DEFAULT_CLAUDE_INSTANCE_ID));
+  const isolatedHomePath = needsIsolatedInstanceHome
+    ? claudeIsolatedHomePath({
+        ...(options?.isolationRootDir ? { isolationRootDir: options.isolationRootDir } : {}),
+        ...(options?.homeDir ? { homeDir: options.homeDir } : {}),
+        ...(providerInstanceId ? { providerInstanceId } : {}),
+      })
+    : undefined;
+  const useMacOSConfigIsolation = platform === "darwin" && isolatedHomePath !== undefined;
   const effectiveHomePath =
     resolvedHomePath ??
     resolvedEnvironmentHomePath ??
-    (needsIsolatedInstanceHome
-      ? claudeIsolatedHomePath({
-          ...(options?.isolationRootDir ? { isolationRootDir: options.isolationRootDir } : {}),
-          ...(options?.homeDir ? { homeDir: options.homeDir } : {}),
-          ...(providerInstanceId ? { providerInstanceId } : {}),
-        })
-      : undefined);
+    (useMacOSConfigIsolation ? undefined : isolatedHomePath);
   if (!effectiveHomePath && options?.homeDir) {
     env.HOME = options.homeDir;
   }
   // An explicit provider home or environment selects a distinct account
   // boundary. Remove account-scoped ambient values first, then overlay only
   // values deliberately supplied by the selected instance.
-  if (effectiveHomePath || selectedEnvironment !== undefined) {
+  if (effectiveHomePath || isolatedHomePath || selectedEnvironment !== undefined) {
     for (const key of Object.keys(env)) {
-      if (isClaudeAccountIsolationEnvKey(key)) {
+      if (
+        isClaudeAccountIsolationEnvKey(key) ||
+        key === "CLAUDE_CONFIG_DIR" ||
+        key === "CLAUDE_SECURESTORAGE_CONFIG_DIR"
+      ) {
         delete env[key];
       }
     }
   }
   if (selectedEnvironment) {
     Object.assign(env, selectedEnvironment);
+  }
+  if (useMacOSConfigIsolation) {
+    // Keep the system Keychain reachable, retaining existing account files in place.
+    env.HOME = options?.homeDir ?? env.HOME ?? homedir();
+    env.CLAUDE_CONFIG_DIR =
+      selectedEnvironment?.CLAUDE_CONFIG_DIR?.trim() || NodePath.join(isolatedHomePath, ".claude");
+    env.CLAUDE_SECURESTORAGE_CONFIG_DIR =
+      selectedEnvironment?.CLAUDE_SECURESTORAGE_CONFIG_DIR?.trim() || env.CLAUDE_CONFIG_DIR;
   }
   if (effectiveHomePath) {
     Object.assign(env, claudeHomeEnvironment(effectiveHomePath, platform));

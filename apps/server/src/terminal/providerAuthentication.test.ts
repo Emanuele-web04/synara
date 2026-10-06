@@ -50,7 +50,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const env = process.env;
 const home = env.CODEX_HOME || env.CLAUDE_CONFIG_DIR || env.CURSOR_CONFIG_DIR || env.GROK_HOME || env.PI_CODING_AGENT_DIR || env.HOME;
-console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), home, ambient: env.OPENAI_API_KEY || env.FACTORY_API_KEY || env.WINDSURF_API_KEY || env.GEMINI_API_KEY || '', authority: env.SYNARA_AUTH_TOKEN || '', nativeFlag: env.ELECTRON_RUN_AS_NODE || '' }));
+console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), home, user: env.USER, logname: env.LOGNAME, ambient: env.OPENAI_API_KEY || env.FACTORY_API_KEY || env.WINDSURF_API_KEY || env.GEMINI_API_KEY || '', authority: env.SYNARA_AUTH_TOKEN || '', nativeFlag: env.ELECTRON_RUN_AS_NODE || '' }));
 process.stdin.once('data', () => { fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, 'fixture-auth.json'), 'fixture-only'); process.exit(0); });
 `,
     { mode: 0o755 },
@@ -65,6 +65,8 @@ process.stdin.once('data', () => { fs.mkdirSync(home, { recursive: true }); fs.w
   const baseEnv = {
     PATH: path.dirname(process.execPath),
     HOME: homeDir,
+    USER: "fixture-user",
+    LOGNAME: "fixture-user",
     SYNARA_HOME: path.join(root, "synara"),
     OPENAI_API_KEY: "ambient-fixture",
     FACTORY_API_KEY: "ambient-fixture",
@@ -156,6 +158,8 @@ it.skipIf(process.platform === "win32").each([
             expect(output.ambient).toBe("");
             expect(output.authority).toBe("");
             expect(output.nativeFlag).toBe("");
+            expect(output.user).toBe("fixture-user");
+            expect(output.logname).toBe("fixture-user");
             const exited = new Promise<void>((resolve) =>
               manager.on("event", (event) => {
                 if (event.type === "exited") resolve();

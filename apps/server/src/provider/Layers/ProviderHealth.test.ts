@@ -2163,10 +2163,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.tap((status) => Effect.sync(() => assert.strictEqual(status.status, "ready"))),
         Effect.provide(
           mockSpawnerLayer((args, _command, env) => {
-            assert.strictEqual(
-              env?.HOME,
-              claudeIsolatedHomePath({ isolationRootDir, providerInstanceId }),
-            );
+            const accountHome = claudeIsolatedHomePath({ isolationRootDir, providerInstanceId });
+            if (process.platform === "darwin") {
+              assert.strictEqual(env?.HOME, "/tmp/server-home");
+              assert.strictEqual(env?.CLAUDE_CONFIG_DIR, join(accountHome, ".claude"));
+              assert.strictEqual(env?.CLAUDE_SECURESTORAGE_CONFIG_DIR, env?.CLAUDE_CONFIG_DIR);
+            } else {
+              assert.strictEqual(env?.HOME, accountHome);
+            }
             assert.strictEqual(env?.ANTHROPIC_AUTH_TOKEN, "work-token");
             const joined = args.join(" ");
             if (joined === "--version") {
