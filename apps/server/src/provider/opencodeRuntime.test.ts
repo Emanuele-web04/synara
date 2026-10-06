@@ -15,7 +15,7 @@ import { type ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
 import { resolveWindowsComSpec } from "@synara/shared/windowsProcess";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
@@ -37,6 +37,10 @@ import {
 } from "./providerBinaryResolution.ts";
 
 const encoder = new TextEncoder();
+const isolationRootDir = mkdtempSync(join(tmpdir(), "synara-opencode-runtime-test-"));
+afterAll(() => rmSync(isolationRootDir, { recursive: true, force: true }));
+
+const v1HealthResponse = () => Response.json({ healthy: true, version: "1.18.31" });
 
 describe("OpenCode permission policy", () => {
   it("keeps full access non-interactive while enforcing read-only Plan turns", () => {
@@ -158,7 +162,12 @@ function openCodeRuntimePoolTestLayer(state: {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
-      fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+      fetchImpl: (url) =>
+        Promise.resolve(
+          String(url).endsWith("/global/health")
+            ? v1HealthResponse()
+            : new Response("", { status: 404 }),
+        ),
       teardownProcessTree: async ({ rootPid }) => {
         const url = processUrls.get(rootPid);
         if (url) state.killUrls.push(url);
@@ -287,6 +296,7 @@ describe("buildOpenCodeServerProcessEnv", () => {
   it("scrubs ambient account config before applying a selected instance environment", () => {
     const env = buildIsolatedOpenCodeServerProcessEnv({
       instanceId: "opencode_work",
+      isolationRootDir,
       baseEnv: {
         PATH: "/usr/bin",
         HTTPS_PROXY: "http://proxy.example",
@@ -376,7 +386,12 @@ describe("OpenCodeRuntime startup diagnostics", () => {
         ).pipe(
           Effect.provide(
             makeOpenCodeRuntimeLive({
-              fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+              fetchImpl: (url) =>
+                Promise.resolve(
+                  String(url).endsWith("/global/health")
+                    ? v1HealthResponse()
+                    : new Response("", { status: 404 }),
+                ),
               teardownProcessTree: async () => ({
                 escalated: false,
                 signalErrors: [],
@@ -414,6 +429,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       const spawnOptions = spawnedCommands[0]?.options as { env?: NodeJS.ProcessEnv } | undefined;
       expect(spawnOptions?.env?.OPENCODE_SERVER_USERNAME).toBe("opencode");
       expect(spawnOptions?.env?.OPENCODE_SERVER_PASSWORD).toBe(server.serverPassword);
+      expect(spawnOptions?.env?.OPENCODE_PASSWORD).toBe(server.serverPassword);
     } finally {
       platformSpy.mockRestore();
     }
@@ -463,6 +479,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
   });
 
   it("accepts the OpenCode 2.x server startup marker", async () => {
+    const spawnedCommands: Array<ChildProcess.StandardCommand> = [];
     const server = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -471,12 +488,26 @@ describe("OpenCodeRuntime startup diagnostics", () => {
             binaryPath: "opencode",
             hostname: "127.0.0.1",
             port: 58_123,
+            cwd: "/repo/a project",
+            isolationRootDir,
+            environment: {
+              OPENCODE_PASSWORD: "selected-v2-password",
+              OPENCODE_SERVER_PASSWORD: "selected-v1-password",
+              OPENCODE_CLIENT: "other-client",
+            },
           });
         }),
       ).pipe(
         Effect.provide(
           makeOpenCodeRuntimeLive({
-            fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+            fetchImpl: (url, init) => {
+              expect(String(url)).toBe("http://127.0.0.1:58123/api/info");
+              expect(new Headers(init?.headers).get("Authorization")).toMatch(/^Basic /u);
+              expect(new Headers(init?.headers).get("x-opencode-directory")).toBe(
+                encodeURIComponent("/repo/a project"),
+              );
+              return Promise.resolve(Response.json({ version: "2.0.4" }));
+            },
             teardownProcessTree: async () => ({
               escalated: false,
               signalErrors: [],
@@ -486,6 +517,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
               mockOpenCodeServerSpawnerLayer({
                 stdout: "server listening on http://127.0.0.1:58123\n",
                 stderr: "",
+                spawnedCommands,
               }),
             ),
           ),
@@ -493,10 +525,23 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       ),
     );
 
-    expect(server.url).toBe("http://127.0.0.1:58123");
+    expect(server).toMatchObject({
+      url: "http://127.0.0.1:58123",
+      protocol: "v2",
+      version: "2.0.4",
+    });
+    const spawnOptions = spawnedCommands[0]?.options as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(spawnOptions?.env).toMatchObject({
+      OPENCODE_PASSWORD: server.serverPassword,
+      OPENCODE_SERVER_PASSWORD: server.serverPassword,
+      OPENCODE_SERVER_USERNAME: "opencode",
+      OPENCODE_CLIENT: "synara",
+    });
+    expect(server.serverPassword).not.toBe("selected-v2-password");
+    expect(server.serverPassword).not.toBe("selected-v1-password");
   });
 
-  it("fails startup when the server does not serve the legacy surface", async () => {
+  it("fails startup when the server does not serve a supported JSON API", async () => {
     const error = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -530,8 +575,8 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     );
 
     expect(OpenCodeRuntimeError.is(error)).toBe(true);
-    expect(error.detail).toContain("does not serve the legacy surface");
-    expect(error.detail).toContain("GET /provider → HTTP 404");
+    expect(error.detail).toContain("did not expose a supported JSON API");
+    expect(error.detail).toContain("HTTP 404");
     expect(error.detail).not.toContain("2.x");
   });
 
@@ -550,9 +595,14 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       ).pipe(
         Effect.provide(
           makeOpenCodeRuntimeLive({
-            fetchImpl: () => {
+            fetchImpl: (url) => {
+              if (!String(url).endsWith("/global/health")) {
+                return Promise.resolve(new Response("", { status: 404 }));
+              }
               probeCalls += 1;
-              return Promise.resolve(new Response("{}", { status: probeCalls === 1 ? 500 : 200 }));
+              return Promise.resolve(
+                probeCalls === 1 ? new Response("", { status: 500 }) : v1HealthResponse(),
+              );
             },
             teardownProcessTree: async () => ({
               escalated: false,
@@ -574,7 +624,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     expect(probeCalls).toBe(2);
   });
 
-  it("reports a distinct probe error for non-surface statuses like 401", async () => {
+  it("reports rejected HTTP credentials distinctly from an unsupported protocol", async () => {
     const error = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -608,9 +658,8 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     );
 
     expect(OpenCodeRuntimeError.is(error)).toBe(true);
-    expect(error.detail).toContain("did not pass the legacy surface probe");
     expect(error.detail).toContain("HTTP 401");
-    expect(error.detail).toContain("rejected the credentials");
+    expect(error.detail).toContain("rejected its HTTP credentials");
     expect(error.detail).not.toContain("2.x");
   });
 
@@ -714,6 +763,44 @@ describe("OpenCodeRuntime startup diagnostics", () => {
   });
 });
 
+it("detects authenticated external v2 servers and forwards client routing metadata", async () => {
+  const request = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      `Basic ${Buffer.from("opencode:external-password").toString("base64")}`,
+    );
+    expect(new Headers(init?.headers).get("x-opencode-directory")).toBe("%2Frepo%2Fproject");
+    return Response.json({ data: { version: "2.0.4" } });
+  });
+  const connection = await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* OpenCodeRuntime;
+      return yield* runtime.connectToOpenCodeServer({
+        binaryPath: "unused",
+        serverUrl: " http://127.0.0.1:9999 ",
+        serverPassword: "external-password",
+        cwd: "/repo/project",
+      });
+    }).pipe(
+      Effect.provide(
+        makeOpenCodeRuntimeLive({ fetchImpl: request }).pipe(
+          Layer.provide(mockOpenCodeServerSpawnerLayer({ stdout: "", stderr: "" })),
+        ),
+      ),
+      Effect.scoped,
+    ),
+  );
+  expect(connection).toMatchObject({
+    url: "http://127.0.0.1:9999",
+    protocol: "v2",
+    version: "2.0.4",
+    serverPassword: "external-password",
+    external: true,
+    exitCode: null,
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls[0]?.[0]).toBe("http://127.0.0.1:9999/api/info");
+});
+
 describe("OpenCodeRuntime local server pool", () => {
   it("keeps server scope closure pending until process-tree exit is proven", async () => {
     let proveExit: (() => void) | undefined;
@@ -728,7 +815,12 @@ describe("OpenCodeRuntime local server pool", () => {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
-      fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+      fetchImpl: (url) =>
+        Promise.resolve(
+          String(url).endsWith("/global/health")
+            ? v1HealthResponse()
+            : new Response("", { status: 404 }),
+        ),
       teardownProcessTree: async ({ rootPid }) => {
         teardownCalls += 1;
         expect(rootPid).toBe(0x7fff_fffe);
@@ -855,6 +947,8 @@ describe("OpenCodeRuntime local server pool", () => {
           });
 
           expect(connection).toMatchObject({
+            protocol: "v1",
+            version: "1.18.31",
             url: "http://127.0.0.1:9999",
             exitCode: null,
             external: true,
@@ -988,6 +1082,7 @@ describe("OpenCodeRuntime local server pool", () => {
                   .connectToOpenCodeServer({
                     binaryPath,
                     cliSpec,
+                    isolationRootDir,
                     ...(firstUsesEmptyEnvironment ? { environment: {} } : {}),
                   })
                   .pipe(Effect.provideService(Scope.Scope, firstScope));
@@ -995,6 +1090,7 @@ describe("OpenCodeRuntime local server pool", () => {
                   .connectToOpenCodeServer({
                     binaryPath,
                     cliSpec,
+                    isolationRootDir,
                     ...(!firstUsesEmptyEnvironment ? { environment: {} } : {}),
                   })
                   .pipe(Effect.provideService(Scope.Scope, secondScope));
@@ -1035,12 +1131,14 @@ describe("OpenCodeRuntime local server pool", () => {
           const first = yield* runtime
             .connectToOpenCodeServer({
               binaryPath: "opencode",
+              isolationRootDir,
               environment: { OPENAI_API_KEY: "a02hh7njhk5" },
             })
             .pipe(Effect.provideService(Scope.Scope, firstScope));
           const second = yield* runtime
             .connectToOpenCodeServer({
               binaryPath: "opencode",
+              isolationRootDir,
               environment: { OPENAI_API_KEY: "p7fe9wsknu9" },
             })
             .pipe(Effect.provideService(Scope.Scope, secondScope));

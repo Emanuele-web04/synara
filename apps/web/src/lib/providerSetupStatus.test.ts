@@ -19,7 +19,19 @@ describe("providerSetupStatusLabel", () => {
     [{ ...connected, available: false, authStatus: "unknown" }, true, false, "Unavailable"],
     [{ ...connected, available: false, status: "error" }, true, false, "Unavailable"],
     [{ ...connected, authStatus: "unauthenticated" }, true, false, "Needs sign-in"],
-    [{ ...connected, authStatus: "unknown" }, true, false, "Installed · sign-in not verified"],
+    [{ ...connected, authStatus: "unknown" }, true, false, "Installed · uses OpenCode credentials"],
+    [
+      {
+        ...connected,
+        provider: "codex",
+        instanceId: "codex",
+        driver: "codex",
+        authStatus: "unknown",
+      },
+      true,
+      false,
+      "Installed · sign-in not verified",
+    ],
     [{ ...connected, status: "warning" }, true, false, "Needs attention"],
     [connected, true, false, "Connected"],
   ] as const)(

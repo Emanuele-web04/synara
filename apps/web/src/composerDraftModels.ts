@@ -842,8 +842,18 @@ export function deriveEffectiveComposerModelState(input: {
   // from the option list; keep it ahead of the first-catalog-entry fallback.
   const unlistedDraftModel =
     input.selectedProvider === "pi" || input.selectedProvider === "omp" ? selectedDraftModel : null;
+  // A provider-qualified OpenCode choice is an explicit route. Discovery can
+  // be incomplete during startup or refresh; never switch it to a saved route.
+  // The static default can be an implicit placeholder from an older draft.
+  const explicitOpenCodeModel =
+    input.selectedProvider === "opencode" &&
+    activeSelection?.model.includes("/") &&
+    activeSelection.model !== getDefaultModel("opencode")
+      ? normalizeModelSlug(activeSelection.model, "opencode")
+      : null;
   const selectedModel =
     resolveAvailableModel(activeSelection?.model) ??
+    explicitOpenCodeModel ??
     resolveAvailableModel(
       selectionMatchesSelectedInstance(input.threadModelSelection)
         ? input.threadModelSelection.model

@@ -8,7 +8,8 @@ import type {
   ProviderListCommandsResult,
   ProviderListModelsResult,
 } from "@synara/contracts";
-import type { Agent, OpencodeClient } from "@opencode-ai/sdk/v2";
+import type { Agent } from "@opencode-ai/sdk/v2";
+import type { OpenCodeClient } from "./openCodeClient.ts";
 
 import { type OpenCodeCliModelDescriptor, type OpenCodeRuntimeError } from "./opencodeRuntime.ts";
 import {
@@ -515,9 +516,14 @@ export function flattenOpenCodeCliModels(input: {
 
 export function flattenOpenCodeModels(input: {
   readonly inventory: OpenCodeModelInventory;
+  readonly protocol?: "v1" | "v2";
   readonly credentialProviderIDs?: ReadonlyArray<string>;
 }): ProviderListModelsResult["models"] {
-  return resolvePreferredOpenCodeModelProviders(input)
+  const providers =
+    input.protocol === "v2"
+      ? input.inventory.providerList.all
+      : resolvePreferredOpenCodeModelProviders(input);
+  return providers
     .flatMap((provider) =>
       Object.values(provider.models).flatMap((model) => {
         const descriptor = toOpenCodeModelDescriptor({
@@ -613,7 +619,7 @@ export function flattenOpenCodeAgents(
     .toSorted((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
-type OpenCodeCommand = Awaited<ReturnType<OpencodeClient["command"]["list"]>>["data"] extends
+type OpenCodeCommand = Awaited<ReturnType<OpenCodeClient["command"]["list"]>>["data"] extends
   | ReadonlyArray<infer TCommand>
   | undefined
   ? TCommand

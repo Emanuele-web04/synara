@@ -244,11 +244,33 @@ boundaries and remaining live validation.
 
 ### OpenCode
 
-Synara uses OpenCode's legacy endpoint family, including `/session` and MCP
-for the Synara tools attached to managed sessions. Startup checks `GET /provider`
-and rejects a server that reports that route as unavailable; this does not identify
-the CLI's version. The SDK is pinned exactly (`1.18.31`) — bump it deliberately,
-never by range.
+The setup badge checks CLI availability. OpenCode manages model-provider API
+keys and OAuth credentials; Synara does not verify those credentials in its
+installation health check.
+
+OpenCode V2 model discovery uses the server's `/api/model` catalog and excludes
+models marked `enabled: false`. It does not add entries from the broader CLI
+catalog. Enabled models may still require provider credentials, credits, or
+account attestations; appearing in the picker does not verify those requirements.
+Model selections retain their full `provider/model` IDs, so similarly named
+OpenCode Zen and OpenRouter entries remain separate routes.
+
+Synara detects OpenCode's V1 or V2 HTTP API with authenticated JSON probes.
+V1 uses the legacy `/session` endpoint family and the exactly pinned SDK
+(`1.18.31`). V2 uses its native `/api` routes for discovery, sessions, streaming,
+permissions, forms, and MCP. The SDK's `/v2` import names an SDK generation;
+it does not identify the OpenCode CLI's major version.
+
+Managed sessions retain a private, thread-scoped Synara MCP connection on both
+protocols. Computer Use still requires a managed server; an external server URL
+cannot receive that isolated connection. V2 session approvals are applied to
+session permissions and acknowledged once, rather than saving a project-wide
+OpenCode grant. Plan mode suppresses those session grants until normal execution
+resumes.
+
+The V2 transport targets the current native API. Earlier V2 beta builds may use
+incompatible routes or payloads; an unsupported API is reported instead of
+falling back to removed V1 routes. V1 dependencies remain pinned deliberately.
 
 The `opencode` executable resolves from `PATH` first, then the standard install
 locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,

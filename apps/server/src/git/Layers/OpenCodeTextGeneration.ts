@@ -438,11 +438,15 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
           }),
       });
 
-      const runAgainstServer = (server: Pick<OpenCodeServerConnection, "url" | "serverPassword">) =>
+      const runAgainstServer = (
+        server: Pick<OpenCodeServerConnection, "url" | "serverPassword" | "protocol" | "version">,
+      ) =>
         Effect.tryPromise({
-          try: async () => {
+          try: async (signal) => {
             const client = openCodeRuntime.createOpenCodeSdkClient({
               baseUrl: server.url,
+              ...(server.protocol ? { protocol: server.protocol } : {}),
+              ...(server.version ? { version: server.version } : {}),
               directory: input.cwd,
               ...(server.serverPassword ? { serverPassword: server.serverPassword } : {}),
               cliSpec: config.cliSpec,
@@ -459,18 +463,22 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
             };
             const session = await client.session.create(
               sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+              { signal },
             );
             if (!session.data) {
               throw new Error("OpenCode session.create returned no session payload.");
             }
 
-            const result = await client.session.prompt({
-              sessionID: session.data.id,
-              model: parsedModel,
-              ...(agent ? { agent } : {}),
-              ...(variant ? { variant } : {}),
-              parts: [{ type: "text", text: promptText }, ...fileParts],
-            });
+            const result = await client.session.prompt(
+              {
+                sessionID: session.data.id,
+                model: parsedModel,
+                ...(agent ? { agent } : {}),
+                ...(variant ? { variant } : {}),
+                parts: [{ type: "text", text: promptText }, ...fileParts],
+              },
+              { signal },
+            );
             const info = result.data?.info;
             const errorMessage = getOpenCodePromptErrorMessage(info?.error);
             if (errorMessage) {
@@ -514,7 +522,27 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
 
       const rawOutput =
         serverUrl.length > 0
-          ? yield* runAgainstServer({ url: serverUrl, serverPassword })
+          ? yield* Effect.scoped(
+              openCodeRuntime
+                .connectToOpenCodeServer({
+                  binaryPath,
+                  cliSpec: config.cliSpec,
+                  cwd: input.cwd,
+                  serverUrl,
+                  ...(serverPassword ? { serverPassword } : {}),
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new TextGenerationError({
+                        operation: input.operation,
+                        detail: openCodeRuntimeErrorDetail(cause),
+                        cause,
+                      }),
+                  ),
+                  Effect.flatMap(runAgainstServer),
+                ),
+            )
           : yield* Effect.acquireUseRelease(
               acquireSharedServer({
                 binaryPath,

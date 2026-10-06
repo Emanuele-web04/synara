@@ -14,7 +14,11 @@ export function providerSetupStatusLabel(input: {
   if (!status.available) return "Unavailable";
   if (status.authStatus === "unauthenticated") return "Needs sign-in";
   if (status.status !== "ready") return "Needs attention";
-  if (status.authStatus === "unknown") return "Installed · sign-in not verified";
+  if (status.authStatus === "unknown") {
+    return status.driver === "opencode"
+      ? "Installed · uses OpenCode credentials"
+      : "Installed · sign-in not verified";
+  }
   return "Connected";
 }
 

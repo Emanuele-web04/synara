@@ -148,6 +148,16 @@ Multiple OpenCode installations or project-level configuration can produce diffe
 
 Not every underlying provider supports the same options. Reproduce the selection in OpenCode first, then report the OpenCode version, model ID, provider ID, and option that differs.
 
+## Managed-session compatibility
+
+Synara detects both the legacy OpenCode V1 API and the native V2 `/api` surface. Use the executable whose models, credentials, and agents you verified, then refresh Synara's provider catalog.
+
+V2 model discovery uses the enabled `/api/model` catalog without adding extra CLI entries. Models marked `enabled: false` are excluded. An enabled model can still require credentials, credits, or account attestations from its underlying provider. Model selections retain their full `provider/model` IDs, so similarly named OpenCode Zen and OpenRouter entries remain separate routes.
+
+Synara's task tools use a private MCP connection for each managed task on either protocol. Computer Use requires that connection to be ready and is unavailable with an external server URL. For V2, approving a tool for the session does not save a project-wide permission; Plan mode keeps its read-only rules.
+
+V2 support targets the current native API. Older V2 beta builds can have incompatible endpoints or request formats. If Synara reports an unsupported API, verify the OpenCode version and executable path before retrying.
+
 ## Official documentation
 
 - [OpenCode introduction and installation](https://opencode.ai/docs)

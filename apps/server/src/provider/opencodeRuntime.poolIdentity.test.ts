@@ -10,11 +10,18 @@ import { join, relative, sep } from "node:path";
 
 import { Effect, Exit, Layer, Scope, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makeOpenCodeRuntimeLive, OpenCodeRuntime, OPENCODE_CLI_SPEC } from "./opencodeRuntime.ts";
 
 const encoder = new TextEncoder();
+let isolationRootDir: string;
+beforeEach(() => {
+  isolationRootDir = mkdtempSync(join(tmpdir(), "opencode-pool-identity-"));
+});
+afterEach(() => {
+  rmSync(isolationRootDir, { recursive: true, force: true });
+});
 
 function mockPooledOpenCodeServerSpawnerLayer(state: {
   spawnUrls: Array<string>;
@@ -59,7 +66,12 @@ function openCodeRuntimePoolTestLayer(state: {
       reserveLoopbackPort: () => Effect.succeed(59_000),
       findAvailablePort: () => Effect.succeed(59_000),
     },
-    fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+    fetchImpl: (url) =>
+      Promise.resolve(
+        String(url).endsWith("/provider")
+          ? Response.json({ all: [], connected: [], default: {} })
+          : new Response(null, { status: 404 }),
+      ),
     teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
   }).pipe(Layer.provide(mockPooledOpenCodeServerSpawnerLayer(state)));
 }
@@ -79,10 +91,14 @@ describe("OpenCode local server pool identity", () => {
           const secondScope = yield* Scope.make();
 
           const first = yield* runtime
-            .connectToOpenCodeServer({ binaryPath: "opencode", cwd: "." })
+            .connectToOpenCodeServer({ isolationRootDir, binaryPath: "opencode", cwd: "." })
             .pipe(Effect.provideService(Scope.Scope, firstScope));
           const second = yield* runtime
-            .connectToOpenCodeServer({ binaryPath: "opencode", cwd: process.cwd() })
+            .connectToOpenCodeServer({
+              isolationRootDir,
+              binaryPath: "opencode",
+              cwd: process.cwd(),
+            })
             .pipe(Effect.provideService(Scope.Scope, secondScope));
 
           expect(second.url).toBe(first.url);
@@ -110,10 +126,15 @@ describe("OpenCode local server pool identity", () => {
           const secondScope = yield* Scope.make();
 
           const first = yield* runtime
-            .connectToOpenCodeServer({ binaryPath: "~/bin/opencode", cwd: "~/work" })
+            .connectToOpenCodeServer({
+              isolationRootDir,
+              binaryPath: "~/bin/opencode",
+              cwd: "~/work",
+            })
             .pipe(Effect.provideService(Scope.Scope, firstScope));
           const second = yield* runtime
             .connectToOpenCodeServer({
+              isolationRootDir,
               binaryPath: join(homedir(), "bin", "opencode"),
               cwd: join(homedir(), "work"),
             })
@@ -142,12 +163,14 @@ describe("OpenCode local server pool identity", () => {
 
           const first = yield* runtime
             .connectToOpenCodeServer({
+              isolationRootDir,
               binaryPath: "opencode",
               cliSpec: OPENCODE_CLI_SPEC,
             })
             .pipe(Effect.provideService(Scope.Scope, firstScope));
           const second = yield* runtime
             .connectToOpenCodeServer({
+              isolationRootDir,
               binaryPath: "opencode",
               cliSpec: { ...OPENCODE_CLI_SPEC, displayName: "OpenCode discovery" },
             })
@@ -195,10 +218,12 @@ describe("OpenCode local server pool identity", () => {
             Effect.gen(function* () {
               const runtime = yield* OpenCodeRuntime;
               const throughLink = yield* runtime.connectToOpenCodeServer({
+                isolationRootDir,
                 binaryPath: "opencode",
                 cwd,
               });
               const direct = yield* runtime.connectToOpenCodeServer({
+                isolationRootDir,
                 binaryPath: "opencode",
                 cwd: workspace,
               });
@@ -240,7 +265,11 @@ describe("OpenCode local server pool identity", () => {
           Effect.scoped(
             Effect.gen(function* () {
               const runtime = yield* OpenCodeRuntime;
-              yield* runtime.connectToOpenCodeServer({ binaryPath: "opencode", cwd });
+              yield* runtime.connectToOpenCodeServer({
+                isolationRootDir,
+                binaryPath: "opencode",
+                cwd,
+              });
               expect(state.spawnCwds).toEqual([cwd]);
               expect(() =>
                 execFileSync(process.execPath, ["-p", "process.cwd()"], {

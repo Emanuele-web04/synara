@@ -34,6 +34,8 @@ test("text-generation environment fingerprints preserve presence and resist old 
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
+    connectionInputs: [] as Array<Parameters<OpenCodeRuntimeShape["connectToOpenCodeServer"]>[0]>,
+    clientInputs: [] as Array<Parameters<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>[0]>,
     startCwds: [] as Array<string | undefined>,
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     promptUrls: [] as string[],
@@ -48,6 +50,8 @@ const runtimeMock = {
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.connectionInputs.length = 0;
+    this.state.clientInputs.length = 0;
     this.state.startCwds.length = 0;
     this.state.sessionCreateInputs.length = 0;
     this.state.promptUrls.length = 0;
@@ -81,11 +85,17 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         exitCode: Effect.never,
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl }) =>
-    Effect.succeed({
-      url: serverUrl ?? "http://127.0.0.1:4301",
-      exitCode: null,
-      external: Boolean(serverUrl),
+  connectToOpenCodeServer: (input) =>
+    Effect.sync(() => {
+      runtimeMock.state.connectionInputs.push(input);
+      return {
+        url: input.serverUrl ?? "http://127.0.0.1:4301",
+        exitCode: null,
+        external: Boolean(input.serverUrl),
+        protocol: "v2" as const,
+        version: "2.0.4",
+        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+      };
     }),
   runOpenCodeCommand: () =>
     Effect.fail(
@@ -95,8 +105,10 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         cause: null,
       }),
     ),
-  createOpenCodeSdkClient: ({ baseUrl, serverPassword }) =>
-    ({
+  createOpenCodeSdkClient: (input) => {
+    runtimeMock.state.clientInputs.push(input);
+    const { baseUrl, serverPassword } = input;
+    return {
       session: {
         create: async (input: Record<string, unknown>) => {
           runtimeMock.state.sessionCreateInputs.push(input);
@@ -131,7 +143,8 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           );
         },
       },
-    }) as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>,
+    } as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>;
+  },
   loadOpenCodeInventory: () =>
     Effect.fail(
       new OpenCodeRuntimeError({
@@ -604,6 +617,19 @@ it.layer(OpenCodeTextGenerationExistingServerTestLayer)(
         });
 
         expect(runtimeMock.state.startCalls).toEqual([]);
+        expect(runtimeMock.state.connectionInputs).toHaveLength(2);
+        expect(runtimeMock.state.connectionInputs[0]).toMatchObject({
+          serverUrl: "http://127.0.0.1:9999",
+          serverPassword: "secret-password",
+          cwd: process.cwd(),
+        });
+        expect(runtimeMock.state.clientInputs).toHaveLength(2);
+        expect(runtimeMock.state.clientInputs[0]).toMatchObject({
+          baseUrl: "http://127.0.0.1:9999",
+          serverPassword: "secret-password",
+          protocol: "v2",
+          version: "2.0.4",
+        });
         expect(runtimeMock.state.promptUrls).toEqual([
           "http://127.0.0.1:9999",
           "http://127.0.0.1:9999",

@@ -57,6 +57,23 @@ export function detectOpenCodeBackgroundTaskStart(
   const toolName = typeof part.tool === "string" ? part.tool.trim().toLowerCase() : "";
   const input = asRecord(state.input);
 
+  if (toolName === "subagent") {
+    const metadata = asRecord(state.metadata) ?? asRecord(part.metadata);
+    const childSessionId = nonEmptyString(metadata?.sessionID);
+    // V2 returns a completed tool call when the child continues in the background.
+    // Foreground tools return status "completed" instead and need no durable task.
+    if (metadata?.status !== "running" || !childSessionId) {
+      return null;
+    }
+    return {
+      taskId: childSessionId,
+      childSessionId,
+      description: nonEmptyString(input?.description) ?? nonEmptyString(state.title),
+      subagentType: nonEmptyString(input?.agent),
+      source: "native-task",
+    };
+  }
+
   if (toolName === "task") {
     const metadata = asRecord(state.metadata) ?? asRecord(part.metadata);
     if (metadata?.background !== true) {

@@ -291,6 +291,33 @@ describe("resolvePreferredOpenCodeModelProviders", () => {
   });
 });
 describe("flattenOpenCodeModels", () => {
+  it("keeps every enabled v2 provider without v1 credential preferences", () => {
+    const providers = [
+      makeProvider({
+        id: "opencode",
+        name: "OpenCode",
+        models: {
+          "free-model": { id: "free-model", name: "Free Model" },
+        },
+      }),
+      makeProvider({
+        id: "openrouter",
+        name: "OpenRouter",
+        models: {
+          "paid-model": { id: "paid-model", name: "Paid Model" },
+        },
+      }),
+    ];
+    const models = flattenOpenCodeModels({
+      protocol: "v2",
+      inventory: { providerList: { all: providers, connected: [] } },
+    });
+    expect(models.map((model) => model.slug)).toEqual([
+      "opencode/free-model",
+      "openrouter/paid-model",
+    ]);
+  });
+
   it("converts OpenCode CLI model output into grouped model descriptors", () => {
     const models = flattenOpenCodeCliModels({
       models: [

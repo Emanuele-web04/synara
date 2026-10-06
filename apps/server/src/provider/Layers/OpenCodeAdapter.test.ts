@@ -169,6 +169,7 @@ function createMockOpenCodeRuntime(options?: {
   ) => Promise<unknown>;
   readonly serverExit?: Effect.Effect<number>;
   readonly serverPassword?: string;
+  readonly protocol?: "v1" | "v2";
   readonly sessionCreateError?: Error;
   readonly sessionUpdate?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly scopeCloseDefect?: boolean;
@@ -332,6 +333,7 @@ function createMockOpenCodeRuntime(options?: {
           exitCode: options?.serverExit ?? null,
           external: Boolean(input.serverUrl),
           ...(options?.serverPassword ? { serverPassword: options.serverPassword } : {}),
+          ...(options?.protocol ? { protocol: options.protocol } : {}),
         };
       }),
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
@@ -1047,8 +1049,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     ]);
   });
 
-  it("lists OpenCode models from the CLI before falling back to server inventory", async () => {
+  it.each(["v1", "v2"] as const)("lists models using the %s catalog policy", async (protocol) => {
     const runtime = createMockOpenCodeRuntime({
+      protocol,
       cliModels: [
         {
           slug: "opencode/minimax-m2.5-free",
@@ -1115,14 +1118,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     );
 
     expect(result).toMatchObject({
-      source: "opencode-cli",
+      source: protocol === "v2" ? "opencode" : "opencode-cli",
       cached: false,
     });
-    expect(result?.models.map((model) => model.slug)).toEqual([
-      "openai/gpt-5",
-      "opencode/minimax-m2.5-free",
-      "opencode-go/kimi-k2.6",
-    ]);
+    expect(result?.models.map((model) => model.slug)).toEqual(
+      protocol === "v2"
+        ? ["openai/gpt-5"]
+        : ["openai/gpt-5", "opencode/minimax-m2.5-free", "opencode-go/kimi-k2.6"],
+    );
     expect(runtime.connectCalls).toHaveLength(1);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
     expect(runtime.cliModelCalls).toHaveLength(1);
@@ -6354,6 +6357,285 @@ describe("OpenCode background subagent tasks", () => {
   const taskEventTypes = new Set(["task.started", "task.updated", "task.completed"]);
   const onlyTaskEvents = (event: { readonly type: string }) => taskEventTypes.has(event.type);
 
+  it("keeps v2 warnings nonterminal while reporting their provider detail", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const result = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        const turn = yield* adapter.sendTurn({
+          threadId,
+          input: "keep working after a provider warning",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        eventQueue.push({
+          type: "session.warning",
+          properties: {
+            sessionID: "opencode-session-1",
+            message: "Provider retry delayed",
+            detail: { attempt: 1 },
+          },
+        });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const [session] = yield* adapter.listSessions();
+        eventQueue.close();
+        return { events, session, turn };
+      }),
+    );
+    expect(result.events.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "runtime.warning",
+    ]);
+    expect(result.events[3]).toMatchObject({
+      turnId: result.turn.turnId,
+      payload: { message: "Provider retry delayed", detail: { attempt: 1 } },
+    });
+    expect(result.session).toMatchObject({ status: "running", activeTurnId: result.turn.turnId });
+  });
+
+  it("fails unsupported v2 forms and cancels the provider session", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const result = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.takeUntil(adapter.streamEvents, (event) => event.type === "runtime.error"),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "ask",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        eventQueue.push({
+          type: "question.unsupported",
+          properties: {
+            sessionID: "opencode-session-1",
+            requestID: "form-1",
+            message: "Conditional form is unsupported",
+          },
+        });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        yield* Effect.sleep(20);
+        eventQueue.close();
+        return events;
+      }),
+    );
+    expect(result.filter((event) => event.type === "turn.completed")).toMatchObject([
+      { payload: { state: "failed", errorMessage: "Conditional form is unsupported" } },
+    ]);
+    expect(runtime.questionRejectCalls).toContainEqual({ requestID: "form-1" });
+    expect(runtime.abortCalls).toContainEqual({ sessionID: "opencode-session-1" });
+  });
+
+  it.each(["session.error", "session.interrupted"] as const)(
+    "keeps the parent running when a foreground child emits %s",
+    async (type) => {
+      const eventQueue = createSubscribedEventQueue();
+      const runtime = createMockOpenCodeRuntime({
+        childrenBySessionId: { "opencode-session-1": [{ id: "child-1" }] },
+      });
+      const result = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+        Effect.gen(function* () {
+          const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+            Effect.forkChild,
+          );
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "ask child",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          });
+          eventQueue.push(
+            type === "session.error"
+              ? {
+                  type,
+                  properties: {
+                    sessionID: "child-1",
+                    error: { name: "UnknownError", data: { message: "child failed" } },
+                  },
+                }
+              : { type, properties: { sessionID: "child-1" } },
+          );
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          const [session] = yield* adapter.listSessions();
+          eventQueue.close();
+          return { events, session, turn };
+        }),
+      );
+      expect(result.events.at(-1)?.type).toBe("runtime.warning");
+      expect(result.session).toMatchObject({ status: "running", activeTurnId: result.turn.turnId });
+    },
+  );
+
+  it("aborts a v2 interrupted turn once and ignores its later idle signal", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const result = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        const turn = yield* adapter.sendTurn({
+          threadId,
+          input: "provider may interrupt this turn",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        eventQueue.push({
+          type: "session.interrupted",
+          properties: { sessionID: "opencode-session-1" },
+        });
+        eventQueue.push({
+          type: "session.interrupted",
+          properties: { sessionID: "opencode-session-1" },
+        });
+        eventQueue.push({
+          type: "session.status",
+          properties: { sessionID: "opencode-session-1", status: { type: "idle" } },
+        });
+        // The warning marks the end of the queue; duplicate abort/completion would arrive before it.
+        eventQueue.push({
+          type: "session.warning",
+          properties: { sessionID: "opencode-session-1", message: "Interruption processed" },
+        });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const [session] = yield* adapter.listSessions();
+        eventQueue.close();
+        return { events, session, turn };
+      }),
+    );
+    expect(result.events.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "turn.aborted",
+      "runtime.warning",
+    ]);
+    expect(result.events[3]).toMatchObject({
+      turnId: result.turn.turnId,
+      payload: { reason: "Interrupted by OpenCode." },
+    });
+    expect(result.session?.status).toBe("ready");
+    expect(result.session?.activeTurnId).toBeUndefined();
+    expect(result.session?.lastError).toBeUndefined();
+  });
+
+  it("does not emit duplicate turn aborts when v2 interruption races the user interrupt", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      session: { abort: (input: { sessionID: string }) => Promise<unknown> };
+    };
+    let acknowledgeProviderAbort!: () => void;
+    const providerAbort = new Promise<void>((resolve) => {
+      acknowledgeProviderAbort = resolve;
+    });
+    client.session.abort = async ({ sessionID }) => {
+      eventQueue.push({ type: "session.interrupted", properties: { sessionID } });
+      await providerAbort;
+      return { data: null };
+    };
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.take(
+            Stream.tap(adapter.streamEvents, (event) =>
+              Effect.sync(() => {
+                if (event.type === "turn.aborted") acknowledgeProviderAbort();
+              }),
+            ),
+            5,
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        const turn = yield* adapter.sendTurn({
+          threadId,
+          input: "interrupt this turn",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        yield* adapter.interruptTurn(threadId, turn.turnId);
+        eventQueue.push({
+          type: "session.warning",
+          properties: { sessionID: "opencode-session-1", message: "User interruption processed" },
+        });
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected;
+      }),
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "turn.aborted",
+      "runtime.warning",
+    ]);
+  });
+
+  it("settles a v2 interrupted background child as stopped without aborting its parent", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const result = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.take(
+            Stream.filter(
+              adapter.streamEvents,
+              (event) =>
+                event.type === "task.completed" ||
+                event.type === "turn.aborted" ||
+                event.type === "runtime.warning",
+            ),
+            2,
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        const turn = yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+        eventQueue.push({
+          type: "session.interrupted",
+          properties: { sessionID: "child-session-1" },
+        });
+        eventQueue.push({
+          type: "session.warning",
+          properties: { sessionID: "opencode-session-1", message: "Parent remains active" },
+        });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const [session] = yield* adapter.listSessions();
+        eventQueue.close();
+        return { events, session, turn };
+      }),
+    );
+    expect(result.events.map((event) => event.type)).toEqual(["task.completed", "runtime.warning"]);
+    expect(result.events[0]).toMatchObject({
+      payload: { taskId: "child-session-1", status: "stopped" },
+    });
+    expect(result.session).toMatchObject({ status: "running", activeTurnId: result.turn.turnId });
+  });
+
   it("emits task.started and task.updated(isBackgrounded) once for a background task tool call", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
@@ -6754,5 +7036,169 @@ describe("OpenCode background subagent tasks", () => {
     expect(events[0]).toMatchObject({
       payload: { taskId: "child-session-1", status: "stopped" },
     });
+  });
+});
+
+describe("OpenCode v2 snapshot terminal recovery", () => {
+  it.each([
+    { outcome: "failed", withMessage: false },
+    { outcome: "failed", withMessage: true },
+    { outcome: "interrupted", withMessage: false },
+    { outcome: "succeeded", withMessage: true },
+    { outcome: "succeeded", withMessage: true, assistantError: true },
+  ])(
+    "recovers dropped terminal events: $outcome, message=$withMessage, error=$assistantError",
+    async ({ outcome, withMessage, assistantError }) => {
+      const eventQueue = createSubscribedEventQueue();
+      const metadata = { opencodeIdleAt: 100, opencodeOutcome: "failed" };
+      let snapshots: Array<{ info: Record<string, unknown>; parts: Part[] }> = [];
+      const runtime = createMockOpenCodeRuntime({
+        protocol: "v2",
+        events: eventQueue.stream,
+        session: { metadata },
+        messages: async () => ({ data: snapshots }),
+        promptAsync: async () => {
+          metadata.opencodeIdleAt = 101;
+          metadata.opencodeOutcome = outcome;
+          if (withMessage) {
+            snapshots = [
+              {
+                info: {
+                  id: "fresh-terminal-message",
+                  role: "assistant",
+                  finish: "stop",
+                  time: { completed: 2 },
+                  ...(assistantError
+                    ? {
+                        error: {
+                          name: "UnknownError",
+                          data: { message: "Fresh assistant failure" },
+                        },
+                      }
+                    : {}),
+                },
+                parts: [
+                  {
+                    id: "fresh-terminal-part",
+                    messageID: "fresh-terminal-message",
+                    sessionID: "opencode-session-1",
+                    type: "text",
+                    text: "partial output",
+                    time: { start: 1, end: 2 },
+                  } as Part,
+                ],
+              },
+            ];
+          }
+          return { data: null };
+        },
+      });
+      const client = runtime.runtime.createOpenCodeSdkClient({
+        baseUrl: "http://127.0.0.1:4099",
+        directory: process.cwd(),
+      }) as unknown as {
+        session: { status: () => Promise<{ data: Record<string, unknown> }> };
+      };
+      client.session.status = async () => ({ data: {} });
+      const events = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const collected = yield* Stream.runCollect(
+            Stream.takeUntil(
+              adapter.streamEvents,
+              (event) => event.type === "turn.completed" || event.type === "turn.aborted",
+            ),
+          ).pipe(Effect.forkChild);
+          const threadId = asThreadId("thread-v2-terminal-recovery");
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "hello",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          });
+          const result = Array.from(yield* Fiber.join(collected));
+          eventQueue.close();
+          return result;
+        }).pipe(
+          Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime)),
+          Effect.timeout("5 seconds"),
+        ),
+      );
+      if (outcome === "interrupted") {
+        expect(events.at(-1)).toMatchObject({ type: "turn.aborted" });
+        expect(events.some((event) => event.type === "turn.completed")).toBe(false);
+      } else if (outcome === "succeeded" && !assistantError) {
+        expect(events.at(-1)).toMatchObject({
+          type: "turn.completed",
+          payload: { state: "completed" },
+        });
+      } else {
+        expect(events.at(-1)).toMatchObject({
+          type: "turn.completed",
+          payload: {
+            state: "failed",
+            errorMessage: assistantError ? "Fresh assistant failure" : "OpenCode execution failed.",
+          },
+        });
+      }
+    },
+  );
+
+  it("does not recover a stale outcome before the terminal watermark advances", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const metadata = { opencodeIdleAt: 100, opencodeOutcome: "failed" };
+    const snapshots: Array<{ info: Record<string, unknown>; parts: Part[] }> = [];
+    const runtime = createMockOpenCodeRuntime({
+      protocol: "v2",
+      events: eventQueue.stream,
+      session: { metadata },
+      messages: async () => ({ data: snapshots }),
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      session: { status: () => Promise<{ data: Record<string, unknown> }> };
+    };
+    client.session.status = async () => ({ data: {} });
+    const observedTypes: string[] = [];
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const collected = yield* Stream.runCollect(
+          Stream.takeUntil(
+            adapter.streamEvents.pipe(
+              Stream.tap((event) => Effect.sync(() => observedTypes.push(event.type))),
+            ),
+            (event) => event.type === "turn.completed" || event.type === "turn.aborted",
+          ),
+        ).pipe(Effect.forkChild);
+        const threadId = asThreadId("thread-v2-stale-terminal");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "hello",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        yield* Effect.sleep(650);
+        expect(observedTypes).not.toContain("turn.completed");
+        expect(observedTypes).not.toContain("turn.aborted");
+        metadata.opencodeIdleAt = 101;
+        metadata.opencodeOutcome = "interrupted";
+        const result = Array.from(yield* Fiber.join(collected));
+        eventQueue.close();
+        return result;
+      }).pipe(
+        Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime)),
+        Effect.timeout("5 seconds"),
+      ),
+    );
+    expect(events.at(-1)).toMatchObject({ type: "turn.aborted" });
   });
 });

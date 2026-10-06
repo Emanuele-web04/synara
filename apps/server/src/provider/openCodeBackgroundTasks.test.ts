@@ -116,6 +116,49 @@ describe("detectOpenCodeBackgroundTaskStart", () => {
       source: "delegate-plugin",
     });
   });
+
+  it("detects a v2 subagent tool returning a running child", () => {
+    expect(
+      detectOpenCodeBackgroundTaskStart(
+        makeToolPart({
+          tool: "subagent",
+          metadata: { sessionID: "v2-child", status: "running" },
+          toolInput: { description: "Explore the runtime", agent: "explore", background: true },
+        }),
+      ),
+    ).toEqual({
+      taskId: "v2-child",
+      childSessionId: "v2-child",
+      description: "Explore the runtime",
+      subagentType: "explore",
+      source: "native-task",
+    });
+  });
+
+  it("detects a foreground v2 subagent that was moved into the background", () => {
+    expect(
+      detectOpenCodeBackgroundTaskStart(
+        makeToolPart({
+          tool: "subagent",
+          metadata: { sessionID: "v2-child", status: "running" },
+          toolInput: { agent: "explore" },
+        }),
+      ),
+    ).toMatchObject({ taskId: "v2-child", childSessionId: "v2-child" });
+  });
+
+  it("ignores completed, still executing, or unowned v2 subagent results", () => {
+    for (const part of [
+      makeToolPart({ tool: "subagent", metadata: { sessionID: "v2-child", status: "completed" } }),
+      makeToolPart({
+        tool: "subagent",
+        status: "running",
+        metadata: { sessionID: "v2-child", status: "running" },
+      }),
+      makeToolPart({ tool: "subagent", metadata: { status: "running" } }),
+    ])
+      expect(detectOpenCodeBackgroundTaskStart(part)).toBeNull();
+  });
 });
 
 describe("detectOpenCodeBackgroundTaskSettlement", () => {

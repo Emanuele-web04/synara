@@ -519,11 +519,52 @@ describe("composerDraftStore modelSelection", () => {
     expect(state.selectedModel).toBe("openai/gpt-5.4");
   });
 
-  it("falls back to the first exposed OpenCode runtime model when the draft selection is stale", () => {
+  it.each(["thread", "project"] as const)(
+    "keeps a Zen draft over a saved %s OpenRouter model through catalog refreshes",
+    (savedScope) => {
+      const zen = "opencode/muse-spark-1.3-contributor-free";
+      const router = "openrouter/meta/muse-spark-1.3-contributor";
+      for (const catalog of [
+        [
+          { slug: zen, name: "Muse Spark 1.3 Free" },
+          { slug: router, name: "Muse Spark 1.3 Contributor" },
+        ],
+        [{ slug: router, name: "Muse Spark 1.3 Contributor" }],
+        [],
+      ]) {
+        const state = deriveEffectiveComposerModelState({
+          draft: {
+            modelSelectionByProvider: { opencode: modelSelection("opencode", zen) },
+            activeProvider: "opencode",
+          },
+          selectedProvider: "opencode",
+          threadModelSelection: savedScope === "thread" ? modelSelection("opencode", router) : null,
+          projectModelSelection:
+            savedScope === "project" ? modelSelection("opencode", router) : null,
+          customModelsByProvider: {
+            codex: [],
+            claudeAgent: [],
+            cursor: [],
+            antigravity: [],
+            grok: [],
+            droid: [],
+            opencode: [],
+            pi: [],
+            devin: [],
+            omp: [],
+          },
+          availableModelOptionsByProvider: { opencode: catalog },
+        });
+        expect(state.selectedModel).toBe(zen);
+      }
+    },
+  );
+
+  it("preserves an explicit OpenCode route when discovery omits it", () => {
     const state = deriveEffectiveComposerModelState({
       draft: {
         modelSelectionByProvider: {
-          opencode: modelSelection("opencode", "openai/gpt-5"),
+          opencode: modelSelection("opencode", "openai/gpt-5.4"),
         },
         activeProvider: "opencode",
       },
@@ -550,7 +591,7 @@ describe("composerDraftStore modelSelection", () => {
       },
     });
 
-    expect(state.selectedModel).toBe("opencode/gpt-5-nano");
+    expect(state.selectedModel).toBe("openai/gpt-5.4");
   });
 
   it("preserves a selected Pi custom model when discovery omits it", () => {
