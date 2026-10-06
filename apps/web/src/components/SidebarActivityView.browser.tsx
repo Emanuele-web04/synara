@@ -11,10 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
+import { Sidebar, SidebarContent, SidebarProvider, SidebarTrigger, useSidebar } from "./ui/sidebar";
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
@@ -81,6 +83,7 @@ function makeThread(
 
 function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
+  compact?: boolean;
   projects?: readonly Project[];
   activeThreadId?: ThreadId | null;
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
@@ -96,6 +99,8 @@ function renderActivity(input: {
   onThreadContextMenu?: (threadId: ThreadId, position: { x: number; y: number }) => void;
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
+  threadJumpLabelByThreadId?: ReadonlyMap<ThreadId, string>;
+  snoozedRevealRequest?: number;
   threadsHydrated?: boolean;
   /** Controlled scope (the sidebar's role); omitted, the harness keeps it in local state. */
   scope?: {
@@ -109,18 +114,23 @@ function renderActivity(input: {
 function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
+  const [groupMode, setGroupMode] = useState<"time" | "project">("time");
   return (
     <SidebarActivityView
+      compact={input.compact ?? false}
+      snoozedRevealRequest={input.snoozedRevealRequest ?? 0}
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
       activeThreadId={input.activeThreadId ?? null}
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
       threadsHydrated={input.threadsHydrated ?? true}
+      groupMode={groupMode}
+      onGroupModeChange={setGroupMode}
       scopeSelection={input.scope ? input.scope.selection : localScope}
       onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
       prByThreadId={input.prByThreadId ?? new Map()}
-      threadJumpLabelByThreadId={new Map()}
+      threadJumpLabelByThreadId={input.threadJumpLabelByThreadId ?? new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
@@ -141,6 +151,11 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   );
 }
 
+function CollapsibleActivityHarness(input: Parameters<typeof renderActivity>[0]) {
+  const { state, isMobile } = useSidebar();
+  return renderActivity({ ...input, compact: !isMobile && state === "collapsed" });
+}
+
 describe("SidebarActivityView", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-02T12:00:00.000Z"));
@@ -149,6 +164,187 @@ describe("SidebarActivityView", () => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
   });
+
+  it("excludes Done and archived chats from compact rows and navigation while keeping Done in the full list", async () => {
+    await page.viewport(1280, 800);
+    const active = makeThread(81);
+    const done = makeThread(82, { settledAt: "2026-08-02T12:00:00.000Z" });
+    const archived = makeThread(83, { archivedAt: "2026-08-02T12:00:00.000Z" });
+    const unpinnedDone = makeThread(84, { settledAt: "2026-08-02T12:00:00.000Z" });
+    const onVisibleThreadIdsChange = vi.fn();
+    const mounted = await render(
+      <SidebarProvider defaultOpen={false}>
+        <Sidebar collapsible="compact">
+          <SidebarContent>
+            <CollapsibleActivityHarness
+              threads={[archived, done, active, unpinnedDone]}
+              pinnedThreadIdSet={new Set([done.id])}
+              activeThreadId={unpinnedDone.id}
+              onVisibleThreadIdsChange={onVisibleThreadIdsChange}
+            />
+          </SidebarContent>
+        </Sidebar>
+        <main>
+          <SidebarTrigger aria-label="Toggle filtered activity" />
+        </main>
+      </SidebarProvider>,
+    );
+    try {
+      const doneRow = mounted.getByTestId(`activity-thread-${done.id}`);
+      const archivedRow = mounted.getByTestId(`activity-thread-${archived.id}`);
+      const unpinnedDoneRow = mounted.getByTestId(`activity-thread-${unpinnedDone.id}`);
+      await expect.element(doneRow).not.toBeInTheDocument();
+      await expect.element(unpinnedDoneRow).not.toBeInTheDocument();
+      await expect.element(archivedRow).not.toBeInTheDocument();
+      await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([active.id]);
+      await mounted.getByRole("button", { name: "Toggle filtered activity" }).click();
+      await expect.element(doneRow).toBeVisible();
+      await expect.element(unpinnedDoneRow).toBeVisible();
+      await expect.element(archivedRow).not.toBeInTheDocument();
+      await mounted.getByRole("button", { name: "Toggle filtered activity" }).click();
+      await expect.element(doneRow).not.toBeInTheDocument();
+      await expect.element(unpinnedDoneRow).not.toBeInTheDocument();
+      await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([active.id]);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("scrolls the first snoozed conversation into view when requested from the rail", async () => {
+    const snoozed = makeThread(55, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const threads = [...Array.from({ length: 12 }, (_, index) => makeThread(index)), snoozed];
+    const view = (request: number) => (
+      <div data-testid="snoozed-scroll-container" style={{ height: 160, overflowY: "auto" }}>
+        {renderActivity({ threads, snoozedRevealRequest: request })}
+      </div>
+    );
+    const mounted = await render(view(0));
+    try {
+      await mounted.rerender(view(1));
+      await expect.element(mounted.getByTestId(`activity-thread-${snoozed.id}`)).toBeVisible();
+      const viewport = mounted.getByTestId("snoozed-scroll-container").element() as HTMLElement;
+      const row = mounted.getByTestId(`activity-thread-${snoozed.id}`).element() as HTMLElement;
+      await expect
+        .poll(
+          () => row.getBoundingClientRect().bottom <= viewport.getBoundingClientRect().bottom + 1,
+        )
+        .toBe(true);
+      expect(row.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        viewport.getBoundingClientRect().top,
+      );
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("keeps Activity order, identities, status markers and snooze actions when expanding the compact list", async () => {
+    await page.viewport(1280, 800);
+    const running = makeThread(41);
+    const review = makeThread(42, { modelSelection: { provider: "claudeAgent", model: "sonnet" } });
+    const draft = makeThread(44);
+    useComposerDraftStore.getState().setPrompt(draft.id, "Unsent draft");
+    const snoozed = makeThread(43, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const onReturnSnoozedThread = vi.fn();
+    const onOpenThread = vi.fn();
+    const mounted = await render(
+      <SidebarProvider defaultOpen={false} className="h-svh">
+        <Sidebar collapsible="compact">
+          <SidebarContent>
+            {renderActivity({
+              threads: [running, review, draft, snoozed],
+              activeThreadId: draft.id,
+              pinnedThreadIdSet: new Set([running.id]),
+              onOpenThread,
+              onReturnSnoozedThread,
+              threadJumpLabelByThreadId: new Map([[running.id, "⌘1"]]),
+              resolveThreadStatus: (thread) =>
+                thread.id === running.id
+                  ? {
+                      label: "Working",
+                      pulse: true,
+                      dotClass: "bg-sky-500",
+                      colorClass: "text-sky-500",
+                    }
+                  : thread.id === review.id
+                    ? {
+                        label: "Pending Approval",
+                        pulse: false,
+                        dismissible: true,
+                        dotClass: "bg-amber-500",
+                        colorClass: "text-amber-500",
+                      }
+                    : null,
+            })}
+          </SidebarContent>
+        </Sidebar>
+        <main className="flex-1" data-testid="activity-compact-main">
+          <SidebarTrigger aria-label="Toggle activity list" />
+          Conversation
+        </main>
+      </SidebarProvider>,
+    );
+    try {
+      const first = mounted.getByTestId(`activity-thread-${running.id}`);
+      const button = first.element() as HTMLElement;
+      const title = button.querySelector<HTMLElement>('[data-slot="sidebar-thread-title"]')!;
+      const provider = button.querySelector<HTMLElement>('[data-slot="sidebar-thread-provider"]')!;
+      expect(getComputedStyle(title).visibility).toBe("hidden");
+      expect(provider.getBoundingClientRect().width).toBe(20);
+      for (const thread of [running, review, draft]) {
+        const row = mounted.getByTestId(`activity-thread-${thread.id}`).element();
+        const bounds = row.getBoundingClientRect();
+        const logo = row
+          .querySelector<HTMLElement>('[data-slot="sidebar-thread-provider"]')!
+          .getBoundingClientRect();
+        expect(bounds.height).toBeCloseTo(bounds.width, 1);
+        expect(bounds.height).toBe(36);
+        expect(logo.left - bounds.left).toBeCloseTo(bounds.right - logo.right, 1);
+        expect(logo.top - bounds.top).toBeCloseTo(bounds.bottom - logo.bottom, 1);
+      }
+      expect(button.getBoundingClientRect().right).toBeLessThanOrEqual(
+        mounted.container
+          .querySelector<HTMLElement>('[data-slot="sidebar-container"]')!
+          .getBoundingClientRect().right,
+      );
+      await expect
+        .element(mounted.getByRole("img", { name: "Working", exact: true }))
+        .toBeVisible();
+      await expect
+        .element(mounted.getByRole("img", { name: "Pending Approval", exact: true }))
+        .toBeVisible();
+      await expect
+        .element(mounted.getByRole("img", { name: "Unsent draft", exact: true }))
+        .toBeVisible();
+      const renderedOrder = () =>
+        Array.from(
+          mounted.container.querySelectorAll('[data-slot="activity-thread-button"]'),
+          (row) => row.getAttribute("data-testid"),
+        );
+      const expectedOrder = [running, draft, review, snoozed].map(
+        (thread) => `activity-thread-${thread.id}`,
+      );
+      expect(renderedOrder()).toEqual(expectedOrder);
+      await mounted.getByRole("button", { name: "Toggle activity list" }).click();
+      await expect.poll(() => getComputedStyle(title).visibility).toBe("visible");
+      expect(renderedOrder()).toEqual(expectedOrder);
+      await mounted.getByRole("button", { name: "Toggle activity list" }).click();
+      await expect.poll(() => getComputedStyle(title).visibility).toBe("hidden");
+      expect(renderedOrder()).toEqual(expectedOrder);
+      await first.click();
+      expect(onOpenThread).toHaveBeenCalledWith(running.id);
+      await mounted.getByRole("button", { name: "Toggle activity list" }).click();
+      await mounted.getByRole("button", { name: "Snoozed", exact: true }).click();
+      await expect.element(mounted.getByTestId(`activity-thread-${snoozed.id}`)).toBeVisible();
+      await expect.element(mounted.getByText(/^Returns /)).toBeVisible();
+      await mounted.getByTestId(`activity-thread-${snoozed.id}`).hover();
+      await mounted.getByRole("button", { name: "Return now", exact: true }).click();
+      expect(onReturnSnoozedThread).toHaveBeenCalledWith(snoozed.id);
+    } finally {
+      await mounted.unmount();
+      useComposerDraftStore.getState().setPrompt(draft.id, "");
+    }
+  }, 20_000);
 
   it("keeps a snoozed pin out of normal rows and returns it through its own section", async () => {
     const thread = makeThread(40, { snoozedUntil: "2026-08-02T13:00:00.000Z" });

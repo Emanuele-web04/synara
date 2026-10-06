@@ -62,6 +62,38 @@ beside the provider label. Settings → Usage uses the same account-specific sna
 Usage checks follow each account's configured credentials; unassigned thread telemetry and
 provider-wide local totals are not used as a fallback for an individual account.
 
+## Keep Synara responsive
+
+Settings → Agent providers → **Keep Synara responsive** is enabled by default in Stable and Beta.
+Synara gives newly launched local agent processes a moderate CPU scheduling priority:
+nice +5 on macOS/Linux and Below Normal on Windows. Their children normally inherit it,
+including tests, compilers, and browsers. Processes that explicitly change their own priority
+can override that inheritance. This does not use background I/O or network throttling.
+Resolved native macOS/Linux executables and WSL workspaces adjust nice before executing the agent, so its initial threads
+and immediate children inherit the lower priority. Native launches preserve an already lower
+inherited priority. Windows applies Below Normal immediately after spawn; a launcher or `.cmd`
+shim that creates a child before that call can race the adjustment. The Effect runtime applies
+it when its spawner returns, after spawn-event and stream setup; that window remains a Windows
+limitation. Changing only the Windows launcher would not change WSL guest scheduling.
+
+The setting is read at process launch; already running agents and their children are not
+reprioritized. Restart existing sessions after changing it to apply consistently. Providers
+that launch a process per turn pick it up on the next launch. Pi's SDK runs inside the server,
+so its supervised shell commands receive the priority selected when that session started.
+An externally managed OpenCode server must be configured by its operator.
+
+The Synara server, terminals opened by the user, Git checkpoint helpers, and brief version,
+authentication, and dedicated Codex/Claude model-list probes keep their existing priority.
+ACP/OpenCode discovery uses the shared agent process/server and retains its agent priority.
+Auxiliary Codex/Claude model-generation processes use the agent priority. Priority changes are best effort: an OS
+failure is logged and the agent launch continues. Lower CPU priority improves scheduling
+under contention; it does not impose a CPU quota or guarantee response times under overload.
+Unresolved native executables launch directly to preserve startup errors such as ENOENT;
+if that direct launch succeeds, priority is adjusted after spawn as a best-effort fallback.
+If the native system `/bin/sh` is unavailable, Synara logs a warning and uses the same
+direct-spawn fallback. These fallback paths can race initial threads/children; actual shell-less
+Linux images and WSL guests without `/bin/sh` have not been verified.
+
 ## What remains provider-owned
 
 The provider still controls:

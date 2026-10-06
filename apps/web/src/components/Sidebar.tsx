@@ -252,6 +252,7 @@ import {
 } from "./SidebarCustomizeList";
 import { AppRailMoreMenu } from "./AppRailMoreMenu";
 import { AppRailUsage } from "./AppRailUsage";
+import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -268,7 +269,10 @@ import {
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import {
   type ActivityScopeSelection,
+  type ActivityGroupMode,
   buildActivityViewModel,
+  groupActivityThreadsByProject,
+  groupSidebarActivityThreads,
   hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
 } from "./SidebarActivityView.logic";
 import {
@@ -288,6 +292,8 @@ import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
+import { ProviderIcon } from "./ProviderIcon";
+import { ScrollArea } from "./ui/scroll-area";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
@@ -380,6 +386,8 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
+  SidebarHeaderTrigger,
+  useSidebar,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
@@ -451,7 +459,7 @@ import {
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { beginThreadDrag, endThreadDrag } from "../lib/threadDrag";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
-import { normalizeSettingsSection } from "../settingsNavigation";
+import { normalizeSettingsSection, type SettingsSectionId } from "../settingsNavigation";
 import {
   sidebarHoverRevealHideClassName,
   SIDEBAR_HEADER_ROW_CLASS_NAME,
@@ -1346,7 +1354,17 @@ export function SidebarSurfacePicker({
   );
 }
 
-export default function Sidebar() {
+export default function Sidebar({
+  onActivityViewEnabledChange,
+}: {
+  onActivityViewEnabledChange?: (enabled: boolean) => void;
+}) {
+  const {
+    setOpen: setSidebarOpen,
+    setOpenMobile: setMobileSidebarOpen,
+    state: sidebarState,
+  } = useSidebar();
+  const [snoozedRevealRequest, setSnoozedRevealRequest] = useState(0);
   const githubProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
     readGitHubProvisioningCapability,
@@ -1633,6 +1651,11 @@ export default function Sidebar() {
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [createProjectSpaceId, setCreateProjectSpaceId] = useState<SpaceId | null | undefined>();
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [automationCreateOpen, setAutomationCreateOpen] = useState(false);
+  useEffect(() => {
+    // Match the dialog's previous panel-local lifetime when leaving Automations.
+    if (!isOnAutomations) setAutomationCreateOpen(false);
+  }, [isOnAutomations]);
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
@@ -1696,11 +1719,16 @@ export default function Sidebar() {
   const [activityViewEnabled, setActivityViewEnabled] = useState(
     () => readSidebarUiState().activityViewEnabled,
   );
+  // The shell follows the displayed mode even when UI-state persistence is unavailable.
+  useEffect(() => {
+    onActivityViewEnabledChange?.(activityViewEnabled);
+  }, [activityViewEnabled, onActivityViewEnabledChange]);
   // Lives here, not in SidebarActivityView, so it survives the view unmounting
   // (opening Settings swaps the sidebar surface) and reloads.
   const [activityScope, setActivityScope] = useState<ActivityScopeSelection>(
     () => readSidebarUiState().activityScope,
   );
+  const [activityGroupMode, setActivityGroupMode] = useState<ActivityGroupMode>("time");
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const [classicSnoozedVisibleThreadIds, setClassicSnoozedVisibleThreadIds] = useState<
     readonly ThreadId[]
@@ -5027,14 +5055,15 @@ export default function Sidebar() {
     timestampToneClassName?: string;
     hoverActions: ReactNode;
   }) {
-    // The jump shortcut owns the slot while it is visible; otherwise the shared
-    // rule decides which status glyph shows here.
+    // Shortcut hints own this slot in the full list; compact mode keeps the status.
     const trailingStatus = resolveThreadStatusTrailingIndicator({
       status: input.threadStatus,
-      slotOccupied: Boolean(input.threadJumpLabel),
     });
     return (
-      <div className="relative flex min-w-0 items-center justify-end gap-[3px] group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
+      <div
+        data-slot="sidebar-thread-trailing"
+        className="relative flex min-w-0 items-center justify-end gap-[3px] group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12"
+      >
         {input.rightMetaChips.length > 0 ? (
           <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
@@ -5052,6 +5081,8 @@ export default function Sidebar() {
           // slot only carries the live status/loader glyph; when idle it
           // collapses and the hover action icons sit flush at the end.
           <span
+            data-slot="sidebar-thread-status"
+            data-shortcut-hidden={input.threadJumpLabel ? "true" : undefined}
             title={trailingStatus.label}
             className={threadRowStatusSlotClassName(
               input.isSubagentThread,
@@ -5075,7 +5106,7 @@ export default function Sidebar() {
   // so spacing/typography stay in lockstep; only the label and toolbar contents vary.
   function renderListSectionHeader(label: string, toolbar: ReactNode) {
     return (
-      <div className="group/project-header relative my-1">
+      <div data-slot="sidebar-list-section-header" className="group/project-header relative my-1">
         <div
           className={cn(
             "flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]",
@@ -5098,7 +5129,10 @@ export default function Sidebar() {
     }
     return (
       <div className="mb-3">
-        <div className="my-1 flex items-center justify-between px-2 py-1">
+        <div
+          data-slot="activity-section-label"
+          className="my-1 flex items-center justify-between px-2 py-1"
+        >
           <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
         </div>
         <div className="flex flex-col gap-0.5">
@@ -5174,6 +5208,7 @@ export default function Sidebar() {
         className={cn(SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME, "whitespace-normal leading-tight")}
       >
         <ThreadHoverCardContent
+          threadId={thread.id}
           title={thread.title}
           timeLabel={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
           projectName={hoverMetadata.projectName}
@@ -6754,6 +6789,34 @@ export default function Sidebar() {
     ...railAvailability,
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
+  const searchPaletteNavigationActions: SidebarSearchAction[] = (
+    ["inbox", "kanban", "studio", "automations"] as const
+  )
+    .filter((id) => isRailItemAvailable(id, railAvailability))
+    .map((id) => {
+      const item = railItemFor(id);
+      return {
+        id: `go-${id}`,
+        label: `Go to ${item.label}`,
+        description: `Open ${item.label}.`,
+        keywords: [item.label, "go", "navigate"],
+        run: item.onSelect,
+        icon: item.glyphs.idle,
+      };
+    });
+  if (projects.length > 0) {
+    searchPaletteNavigationActions.push({
+      id: "new-automation",
+      label: "New automation",
+      description: "Schedule a recurring task.",
+      keywords: ["automation", "create", "new", "schedule"],
+      icon: AddPlusIcon,
+      run: () => {
+        railItemFor("automations").onSelect();
+        setAutomationCreateOpen(true);
+      },
+    });
+  }
   const railShortcutItems: AppRailItem[] = railShortcuts.flatMap((shortcut): AppRailItem[] => {
     if (shortcut.kind === "space") {
       return [
@@ -6930,11 +6993,137 @@ export default function Sidebar() {
   const projectContextMenuHasOpenServer =
     projectContextMenuServer !== null && firstLocalServerUrl(projectContextMenuServer) !== null;
 
+  const activityThreads = useMemo(
+    () =>
+      groupSidebarActivityThreads(
+        activityNonGroupSidebarThreads,
+        resolveThreadStatusForSidebar,
+        visualActiveSidebarThreadId,
+      ),
+    [activityNonGroupSidebarThreads, resolveThreadStatusForSidebar, visualActiveSidebarThreadId],
+  );
+  const reviewThreads = useMemo(() => {
+    const model = buildActivityViewModel({
+      threads: activityNonGroupSidebarThreads,
+      pinnedThreadIdSet,
+      draftThreadIdSet,
+      settledOverrideByThreadId,
+      compact: !isMobile && sidebarState === "collapsed",
+    });
+    const reviewThreadIds = new Set(activityThreads.review.map((thread) => thread.id));
+    const feedThreads =
+      activityGroupMode === "project"
+        ? groupActivityThreadsByProject(
+            [...model.drafts, ...model.active],
+            (projectId) => projectById.get(projectId)?.kind === "project",
+          ).flatMap((group) => group.threads)
+        : [...model.drafts, ...model.active];
+    return [...model.pinned, ...feedThreads, ...model.settled].filter((thread) =>
+      reviewThreadIds.has(thread.id),
+    );
+  }, [
+    activityThreads.review,
+    activityNonGroupSidebarThreads,
+    activityGroupMode,
+    projectById,
+    pinnedThreadIdSet,
+    draftThreadIdSet,
+    settledOverrideByThreadId,
+    isMobile,
+    sidebarState,
+  ]);
+  const activityCounts = {
+    working: activityThreads.working.length,
+    review: reviewThreads.length,
+    snoozed: activityThreads.snoozed.length,
+  };
+  const reviewHoverContent = (
+    <div className="p-0.5">
+      <div className="px-1.5 py-1 text-ui-sm font-medium text-foreground">
+        Unread &amp; needs review
+      </div>
+      <ScrollArea className="h-auto [&_[data-slot=scroll-area-viewport]]:max-h-72">
+        <SidebarMenu aria-label="Unread chats" className="gap-0.5">
+          {reviewThreads.map((thread) => {
+            const status = resolveThreadStatusTrailingIndicator({
+              status: resolveThreadStatusForSidebar(thread),
+              isActive: thread.id === visualActiveSidebarThreadId,
+            });
+            return (
+              <SidebarMenuItem key={thread.id}>
+                <SidebarMenuButton
+                  size="sm"
+                  aria-label={thread.title}
+                  isActive={thread.id === visualActiveSidebarThreadId}
+                  onClick={() => activateThreadFromSidebarIntent(thread.id)}
+                >
+                  <ProviderIcon
+                    provider={thread.session?.provider ?? thread.modelSelection.provider}
+                    className="size-3.5 shrink-0"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+                  {status ? <SidebarStatusTrailingGlyph status={status} /> : null}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
+        </SidebarMenu>
+      </ScrollArea>
+    </div>
+  );
+  const openRailActivity = (snoozed: boolean) => {
+    selectRailPanelItem("home");
+    if (!isOnThreadsSection) handleSidebarViewChange("threads");
+    setActivityViewEnabledSmoothly(true);
+    setActivityScope(null);
+    if (snoozed) setSnoozedRevealRequest((request) => request + 1);
+    if (isMobile) setMobileSidebarOpen(true);
+    else setSidebarOpen(true);
+  };
+  const activityItems: AppRailItem[] = [
+    {
+      id: "activity-working",
+      glyphs: { idle: ThreadRunningSpinner, active: ThreadRunningSpinner },
+      label: "Working",
+      count: activityCounts.working,
+      badgeClassName: "text-sky-500 dark:text-sky-300",
+      snoozed: false,
+    },
+    {
+      id: "activity-review",
+      glyphs: railCentralGlyphs("eye-open"),
+      label: "Needs review",
+      count: activityCounts.review,
+      badgeClassName: "text-amber-600 dark:text-amber-300",
+      snoozed: false,
+    },
+    {
+      id: "activity-snoozed",
+      glyphs: railItemGlyphs("automations"),
+      label: "Snoozed",
+      count: activityCounts.snoozed,
+      badgeClassName: "text-info",
+      snoozed: true,
+    },
+  ]
+    .filter((item) => item.count > 0)
+    .map((item) => ({
+      ...item,
+      badge: {
+        text: item.count > 99 ? "99+" : String(item.count),
+        accessibleLabel: `${item.count} ${item.count === 1 ? "conversation" : "conversations"}`,
+      },
+      showBadgeCount: true,
+      active: false,
+      onSelect: () => openRailActivity(item.snoozed),
+      ...(item.id === "activity-review" ? { hoverContent: reviewHoverContent } : {}),
+    }));
   const appRailProps = {
     items: railItems,
     shortcuts: railShortcutItems,
     moreSlot: railMoreMenu,
     bottomItems: railBottomItems,
+    activityItems,
     bottomSlot: (
       <>
         <AppRailUsage
@@ -7049,15 +7238,24 @@ export default function Sidebar() {
                 />
               </SidebarGroup>
             ) : showRailAutomationsPanel ? (
-              <RailAutomationsPanel />
+              <RailAutomationsPanel
+                createOpen={automationCreateOpen}
+                onCreateOpenChange={setAutomationCreateOpen}
+              />
             ) : (
               <>
                 <div
+                  data-slot="sidebar-panel-controls"
                   // The panel has no header above it, so the title row gets breathing room from
                   // the panel's top edge. pt-1.5 puts the title's cap height as far from the top
                   // edge as its first letter is from the side.
                   className="flex items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5"
                 >
+                  <SidebarHeaderTrigger
+                    aria-label="Toggle compact sidebar"
+                    data-slot="sidebar-compact-trigger"
+                    className="hidden"
+                  />
                   <SidebarSurfacePicker
                     views={["threads", ...(groupsSectionVisible ? (["groups"] as const) : [])]}
                     activeView={isOnGroups ? "groups" : "threads"}
@@ -7139,12 +7337,16 @@ export default function Sidebar() {
                   ) : activityViewEnabled ? (
                     <SidebarGroup className="px-1.5 py-1.5">
                       <SidebarActivityView
+                        compact={!isMobile && sidebarState === "collapsed"}
+                        snoozedRevealRequest={snoozedRevealRequest}
                         threads={activityNonGroupSidebarThreads}
                         projectById={projectById}
                         activeThreadId={visualActiveSidebarThreadId}
                         pinnedThreadIdSet={pinnedThreadIdSet}
                         settledOverrideByThreadId={settledOverrideByThreadId}
                         threadsHydrated={threadsHydrated}
+                        groupMode={activityGroupMode}
+                        onGroupModeChange={setActivityGroupMode}
                         scopeSelection={activityScope}
                         onScopeSelectionChange={setActivityScope}
                         resolveThreadStatus={resolveThreadStatusForSidebar}
@@ -7315,6 +7517,7 @@ export default function Sidebar() {
             snoozedSidebarThreads.length > 0 ? (
               <SidebarGroup className="px-1.5 pt-1 pb-2">
                 <SidebarSnoozedThreadsSection
+                  revealRequest={snoozedRevealRequest}
                   threads={snoozedSidebarThreads}
                   renderThreadRow={renderSnoozedThreadRow}
                   onVisibleThreadIdsChange={setClassicSnoozedVisibleThreadIds}
@@ -7985,7 +8188,7 @@ export default function Sidebar() {
               setSearchPaletteMode("search");
             }
           }}
-          actions={searchPaletteActions}
+          actions={[...searchPaletteActions, ...searchPaletteNavigationActions]}
           projects={searchPaletteProjects}
           projectById={projectById}
           onCreateChat={() =>
@@ -7996,8 +8199,15 @@ export default function Sidebar() {
           onCreateThread={handlePrimaryNewThread}
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}
-          onOpenSettings={() => {
-            void navigate({ to: "/settings" });
+          onOpenSettings={(section, options) => {
+            void navigate({
+              to: "/settings",
+              search: (previous) => ({
+                ...previous,
+                section: section === "general" ? undefined : section,
+                target: options?.target,
+              }),
+            });
           }}
           onOpenFeedback={() => openFeedbackDialog()}
           onOpenUsageSettings={() => {
@@ -8047,7 +8257,7 @@ function SidebarSearchPaletteController(props: {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: SettingsSectionId, options?: { target?: string }) => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
