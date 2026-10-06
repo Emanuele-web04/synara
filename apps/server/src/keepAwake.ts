@@ -4,6 +4,7 @@
  *
  * `always` keeps one caffeinate child alive for the server lifetime, `agent`
  * only while at least one thread session is running a turn, `off` never spawns.
+ * The native assertion also watches the server PID, releasing it after a crash.
  * Process control (spawn, SIGTERM, bounded restart backoff) is isolated behind
  * an injectable runtime so the fold is unit-testable without a real child.
  */
@@ -33,7 +34,7 @@ import { OrchestrationEngineService } from "./orchestration/Services/Orchestrati
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ServerSettingsService } from "./serverSettings";
 
-export const KEEP_AWAKE_ARGS = ["-dims"] as const;
+const KEEP_AWAKE_ARGS = ["-dims", "-w", String(process.pid)] as const;
 export const KEEP_AWAKE_MAX_RESTARTS = 5;
 
 export interface KeepAwakeChild {
@@ -92,6 +93,12 @@ export function applySessionEvent(
   active: ReadonlySet<string>,
   event: OrchestrationEvent,
 ): ReadonlySet<string> {
+  if (event.type === "thread.deleted") {
+    if (!active.has(event.payload.threadId)) return active;
+    const next = new Set(active);
+    next.delete(event.payload.threadId);
+    return next;
+  }
   if (event.type !== "thread.session-set") {
     return active;
   }
@@ -295,7 +302,7 @@ export const makeKeepAwake = Effect.fn(function* (runtime: KeepAwakeRuntime) {
     yield* Effect.forkScoped(
       Stream.runForEach(domainEvents, (event) =>
         Effect.gen(function* () {
-          if (event.type !== "thread.session-set") return;
+          if (event.type !== "thread.session-set" && event.type !== "thread.deleted") return;
           const before = yield* Ref.get(activeThreadsRef);
           const after = applySessionEvent(before, event);
           if (after === before) return;

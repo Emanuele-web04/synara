@@ -487,3 +487,11 @@ they have no authenticated creating task.
 Delivery survives restart and duplicate events. An archived or deleted creator
 is not reopened; the result remains in the child and delivery is recorded as
 unavailable. Delivery is checked approximately once per second.
+
+## Keep Awake on macOS
+
+Keep Awake is off by default. On supported macOS hosts, Settings can keep the
+computer awake either for the server lifetime or while an agent turn is running.
+The server owns a `caffeinate -dims -w <server PID>` assertion; switching off or
+shutting down terminates it, deleting the last active thread releases its agent
+lease, and the native PID watch releases it if the server crashes. It does not change persistent macOS power settings.

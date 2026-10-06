@@ -1,3 +1,6 @@
+import { once } from "node:events";
+import { spawnProcess, spawnProcessSync } from "@synara/shared/processRuntime";
+import { resolveExecutable } from "@synara/shared/executable";
 import {
   EventId,
   type OrchestrationEvent,
@@ -11,7 +14,6 @@ import {
   applySessionEvent,
   computeDesired,
   isActiveSession,
-  KEEP_AWAKE_ARGS,
   KEEP_AWAKE_MAX_RESTARTS,
   type KeepAwakeChild,
   type KeepAwakeRuntime,
@@ -95,10 +97,6 @@ describe("keepAwake pure helpers", () => {
       sessionSetEvent({ threadId: "t1", status: "idle", activeTurnId: null, sequence: 2 }),
     );
     expect(active.size).toBe(0);
-  });
-
-  it("spawns caffeinate with -dims", () => {
-    expect([...KEEP_AWAKE_ARGS]).toEqual(["-dims"]);
   });
 });
 
@@ -256,31 +254,45 @@ describe("KeepAwakeService", () => {
     );
   });
 
-  it("mode agent follows agent turn start and stop", async () => {
-    const harness = makeHarness({ mode: "agent" });
-    await runScoped(harness, ({ keepAwake, eventsPubSub }) =>
-      Effect.gen(function* () {
-        expect((yield* keepAwake.getState).active).toBe(false);
-        yield* PubSub.publish(
-          eventsPubSub,
-          sessionSetEvent({
+  it.each(["idle", "deleted"] as const)(
+    "mode agent releases the wake assertion when its last active thread becomes %s",
+    async (termination) => {
+      const harness = makeHarness({ mode: "agent" });
+      await runScoped(harness, ({ keepAwake, eventsPubSub }) =>
+        Effect.gen(function* () {
+          expect((yield* keepAwake.getState).active).toBe(false);
+          yield* PubSub.publish(
+            eventsPubSub,
+            sessionSetEvent({
+              threadId: "t1",
+              status: "running",
+              activeTurnId: "turn-1",
+              sequence: 1,
+            }),
+          );
+          yield* waitFor(keepAwake.getState, (state) => state.active);
+          expect(harness.spawned).toHaveLength(1);
+          const settled = sessionSetEvent({
             threadId: "t1",
-            status: "running",
-            activeTurnId: "turn-1",
-            sequence: 1,
-          }),
-        );
-        yield* waitFor(keepAwake.getState, (state) => state.active);
-        expect(harness.spawned).toHaveLength(1);
-        yield* PubSub.publish(
-          eventsPubSub,
-          sessionSetEvent({ threadId: "t1", status: "idle", activeTurnId: null, sequence: 2 }),
-        );
-        yield* waitFor(keepAwake.getState, (state) => !state.active);
-        expect(harness.spawned[0]?.kills).toEqual(["SIGTERM"]);
-      }),
-    );
-  });
+            status: "idle",
+            activeTurnId: null,
+            sequence: 2,
+          });
+          const terminated: OrchestrationEvent =
+            termination === "idle"
+              ? settled
+              : {
+                  ...settled,
+                  type: "thread.deleted",
+                  payload: { threadId: ThreadId.makeUnsafe("t1"), deletedAt: NOW },
+                };
+          yield* PubSub.publish(eventsPubSub, terminated);
+          yield* waitFor(keepAwake.getState, (state) => !state.active);
+          expect(harness.spawned[0]?.kills).toEqual(["SIGTERM"]);
+        }),
+      );
+    },
+  );
 
   it("mode agent seeds from the projection snapshot", async () => {
     const harness = makeHarness({
@@ -393,3 +405,51 @@ describe("KeepAwakeService", () => {
     expect(harness.spawned).toHaveLength(0);
   });
 });
+
+it.runIf(process.platform === "darwin")(
+  "releases the native wake assertion if the owning server is killed",
+  async () => {
+    const bun = resolveExecutable("bun");
+    expect(bun).not.toBeNull();
+    const moduleUrl = new URL("./keepAwake.ts", import.meta.url).href;
+    const owner = spawnProcess(
+      bun!,
+      [
+        "--eval",
+        `
+    const { defaultKeepAwakeRuntime } = await import(${JSON.stringify(moduleUrl)});
+    const child = defaultKeepAwakeRuntime.spawnCaffeinate();
+    child.once('error', error => { console.error(error); process.exit(1); });
+    console.log(child.pid);
+    setInterval(() => {}, 1000);
+  `,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let caffeinatePid: number | undefined;
+    const alive = () => {
+      const result = spawnProcessSync("/bin/ps", ["-o", "stat=", "-p", String(caffeinatePid)], {
+        encoding: "utf8",
+      });
+      const state = result.stdout.trim();
+      return state.length > 0 && !state.startsWith("Z");
+    };
+    try {
+      const [chunk] = await once(owner.stdout!, "data");
+      caffeinatePid = Number(String(chunk).trim());
+      expect(Number.isInteger(caffeinatePid) && caffeinatePid > 0).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(alive()).toBe(true);
+      const ownerExited = once(owner, "exit");
+      owner.kill("SIGKILL");
+      await ownerExited;
+      for (let i = 0; i < 40 && alive(); i++)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(alive()).toBe(false);
+    } finally {
+      owner.kill("SIGKILL");
+      if (caffeinatePid && alive()) process.kill(caffeinatePid, "SIGTERM");
+    }
+  },
+  10000,
+);
