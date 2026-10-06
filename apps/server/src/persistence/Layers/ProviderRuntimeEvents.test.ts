@@ -1037,3 +1037,91 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
     }),
   );
 });
+
+it.effect("amortizes checkpoint retention passes across small checkpoint ACKs", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    yield* registerCheckpointConsumer;
+    const sequences: number[] = [];
+    for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 8; index++)
+      sequences.push((yield* repository.append(checkpointWarning(index))).sequence);
+    const statements: string[] = [];
+    const capture = Effect.provideService(Statement.CurrentTransformer, (statement) =>
+      Effect.sync(() => {
+        statements.push(statement.compile()[0]);
+        return statement;
+      }),
+    );
+    const prunes = () =>
+      statements.filter((query) => query.includes("DELETE FROM provider_runtime_events")).length;
+    for (const throughSequence of sequences.slice(0, 8))
+      assert.isTrue(
+        yield* repository
+          .advanceConsumerCursorThrough({
+            consumerName: checkpointConsumer,
+            throughSequence,
+            updatedAt: "2026-10-07T00:00:01.000Z",
+          })
+          .pipe(capture),
+      );
+    assert.strictEqual(prunes(), 0);
+    assert.isTrue(
+      yield* repository
+        .advanceConsumerCursorThrough({
+          consumerName: checkpointConsumer,
+          throughSequence: sequences.at(-1)!,
+          updatedAt: "2026-10-07T00:00:02.000Z",
+        })
+        .pipe(capture),
+    );
+    assert.strictEqual(prunes(), 1);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
+it.effect("releases superseded file notifications behind a stalled checkpoint cursor", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    yield* registerCheckpointConsumer;
+    const fileChange = (id: string): ProviderRuntimeEvent => ({
+      ...runtimeEvent(id, ""),
+      type: "item.completed",
+      itemId: RuntimeItemId.makeUnsafe(id),
+      payload: { itemType: "file_change", status: "completed" },
+    });
+    yield* repository.append(fileChange("superseded-file"));
+    yield* repository.append(fileChange("newest-file-before-terminal"));
+    yield* repository.append({
+      ...runtimeEvent("superseded-terminal", ""),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    let throughSequence = (yield* repository.append(fileChange("file-after-terminal"))).sequence;
+    for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 8; index++)
+      throughSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+    assert.isTrue(
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:01.000Z",
+      }),
+    );
+    const retained = yield* sql<{ readonly eventId: string }>`
+        SELECT json_extract(event_json, '$.eventId') AS "eventId" FROM provider_runtime_events
+        WHERE thread_id = 'thread-runtime-journal' ORDER BY sequence`;
+    // The checkpoint cursor never moved: only the superseded notification is
+    // released; each turn's newest file row and its terminal stay replayable.
+    assert.deepEqual(
+      retained.map((row) => row.eventId),
+      ["newest-file-before-terminal", "superseded-terminal", "file-after-terminal"],
+    );
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);

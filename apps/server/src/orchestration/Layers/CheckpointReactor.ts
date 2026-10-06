@@ -95,6 +95,8 @@ type ReactorInput =
     };
 
 const CHECKPOINT_REACTOR_CAPACITY = 256;
+// Background ACKs coalesce for this window; drain still flushes synchronously.
+const CHECKPOINT_ACK_INTERVAL_MS = 50;
 
 const REVERT_LEASE_ACQUIRE_TIMEOUT_MS = 15_000;
 
@@ -273,15 +275,27 @@ const make = Effect.gen(function* () {
     return latestCheckpoint?.turnId ?? thread.latestTurn?.turnId ?? null;
   });
 
-  const catchNoticeFailure = Effect.catchCause((cause: Cause.Cause<unknown>) =>
-    Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.logWarning(
-      "Checkpoint failure notice could not be published; durable settlement is retained",
-      { cause: Cause.pretty(cause) },
-    ),
-  );
-  const noticeThreadExists = (threadId: ThreadId) => orchestrationEngine.getReadModel().pipe(
-    Effect.map((model) => model.threads.some((thread) => thread.id === threadId && thread.deletedAt == null)),
-  );
+  // A notice is advisory: its failure must never reach failSource and stop
+  // every workspace. Interruption still propagates.
+  const catchNoticeFailure = <A, E, R>(notice: Effect.Effect<A, E, R>) =>
+    notice.pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning(
+              "Checkpoint failure notice could not be published; durable settlement is retained",
+              { cause: Cause.pretty(cause) },
+            ),
+      ),
+    );
+  const noticeThreadExists = (threadId: ThreadId) =>
+    orchestrationEngine
+      .getReadModel()
+      .pipe(
+        Effect.map((model) =>
+          model.threads.some((thread) => thread.id === threadId && thread.deletedAt == null),
+        ),
+      );
   const appendRevertFailureActivity = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnCount: number;
@@ -1872,7 +1886,11 @@ const make = Effect.gen(function* () {
     let observedCwd: { readonly source: string; readonly physical: string } | undefined;
     // A turn may initialize Git after its start row. Recheck missing Git until
     // discovered; each operation then keeps its captured classification/cwd.
-    if (cached !== undefined && (cached.isGitRepository || Date.now() - cached.classifiedAt < 1_000) && !changedWorkspaceThreads.has(threadId)) {
+    if (
+      cached !== undefined &&
+      (cached.isGitRepository || Date.now() - cached.classifiedAt < 1_000) &&
+      !changedWorkspaceThreads.has(threadId)
+    ) {
       if (!changedSessionThreads.has(threadId)) return cached;
       const session = yield* resolveSessionRuntimeForThread(threadId);
       const candidateCwd = Option.isSome(session) ? session.value.cwd : cached.fallbackCwd;
@@ -1980,12 +1998,12 @@ const make = Effect.gen(function* () {
       return yield* settleProvenDelivery(domainConsumer, event.sequence, event.payload.threadId);
     if (event.sequence <= adoptionFence) {
       const failure = yield* sql`SELECT 1 FROM orchestration_events AS outcome
-        WHERE outcome.stream_id = ${event.payload.threadId} AND outcome.event_type = 'thread.activity-appended'
+        WHERE outcome.aggregate_kind = 'thread' AND outcome.stream_id = ${event.payload.threadId} AND outcome.event_type = 'thread.activity-appended'
           AND outcome.sequence > ${event.sequence}
           AND json_extract(outcome.payload_json, '$.activity.kind') = 'checkpoint.revert.failed'
           AND json_extract(outcome.payload_json, '$.activity.payload.turnCount') = ${event.payload.turnCount}
           AND NOT EXISTS (SELECT 1 FROM orchestration_events AS next
-            WHERE next.stream_id = outcome.stream_id AND next.event_type = 'thread.checkpoint-revert-requested'
+            WHERE next.aggregate_kind = 'thread' AND next.stream_id = outcome.stream_id AND next.event_type = 'thread.checkpoint-revert-requested'
               AND next.sequence > ${event.sequence} AND next.sequence < outcome.sequence)
         LIMIT 1`.pipe(Effect.orDie);
       if (failure.length) {
@@ -2161,19 +2179,22 @@ const make = Effect.gen(function* () {
               .pipe(Effect.orDie)
           : false;
       if (!proven) {
-        const interruptedPlaceholder = thread?.checkpoints.some(
+        // Ingestion acceptance is not proof of a new Git snapshot. It does
+        // prove this legacy row was handled; non-Git, undone and deliberately
+        // skipped turns must not acquire a fresh error merely because this
+        // consumer is new. Only a missing placeholder proves an interruption.
+        const interrupted = thread?.checkpoints.some(
           (checkpoint) => checkpoint.turnId === event.turnId && checkpoint.status === "missing",
         );
-        // Ingestion acceptance is not proof of a new Git snapshot. It does
-        // prove this legacy row was handled; non-Git, undone and ignored turns
-        // must not acquire a fresh error merely because this consumer is new.
-        if (sequence > startupIngestionFence || interruptedPlaceholder) {
+        if (sequence > startupIngestionFence || interrupted) {
           yield* uncertain(
             "A native completion present before checkpoint startup has no immutable checkpoint outcome; the current workspace was not recaptured during recovery.",
           );
           return;
         }
-        yield* Effect.logDebug("Accepted legacy native checkpoint history adopted without recapture");
+        yield* Effect.logDebug(
+          "Accepted legacy native checkpoint history adopted without recapture",
+        );
       }
     }
     let successful = true;
@@ -2245,13 +2266,21 @@ const make = Effect.gen(function* () {
   const definitiveWorkspaceFailure = (cause: Cause.Cause<unknown>) => {
     let error = Cause.squash(cause);
     for (let depth = 0; depth < 8 && typeof error === "object" && error !== null; depth++) {
-      if ("code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EACCES" || error.code === "EPERM")) return true;
+      if (
+        "code" in error &&
+        (error.code === "ENOENT" ||
+          error.code === "ENOTDIR" ||
+          error.code === "EACCES" ||
+          error.code === "EPERM")
+      )
+        return true;
       error = "cause" in error ? error.cause : undefined;
     }
     return false;
   };
   const invalidateNonGitCompletion = (event: ProviderRuntimeEvent) => {
-    if (event.type === "turn.completed" && keys.get(event.threadId)?.isGitRepository === false) keys.delete(event.threadId);
+    if (event.type === "turn.completed" && keys.get(event.threadId)?.isGitRepository === false)
+      keys.delete(event.threadId);
   };
 
   // Failed identity recovery has its own bounded read-only execution budget;
@@ -2386,24 +2415,29 @@ const make = Effect.gen(function* () {
       // already have edited an alias, so none of this pending range may mutate.
       const configuration = workspaceConfigurationSequence;
       let recovered: WorkspaceSelection | undefined;
-      for (let attempt = 0; !stopping && (pending.replayOnRecovery || attempt < 3); attempt++) {
-        yield* Effect.sleep(Math.min(1_000, 50 * (attempt + 1)));
+      // A transient lookup failure gets a longer, still bounded retry window;
+      // only after it is exhausted does the range settle as uncertain.
+      for (let attempt = 0; !stopping && attempt < (pending.replayOnRecovery ? 6 : 3); attempt++) {
+        yield* Effect.sleep(50 * (attempt + 1));
         const resolved = yield* workspaceForThread(pending.threadId, false).pipe(
-          Effect.timeoutOption(200),
+          Effect.timeoutOption(pending.replayOnRecovery ? 1_000 : 200),
           Effect.exit,
         );
         if (resolved._tag === "Success" && Option.isSome(resolved.value)) {
           recovered = resolved.value.value;
           break;
         }
-        if (resolved._tag === "Failure" && definitiveWorkspaceFailure(resolved.cause)) pending.replayOnRecovery = false;
+        if (resolved._tag === "Failure" && definitiveWorkspaceFailure(resolved.cause))
+          pending.replayOnRecovery = false;
       }
       if (stopping) return;
       if (pending.replayOnRecovery && recovered !== undefined) {
         // Transient latency is not proof that an operation is lost. Resume its
         // durable range unless a peer has already touched this physical checkout
         // while its identity was unknown (or bounded evidence was evicted).
-        const unsafeAlias = (workspaceWorkClocks.get(recovered.key) ?? 0) > pending.observedWorkspaceClock || evictedWorkspaceClock > pending.observedWorkspaceClock;
+        const unsafeAlias =
+          (workspaceWorkClocks.get(recovered.key) ?? 0) > pending.observedWorkspaceClock ||
+          evictedWorkspaceClock > pending.observedWorkspaceClock;
         if (!unsafeAlias) {
           publishWorkspaceSelection(pending.threadId, recovered, configuration);
           unavailableWorkspaces.delete(pending.threadId);
@@ -2412,8 +2446,8 @@ const make = Effect.gen(function* () {
           Queue.offerUnsafe(wake, undefined);
           return;
         }
-        pending.replayOnRecovery = false;
       }
+      pending.replayOnRecovery = false;
       // Admission may be behind the journals while lookup waits. Fence both
       // durable sources once, before exposing the recovered identity, so rows
       // committed during that wait cannot become fresh work after a peer Undo.
@@ -2508,7 +2542,8 @@ const make = Effect.gen(function* () {
           pending = {
             threadId,
             ready: Deferred.makeUnsafe<void, unknown>(),
-            replayOnRecovery: selected._tag === "Failure" && !definitiveWorkspaceFailure(selected.cause),
+            replayOnRecovery:
+              selected._tag === "Failure" && !definitiveWorkspaceFailure(selected.cause),
             observedWorkspaceClock: workspaceClock,
             runtimePin: floor.runtimeFrom,
             domainPin: floor.domainFrom,
@@ -2519,7 +2554,9 @@ const make = Effect.gen(function* () {
           };
           unavailableWorkspaces.set(threadId, pending);
           created = true;
-          yield* (pending.replayOnRecovery ? Effect.void : claimUnavailableRow(source, sequence, threadId)).pipe(
+          yield* (
+            pending.replayOnRecovery ? Effect.void : claimUnavailableRow(source, sequence, threadId)
+          ).pipe(
             Effect.catchCause((cause) =>
               Deferred.failCause(pending!.ready, cause).pipe(
                 Effect.andThen(Effect.failCause(cause)),
@@ -2528,7 +2565,9 @@ const make = Effect.gen(function* () {
           );
           yield* Deferred.succeed(pending.ready, undefined);
           yield* Effect.logWarning(
-            pending.replayOnRecovery ? "Checkpoint workspace lookup delayed; durable work retained for retry" : "checkpoint workspace unavailable; pending operations will not be replayed",
+            pending.replayOnRecovery
+              ? "Checkpoint workspace lookup delayed; durable work retained for retry"
+              : "checkpoint workspace unavailable; pending operations will not be replayed",
             { operation: "workspace resolution" },
           );
         }
@@ -2673,7 +2712,9 @@ const make = Effect.gen(function* () {
                           ),
                         );
               refreshFences = true;
-              yield* withPinnedWorkspaceLease(Effect.sync(() => recordWorkspaceWork(lane.key)).pipe(Effect.andThen(work))).pipe(
+              yield* withPinnedWorkspaceLease(
+                Effect.sync(() => recordWorkspaceWork(lane.key)).pipe(Effect.andThen(work)),
+              ).pipe(
                 Effect.provideService(PinnedCheckpointWorkspace, {
                   cwd: selectedWorkspace.cwd,
                   identity: selectedWorkspace.cwd === undefined ? undefined : selectedWorkspace.key,
@@ -2975,9 +3016,14 @@ const make = Effect.gen(function* () {
     workspaceConfigurationSequence = domainScanned;
     started = true;
     yield* Effect.forkScoped(
-      Effect.forever(Queue.take(acknowledge).pipe(Effect.andThen(pumpAcknowledgements))).pipe(
-        Effect.catchCause(failSource),
-      ),
+      Effect.forever(
+        Queue.take(acknowledge).pipe(
+          Effect.andThen(pumpAcknowledgements),
+          // The sliding queue keeps one pending request, so a streaming burst
+          // pays at most one ACK transaction per interval.
+          Effect.andThen(Effect.sleep(CHECKPOINT_ACK_INTERVAL_MS)),
+        ),
+      ).pipe(Effect.catchCause(failSource)),
     );
     yield* Effect.forkScoped(
       Effect.forever(Queue.take(wake).pipe(Effect.andThen(scan))).pipe(
@@ -3011,7 +3057,8 @@ const make = Effect.gen(function* () {
       yield* Effect.forkScoped(
         Stream.runForEach(providerService.streamEvents, (event) =>
           runtimeRelevant(event)
-            ? Effect.sync(() => invalidateNonGitCompletion(event)).pipe(Effect.andThen(runtimeRepository.append(event)),
+            ? Effect.sync(() => invalidateNonGitCompletion(event)).pipe(
+                Effect.andThen(runtimeRepository.append(event)),
                 Effect.tap((row) =>
                   Effect.sync(() => {
                     runtimeFence = Math.max(runtimeFence, row.sequence);
