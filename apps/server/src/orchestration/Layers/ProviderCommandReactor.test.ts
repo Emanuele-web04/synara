@@ -14737,12 +14737,60 @@ describe("ProviderCommandReactor", () => {
       expect(after).toMatchObject(
         interveningEvent
           ? { status: "running", activeTurnId: "late-turn" }
-          : { status: "ready", activeTurnId: null, runtimeMode: prior.runtimeMode },
+          : {
+              status: "ready",
+              activeTurnId: null,
+              runtimeMode: prior.runtimeMode,
+              lastError: "Your message was not sent. Background work is active",
+            },
       );
       expect(harness.sendTurn).not.toHaveBeenCalled();
       expect(harness.stopSession).not.toHaveBeenCalled();
     });
   }
+
+  it("defers switching Computer off while Claude still has background work", async () => {
+    const registry = makeAgentGatewaySessionRegistry();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
+      gatewaySessions: registry,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    const send = (id: string) =>
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(id),
+        threadId,
+        message: { messageId: asMessageId(id), role: "user", text: "continue", attachments: [] },
+        enableComputerControl: false,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+    await Effect.runPromise(send("bootstrap-computer"));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    // The previous turn ran with Computer on; this one turns it off.
+    registry.issue(threadId, "claudeAgent", { additionalCapabilities: ["computer:control"] });
+    harness.startSession.mockClear();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: "claudeAgent",
+          operation: "session/reconfigure",
+          issue: "Background work is active",
+        }),
+      ),
+    );
+    await Effect.runPromise(send("computer-off-busy"));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const session = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!.session!;
+    expect(session.lastError).toBeNull();
+  });
 
   it("seeds imported Droid selection before handling idle metadata updates", async () => {
     const harness = await createHarness({
@@ -15530,7 +15578,10 @@ describe("ProviderCommandReactor", () => {
         }),
       );
 
-    const sendSecondTurn = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+    const sendSecondTurn = (
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      enableComputerControl?: boolean,
+    ) =>
       Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
@@ -15542,13 +15593,14 @@ describe("ProviderCommandReactor", () => {
             text: "continue after the handoff",
             attachments: [],
           },
+          ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: new Date().toISOString(),
         }),
       );
 
-    it("starts the target in the same thread and records the transferred context", async () => {
+    it("starts the target in the same thread and carries context through computer control activation", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
       });
@@ -15610,9 +15662,10 @@ describe("ProviderCommandReactor", () => {
       });
 
       // The next turn runs on the target and carries the prior transcript.
-      await sendSecondTurn(harness);
+      await sendSecondTurn(harness, true);
       await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-      expect(harness.startSession.mock.calls).toHaveLength(2);
+      expect(harness.startSession.mock.calls).toHaveLength(3);
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
       // The handoff divider explains the fresh session; no lost-history notice.
