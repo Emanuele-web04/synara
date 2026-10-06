@@ -174,7 +174,7 @@ describe("SidebarActivityView", () => {
     const onVisibleThreadIdsChange = vi.fn();
     const mounted = await render(
       <SidebarProvider defaultOpen={false}>
-        <Sidebar collapsible="compact" compactPreview={false}>
+        <Sidebar collapsible="compact">
           <SidebarContent>
             <CollapsibleActivityHarness
               threads={[archived, done, active, unpinnedDone]}
@@ -249,7 +249,7 @@ describe("SidebarActivityView", () => {
     const onOpenThread = vi.fn();
     const mounted = await render(
       <SidebarProvider defaultOpen={false} className="h-svh">
-        <Sidebar collapsible="compact" compactPreview={false}>
+        <Sidebar collapsible="compact">
           <SidebarContent>
             {renderActivity({
               threads: [running, review, draft, snoozed],

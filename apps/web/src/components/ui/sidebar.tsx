@@ -4,8 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { LayoutAlignLeftIcon, LayoutLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { DISCLOSURE_TRANSITION_MS, DISCLOSURE_WIDTH_MOTION_CLASS } from "~/lib/disclosureMotion";
-import { registerInPageGlassOverlay } from "~/lib/glassOverlayCutout";
+import { DISCLOSURE_WIDTH_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -27,10 +26,6 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_WIDTH_COMPACT = 64;
-// Give pointer users time to select an icon or open its menu before expanding.
-const SIDEBAR_PREVIEW_HOVER_DELAY_MS = 650;
-const SIDEBAR_PREVIEW_PORTAL_SELECTOR =
-  '[role="menu"], [role="dialog"], [data-slot="popover-popup"], [data-slot="preview-card-popup"], [data-slot="tooltip-popup"]';
 type SidebarCollapsible = "offcanvas" | "icon" | "compact" | "none";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 
@@ -245,7 +240,6 @@ function Sidebar({
   className,
   gapClassName,
   compactInRail = false,
-  compactPreview = true,
   compactAnchor,
   innerClassName,
   transparentSurface: transparentSurfaceProp,
@@ -260,8 +254,6 @@ function Sidebar({
   gapClassName?: string;
   /** Reserve no extra column; align compact rows to the shell rail's available space. */
   compactInRail?: boolean;
-  /** Allow automatic full-list previews on pointer hover or keyboard focus. */
-  compactPreview?: boolean;
   compactAnchor?: HTMLElement | null;
   innerClassName?: string;
   transparentSurface?: boolean;
@@ -275,9 +267,6 @@ function Sidebar({
   const transparentSurface = transparentSurfaceProp ?? false;
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
   const compactCollapsed = collapsible === "compact" && !isMobile && state === "collapsed";
-  const [previewOpen, setPreviewOpen] = React.useState(false);
-  const previewTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previewTimerTarget = React.useRef<boolean | null>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
   const [compactBounds, setCompactBounds] = React.useState<{
     left: number;
@@ -313,86 +302,6 @@ function Sidebar({
     observer.observe(root);
     return () => observer.disconnect();
   }, [compactCollapsed, compactInRail, compactAnchor]);
-  const clearPreviewTimer = React.useCallback(() => {
-    if (previewTimer.current !== null) clearTimeout(previewTimer.current);
-    previewTimer.current = null;
-    previewTimerTarget.current = null;
-  }, []);
-  const schedulePreview = React.useCallback(
-    (open: boolean) => {
-      clearPreviewTimer();
-      previewTimerTarget.current = open;
-      previewTimer.current = setTimeout(
-        () => {
-          previewTimer.current = null;
-          previewTimerTarget.current = null;
-          setPreviewOpen(open);
-        },
-        open ? SIDEBAR_PREVIEW_HOVER_DELAY_MS : DISCLOSURE_TRANSITION_MS,
-      );
-    },
-    [clearPreviewTimer],
-  );
-  React.useEffect(() => {
-    clearPreviewTimer();
-    setPreviewOpen(false);
-    return clearPreviewTimer;
-  }, [compactCollapsed, compactPreview, clearPreviewTimer]);
-  React.useLayoutEffect(() => {
-    if (!compactCollapsed || !compactInRail || !previewOpen) return;
-    const host = panelRef.current?.closest<HTMLElement>("[data-sidebar-preview-host]");
-    const surface = panelRef.current?.querySelector<HTMLElement>('[data-slot="sidebar-inner"]');
-    if (!host || !surface) return;
-    return registerInPageGlassOverlay(host, surface);
-  }, [compactCollapsed, compactInRail, previewOpen]);
-  React.useEffect(() => {
-    if (!compactCollapsed || !compactPreview || !previewOpen) return;
-    // Menus and dialogs opened by a row live in portals. Keep the preview available
-    // while using them, then close after the pointer/focus returns to the chat.
-    const isInside = (target: EventTarget | null) =>
-      target instanceof Element &&
-      (panelRef.current?.contains(target) ||
-        (compactInRail && compactAnchor?.contains(target)) ||
-        target.closest(SIDEBAR_PREVIEW_PORTAL_SELECTOR));
-    const handlePointer = (event: PointerEvent) => {
-      const active = document.activeElement;
-      if (isInside(event.target) || (isInside(active) && active?.matches(":focus-visible")))
-        clearPreviewTimer();
-      else if (previewTimer.current === null) schedulePreview(false);
-    };
-    const handleFocus = (event: FocusEvent) => {
-      if (isInside(event.target)) clearPreviewTimer();
-      else schedulePreview(false);
-    };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (
-        event.key !== "Escape" ||
-        event.defaultPrevented ||
-        (event.target instanceof Element && event.target.closest(SIDEBAR_PREVIEW_PORTAL_SELECTOR))
-      )
-        return;
-      event.preventDefault();
-      event.stopPropagation();
-      clearPreviewTimer();
-      setPreviewOpen(false);
-    };
-    document.addEventListener("pointermove", handlePointer);
-    document.addEventListener("focusin", handleFocus);
-    document.addEventListener("keydown", handleEscape, true);
-    return () => {
-      document.removeEventListener("pointermove", handlePointer);
-      document.removeEventListener("focusin", handleFocus);
-      document.removeEventListener("keydown", handleEscape, true);
-    };
-  }, [
-    compactCollapsed,
-    compactPreview,
-    compactInRail,
-    compactAnchor,
-    previewOpen,
-    clearPreviewTimer,
-    schedulePreview,
-  ]);
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(
     () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
     [collapsible, isMobile, resizable],
@@ -458,61 +367,14 @@ function Sidebar({
         className={cn(
           "group peer hidden text-sidebar-foreground md:block",
           collapsible === "compact" && "relative self-stretch",
-          compactCollapsed && previewOpen && "z-40",
         )}
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side={side}
         data-slot="sidebar"
         data-state={state}
         data-variant={variant}
-        data-sidebar-compact={compactCollapsed && !previewOpen ? "true" : undefined}
-        data-sidebar-preview={compactCollapsed && previewOpen ? "true" : undefined}
+        data-sidebar-compact={compactCollapsed ? "true" : undefined}
         data-sidebar-compact-rail={compactInRail ? "true" : undefined}
-        onPointerDownCapture={() => {
-          if (compactCollapsed && !previewOpen) clearPreviewTimer();
-        }}
-        onPointerMove={(event) => {
-          if (!compactCollapsed || !compactPreview || event.pointerType === "touch") return;
-          // Portal navigation shares React ancestors but is outside the panel.
-          // Leaving for it must cancel an opening that has not fired yet.
-          if (!(event.target instanceof Node) || !panelRef.current?.contains(event.target)) {
-            if (!previewOpen) clearPreviewTimer();
-            return;
-          }
-          if (previewOpen) clearPreviewTimer();
-          else if (previewTimerTarget.current !== true) schedulePreview(true);
-        }}
-        onPointerLeave={(event) => {
-          if (!compactPreview) return;
-          if (
-            compactInRail &&
-            event.relatedTarget instanceof Node &&
-            compactAnchor?.contains(event.relatedTarget)
-          ) {
-            clearPreviewTimer();
-            return;
-          }
-          const active = document.activeElement;
-          if (
-            compactCollapsed &&
-            !(panelRef.current?.contains(active) && active?.matches(":focus-visible"))
-          )
-            schedulePreview(false);
-        }}
-        onFocusCapture={(event) => {
-          // The navigation rail is a React portal owned by these children, but
-          // its focus belongs to the shell, outside this panel's DOM boundary.
-          if (
-            !compactCollapsed ||
-            !compactPreview ||
-            !(event.target instanceof Element) ||
-            !panelRef.current?.contains(event.target) ||
-            !event.target.matches(":focus-visible")
-          )
-            return;
-          clearPreviewTimer();
-          setPreviewOpen(true);
-        }}
       >
         {/* This is what handles the sidebar gap on desktop */}
         <div
@@ -556,7 +418,7 @@ function Sidebar({
               cn(
                 "absolute h-full",
                 DISCLOSURE_WIDTH_MOTION_CLASS,
-                compactCollapsed && !previewOpen && "w-(--sidebar-width-compact)",
+                compactCollapsed && "w-(--sidebar-width-compact)",
               ),
           )}
           data-slot="sidebar-container"
@@ -565,17 +427,10 @@ function Sidebar({
             compactCollapsed && compactInRail
               ? {
                   ...props.style,
-                  // The full preview opens beside the rail so navigation stays usable.
-                  left: previewOpen
-                    ? 0
-                    : (compactBounds?.left ?? "calc(-1 * var(--app-rail-width))"),
-                  ...(!previewOpen
-                    ? {
-                        top: compactBounds?.top ?? 0,
-                        width: compactBounds?.width ?? "var(--app-rail-width)",
-                        height: compactBounds?.height ?? 0,
-                      }
-                    : {}),
+                  left: compactBounds?.left ?? "calc(-1 * var(--app-rail-width))",
+                  top: compactBounds?.top ?? 0,
+                  width: compactBounds?.width ?? "var(--app-rail-width)",
+                  height: compactBounds?.height ?? 0,
                 }
               : props.style
           }
@@ -586,7 +441,6 @@ function Sidebar({
             className={cn(
               "relative z-0 flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
               !transparentSurface && "bg-sidebar",
-              compactInRail && previewOpen && "app-rail-panel mb-0",
               innerClassName,
             )}
             data-sidebar="sidebar"

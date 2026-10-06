@@ -3052,8 +3052,7 @@ diffs-container {
   ) !important;
 }
 
-/* A compact list reserves its icon column; its hover preview overlays the chat.
-   Keep rows mounted and preserve section state and scroll. */
+/* Compact rows stay mounted, preserving section state and scroll until explicitly expanded. */
 :is(
   [data-slot="activity-completion-status"],
   [data-slot="sidebar-thread-status"]

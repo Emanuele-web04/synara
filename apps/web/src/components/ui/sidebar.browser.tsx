@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cdp, page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import { DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
-import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./preview-card";
 import { AppRailPortal, AppRailSlotProvider, railItemGlyphs } from "../AppRail";
 import { ProviderIcon } from "../ProviderIcon";
 import { installGlassOverlayCutout } from "~/lib/glassOverlayCutout";
@@ -40,7 +39,7 @@ function ControlledSidebar() {
   );
 }
 
-function IntegratedRailShell({ compactPreview = false }: { compactPreview?: boolean }) {
+function IntegratedRailShell() {
   const { open } = useSidebar();
   const [rail, setRail] = useState<HTMLDivElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLDivElement | null>(null);
@@ -54,16 +53,10 @@ function IntegratedRailShell({ compactPreview = false }: { compactPreview?: bool
   });
   return (
     <AppRailSlotProvider value={rail} compactThreadSlotRef={!open ? setAnchor : undefined}>
-      <div data-sidebar-preview-host className="flex min-h-0 shrink-0">
+      <div className="flex min-h-0 shrink-0">
         <div ref={setRail} className="flex shrink-0" />
         <div className="app-rail-panel relative flex shrink-0">
-          <Sidebar
-            collapsible="compact"
-            compactInRail
-            compactPreview={compactPreview}
-            compactAnchor={anchor}
-            transparentSurface
-          >
+          <Sidebar collapsible="compact" compactInRail compactAnchor={anchor} transparentSurface>
             <AppRailPortal items={[item("home")]} shortcuts={[]} bottomItems={[item("settings")]} />
             <SidebarContent>
               <div
@@ -136,39 +129,6 @@ describe("sidebar toggles", () => {
       await screen.unmount();
     }
   });
-  it("lets users click compact icons and cross the rail before a sustained hover opens it", async () => {
-    await page.viewport(1280, 800);
-    const onSelect = vi.fn();
-    const screen = await render(
-      <SidebarProvider defaultOpen={false}>
-        <Sidebar collapsible="compact">
-          <button type="button" className="w-full" onClick={onSelect}>
-            Quick conversation
-          </button>
-        </Sidebar>
-        <main className="flex-1" data-testid="quick-hover-main">
-          Chat
-        </main>
-      </SidebarProvider>,
-    );
-    try {
-      const sidebar = screen.container.querySelector<HTMLElement>('[data-slot="sidebar"]')!;
-      const button = screen.getByRole("button", { name: "Quick conversation" });
-      await button.hover();
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      expect(sidebar.dataset.sidebarPreview).not.toBe("true");
-      await button.click();
-      expect(onSelect).toHaveBeenCalledOnce();
-      expect(sidebar.dataset.sidebarPreview).not.toBe("true");
-      await screen.getByTestId("quick-hover-main").hover();
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      expect(sidebar.dataset.sidebarPreview).not.toBe("true");
-      await button.hover();
-      await expect.poll(() => sidebar.dataset.sidebarPreview).toBe("true");
-    } finally {
-      await screen.unmount();
-    }
-  });
   it.each([
     { dark: false, scope: "none" },
     { dark: true, scope: "none" },
@@ -177,7 +137,7 @@ describe("sidebar toggles", () => {
     { dark: false, scope: "window" },
     { dark: true, scope: "window" },
   ])(
-    "preserves configured appearance in the hover preview (dark=$dark, glass=$scope)",
+    "preserves configured appearance after explicit expansion (dark=$dark, glass=$scope)",
     async ({ dark, scope }) => {
       await page.viewport(1280, 800);
       const html = document.documentElement;
@@ -202,13 +162,13 @@ describe("sidebar toggles", () => {
             } as import("react").CSSProperties
           }
         >
-          <IntegratedRailShell compactPreview />
+          <IntegratedRailShell />
         </SidebarProvider>,
         { container: root },
       );
       try {
         const host = root.querySelector<HTMLElement>(".app-rail-panel")!;
-        const surface = root.querySelector<HTMLElement>('[data-slot="sidebar-inner"]')!;
+        const surface = host;
         const main = page.getByTestId("integrated-main").element() as HTMLElement;
         const title = page.getByTestId("rail-panel-title").element();
         const normal = getComputedStyle(host);
@@ -229,7 +189,7 @@ describe("sidebar toggles", () => {
                 .width,
           )
           .toBe(0);
-        await page.getByRole("button", { name: "codex thread", exact: true }).hover();
+        await page.getByRole("button", { name: "Toggle integrated sidebar" }).click();
         await expect
           .poll(
             () =>
@@ -253,18 +213,7 @@ describe("sidebar toggles", () => {
         expect(getComputedStyle(title).fontFamily).toBe(expected.font);
         expect(getComputedStyle(title).fontSize).toBe(expected.fontSize);
         expect(root.style.clipPath).toBe("");
-        if (scope === "window") {
-          await expect.poll(() => main.style.clipPath).not.toBe("");
-          const bounds = surface.getBoundingClientRect();
-          expect(
-            document.elementsFromPoint(
-              bounds.left + bounds.width / 2,
-              bounds.top + bounds.height / 2,
-            ),
-          ).not.toContain(main);
-        } else expect(main.style.clipPath).toBe("");
-        await userEvent.keyboard("{Escape}");
-        await expect.poll(() => main.style.clipPath).toBe("");
+        expect(main.style.clipPath).toBe("");
       } finally {
         await screen.unmount();
         dispose();
@@ -281,7 +230,7 @@ describe("sidebar toggles", () => {
     await page.viewport(1280, 800);
     const screen = await render(
       <SidebarProvider defaultOpen>
-        <IntegratedRailShell compactPreview />
+        <IntegratedRailShell />
       </SidebarProvider>,
     );
     try {
@@ -319,11 +268,7 @@ describe("sidebar toggles", () => {
       await page.getByRole("button", { name: "Home", exact: true }).hover();
       await new Promise((resolve) => setTimeout(resolve, DISCLOSURE_TRANSITION_MS * 2));
       expect(panel.getBoundingClientRect().width).toBe(rail.getBoundingClientRect().width);
-      await page.getByRole("button", { name: "codex thread", exact: true }).hover();
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
-      expect(panel.getBoundingClientRect().left).toBeGreaterThanOrEqual(
-        rail.getBoundingClientRect().right,
-      );
+      expect(panel.getBoundingClientRect().width).toBe(rail.getBoundingClientRect().width);
       const expectNavigationUncovered = () => {
         for (const name of ["Home", "Settings"]) {
           const button = page.getByRole("button", { name, exact: true }).element();
@@ -339,17 +284,7 @@ describe("sidebar toggles", () => {
         }
       };
       expectNavigationUncovered();
-      await userEvent.hover(slot);
-      await new Promise((resolve) => setTimeout(resolve, DISCLOSURE_TRANSITION_MS * 2));
-      expect(panel.getBoundingClientRect().width).toBe(256);
-      await expect
-        .element(thread.querySelector<HTMLElement>('[data-slot="sidebar-thread-title"]')!)
-        .toBeVisible();
       expect(main.getBoundingClientRect().left).toBe(contentLeft);
-      await userEvent.keyboard("{Escape}");
-      await expect
-        .poll(() => panel.getBoundingClientRect().width)
-        .toBe(rail.getBoundingClientRect().width);
       await page.viewport(1280, 360);
       await expect
         .poll(() => panel.getBoundingClientRect().height)
@@ -378,104 +313,6 @@ describe("sidebar toggles", () => {
       await screen.unmount();
     }
   });
-  it("keeps the compact list visible and previews it without moving content or pinning it", async () => {
-    await page.viewport(1280, 800);
-    const screen = await render(
-      <SidebarProvider defaultOpen={false}>
-        <Sidebar collapsible="compact">
-          <button type="button" className="w-full truncate">
-            Compact conversation
-          </button>
-          <SidebarTrigger aria-label="Pin compact sidebar" />
-        </Sidebar>
-        <main className="min-w-0 flex-1" data-testid="compact-main">
-          Conversation
-        </main>
-      </SidebarProvider>,
-    );
-    const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
-    const gap = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
-    const sidebar = screen.container.querySelector<HTMLElement>('[data-slot="sidebar"]')!;
-    const main = screen.container.querySelector<HTMLElement>('[data-testid="compact-main"]')!;
-    try {
-      expect(gap.getBoundingClientRect().width).toBe(64);
-      expect(panel.getBoundingClientRect().width).toBe(64);
-      const contentLeft = main.getBoundingClientRect().left;
-      await page.getByRole("button", { name: "Compact conversation", exact: true }).hover();
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
-      expect(main.getBoundingClientRect().left).toBe(contentLeft);
-      expect(gap.getBoundingClientRect().width).toBe(64);
-      expect(sidebar.dataset.state).toBe("collapsed");
-      await page.getByRole("button", { name: "Compact conversation", exact: true }).click();
-      await page.getByTestId("compact-main").hover();
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(64);
-      await page.getByRole("button", { name: "Compact conversation", exact: true }).hover();
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
-      await page.getByRole("button", { name: "Pin compact sidebar", exact: true }).click();
-      await expect.poll(() => gap.getBoundingClientRect().width).toBe(256);
-      await page.getByTestId("compact-main").hover();
-      expect(sidebar.dataset.state).toBe("expanded");
-      expect(panel.getBoundingClientRect().width).toBe(256);
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("opens a compact preview for keyboard focus and closes only the preview with Escape", async () => {
-    await page.viewport(1280, 800);
-    const screen = await render(
-      <SidebarProvider defaultOpen={false}>
-        <Sidebar collapsible="compact">
-          <button type="button">Keyboard conversation</button>
-        </Sidebar>
-        <main className="min-w-0 flex-1">Conversation</main>
-      </SidebarProvider>,
-    );
-    const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
-    const sidebar = screen.container.querySelector<HTMLElement>('[data-slot="sidebar"]')!;
-    try {
-      await userEvent.keyboard("{Tab}");
-      expect(document.activeElement).toBe(screen.container.querySelector("button"));
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
-      await userEvent.keyboard("{Escape}");
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(64);
-      expect(sidebar.dataset.state).toBe("collapsed");
-      expect(document.activeElement).toBe(screen.container.querySelector("button"));
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("closes a hover preview with Escape while focus stays in the composer", async () => {
-    await page.viewport(1280, 800);
-    const screen = await render(
-      <SidebarProvider defaultOpen={false}>
-        <Sidebar collapsible="compact">
-          <button type="button" className="w-full truncate">
-            Hover conversation
-          </button>
-        </Sidebar>
-        <main className="flex-1">
-          <input aria-label="Chat composer" />
-        </main>
-      </SidebarProvider>,
-    );
-    try {
-      const composer = screen
-        .getByRole("textbox", { name: "Chat composer" })
-        .element() as HTMLInputElement;
-      composer.focus();
-      await screen.getByRole("button", { name: "Hover conversation" }).hover();
-      const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
-      await userEvent.keyboard("{Escape}");
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(64);
-      expect(document.activeElement).toBe(composer);
-    } finally {
-      await screen.unmount();
-    }
-  });
-
   it("keeps the mobile sheet when the desktop sidebar uses compact mode", async () => {
     await page.viewport(390, 800);
     const screen = await render(
@@ -501,7 +338,7 @@ describe("sidebar toggles", () => {
     }
   });
 
-  it("does not preview the panel when focusing its navigation rail portal", async () => {
+  it("keeps the compact panel collapsed when focusing its navigation rail portal", async () => {
     await page.viewport(1280, 800);
     const rail = document.createElement("nav");
     document.body.append(rail);
@@ -519,7 +356,7 @@ describe("sidebar toggles", () => {
     try {
       await page.getByRole("button", { name: "Navigation destination" }).click();
       const sidebar = screen.container.querySelector<HTMLElement>('[data-slot="sidebar"]')!;
-      expect(sidebar.dataset.sidebarPreview).not.toBe("true");
+      expect(sidebar.dataset.state).toBe("collapsed");
       expect(
         screen.container
           .querySelector<HTMLElement>('[data-slot="sidebar-container"]')!
@@ -528,52 +365,6 @@ describe("sidebar toggles", () => {
     } finally {
       await screen.unmount();
       rail.remove();
-    }
-  });
-
-  it("keeps the hover preview open while using a portaled project card", async () => {
-    await page.viewport(1280, 800);
-    const onEdit = vi.fn();
-    const screen = await render(
-      <SidebarProvider defaultOpen={false}>
-        <Sidebar collapsible="compact">
-          <PreviewCard>
-            <PreviewCardTrigger
-              render={
-                <button type="button" className="w-full truncate">
-                  Project card
-                </button>
-              }
-            />
-            <PreviewCardPopup>
-              <button type="button" onClick={onEdit}>
-                Edit preview project
-              </button>
-            </PreviewCardPopup>
-          </PreviewCard>
-        </Sidebar>
-        <main className="flex-1">
-          <input aria-label="Project card composer" />
-        </main>
-      </SidebarProvider>,
-    );
-    try {
-      (
-        screen.getByRole("textbox", { name: "Project card composer" }).element() as HTMLElement
-      ).focus();
-      await screen.getByRole("button", { name: "Project card" }).hover();
-      const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
-      await expect.poll(() => panel.getBoundingClientRect().width).toBe(256);
-      const edit = page.getByRole("button", { name: "Edit preview project" });
-      await expect.element(edit).toBeVisible();
-      await edit.hover();
-      // Exercise the leave grace period while the pointer is inside the shared card.
-      await new Promise((resolve) => setTimeout(resolve, DISCLOSURE_TRANSITION_MS * 2));
-      expect(panel.getBoundingClientRect().width).toBe(256);
-      await edit.click();
-      expect(onEdit).toHaveBeenCalledOnce();
-    } finally {
-      await screen.unmount();
     }
   });
 

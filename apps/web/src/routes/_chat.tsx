@@ -603,7 +603,6 @@ function ChatRouteLayout() {
       side="left"
       collapsible={compactThreadSidebar ? "compact" : "offcanvas"}
       compactInRail={compactThreadSidebar}
-      compactPreview={false}
       compactAnchor={compactThreadAnchor}
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
@@ -674,7 +673,7 @@ function ChatRouteLayout() {
             // so the shell keeps no left column.
             sidebarElement
           ) : (
-            <div data-sidebar-preview-host className="flex min-h-0 shrink-0 flex-col">
+            <div className="flex min-h-0 shrink-0 flex-col">
               <AppShellTopStrip />
               <div className="flex min-h-0 flex-1">
                 <div ref={setRailSlot} className="flex shrink-0" />
