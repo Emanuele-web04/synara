@@ -24,7 +24,9 @@ afterEach(() => {
 });
 
 it("does not fall back to a disabled provider when no enabled provider supports discovery", () => {
-  settings.disabledProviders = ["codex"];
+  settings.disabledProviders = DEFAULT_PROVIDER_ORDER.filter(
+    (provider) => provider !== "claudeAgent",
+  );
   const markup = renderToStaticMarkup(<PluginLibrary embedded />);
   expect(markup).not.toContain("Codex");
   expect(markup).toContain("Plugins unavailable for Claude");
