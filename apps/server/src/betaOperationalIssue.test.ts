@@ -64,3 +64,30 @@ it.each([
     );
   },
 );
+
+it.each([SYNARA_PRODUCTION_BUNDLE_ID, SYNARA_BETA_BUNDLE_ID])(
+  "gates stall diagnostics by baked desktop flavor (%s)",
+  async (bundleId) => {
+    vi.stubEnv(SYNARA_DESKTOP_BUNDLE_ID_ENV, bundleId);
+    vi.resetModules();
+    const { reportBetaOperationalIssue } = await import("./betaOperationalIssue");
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    reportBetaOperationalIssue({
+      code: "server.event-loop.stall",
+      durationMs: 5200,
+      ...{ stack: "private stack", loadAverage: [80, 80, 80] },
+    });
+    const calls = write.mock.calls.slice();
+    write.mockRestore();
+    expect(calls).toEqual(
+      bundleId === SYNARA_BETA_BUNDLE_ID
+        ? [
+            [
+              DESKTOP_DIAGNOSTIC_ISSUE_PREFIX +
+                '{"code":"server.event-loop.stall","durationMs":5200}\n',
+            ],
+          ]
+        : [],
+    );
+  },
+);
