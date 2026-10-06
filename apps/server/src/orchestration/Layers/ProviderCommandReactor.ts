@@ -3554,14 +3554,18 @@ const make = Effect.gen(function* () {
       // Capture before provider dispatch so the later turn diff is bounded by
       // the user's submit moment, not early provider edits. This hook is the
       // sole source capturer; reactors may only alias refs already captured.
-      yield* checkpointStore.captureCheckpoint({
+      // Lease acquisition is inside capturePreTurnBaselines' bounded effect.
+      yield* turnCheckpointCoordinator.withWorkspaceLease(
         cwd,
-        checkpointRef: checkpointRefForThreadMessageStart(
-          input.threadId,
-          MessageId.makeUnsafe(input.messageId),
-        ),
-        skipIfExists: true,
-      });
+        checkpointStore.captureCheckpoint({
+          cwd,
+          checkpointRef: checkpointRefForThreadMessageStart(
+            input.threadId,
+            MessageId.makeUnsafe(input.messageId),
+          ),
+          skipIfExists: true,
+        }),
+      );
       checkpointPreparation = "captured";
     }).pipe(
       Effect.catchCause((cause) => {

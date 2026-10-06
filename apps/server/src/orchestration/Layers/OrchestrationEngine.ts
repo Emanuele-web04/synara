@@ -1217,8 +1217,29 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               }
             }
 
+            // A checkpoint request must observe a durable cut of native events,
+            // not the timing of two independent live subscriptions. The SQLite
+            // transaction owns both this fence and the command receipt.
+            const needsCheckpointFence = eventBases.some(
+              (event) =>
+                event.type === "thread.turn-start-requested" ||
+                event.type === "thread.checkpoint-revert-requested" ||
+                event.type === "thread.turn-diff-completed",
+            );
+            const checkpointRuntimeSequence = needsCheckpointFence
+              ? ((yield* sql<{ readonly sequence: number }>`
+                  SELECT COALESCE(MAX(sequence), 0) AS sequence FROM provider_runtime_events
+                `)[0]?.sequence ?? 0)
+              : undefined;
             for (const nextEvent of eventBases) {
-              const savedEvent = yield* eventStore.append(nextEvent);
+              const savedEvent = yield* eventStore.append(
+                checkpointRuntimeSequence === undefined
+                  ? nextEvent
+                  : {
+                      ...nextEvent,
+                      metadata: { ...nextEvent.metadata, checkpointRuntimeSequence },
+                    },
+              );
               nextCommandReadModel = yield* projectEvent(nextCommandReadModel, savedEvent);
               if (isShellMetadataEvent(savedEvent)) {
                 yield* projectionPipeline.projectMetadataEvent(savedEvent);
