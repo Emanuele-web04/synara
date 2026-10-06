@@ -29,7 +29,11 @@ import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import {
+  checkpointRefForThreadMessageStart,
+  checkpointRefForThreadTurnStart,
+  resolveThreadWorkspaceCwd,
+} from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import {
   scanStudioWorkspaceFiles,
@@ -40,6 +44,8 @@ import { diffStudioWorkspaceScans } from "../../studioOutputs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import {
   StudioOutputReactor,
   type StudioOutputReactorShape,
@@ -71,6 +77,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const scanWorkspaceFiles = (workspaceRoot: string) =>
@@ -134,11 +141,12 @@ const make = Effect.gen(function* () {
     pendingBaselineByThread.delete(threadId);
     const workspaceRoot = yield* resolveStudioScanRoot(threadId);
     if (!workspaceRoot) {
-      return;
+      return { status: "not-applicable" as const };
     }
     const files = yield* scanWorkspaceFiles(workspaceRoot);
     makeRoomForBaseline();
     pendingBaselineByThread.set(threadId, { threadId, workspaceRoot, files });
+    return { status: "completed" as const };
   });
 
   const captureBaselineBeforeTurn: StudioOutputReactorShape["captureBaselineBeforeTurn"] = (
@@ -152,7 +160,7 @@ const make = Effect.gen(function* () {
         return Effect.logWarning("studio output reactor failed to capture pre-turn baseline", {
           threadId,
           cause: Cause.pretty(cause),
-        });
+        }).pipe(Effect.as({ status: "failed" as const, detail: Cause.pretty(cause) }));
       }),
     );
 
@@ -160,39 +168,82 @@ const make = Effect.gen(function* () {
     threadId,
   ) => Effect.sync(() => pendingBaselineByThread.delete(threadId)).pipe(Effect.asVoid);
 
-  const associateTurnStartBaseline = Effect.fnUntraced(function* (
+  const associateTurnStartBaseline = (
     event: Extract<ProviderRuntimeEvent, { type: "turn.started" }>,
-  ) {
-    if (event.turnId === undefined) {
-      return;
-    }
-    const key = baselineKey(event.threadId, event.turnId);
-    if (baselineByTurn.has(key)) {
-      return;
-    }
-    const prepared = pendingBaselineByThread.get(event.threadId);
-    pendingBaselineByThread.delete(event.threadId);
-    if (prepared) {
-      baselineByTurn.set(key, { ...prepared, turnId: event.turnId });
-      return;
-    }
+  ) =>
+    Effect.gen(function* () {
+      if (event.turnId === undefined) {
+        return;
+      }
+      const key = baselineKey(event.threadId, event.turnId);
+      if (baselineByTurn.has(key)) {
+        return;
+      }
+      const prepared = pendingBaselineByThread.get(event.threadId);
+      pendingBaselineByThread.delete(event.threadId);
+      if (prepared) {
+        baselineByTurn.set(key, { ...prepared, turnId: event.turnId });
+        return;
+      }
 
-    // Provider-native/subagent turns can bypass ProviderCommandReactor. Preserve
-    // best-effort capture for those paths, while ordinary user turns always use
-    // the awaited pre-dispatch baseline above.
-    const workspaceRoot = yield* resolveStudioScanRoot(event.threadId);
-    if (!workspaceRoot) {
-      return;
-    }
-    const files = yield* scanWorkspaceFiles(workspaceRoot);
-    makeRoomForBaseline();
-    baselineByTurn.set(key, {
-      threadId: event.threadId,
-      turnId: event.turnId,
-      workspaceRoot,
-      files,
+      // An absent preparation may have timed out or been cancelled. Never scan
+      // at turn.started: provider edits could already be part of that baseline.
+      // Only Studio workspaces need this feedback. Resolve their identity, but
+      // never scan files to reconstruct a provider-native turn's initial state.
+      if (!(yield* resolveStudioScanRoot(event.threadId))) return;
+      const threadOption = yield* projectionSnapshotQuery
+        .getThreadDetailById(event.threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+      const thread = Option.getOrUndefined(threadOption);
+      const turn = yield* projectionTurnRepository
+        .getByTurnId({ threadId: event.threadId, turnId: event.turnId })
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+      const messageId =
+        Option.getOrNull(turn)?.pendingMessageId ??
+        thread?.messages.find(
+          (message) => message.role === "user" && message.turnId === event.turnId,
+        )?.id;
+      if (thread?.parentThreadId && messageId === undefined) return;
+      if (
+        thread?.activities.some(
+          (activity) =>
+            activity.kind === "checkpoint.baseline.skipped" &&
+            (activity.turnId === event.turnId ||
+              (messageId !== undefined &&
+                typeof activity.payload === "object" &&
+                activity.payload !== null &&
+                "messageId" in activity.payload &&
+                activity.payload.messageId === messageId)),
+        )
+      )
+        return;
+      const activityId = EventId.makeUnsafe(
+        `checkpoint-baseline-skipped:${
+          messageId === undefined
+            ? checkpointRefForThreadTurnStart(event.threadId, event.turnId)
+            : checkpointRefForThreadMessageStart(event.threadId, messageId)
+        }`,
+      );
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: serverCommandId("studio-baseline-unavailable"),
+        threadId: event.threadId,
+        activity: {
+          id: activityId,
+          tone: "info",
+          kind: "checkpoint.baseline.skipped",
+          summary: "Studio output baseline unavailable for this turn",
+          payload: {
+            detail:
+              "The initial Studio workspace state is unavailable for this turn, so its output changes cannot be indexed. Files are not rescanned after edits to invent a baseline.",
+            ...(messageId === undefined ? {} : { messageId }),
+          },
+          turnId: event.turnId,
+          createdAt: event.createdAt,
+        },
+        createdAt: event.createdAt,
+      });
     });
-  });
 
   const persistBaselineOutputs = Effect.fnUntraced(function* (input: {
     readonly baseline: StudioTurnBaseline;
@@ -332,4 +383,6 @@ const make = Effect.gen(function* () {
   } satisfies StudioOutputReactorShape;
 });
 
-export const StudioOutputReactorLive = Layer.effect(StudioOutputReactor, make);
+export const StudioOutputReactorLive = Layer.effect(StudioOutputReactor, make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

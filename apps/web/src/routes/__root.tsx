@@ -1,5 +1,6 @@
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type OrchestrationEvent,
@@ -72,6 +73,7 @@ import {
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
+import { registerThreadDetailSyncRetry, retryThreadDetailSync } from "../threadDetailSyncRetry";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
@@ -88,6 +90,7 @@ import {
   onServerSettingsUpdated,
   onServerWelcome,
   onThreadStreamFailure,
+  onShellStreamFailure,
 } from "../wsNativeApi";
 import {
   addWsCompatibilityIssueListener,
@@ -353,11 +356,12 @@ function RootRouteView() {
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <SafariAccessOnboarding>
+          {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
+          <BetaWelcomeDialog />
+          <SafariAccessOnboarding startup>
             <AppSnapWelcomeDialog>
               <FeatureTourDialog />
             </AppSnapWelcomeDialog>
-            <BetaWelcomeDialog />
           </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
           <ProjectImportAnnouncementDialog />
@@ -1490,6 +1494,8 @@ function EventRouter() {
       );
     };
 
+    const threadOverflowToastId = (threadId: ThreadId) => `stream-overflow:thread:${threadId}`;
+
     // Single choke point for handing a thread detail event to the reducer.
     // The reducer silently ignores detail events for a thread the store no
     // longer holds (pruned by a shell full sync, evicted, deleted), and domain
@@ -1497,8 +1503,13 @@ function EventRouter() {
     // cursor first would vouch for events that never landed — a later cursor
     // resume would then skip them forever. When the thread is missing, drop
     // the resume bookkeeping and re-snapshot through the projection instead.
-    const applyFencedThreadEvent = (threadId: ThreadId, event: OrchestrationEvent): boolean => {
-      if (!getThreadFromState(useStore.getState(), threadId)) {
+    const applyFencedThreadEvent = (
+      threadId: ThreadId,
+      event: OrchestrationEvent,
+      source: "stream" | "replay",
+    ): boolean => {
+      const state = useStore.getState();
+      if (!getThreadFromState(state, threadId)) {
         threadSnapshotSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         clearThreadDetailResumeCursor(threadId);
@@ -1510,6 +1521,12 @@ function EventRouter() {
       threadSnapshotSequenceById.set(threadId, event.sequence);
       advanceThreadDetailResumeCursor(threadId, event.sequence);
       queueDomainEvent(event);
+      // Catch-up replay can advance a dead stream's cursor; only that stream's
+      // own delivery proves recovery and can dismiss its exhausted failure.
+      if (source === "stream" && state.threadDetailSyncById?.[threadId] === "failed") {
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        toastManager.close(threadOverflowToastId(threadId));
+      }
       // Any applied event — live or replayed — is fresh activity: drop the
       // replay backoff so a subsequently lost event repairs at base cadence.
       const backoff = threadCatchupBackoffById.get(threadId);
@@ -1528,7 +1545,7 @@ function EventRouter() {
       for (const event of pendingEvents.toSorted((left, right) => left.sequence - right.sequence)) {
         if (event.sequence > latestThreadSequence) {
           latestThreadSequence = event.sequence;
-          if (!applyFencedThreadEvent(threadId, event)) {
+          if (!applyFencedThreadEvent(threadId, event, "stream")) {
             return;
           }
         }
@@ -1599,6 +1616,34 @@ function EventRouter() {
         .then(operation);
       return reconcileThreadSubscriptionsChain;
     };
+
+    const unregisterThreadDetailSyncRetry = registerThreadDetailSyncRetry((threadId) =>
+      enqueueThreadSubscriptionOperation(async () => {
+        if (disposed || !subscribedThreadIds.has(threadId)) return;
+        // Both retry surfaces use the owner's normal cursor/fence initialization.
+        beginThreadSubscription(threadId);
+        const generation = threadSubscriptionGenerationById.get(threadId);
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        try {
+          await api.orchestration.subscribeThread(buildThreadSubscribeInput(threadId));
+        } catch {
+          if (
+            disposed ||
+            !subscribedThreadIds.has(threadId) ||
+            threadSubscriptionGenerationById.get(threadId) !== generation
+          )
+            return;
+          useStore.getState().markThreadDetailSyncFailed(threadId);
+          toastManager.add({
+            id: `stream-overflow:retry-failed:${threadId}`,
+            type: "error",
+            title: "Unable to resume thread updates",
+            description: "Try again when the server responds.",
+            data: { threadId },
+          });
+        }
+      }),
+    );
 
     const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
       const nextThreadIds = [...threadIds];
@@ -1954,7 +1999,7 @@ function EventRouter() {
             if (event.sequence <= latestThreadSequence) {
               continue;
             }
-            if (!applyFencedThreadEvent(threadId, event)) {
+            if (!applyFencedThreadEvent(threadId, event, "replay")) {
               break;
             }
             appliedEventCount += 1;
@@ -2123,6 +2168,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
+        toastManager.close("stream-overflow:shell");
         shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
         const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
         shellSnapshotSequence = item.snapshot.snapshotSequence;
@@ -2142,6 +2188,7 @@ function EventRouter() {
         return;
       }
       shellSnapshotSequence = item.sequence;
+      toastManager.close("stream-overflow:shell");
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
@@ -2224,6 +2271,7 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        toastManager.close(threadOverflowToastId(threadId));
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
         // even when it is lower than the previous one (server-side reset).
@@ -2261,7 +2309,7 @@ function EventRouter() {
       if (item.event.sequence <= latestThreadSequence) {
         return;
       }
-      if (!applyFencedThreadEvent(threadId, item.event)) {
+      if (!applyFencedThreadEvent(threadId, item.event, "stream")) {
         return;
       }
       if (
@@ -2281,19 +2329,75 @@ function EventRouter() {
         );
       }
     });
+    const unsubShellStreamFailure = onShellStreamFailure(() => {
+      if (disposed) return;
+      const toastId = "stream-overflow:shell";
+      toastManager.add({
+        id: toastId,
+        type: "error",
+        title: "Workspace updates paused",
+        description:
+          "The update stream could not keep up after repeated retries. Retry to resume workspace updates.",
+        timeout: 0,
+        actionProps: {
+          children: "Retry updates",
+          onClick: () => {
+            toastManager.close(toastId);
+            if (disposed) return;
+            // Reset only the shell snapshot fence. Thread subscriptions and
+            // their applied cursors stay on the existing connection.
+            shellSnapshotSequence = -1;
+            pendingShellEvents = [];
+            const generation = shellSubscriptionGeneration;
+            void api.orchestration.subscribeShell().catch(() => {
+              if (disposed || shellSubscriptionGeneration !== generation) return;
+              toastManager.add({
+                id: "stream-overflow:shell:retry-failed",
+                type: "error",
+                title: "Unable to resume workspace updates",
+                description: "Try again when the server responds.",
+              });
+            });
+          },
+        },
+      });
+    });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);
       if (disposed || !subscribedThreadIds.has(threadId)) {
         return;
       }
-      // The stream is dead with retries and reconnects exhausted: forget its
-      // cursor so a future resubscribe requests a fresh snapshot, and surface
-      // the failure so the thread view stops posing as an empty conversation.
-      clearThreadDetailResumeCursor(threadId);
-      threadSnapshotSequenceById.delete(threadId);
+      // Overflow retries preserve the last applied cursor, including exhaustion.
+      // Other terminal faults still request a fresh snapshot on resubscribe.
+      if (failure.code !== ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        clearThreadDetailResumeCursor(threadId);
+        threadSnapshotSequenceById.delete(threadId);
+      }
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
+      if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        const toastId = threadOverflowToastId(threadId);
+        const threadTitle = getThreadFromState(useStore.getState(), threadId)?.title;
+        const threadLabel = threadTitle ? `“${threadTitle}”` : "this thread";
+        toastManager.add({
+          id: toastId,
+          type: "error",
+          title: "Thread updates paused",
+          description: `The update stream for ${threadLabel} could not keep up after repeated retries. Retry to resume updates.`,
+          timeout: 0,
+          data: { threadId },
+          actionProps: {
+            children: "Retry updates",
+            onClick: () => {
+              toastManager.close(toastId);
+              if (disposed || !subscribedThreadIds.has(threadId)) return;
+              void retryThreadDetailSync(threadId).catch(() => undefined);
+            },
+          },
+        });
+      }
+
       if (
         failure.code === "THREAD_SNAPSHOT_NOT_FOUND" &&
         !threadSnapshotNotFoundRetryAttempted.has(threadId) &&
@@ -2606,6 +2710,7 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();
+      unregisterThreadDetailSyncRetry();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
       // only the visible threads. Keeping those avoids blanking the open chat, and
@@ -2622,6 +2727,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubThreadStreamFailure();
+      unsubShellStreamFailure();
       unsubThreadDetailEviction();
       unsubTerminalEvent();
       unsubDevServerEvent();
