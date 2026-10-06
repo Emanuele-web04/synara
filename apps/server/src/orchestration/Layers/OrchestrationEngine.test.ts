@@ -21,6 +21,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
+import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import {
@@ -158,6 +160,7 @@ async function createOrchestrationSystem(pipeline?: OrchestrationProjectionPipel
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(OrchestrationEventStoreLive),
     Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+    Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(ServerConfigLayer),
@@ -173,6 +176,9 @@ async function createOrchestrationSystem(pipeline?: OrchestrationProjectionPipel
   const receiptRepository = await runtime.runPromise(
     Effect.service(OrchestrationCommandReceiptRepository),
   );
+  const runtimeRepository = await runtime.runPromise(
+    Effect.service(ProviderRuntimeEventRepository),
+  );
   const eventStore = await runtime.runPromise(Effect.service(OrchestrationEventStore));
   const projectionPipeline = await runtime.runPromise(
     Effect.service(OrchestrationProjectionPipeline),
@@ -181,6 +187,7 @@ async function createOrchestrationSystem(pipeline?: OrchestrationProjectionPipel
     engine,
     sql,
     receiptRepository,
+    runtimeRepository,
     eventStore,
     projectionPipeline,
     managedAttachmentRepository,
@@ -781,6 +788,161 @@ describe("OrchestrationEngine", () => {
       }
     },
   );
+
+  it("omits checkpoint runtime cuts for standalone assistant deltas while fencing turn starts", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("checkpoint-fence-project");
+    const threadId = ThreadId.makeUnsafe("checkpoint-fence-thread");
+    const createdAt = now();
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("checkpoint-fence-project-create"),
+          projectId,
+          title: "Checkpoint fence",
+          workspaceRoot: "/tmp/checkpoint-fence",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("checkpoint-fence-thread-create"),
+          threadId,
+          projectId,
+          title: "Checkpoint fence",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      const first = await system.run(
+        system.runtimeRepository.append({
+          type: "turn.completed",
+          eventId: EventId.makeUnsafe("standalone-delta-native-before"),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId("standalone-delta-native-turn"),
+          createdAt,
+          payload: { state: "completed" },
+        }),
+      );
+      const delta: OrchestrationCommand = {
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.makeUnsafe("standalone-delta-command"),
+        threadId,
+        messageId: asMessageId("standalone-delta-message"),
+        delta: "Streaming text",
+        createdAt,
+      };
+      const deltaReceipt = await system.run(system.engine.dispatch(delta));
+      expect(await system.run(system.engine.dispatch(delta))).toEqual(deltaReceipt);
+      const deltaEvents = Array.from(
+        await system.run(Stream.runCollect(system.engine.readEvents(0))),
+      ).filter((event) => event.commandId === delta.commandId);
+      expect(deltaEvents).toHaveLength(1);
+      expect(deltaEvents[0]?.type).toBe("thread.message-sent");
+      expect(deltaEvents[0]?.metadata).not.toHaveProperty("checkpointRuntimeSequence");
+
+      const start: OrchestrationCommand = {
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("standalone-delta-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("standalone-delta-user-message"),
+          role: "user",
+          text: "Start a turn",
+          attachments: [],
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        createdAt,
+      };
+      const startReceipt = await system.run(system.engine.dispatch(start));
+      expect(await system.run(system.engine.dispatch(start))).toEqual(startReceipt);
+      const startEvents = Array.from(
+        await system.run(Stream.runCollect(system.engine.readEvents(0))),
+      ).filter((event) => event.commandId === start.commandId);
+      expect(startEvents.some((event) => event.type === "thread.turn-start-requested")).toBe(true);
+      for (const event of startEvents) {
+        expect(event.metadata).toMatchObject({ checkpointRuntimeSequence: first.sequence });
+      }
+    } finally {
+      await system.dispose();
+    }
+  });
+
+  it("persists a server-owned runtime fence with checkpoint requests and preserves it on receipt retries", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("checkpoint-fence-project");
+    const threadId = ThreadId.makeUnsafe("checkpoint-fence-thread");
+    const createdAt = now();
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("checkpoint-fence-project-create"),
+          projectId,
+          title: "Checkpoint fence",
+          workspaceRoot: "/tmp/checkpoint-fence",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("checkpoint-fence-thread-create"),
+          threadId,
+          projectId,
+          title: "Checkpoint fence",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      const repository = system.runtimeRepository;
+      const append = (id: string) =>
+        system.run(
+          repository.append({
+            type: "turn.completed",
+            eventId: EventId.makeUnsafe(id),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId("checkpoint-fence-turn"),
+            createdAt,
+            payload: { state: "completed" },
+          }),
+        );
+      const first = await append("checkpoint-fence-before");
+      const command: OrchestrationCommand = {
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("checkpoint-fence-revert"),
+        threadId,
+        turnCount: 1,
+        createdAt,
+      };
+      const receipt = await system.run(system.engine.dispatch(command));
+      await append("checkpoint-fence-after");
+      expect(await system.run(system.engine.dispatch(command))).toEqual(receipt);
+      const events = Array.from(await system.run(Stream.runCollect(system.engine.readEvents(0))));
+      const requests = events.filter(
+        (event) => event.type === "thread.checkpoint-revert-requested",
+      );
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.metadata).toMatchObject({ checkpointRuntimeSequence: first.sequence });
+    } finally {
+      await system.dispose();
+    }
+  });
 
   it.each([false, true])(
     "publishes a ready control before queued normal commits with cancelled maintenance waiter=%s",
