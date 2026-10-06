@@ -4265,15 +4265,20 @@ describe("ChatView transcript geometry (full app)", () => {
                           ? `provider-handoff:${commandId}`
                           : `provider-handoff-failed:${commandId}`,
                       ),
-                      createdAt: NOW_ISO,
+                      createdAt: new Date().toISOString(),
                       kind:
                         outcome === "completed" ? "provider.handoff" : "provider.handoff.failed",
                       summary: outcome === "completed" ? "Handed off" : "Handoff failed",
                       tone: outcome === "completed" ? ("info" as const) : ("error" as const),
                       turnId: null,
                       sequence: 950,
-                      payload:
-                        outcome === "completed" ? {} : { detail: "Claude CLI is not signed in." },
+                      payload: {
+                        sourceProvider: thread.modelSelection.provider,
+                        sourceModel: thread.modelSelection.model,
+                        targetProvider: "claudeAgent",
+                        targetModel: "claude-sonnet-4-6",
+                        ...(outcome === "failed" ? { detail: "Claude CLI is not signed in." } : {}),
+                      },
                     },
                   ],
                 },
@@ -4340,6 +4345,24 @@ describe("ChatView transcript geometry (full app)", () => {
           threadId: THREAD_ID,
           providerHandoff: true,
           modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        });
+        const handoffActivity = fixture.snapshot.threads
+          .find((thread) => thread.id === THREAD_ID)!
+          .activities.find((activity) => activity.kind === "provider.handoff")!;
+        const sentTurn = mounted.commands[turnStartIndex]!;
+        expect(sentTurn.type).toBe("thread.turn.start");
+        if (sentTurn.type !== "thread.turn.start") throw new Error("Expected turn start");
+        expect(Date.parse(sentTurn.createdAt)).toBeGreaterThan(
+          Date.parse(handoffActivity.createdAt),
+        );
+        await vi.waitFor(() => {
+          const divider = document.querySelector('[data-provider-handoff-divider="true"]')!;
+          const userMessage = [...document.querySelectorAll('[data-message-role="user"]')].find(
+            (row) => (row.textContent ?? "").includes("Review the reconnect fix"),
+          )!;
+          expect(
+            divider.compareDocumentPosition(userMessage) & Node.DOCUMENT_POSITION_FOLLOWING,
+          ).toBeTruthy();
         });
         // The message only goes out once the target is up, and to the target.
         expect(turnStartIndex).toBeGreaterThan(handoffIndex);
@@ -8320,15 +8343,25 @@ describe("ChatView transcript geometry (full app)", () => {
       const actionButtons = document.querySelectorAll<HTMLButtonElement>(
         'button[aria-label="Queued follow-up actions"]',
       );
+      await page.getByRole("button", { name: "Steer", exact: true }).first().hover();
+      await expect
+        .element(page.getByText("Send this follow-up now to redirect the current work."))
+        .toHaveTextContent(
+          "Send this follow-up now to redirect the current work. If native steering is unavailable, stop the current turn and start a new one.",
+        );
+      expect(
+        document.querySelectorAll('button[aria-label="Delete queued follow-up"]'),
+      ).toHaveLength(2);
       actionButtons[0]?.click();
 
       const editMenuItem = await waitForElement(
         () =>
           Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-item"]')).find(
-            (item) => item.textContent?.trim() === "Edit queued prompt",
+            (item) => item.textContent?.trim() === "Edit queued follow-up",
           ) ?? null,
-        "Unable to find edit queued prompt menu item.",
+        "Unable to find edit queued follow-up menu item.",
       );
+      expect(document.querySelectorAll('[data-slot="menu-item"]')).toHaveLength(1);
       editMenuItem.click();
 
       await vi.waitFor(
