@@ -2105,6 +2105,7 @@ const make = Effect.gen(function* () {
     event: ProviderRuntimeEvent,
     runtimeSequence: number,
     suppressProgressActivity = false,
+    rebuildAcceptedProgress = false,
   ) =>
     Effect.gen(function* () {
       const now = event.createdAt;
@@ -3219,17 +3220,37 @@ const make = Effect.gen(function* () {
         );
       }
 
-      yield* Effect.forEach(
-        suppressProgressActivity && providerRuntimeProgressKey(event) !== undefined
-          ? []
-          : projectProviderRuntimeActivities(
-              activityEvent,
-              event.provider === "claudeAgent"
-                ? (completedReasoning?.sequence ?? runtimeSequence)
-                : runtimeSequence,
-            ),
-        (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
+      const snapshotKey = providerRuntimeProgressKey(event);
+      const activities = projectProviderRuntimeActivities(
+        activityEvent,
+        event.provider === "claudeAgent"
+          ? (completedReasoning?.sequence ?? runtimeSequence)
+          : runtimeSequence,
       );
+      if (
+        rebuildAcceptedProgress &&
+        (snapshotKey !== undefined || event.type === "task.progress")
+      ) {
+        // Restore snapshot dedupe without dispatching already-accepted rows.
+        // Historical task rows may have been accepted under the old coalescing
+        // policy without activity receipts; never resurrect those phases here.
+        if (snapshotKey !== undefined)
+          yield* Effect.forEach(activities, (activity) => {
+            const key = providerActivityUpdateDedupeKey(activityEvent, thread.id, activity);
+            return key
+              ? Cache.set(
+                  latestActivityUpdateFingerprintByKey,
+                  key,
+                  providerActivityUpdateFingerprint(activity),
+                )
+              : Effect.void;
+          });
+      } else {
+        yield* Effect.forEach(
+          suppressProgressActivity && snapshotKey !== undefined ? [] : activities,
+          (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
+        );
+      }
 
       // Exact-turn delivery modes deliberately survive terminal events for a
       // bounded TTL: providers may send late item/delta events after settlement.
@@ -3642,7 +3663,7 @@ const make = Effect.gen(function* () {
     prepareAcceptedRuntimeEventReplay(event).pipe(
       // Accepted progress rows already contributed their durable snapshots.
       // Rebuild caches without resurrecting intermediate coalesced updates.
-      Effect.andThen(processRuntimeEvent(event, sequence, true)),
+      Effect.andThen(processRuntimeEvent(event, sequence, false, true)),
       Effect.as({ replayed: true } as const),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
@@ -3704,9 +3725,8 @@ const make = Effect.gen(function* () {
   const start: ProviderRuntimeIngestionShape["start"] = startDrainableWorkerProducers(
     worker,
     Effect.gen(function* () {
-      // Registered before the producer fibers: stop subscriptions and timers
-      // first, then commit their final durable progress before worker.stop.
-      yield* Effect.addFinalizer(() => drainRuntimeJournalSafely.pipe(Effect.asVoid, Effect.orDie));
+      // Stop producer fibers without an unbounded final journal scan. Already
+      // completed rows flush their cursor; unread durable rows replay on start.
       const streamPersistedEvents = providerService.streamPersistedEvents;
       const persistedRuntimeEvents = selectProviderRuntimeJournalStream({
         streamEvents: providerService.streamEvents,
@@ -3721,6 +3741,9 @@ const make = Effect.gen(function* () {
       // Replaceable progress snapshots share a 50 ms wake window. Every other
       // notification flushes the pending prefix immediately, preserving text,
       // approval and terminal boundaries without retaining session-sized maps.
+      // The accepted cursor is globally ordered: another thread's immediate
+      // text may shorten this window. Page replacement boundaries are per
+      // thread, but this wake mechanism is not an independent priority lane.
       let requestedLiveFence = 0;
       let pendingProgressFence = 0;
       const liveDrainWakeups = yield* Queue.sliding<void>(1);

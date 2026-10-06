@@ -33,7 +33,7 @@ const ids = (rows: ReadonlyArray<{ event: ProviderRuntimeEvent }>) =>
   rows.map((entry) => entry.event.eventId);
 
 describe("provider runtime progress coalescing", () => {
-  it("retains latest snapshots in source order for parallel tools and tasks", () => {
+  it("preserves task boundaries and parallel tool source order", () => {
     const task = (id: string) =>
       event(id, {
         type: "task.progress",
@@ -55,11 +55,47 @@ describe("provider runtime progress coalescing", () => {
       row(5, task("task-latest")),
     ];
     expect(ids(coalesceProviderRuntimeProgress(input))).toEqual([
+      "tool-a-old",
       "tool-b",
+      "task-old",
       "tool-a-latest",
       "task-latest",
     ]);
     expect(input).toHaveLength(5);
+  });
+
+  it("keeps task phases and sections lossless even when they share one task id", () => {
+    const rows = ["phase-one: agent-a", "phase-one: agent-b", "Reasoning section"].map(
+      (description, i) =>
+        row(
+          i + 1,
+          event(`task-${i}`, {
+            type: "task.progress",
+            payload: { taskId: RuntimeTaskId.makeUnsafe("shared-task"), description },
+          }),
+        ),
+    );
+    expect(rows.map((entry) => providerRuntimeProgressKey(entry.event))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(ids(coalesceProviderRuntimeProgress(rows))).toEqual(["task-0", "task-1", "task-2"]);
+  });
+
+  it("does not let another thread's text close a progress run", () => {
+    const rows = [
+      row(1, event("a-old")),
+      row(
+        2,
+        event("b-text", {
+          threadId: ThreadId.makeUnsafe("other-thread"),
+          type: "content.delta",
+        } as Partial<ProviderRuntimeEvent>),
+      ),
+      row(3, event("a-latest")),
+    ];
+    expect(ids(coalesceProviderRuntimeProgress(rows))).toEqual(["b-text", "a-latest"]);
   });
 
   it.each([

@@ -21,11 +21,22 @@ import {
   MessageId,
   ProjectId,
   RuntimeItemId,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Option,
+  PubSub,
+  Scope,
+  Stream,
+  ServiceMap,
+} from "effect";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -40,6 +51,7 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { projectProviderRuntimeActivities } from "../providerRuntimeActivityProjection.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -408,7 +420,8 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
-    runtime = ManagedRuntime.make(layer);
+    const managed = ManagedRuntime.make(layer);
+    runtime = managed;
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
     const runtimeEventRepository = await runtime.runPromise(
@@ -426,6 +439,20 @@ describe("ProviderRuntimeIngestion", () => {
       await startIngestion();
     }
     const drain = () => Effect.runPromise(ingestion.drain);
+    const restartIngestion = async () => {
+      scope = await Effect.runPromise(Scope.make("sequential"));
+      const services = await Effect.runPromise(
+        Layer.buildWithScope(
+          Layer.fresh(ProviderRuntimeIngestionLive).pipe(
+            Layer.provide(Layer.succeedServices(await managed.services())),
+          ),
+          scope,
+        ),
+      );
+      const fresh = ServiceMap.get(services, ProviderRuntimeIngestionService);
+      await Effect.runPromise(fresh.start.pipe(Scope.provide(scope)));
+      return () => Effect.runPromise(fresh.drain);
+    };
 
     const createdAt = new Date().toISOString();
     await Effect.runPromise(
@@ -500,25 +527,328 @@ describe("ProviderRuntimeIngestion", () => {
       setProviderSession: provider.setSession,
       drain,
       startIngestion,
+      restartIngestion,
       runtimeEventRepository,
       readProjectedThread,
     };
   }
 
-  it("coalesces changed task progress during durable replay without discarding raw journal rows", async () => {
+  it.each(["replay", "live"] as const)(
+    "preserves workflow phase agents and poll snapshots during %s ingestion",
+    async (mode) => {
+      const harness = await createHarness({
+        startIngestion: mode === "live",
+        persistedStream: true,
+      });
+      const labels = ["Reviewer", "Planner", "Implementer"];
+      const rows: PersistedProviderRuntimeEvent[] = [];
+      for (const [index, label] of labels.entries())
+        rows.push(
+          await Effect.runPromise(
+            harness.runtimeEventRepository.append({
+              type: "task.progress",
+              eventId: asEventId(`workflow-phase-${index}`),
+              provider: "claudeAgent",
+              createdAt: "2026-10-06T12:00:00.000Z",
+              threadId: asThreadId("thread-1"),
+              turnId: asTurnId("workflow-turn"),
+              payload: {
+                taskId: RuntimeTaskId.makeUnsafe("workflow-task"),
+                description: `Review: ${label}`,
+              },
+            }),
+          ),
+        );
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "task.progress",
+            eventId: asEventId("workflow-poll"),
+            provider: "claudeAgent",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("workflow-turn"),
+            payload: {
+              taskId: RuntimeTaskId.makeUnsafe("workflow-task"),
+              description: "Workflow agents",
+              workflowAgents: labels.map((label, index) => ({
+                agentId: `agent-${index}`,
+                label,
+                state: "running" as const,
+                tokens: index + 1,
+              })),
+            },
+          }),
+        ),
+      );
+      if (mode === "live") rows.forEach(harness.emitPersisted);
+      else await harness.startIngestion();
+      await harness.drain();
+      const thread = await harness.readProjectedThread();
+      const tasks = thread!.activities.filter((activity) => activity.kind === "task.progress");
+      expect(tasks.map((activity) => activity.id)).toEqual([
+        "workflow-phase-0",
+        "workflow-phase-1",
+        "workflow-phase-2",
+        "workflow-poll",
+      ]);
+      expect(
+        tasks
+          .slice(0, 3)
+          .map((activity) => (activity.payload as { description: string }).description),
+      ).toEqual(labels.map((label) => `Review: ${label}`));
+      expect(
+        (tasks[3]!.payload as { workflowAgents: Array<{ label: string }> }).workflowAgents.map(
+          (agent) => agent.label,
+        ),
+      ).toEqual(labels);
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        ),
+      ).toBe(rows[3]!.sequence);
+    },
+  );
+
+  it.each(["replay", "live"] as const)(
+    "preserves distinct legacy Codex reasoning sections during %s ingestion",
+    async (mode) => {
+      const harness = await createHarness({
+        startIngestion: mode === "live",
+        persistedStream: true,
+      });
+      const sections = ["Inspect the parser", "Check cancellation", "Check restart recovery"];
+      const rows: PersistedProviderRuntimeEvent[] = [];
+      for (const [index, description] of sections.entries())
+        rows.push(
+          await Effect.runPromise(
+            harness.runtimeEventRepository.append({
+              type: "task.progress",
+              eventId: asEventId(`legacy-reasoning-${index}`),
+              provider: "codex",
+              createdAt: "2026-10-06T12:00:00.000Z",
+              threadId: asThreadId("thread-1"),
+              turnId: asTurnId("reasoning-turn"),
+              payload: { taskId: RuntimeTaskId.makeUnsafe("legacy-reasoning-item"), description },
+            }),
+          ),
+        );
+      if (mode === "live") rows.forEach(harness.emitPersisted);
+      else await harness.startIngestion();
+      await harness.drain();
+      const thread = await harness.readProjectedThread();
+      expect(
+        thread!.activities
+          .filter((activity) => activity.kind === "task.progress")
+          .map((activity) => (activity.payload as { detail: string }).detail),
+      ).toEqual(sections);
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        ),
+      ).toBe(rows[2]!.sequence);
+    },
+  );
+
+  it("keeps unrelated live text immediate while coalescing mixed-thread page snapshots", async () => {
+    const harness = await createHarness({ persistedStream: true });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("create-text-thread"),
+        threadId: asThreadId("thread-2"),
+        projectId: asProjectId("project-1"),
+        title: "Text thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-10-06T12:00:00.000Z",
+      }),
+    );
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 20; index++) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "tool.progress",
+            eventId: asEventId(`mixed-tool-${index}`),
+            provider: "claudeAgent",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("mixed-a"),
+            payload: { toolUseId: "mixed-tool", summary: `Progress ${index}` },
+          }),
+        ),
+      );
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "content.delta",
+            eventId: asEventId(`mixed-text-${index}`),
+            provider: "codex",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-2"),
+            turnId: asTurnId("mixed-b"),
+            itemId: asItemId("mixed-message"),
+            payload: { streamKind: "assistant_text", delta: "b" },
+          }),
+        ),
+      );
+    }
+    const started = performance.now();
+    rows.forEach(harness.emitPersisted);
+    const text = await waitForProjectedThread(
+      () => harness.readProjectedThread(asThreadId("thread-2")),
+      (thread) => thread.messages.some((message) => message.text.includes("b")),
+      500,
+    );
+    const firstTextMs = performance.now() - started;
+    await harness.drain();
+    const progress = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "tool.updated",
+    );
+    expect(progress.at(-1)?.id).toBe("mixed-tool-19");
+    expect(progress.length).toBeLessThan(20);
+    const finalText = (await harness.readProjectedThread(asThreadId("thread-2")))!.messages.find(
+      (message) => message.id === "assistant:mixed-message",
+    );
+    expect(finalText?.text).toBe("b".repeat(20));
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(rows[39]!.sequence);
+    console.info(
+      "[progress mixed-thread]",
+      JSON.stringify({
+        rawRows: rows.length,
+        progressInput: 20,
+        projectedSnapshots: progress.length,
+        firstTextMs: Number(firstTextMs.toFixed(2)),
+        textAlreadyVisible: text.messages.length > 0,
+      }),
+    );
+  });
+
+  it("bounds shutdown without draining unread backlog and replays deferred progress after restart", async () => {
+    const harness = await createHarness({ persistedStream: true });
+    const highWaterDescriptor = Object.getOwnPropertyDescriptor(
+      harness.runtimeEventRepository,
+      "getHighWaterSequence",
+    )!;
+    Object.defineProperty(harness.runtimeEventRepository, "getHighWaterSequence", {
+      ...highWaterDescriptor,
+      value: Effect.succeed(0),
+    });
+    let last: PersistedProviderRuntimeEvent | undefined;
+    for (let index = 0; index < 1000; index++)
+      last = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "tool.progress",
+          eventId: asEventId(`deferred-tool-${index}`),
+          provider: "claudeAgent",
+          createdAt: "2026-10-06T12:00:00.000Z",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("deferred-turn"),
+          payload: { toolUseId: "deferred-tool", summary: `Progress ${index}` },
+        }),
+      );
+    Object.defineProperty(
+      harness.runtimeEventRepository,
+      "getHighWaterSequence",
+      highWaterDescriptor,
+    );
+    const readAfter = harness.runtimeEventRepository.readAfter;
+    const readSpy = vi
+      .spyOn(harness.runtimeEventRepository, "readAfter")
+      .mockImplementationOnce((input) =>
+        Effect.sleep("750 millis").pipe(Effect.andThen(readAfter(input))),
+      );
+    const started = performance.now();
+    await Effect.runPromise(Scope.close(scope!, Exit.void));
+    scope = null;
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(readSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBeLessThan(last!.sequence);
+    const drain = await harness.restartIngestion();
+    await drain();
+    const thread = await harness.readProjectedThread();
+    expect(thread!.activities.some((activity) => activity.id === last!.event.eventId)).toBe(true);
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(last!.sequence);
+  });
+
+  it("restores accepted tool snapshot fingerprints without dispatching intermediate activities", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    let last: PersistedProviderRuntimeEvent | undefined;
+    for (let index = 0; index < 5; index++)
+      last = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "tool.progress",
+          eventId: asEventId(`fingerprint-${index}`),
+          provider: "claudeAgent",
+          createdAt: "2026-10-06T12:00:00.000Z",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("fingerprint-turn"),
+          payload: { toolUseId: "fingerprint-tool", summary: `Snapshot ${index}` },
+        }),
+      );
+    const activity = projectProviderRuntimeActivities(last!.event, last!.sequence)[0]!;
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("seed-fingerprint"),
+        threadId: asThreadId("thread-1"),
+        activity,
+        createdAt: activity.createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence: last!.sequence,
+        updatedAt: activity.createdAt,
+      }),
+    );
+    await harness.startIngestion();
+    const duplicate = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...last!.event,
+        eventId: asEventId("fingerprint-duplicate"),
+      }),
+    );
+    harness.emitPersisted(duplicate);
+    await harness.drain();
+    const thread = await harness.readProjectedThread();
+    expect(
+      thread!.activities.filter((entry) => entry.kind === "tool.updated").map((entry) => entry.id),
+    ).toEqual(["fingerprint-4"]);
+  });
+
+  it("coalesces changed tool snapshots during durable replay without discarding raw journal rows", async () => {
     const harness = await createHarness({ startIngestion: false });
     const rows: PersistedProviderRuntimeEvent[] = [];
     for (let index = 0; index < 20; index += 1) {
       rows.push(
         await Effect.runPromise(
           harness.runtimeEventRepository.append({
-            type: "task.progress",
+            type: "tool.progress",
             eventId: asEventId(`progress-burst-${index}`),
             provider: "codex",
             createdAt: "2026-10-06T12:00:00.000Z",
             threadId: asThreadId("thread-1"),
             turnId: asTurnId("turn-progress-burst"),
-            payload: { taskId: "task-burst", description: `Latest progress ${index}` },
+            payload: { toolUseId: "task-burst", summary: `Latest progress ${index}` },
           } as ProviderRuntimeEvent),
         ),
       );
@@ -530,7 +860,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(
       thread.activities
-        .filter((activity) => activity.kind === "task.progress")
+        .filter((activity) => activity.kind === "tool.updated")
         .map((activity) => ({
           id: activity.id,
           detail: (activity.payload as { detail: string }).detail,
@@ -553,27 +883,27 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(rows[19]!.sequence);
   });
 
-  it("flushes the newest live task progress within the window without an explicit drain", async () => {
+  it("flushes the newest live tool snapshot within the window without an explicit drain", async () => {
     const harness = await createHarness({ persistedStream: true });
     const rows: PersistedProviderRuntimeEvent[] = [];
     for (let index = 0; index < 10; index += 1) {
       rows.push(
         await Effect.runPromise(
           harness.runtimeEventRepository.append({
-            type: "task.progress",
+            type: "tool.progress",
             eventId: asEventId(`live-progress-${index}`),
             provider: "codex",
             createdAt: "2026-10-06T12:00:00.000Z",
             threadId: asThreadId("thread-1"),
             turnId: asTurnId("turn-live-progress"),
-            payload: { taskId: "live-task", description: `Progress ${index}` },
+            payload: { toolUseId: "live-task", summary: `Progress ${index}` },
           } as ProviderRuntimeEvent),
         ),
       );
     }
     rows.forEach(harness.emitPersisted);
     const before = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!;
-    expect(before.activities.filter((activity) => activity.kind === "task.progress")).toEqual([]);
+    expect(before.activities.filter((activity) => activity.kind === "tool.updated")).toEqual([]);
     const thread = await waitForThread(
       harness.engine,
       (entry) => entry.activities.some((activity) => activity.id === "live-progress-9"),
@@ -581,7 +911,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(
       thread.activities
-        .filter((activity) => activity.kind === "task.progress")
+        .filter((activity) => activity.kind === "tool.updated")
         .map((activity) => activity.id),
     ).toEqual(["live-progress-9"]);
   });
@@ -593,13 +923,13 @@ describe("ProviderRuntimeIngestion", () => {
       rows.push(
         await Effect.runPromise(
           harness.runtimeEventRepository.append({
-            type: "task.progress",
+            type: "tool.progress",
             eventId: asEventId(`terminal-progress-${index}`),
             provider: "codex",
             createdAt: "2026-10-06T12:00:00.000Z",
             threadId: asThreadId("thread-1"),
             turnId: asTurnId("turn-terminal-progress"),
-            payload: { taskId: "terminal-task", description: `Progress ${index}` },
+            payload: { toolUseId: "terminal-task", summary: `Progress ${index}` },
           } as ProviderRuntimeEvent),
         ),
       );
@@ -625,38 +955,11 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(
       thread.activities
-        .filter((activity) => activity.kind.startsWith("task."))
+        .filter(
+          (activity) => activity.kind === "tool.updated" || activity.kind === "task.completed",
+        )
         .map((activity) => activity.id),
     ).toEqual(["terminal-progress-4", "terminal-progress-complete"]);
-  });
-
-  it("commits trailing progress and its cursor when the producer scope shuts down", async () => {
-    const harness = await createHarness({ persistedStream: true });
-    const last = await Effect.runPromise(
-      harness.runtimeEventRepository.append({
-        type: "task.progress",
-        eventId: asEventId("shutdown-progress"),
-        provider: "codex",
-        createdAt: "2026-10-06T12:00:00.000Z",
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("turn-shutdown-progress"),
-        payload: { taskId: "shutdown-task", description: "Last progress" },
-      } as ProviderRuntimeEvent),
-    );
-    harness.emitPersisted(last);
-    await Effect.runPromise(Scope.close(scope!, Exit.void));
-    scope = null;
-    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!;
-    expect(
-      thread.activities
-        .filter((activity) => activity.kind === "task.progress")
-        .map((activity) => activity.id),
-    ).toEqual(["shutdown-progress"]);
-    expect(
-      await Effect.runPromise(
-        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
-      ),
-    ).toBe(last.sequence);
   });
 
   it("does not resurrect coalesced accepted progress while rebuilding open-turn state", async () => {

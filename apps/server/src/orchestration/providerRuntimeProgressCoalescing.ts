@@ -2,13 +2,13 @@ import { isToolLifecycleItemType, type ProviderRuntimeEvent } from "@synara/cont
 
 export const PROVIDER_RUNTIME_PROGRESS_WINDOW_MS = 50;
 
-/** Only replaceable snapshots qualify; deltas and lifecycle transitions are boundaries. */
+/**
+ * Only complete tool snapshots qualify. task.progress can append workflow agent
+ * phases or noncumulative reasoning sections, so it is always lossless.
+ */
 export function providerRuntimeProgressKey(event: ProviderRuntimeEvent): string | undefined {
   let identity: string | undefined;
   switch (event.type) {
-    case "task.progress":
-      identity = event.payload.taskId;
-      break;
     case "tool.progress":
       identity = event.payload.toolUseId;
       break;
@@ -38,33 +38,31 @@ export function providerRuntimeProgressKey(event: ProviderRuntimeEvent): string 
 }
 
 /**
- * Preserve source order and all boundaries, retaining the newest snapshot for
- * each identity within a contiguous progress run. State is bounded by the
- * caller's durable journal page, never by the lifetime of a provider session.
+ * Within each thread's progress run, retain its newest snapshot per identity.
+ * Other threads' text/terminals do not close that run. Survivors remain in
+ * original global source order; callers still process and ACK every raw row.
+ * State is bounded by the caller's journal page, not a provider session.
  */
 export function coalesceProviderRuntimeProgress<A extends { readonly event: ProviderRuntimeEvent }>(
   page: ReadonlyArray<A>,
 ): ReadonlyArray<A> {
-  const retained: A[] = [];
-  let run: Array<{ readonly row: A; readonly key: string }> = [];
-  const latest = new Map<string, A>();
-  const flush = () => {
-    for (const { row, key } of run) {
-      if (latest.get(key) === row) retained.push(row);
-    }
-    run = [];
-    latest.clear();
-  };
+  const retained = new Set<A>();
+  const latestByThread = new Map<string, Map<string, A>>();
   for (const row of page) {
     const key = providerRuntimeProgressKey(row.event);
+    let latest = latestByThread.get(row.event.threadId);
     if (key === undefined) {
-      flush();
-      retained.push(row);
+      latest?.clear();
     } else {
-      run.push({ row, key });
+      if (latest === undefined) {
+        latest = new Map();
+        latestByThread.set(row.event.threadId, latest);
+      }
+      const previous = latest.get(key);
+      if (previous !== undefined) retained.delete(previous);
       latest.set(key, row);
     }
+    retained.add(row);
   }
-  flush();
-  return retained;
+  return page.filter((row) => retained.has(row));
 }
