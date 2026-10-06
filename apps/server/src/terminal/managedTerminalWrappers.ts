@@ -262,6 +262,7 @@ const PROFILE_INHERITED_ENV_KEYS = [
   "LANG",
   "LANGUAGE",
   "LC_ALL",
+  "LOGNAME",
   "NODE_EXTRA_CA_CERTS",
   "NO_COLOR",
   "NO_PROXY",
@@ -275,6 +276,7 @@ const PROFILE_INHERITED_ENV_KEYS = [
   "TERM",
   "TMPDIR",
   "TZ",
+  "USER",
   "XDG_RUNTIME_DIR",
 ] as const;
 

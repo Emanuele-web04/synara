@@ -681,3 +681,24 @@ export type ServerUpdateSettingsInput = typeof ServerUpdateSettingsInput.Type;
 
 export const ServerUpdateSettingsResult = ServerSettingsView;
 export type ServerUpdateSettingsResult = typeof ServerUpdateSettingsResult.Type;
+
+/** Aggregate runtime counters only: safe for the unauthenticated health route. */
+const RuntimeMilliseconds = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+export const ServerRuntimeStatus = Schema.Struct({
+  available: Schema.Boolean,
+  sampleWindowMs: RuntimeMilliseconds,
+  sampleCount: NonNegativeInt,
+  delayP50Ms: RuntimeMilliseconds,
+  delayP99Ms: RuntimeMilliseconds,
+  delayMaxMs: RuntimeMilliseconds,
+  utilization: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  stallWindowCount: NonNegativeInt,
+  maxStallMs: RuntimeMilliseconds,
+  /** Ambiguous suspend/scheduling gaps excluded from active-stall percentiles. */
+  discardedIdleGapCount: Schema.optional(NonNegativeInt),
+  discardedIdleGapMs: Schema.optional(RuntimeMilliseconds),
+  lastStall: Schema.NullOr(
+    Schema.Struct({ durationMs: RuntimeMilliseconds, ageMs: RuntimeMilliseconds }),
+  ),
+});
+export type ServerRuntimeStatus = typeof ServerRuntimeStatus.Type;

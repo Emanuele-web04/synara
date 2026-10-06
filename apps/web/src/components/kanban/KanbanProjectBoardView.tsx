@@ -39,6 +39,7 @@ import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
 import { NeedsReviewFilter } from "./NeedsReviewFilter";
 import {
   reorderDraftCardIdsInFullOrder,
+  resolveDraftDropAction,
   resolveReviewFoldToggleLabel,
   shouldShowReviewFoldToggle,
   type KanbanCard,
@@ -46,6 +47,7 @@ import {
   type KanbanProjectBoard,
 } from "./kanban.logic";
 import { useKanbanUiStore } from "../../kanbanUiStore";
+import type { KanbanCardContextMenuController } from "./useKanbanCardContextMenu";
 
 function resolveDropColumn(board: KanbanProjectBoard, overId: string): KanbanColumnKey | null {
   const columnDrop = parseKanbanColumnDropId(overId);
@@ -80,7 +82,7 @@ export function KanbanProjectBoardView({
 }: {
   board: KanbanProjectBoard;
   onOpenCard: (card: KanbanCard) => void;
-  onCardContextMenu?: ((card: KanbanCard, event: React.MouseEvent) => void) | undefined;
+  onCardContextMenu?: KanbanCardContextMenuController["onCardContextMenu"] | undefined;
   onNewTask: () => void;
   prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
@@ -133,7 +135,11 @@ export function KanbanProjectBoardView({
     onOpenCard(card);
   };
 
-  const handleDispatchDrop = async (card: KanbanCard) => {
+  const handleMoveToInProgress = async (card: KanbanCard) => {
+    // Both a stale drag and a menu left open during a send must stand down.
+    if (useKanbanUiStore.getState().optimisticDispatchByThreadId[card.threadId]) {
+      return;
+    }
     const dispatchTarget = resolveKanbanDraftDispatchTarget({
       threadId: card.threadId,
       projectId: card.projectId,
@@ -196,6 +202,29 @@ export function KanbanProjectBoardView({
       return;
     }
     toastManager.add(kanbanDispatchFailureToast(result, "Could not send draft"));
+  };
+
+  const handleCardContextMenu = (card: KanbanCard, event: React.MouseEvent) => {
+    // Other columns are derived-only. Drafts requiring the chat composer are
+    // not manual moves either; use the same dispatch eligibility as the drop.
+    const canMoveToInProgress =
+      resolveDraftDropAction(card) === "dispatch" &&
+      !card.isOptimisticDispatch &&
+      !useKanbanUiStore.getState().optimisticDispatchByThreadId[card.threadId];
+    onCardContextMenu?.(
+      card,
+      event,
+      canMoveToInProgress
+        ? [
+            {
+              column: "inProgress",
+              onMove: () => {
+                void handleMoveToInProgress(card);
+              },
+            },
+          ]
+        : [],
+    );
   };
 
   // Keyboard reorder for draft cards that can not be dragged: Alt+ArrowUp/Down
@@ -265,12 +294,7 @@ export function KanbanProjectBoardView({
       return;
     }
     if (targetColumn === "inProgress") {
-      // A drag that started before the board re-derived could re-drop a card whose
-      // dispatch is still settling; a second drop must not queue another turn.
-      if (useKanbanUiStore.getState().optimisticDispatchByThreadId[card.threadId]) {
-        return;
-      }
-      void handleDispatchDrop(card);
+      void handleMoveToInProgress(card);
       return;
     }
     if (targetColumn === "done") {
@@ -322,7 +346,7 @@ export function KanbanProjectBoardView({
             columnKey="draft"
             cards={board.draft}
             onOpenCard={handleOpenCard}
-            onCardContextMenu={onCardContextMenu}
+            onCardContextMenu={handleCardContextMenu}
             onCardKeyDown={handleCardKeyDown}
             sortable
             droppable
@@ -336,7 +360,7 @@ export function KanbanProjectBoardView({
             columnKey="inProgress"
             cards={board.inProgress}
             onOpenCard={handleOpenCard}
-            onCardContextMenu={onCardContextMenu}
+            onCardContextMenu={handleCardContextMenu}
             droppable
             activeCard={activeCard}
             prByThreadId={prByThreadId}
@@ -348,7 +372,7 @@ export function KanbanProjectBoardView({
               columnKey="awaitingYou"
               cards={board.awaitingYou}
               onOpenCard={handleOpenCard}
-              onCardContextMenu={onCardContextMenu}
+              onCardContextMenu={handleCardContextMenu}
               // Droppable so a drop onto it produces the explaining toast rather
               // than silently falling through to empty space (L1).
               droppable
@@ -363,7 +387,7 @@ export function KanbanProjectBoardView({
             capDone={viewMode !== "v2" || !needsReviewFilter}
             cards={board.done}
             onOpenCard={handleOpenCard}
-            onCardContextMenu={onCardContextMenu}
+            onCardContextMenu={handleCardContextMenu}
             droppable
             activeCard={activeCard}
             prByThreadId={prByThreadId}
