@@ -18,6 +18,7 @@ import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
 import { remarkGithubAlerts, type GithubAlertKind } from "../lib/remarkGithubAlerts";
+import { remarkHtmlBreaks } from "../lib/remarkHtmlBreaks";
 import React, {
   Children,
   createContext,
@@ -227,6 +228,7 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
   remarkGithubAlerts,
+  remarkHtmlBreaks,
 ];
 // User prompts are casual typing, not authored markdown: hard-break single
 // newlines and skip math entirely (the composer chip plugin is appended per
