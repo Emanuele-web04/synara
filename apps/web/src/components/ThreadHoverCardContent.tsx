@@ -2,18 +2,20 @@
 // Purpose: Rich hover-card body shown when hovering a sidebar thread/chat row —
 //          the title with a relative time on the header line, then project,
 //          source folder, git branch, worktree identity, pull request, and the chat's current
-//          model rows when available.
+//          model rows when available, plus an excerpt of any unsent draft.
 // Layer: Sidebar UI component
 // Exports: ThreadHoverCardContent
 // Why: Shared by both the pinned and the nested thread-row tooltips so the two
 //      surfaces cannot drift apart.
 
-import type { OrchestrationThreadPullRequest } from "@synara/contracts";
+import type { OrchestrationThreadPullRequest, ThreadId } from "@synara/contracts";
 import type { MouseEvent, ReactNode } from "react";
 
+import { useThreadDraftPreviewText } from "~/composerDraftStore";
 import { FastModeIcon, GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import type { ThreadModelSummary } from "~/lib/threadModelSummary";
+import { cn } from "~/lib/utils";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon } from "./ProviderIcon";
 import {
@@ -21,13 +23,14 @@ import {
   resolvePrStatePresentation,
 } from "./pullRequest/pullRequestStatePresentation";
 import type { ThreadStatusPill } from "./Sidebar.logic";
-import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
+import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import {
   SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME,
   SIDEBAR_HOVER_CARD_ROW_CLASS_NAME,
 } from "./sidebarHoverCardStyles";
 
 export type ThreadHoverCardContentProps = {
+  threadId: ThreadId;
   title: string;
   /** Pre-formatted relative time (e.g. "2h"); omitted when unavailable. */
   timeLabel: string | null;
@@ -79,6 +82,7 @@ function ModelRow({ model }: { model: ThreadModelSummary }) {
 }
 
 export function ThreadHoverCardContent({
+  threadId,
   title,
   timeLabel,
   projectName,
@@ -170,6 +174,27 @@ export function ThreadHoverCardContent({
           {model ? <ModelRow model={model} /> : null}
         </div>
       ) : null}
+      <DraftPreviewRow threadId={threadId} />
+    </div>
+  );
+}
+
+// Unsent composer text, clamped so a long draft cannot stretch the card.
+function DraftPreviewRow({ threadId }: { threadId: ThreadId }) {
+  const previewText = useThreadDraftPreviewText(threadId);
+  if (!previewText) return null;
+  return (
+    <div className={cn(SIDEBAR_HOVER_CARD_ROW_CLASS_NAME, "items-start text-muted-foreground")}>
+      <span
+        aria-hidden="true"
+        className="inline-flex size-3.5 shrink-0 items-center justify-center"
+      >
+        <SidebarDraftGlyph />
+      </span>
+      <span className="sr-only">Unsent draft:</span>
+      <span className="line-clamp-3 min-w-0 whitespace-normal break-words leading-snug">
+        {previewText}
+      </span>
     </div>
   );
 }
