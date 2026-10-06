@@ -112,6 +112,58 @@ describe("ProjectPicker workspace choices", () => {
     }
   });
 
+  const dotProjectId = ProjectId.makeUnsafe("project-picker-hermes");
+  function addDotProject() {
+    useStore.setState({
+      projects: [
+        project,
+        {
+          ...project,
+          id: dotProjectId,
+          name: ".hermes",
+          remoteName: ".hermes",
+          folderName: ".hermes",
+          cwd: "/Users/tester/.hermes",
+        },
+      ],
+    });
+  }
+
+  it("lists a registered dot-folder project in the chat workspace picker", async () => {
+    addDotProject();
+    const onSelectProject = vi.fn();
+    const onSelectWorkspaceRoot = vi.fn();
+    const screen = await mountPicker({ onSelectProject, onSelectWorkspaceRoot });
+
+    try {
+      await page.getByTestId("workspace-picker-trigger").click();
+      await page.getByRole("option", { name: ".hermes", exact: true }).click();
+      expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(dotProjectId);
+      expect(onSelectWorkspaceRoot).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("lists and selects a registered project whose folder starts with a dot", async () => {
+    addDotProject();
+    const onSelectProject = vi.fn();
+    const screen = await mountPicker({
+      selectionMode: "project",
+      selectedProjectId: dotProjectId,
+      onSelectProject,
+    });
+
+    try {
+      await expect.element(page.getByTestId("project-picker-trigger")).toHaveTextContent(".hermes");
+      await page.getByTestId("project-picker-trigger").click();
+      await page.getByRole("option", { name: ".hermes", exact: true }).click();
+      expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(dotProjectId);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("does not add a project choice when a thread creates another worktree", async () => {
     const screen = await mountPicker();
 
