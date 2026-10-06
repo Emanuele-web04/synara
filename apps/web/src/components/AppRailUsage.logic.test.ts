@@ -26,6 +26,25 @@ describe("rail usage accounts", () => {
   const selectedIds = (selected: readonly string[]) =>
     resolveRailUsageAccounts(selected, accounts).map((account) => account.instance.instanceId);
 
+  it("filters globally disabled accounts before the cap while preserving saved choices", () => {
+    const visible = getRailUsageAccounts(deriveProviderInstances(DEFAULT_SERVER_SETTINGS_VIEW), [
+      "codex",
+      "claudeAgent",
+    ]);
+    const saved = ["codex", "claudeAgent"];
+    expect(
+      resolveRailUsageAccounts([...saved, "opencode"], visible).map(
+        (account) => account.instance.instanceId,
+      ),
+    ).toEqual(["opencode"]);
+    const added = toggleRailUsageAccount(saved, "opencode", true, visible);
+    expect(added).toEqual(["codex", "claudeAgent", "opencode"]);
+    expect(toggleRailUsageAccount(added, "opencode", false, visible)).toEqual(saved);
+    expect(
+      resolveRailUsageAccounts(added, accounts).map((account) => account.instance.instanceId),
+    ).toEqual(saved);
+  });
+
   it("allows two accounts of the same provider and distinguishes their names", () => {
     const selected = resolveRailUsageAccounts(["claudeAgent", "claude_work"], accounts);
     expect(selected.map((account) => account.label)).toEqual([

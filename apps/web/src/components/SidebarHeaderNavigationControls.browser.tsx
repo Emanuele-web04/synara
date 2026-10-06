@@ -1,6 +1,6 @@
 import "../index.css";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { describe, expect, it } from "vitest";
 import { cdp, page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -39,19 +39,35 @@ function Shell({ vertical = false }: { vertical?: boolean }) {
   );
 }
 
-function RailShell() {
+function RailShell({
+  compact = false,
+  integrated = false,
+}: {
+  compact?: boolean;
+  integrated?: boolean;
+}) {
   const [rail, setRail] = useState<HTMLDivElement | null>(null);
   const [route, setRoute] = useState<HTMLElement | null>(null);
   const { open, isMobile } = useSidebar();
   return (
-    <SidebarLeadingControlsDock railSlot={rail} routeColumn={route}>
-      <div ref={setRail} style={{ width: 48, flexShrink: 0 }} />
+    <SidebarLeadingControlsDock
+      railSlot={rail}
+      routeColumn={route}
+      collapsedPanelWidth={compact && !integrated ? 64 : 0}
+    >
+      <div ref={setRail} style={{ width: "var(--app-rail-width)", flexShrink: 0 }} />
       <div
         className="app-rail-panel"
         aria-label="Thread panel"
-        style={{ width: open ? 272 : 0, flexShrink: 0 }}
+        style={{ width: open ? 272 : compact && !integrated ? 64 : 0, flexShrink: 0 }}
       >
-        <div data-slot="sidebar" data-side="left" data-state={open ? "expanded" : "collapsed"} />
+        <div
+          data-slot="sidebar"
+          data-side="left"
+          data-state={open ? "expanded" : "collapsed"}
+          data-collapsible={!open && compact ? "compact" : undefined}
+          data-sidebar-compact-rail={integrated ? "true" : undefined}
+        />
       </div>
       {open && !isMobile ? (
         <header className="drag-region" style={{ position: "absolute", left: 90, top: 12 }}>
@@ -79,6 +95,51 @@ async function renderShell(vertical = false) {
 }
 
 describe("sidebar leading controls dock", () => {
+  it.each([false, true])(
+    "aligns collapsed header controls and retains the compact seam (integrated=%s)",
+    async (integrated) => {
+      await page.viewport(1280, 800);
+      const previousRuntime = document.documentElement.dataset.runtime;
+      document.documentElement.dataset.runtime = "electron";
+      const screen = await render(
+        <SidebarProvider
+          defaultOpen={false}
+          data-sidebar-layout="rail"
+          data-sidebar-compact-mode="true"
+          style={
+            integrated
+              ? ({ "--sidebar-compact-reserved-width": "0px" } as CSSProperties)
+              : undefined
+          }
+        >
+          <RailShell compact integrated={integrated} />
+        </SidebarProvider>,
+      );
+      try {
+        const toggle = page.getByRole("button", { name: "Toggle thread sidebar" }).element();
+        const topBar = screen.container.querySelector<HTMLElement>(".app-top-bar")!;
+        const reserved = topBar.querySelector<HTMLElement>("[aria-hidden]")!;
+        await expect
+          .poll(() =>
+            Math.abs(toggle.getBoundingClientRect().left - reserved.getBoundingClientRect().left),
+          )
+          .toBeLessThan(1);
+        expect(toggle.getBoundingClientRect().left).toBeGreaterThanOrEqual(integrated ? 90 : 112);
+        const panel = screen.container.querySelector<HTMLElement>(".app-rail-panel")!;
+        const panelBorder = Number.parseFloat(getComputedStyle(panel).borderLeftWidth);
+        if (integrated) expect(panelBorder).toBe(0);
+        else expect(panelBorder).toBeGreaterThan(0);
+        expect(
+          getComputedStyle(screen.container.querySelector<HTMLElement>(".chat-content-card")!)
+            .borderBottomLeftRadius,
+        ).toBe("0px");
+      } finally {
+        await screen.unmount();
+        if (previousRuntime === undefined) delete document.documentElement.dataset.runtime;
+        else document.documentElement.dataset.runtime = previousRuntime;
+      }
+    },
+  );
   it("excludes the docked toggle from the host header's native drag region", async () => {
     await page.viewport(1280, 800);
     const screen = await render(

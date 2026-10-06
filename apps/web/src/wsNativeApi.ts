@@ -31,6 +31,7 @@ import {
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
+  type ServerKeepAwakeUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
   ServerVoiceTranscriptionResult,
@@ -141,6 +142,7 @@ const serverProviderStatusesUpdatedListeners =
   createListenerRegistry<ServerProviderStatusesUpdatedPayload>();
 const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
+const serverKeepAwakeUpdatedListeners = createListenerRegistry<ServerKeepAwakeUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
 const projectProvisionProgressListeners =
@@ -183,6 +185,7 @@ function clearWsNativeApiListeners(): void {
   serverProviderStatusesUpdatedListeners.clear();
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
+  serverKeepAwakeUpdatedListeners.clear();
   gitActionProgressListeners.clear();
   gitWorktreeSetupProgressListeners.clear();
   projectProvisionProgressListeners.clear();
@@ -431,6 +434,19 @@ export function onServerSettingsUpdated(
   });
 }
 
+/** Subscribe to keep-awake (caffeinate) state; replays the latest push. */
+export function onServerKeepAwakeUpdated(
+  listener: (payload: ServerKeepAwakeUpdatedPayload) => void,
+): () => void {
+  const latestKeepAwake =
+    instance?.transport.getLatestPush(WS_CHANNELS.serverKeepAwakeUpdated)?.data ?? null;
+  return subscribeWithReplay({
+    registry: serverKeepAwakeUpdatedListeners,
+    listener,
+    latest: latestKeepAwake,
+  });
+}
+
 /**
  * Subscribe to unrecoverable per-thread stream failures (retries and reconnect
  * exhausted). Lets thread-detail consumers surface a failed hydration state
@@ -484,6 +500,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
     serverSettingsUpdatedListeners.emit(message.data);
+  });
+  transport.subscribe(WS_CHANNELS.serverKeepAwakeUpdated, (message) => {
+    serverKeepAwakeUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
@@ -822,6 +841,7 @@ export function createWsNativeApi(): NativeApi {
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
       getThreadDetailSnapshot: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot, input),
+      searchThreads: (input) => transport.request(ORCHESTRATION_WS_METHODS.searchThreads, input),
       dispatchCommand: (command) => {
         return transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
           command: omitNullUserInputAnswers(command),

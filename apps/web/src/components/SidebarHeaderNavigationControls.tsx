@@ -86,10 +86,12 @@ const LeadingControlsDockContext = createContext<RegisterLeadingControlsAnchor |
 export function SidebarLeadingControlsDock({
   routeColumn,
   railSlot,
+  collapsedPanelWidth = 0,
   children,
 }: {
   routeColumn: HTMLElement | null;
   railSlot: HTMLElement | null;
+  collapsedPanelWidth?: number;
   children: ReactNode;
 }) {
   const { isMobile } = useSidebar();
@@ -130,6 +132,7 @@ export function SidebarLeadingControlsDock({
           ? rect.left -
             routeColumn.getBoundingClientRect().left +
             railSlot.getBoundingClientRect().right +
+            collapsedPanelWidth +
             pendingLeadingPaddingShift(anchor, routeColumn)
           : rect.left;
       const y = rect.top;
@@ -140,7 +143,7 @@ export function SidebarLeadingControlsDock({
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [anchor, railSlot, routeColumn]);
+  }, [anchor, railSlot, routeColumn, collapsedPanelWidth]);
 
   // Phones keep the cluster inside the host header (the drawer floats over content).
   const contextValue = useMemo(

@@ -177,11 +177,13 @@ import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsag
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { RecapStatsQuery } from "./recapStats";
+import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
@@ -495,6 +497,7 @@ const makeWsRpcHandlersLayer = () =>
       const githubInbox = yield* GitHubInboxService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const recapStatsQuery = yield* RecapStatsQuery;
+      const threadSearchQuery = yield* ThreadSearchQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
@@ -504,6 +507,7 @@ const makeWsRpcHandlersLayer = () =>
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
+      const keepAwake = yield* KeepAwakeService;
       const terminalManager = yield* TerminalManager;
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
@@ -1353,6 +1357,8 @@ const makeWsRpcHandlersLayer = () =>
               .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
+        [ORCHESTRATION_WS_METHODS.searchThreads]: (input) =>
+          rpcEffect(threadSearchQuery.searchThreads(input), "Failed to search threads"),
         [ORCHESTRATION_WS_METHODS.repairState]: () =>
           rpcEffect(orchestrationEngine.repairState(), "Failed to repair orchestration state"),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
@@ -2508,6 +2514,22 @@ const makeWsRpcHandlersLayer = () =>
               }).pipe(Stream.map((settings) => ({ settings }))),
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed")),
+            ),
+          ),
+        [WS_METHODS.subscribeServerKeepAwake]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.keep-awake" },
+            Stream.concat(
+              Stream.fromEffect(
+                keepAwake.getState.pipe(Effect.map((state) => ({ keepAwake: state }))),
+              ),
+              bufferLiveUiStream(keepAwake.streamChanges, {
+                label: "server.keep-awake",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(Stream.map((state) => ({ keepAwake: state }))),
+            ).pipe(
+              Stream.mapError((cause) => toWsRpcError(cause, "Server keep-awake stream failed")),
             ),
           ),
 

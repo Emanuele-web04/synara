@@ -173,7 +173,10 @@ export function ProviderUsageSettingsPanel() {
       ),
     [serverSettingsQuery.data],
   );
-  const railUsageAccounts = getRailUsageAccounts([...providerInstances.values()]);
+  const railUsageAccounts = getRailUsageAccounts(
+    [...providerInstances.values()],
+    settings.disabledProviders,
+  );
   // Disabled accounts keep their saved choice; only deleted accounts are discarded.
   const savedRailUsageInstanceIds = (
     settings.railUsageInstanceIds ?? settings.railUsageProviders
@@ -206,7 +209,9 @@ export function ProviderUsageSettingsPanel() {
         return instance?.enabled === true && instance.driver === snapshot.provider;
       })
     : (usageQuery.data ?? []);
-  const cards = selectVisibleProviderUsageSnapshots(activeSnapshots);
+  const cards = selectVisibleProviderUsageSnapshots(
+    activeSnapshots.filter((snapshot) => !settings.disabledProviders.includes(snapshot.provider)),
+  );
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
@@ -275,19 +280,21 @@ export function ProviderUsageSettingsPanel() {
             />
           }
         />
-        <SettingsListRow
-          title="Banked resets"
-          description="Include Codex banked resets in the details."
-          actions={
-            <Switch
-              checked={settings.usagePopoverShowResetCredits}
-              onCheckedChange={(next) =>
-                updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
-              }
-              aria-label="Show banked resets in usage popovers"
-            />
-          }
-        />
+        {!settings.disabledProviders.includes("codex") ? (
+          <SettingsListRow
+            title="Banked resets"
+            description="Include Codex banked resets in the details."
+            actions={
+              <Switch
+                checked={settings.usagePopoverShowResetCredits}
+                onCheckedChange={(next) =>
+                  updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
+                }
+                aria-label="Show banked resets in usage popovers"
+              />
+            }
+          />
+        ) : null}
         <SettingsListRow
           title="Credits and token totals"
           description="Include credit balances and recent token totals (24h, 7d, 30d) in the details."

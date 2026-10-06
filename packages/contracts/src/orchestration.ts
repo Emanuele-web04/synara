@@ -47,6 +47,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
   getShellSnapshot: "orchestration.getShellSnapshot",
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
+  searchThreads: "orchestration.searchThreads",
   dispatchCommand: "orchestration.dispatchCommand",
   settleTurnDispatch: "orchestration.settleTurnDispatch",
   importThread: "orchestration.importThread",
@@ -3003,6 +3004,35 @@ export const OrchestrationGetThreadDetailSnapshotResult = Schema.NullOr(
 export type OrchestrationGetThreadDetailSnapshotResult =
   typeof OrchestrationGetThreadDetailSnapshotResult.Type;
 
+// Exported so server and web enforce the same bounds the schema validates.
+export const ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH = 2;
+export const ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT = 50;
+export const ORCHESTRATION_SEARCH_THREADS_MAX_EXCERPT_LENGTH = 320;
+
+/** Message-content search over persisted history, independent of what a client has hydrated. */
+export const OrchestrationSearchThreadsInput = Schema.Struct({
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)).check(
+    Schema.isMinLength(ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH),
+  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT)),
+  ),
+});
+export type OrchestrationSearchThreadsInput = typeof OrchestrationSearchThreadsInput.Type;
+
+export const OrchestrationThreadSearchMatch = Schema.Struct({
+  threadId: ThreadId,
+  /** Text around the first hit of the thread's best matching message. */
+  excerpt: Schema.String.check(Schema.isMaxLength(ORCHESTRATION_SEARCH_THREADS_MAX_EXCERPT_LENGTH)),
+  matchCount: PositiveInt,
+});
+export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
+
+export const OrchestrationSearchThreadsResult = Schema.Struct({
+  matches: Schema.Array(OrchestrationThreadSearchMatch),
+});
+export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
+
 export const OrchestrationImportThreadInput = Schema.Struct({
   threadId: ThreadId,
   externalId: TrimmedNonEmptyString,
@@ -3047,6 +3077,10 @@ export const OrchestrationRpcSchemas = {
   getThreadDetailSnapshot: {
     input: OrchestrationGetThreadDetailSnapshotInput,
     output: OrchestrationGetThreadDetailSnapshotResult,
+  },
+  searchThreads: {
+    input: OrchestrationSearchThreadsInput,
+    output: OrchestrationSearchThreadsResult,
   },
   repairState: {
     input: OrchestrationRepairStateInput,

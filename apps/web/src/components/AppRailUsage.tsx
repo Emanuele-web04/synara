@@ -210,6 +210,7 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
     settings.railUsageInstanceIds ?? settings.railUsageProviders,
     getRailUsageAccounts(
       deriveProviderInstances(settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW),
+      settings.disabledProviders,
     ),
   );
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions({ enabled: accounts.length > 0 }));

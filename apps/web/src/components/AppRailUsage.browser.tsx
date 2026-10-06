@@ -12,6 +12,7 @@ import { render } from "vitest-browser-react";
 
 const settings = vi.hoisted(() => ({
   codexHomePath: "",
+  disabledProviders: [] as string[],
   railUsageProviders: ["codex"],
   railUsageInstanceIds: null as string[] | null,
   railUsageWindow: "both",
@@ -106,9 +107,17 @@ const claudeSnapshots: readonly ServerProviderUsageSnapshot[] = [
 describe("AppRailUsage", () => {
   beforeEach(() => {
     settings.railUsageWindow = "both";
+    settings.disabledProviders = [];
     settings.railUsageProviders = ["codex"];
     settings.railUsageInstanceIds = null;
     updateSettings.mockReset().mockImplementation((patch) => Object.assign(settings, patch));
+  });
+
+  it("hides globally disabled selected accounts without erasing their saved selection", async () => {
+    settings.disabledProviders = ["codex"];
+    await renderUsage([{ window: "Weekly", usedPercent: 35 }]);
+    expect(page.getByRole("button", { name: /^Codex usage:/ }).elements()).toHaveLength(0);
+    expect(settings.railUsageProviders).toEqual(["codex"]);
   });
 
   it("selects two Claude accounts in Settings and shows each account's ring and hover card", async () => {

@@ -1,7 +1,7 @@
 // FILE: AppRailUsage.logic.ts
 // Purpose: Pure selection rules for the provider usage rings at the bottom of the app rail.
 
-import type { ProviderInstanceId } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import type { ResolvedProviderInstance } from "@synara/shared/providerInstances";
 import { PROVIDER_USAGE_PROVIDERS, providerUsageDisplayName } from "@synara/shared/providerUsage";
 
@@ -21,10 +21,14 @@ export interface RailUsageAccount {
 /** Enabled usage-capable accounts, named consistently in Settings and the rail. */
 export function getRailUsageAccounts(
   instances: ReadonlyArray<ResolvedProviderInstance>,
+  disabledProviders: ReadonlyArray<ProviderKind> = [],
 ): ReadonlyArray<RailUsageAccount> {
   return PROVIDER_USAGE_PROVIDERS.flatMap((provider) => {
     const accounts = instances.filter(
-      (instance) => instance.enabled && instance.driver === provider,
+      (instance) =>
+        instance.enabled &&
+        instance.driver === provider &&
+        !disabledProviders.includes(instance.driver),
     );
     const providerName = providerUsageDisplayName(provider);
     return accounts.map((instance) => {

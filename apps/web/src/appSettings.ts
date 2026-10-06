@@ -20,6 +20,7 @@ import {
   type ProviderInstanceEnvironment,
   ProviderInstanceId,
   GitHubInboxSort,
+  KeepAwakeMode,
   TrimmedNonEmptyString,
   ProviderKind,
   SidechatExpiry,
@@ -491,6 +492,7 @@ export const AppSettingsSchema = Schema.Struct({
   ),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
+  keepAwakeMode: KeepAwakeMode.pipe(withDefaults(() => "off" as const satisfies KeepAwakeMode)),
   lowerProviderProcessPriority: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
@@ -991,7 +993,8 @@ export function getProviderInstanceOptions(
   settings: Pick<
     AppSettings,
     "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
-  >,
+  > &
+    Partial<Pick<AppSettings, "disabledProviders">>,
 ): ProviderInstanceOption[] {
   const optionsById = new Map<ProviderInstanceId, ProviderInstanceOption>();
 
@@ -1049,18 +1052,23 @@ export function getProviderInstanceOptions(
     });
   }
 
-  return Array.from(optionsById.values()).toSorted((left, right) => {
-    const providerDelta =
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
-    if (providerDelta !== 0) {
-      return providerDelta;
-    }
-    if (left.isDefault !== right.isDefault) {
-      return left.isDefault ? -1 : 1;
-    }
-    return left.label.localeCompare(right.label);
-  });
+  return Array.from(optionsById.values())
+    .map((option) => ({
+      ...option,
+      enabled: option.enabled && !settings.disabledProviders?.includes(option.provider),
+    }))
+    .toSorted((left, right) => {
+      const providerDelta =
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+      if (providerDelta !== 0) {
+        return providerDelta;
+      }
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    });
 }
 
 export function getUnsupportedProviderInstanceOptions(
@@ -1510,7 +1518,7 @@ export function didProviderCommandDiscoverySettingsChange(
   );
 }
 
-function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
+export function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     claudeEnableArtifacts: settings.providers.claudeAgent.enableArtifacts,
@@ -1527,6 +1535,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     sidechatExpiry: settings.sidechatExpiry,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+    keepAwakeMode: settings.keepAwakeMode,
     lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
@@ -1662,6 +1671,13 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "enableProviderUpdateChecks")) {
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
+  }
+  if (
+    patch.keepAwakeMode === "always" ||
+    patch.keepAwakeMode === "agent" ||
+    patch.keepAwakeMode === "off"
+  ) {
+    serverPatch.keepAwakeMode = patch.keepAwakeMode;
   }
   if (hasOwn(patch, "lowerProviderProcessPriority")) {
     serverPatch.lowerProviderProcessPriority = Boolean(patch.lowerProviderProcessPriority);
@@ -1890,6 +1906,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
+    "keepAwakeMode",
     "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",

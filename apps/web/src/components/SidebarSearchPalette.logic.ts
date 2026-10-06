@@ -1,6 +1,7 @@
 // Purpose: Scores sidebar palette results for actions, themes, projects, and chat threads.
-// Keeps search local and deterministic so the palette can rank title hits above
+// Scoring stays local and deterministic so the palette can rank title hits above
 // message-content hits while still surfacing a useful snippet for chat matches.
+// Server message hits cover threads whose messages this client has not loaded.
 import type { ComponentType } from "react";
 
 import type { ProviderKind } from "@synara/contracts";
@@ -98,6 +99,12 @@ export function areSidebarSearchThreadListsEqual(
     }
   }
   return true;
+}
+
+/** Server-side message hit for a thread whose messages may not be loaded on this client. */
+export interface SidebarSearchServerThreadMatch {
+  excerpt: string;
+  matchCount: number;
 }
 
 export interface SidebarSearchThreadMatch {
@@ -355,10 +362,67 @@ export function matchSidebarSearchProjects(
     .map(({ id, project }) => ({ id, project }));
 }
 
+/**
+ * Indexes server hits by thread. While a newer query is still in flight, the
+ * previous response only keeps hits whose excerpt matches the current query,
+ * so stale results never surface a thread the current query does not match.
+ */
+export function buildSidebarSearchServerThreadMatches(
+  result:
+    | {
+        readonly query: string;
+        readonly matches: readonly ({
+          readonly threadId: string;
+        } & SidebarSearchServerThreadMatch)[];
+      }
+    | null
+    | undefined,
+  query: string,
+): ReadonlyMap<string, SidebarSearchServerThreadMatch> {
+  const serverMatches = new Map<string, SidebarSearchServerThreadMatch>();
+  if (!result) return serverMatches;
+  const isCurrent = normalizeText(result.query) === normalizeText(query);
+  const queryTokens = tokenizeQuery(query);
+  for (const { threadId, excerpt, matchCount } of result.matches) {
+    const normalizedExcerpt = normalizeText(excerpt);
+    if (isCurrent || queryTokens.every((token) => normalizedExcerpt.includes(token))) {
+      serverMatches.set(threadId, { excerpt, matchCount });
+    }
+  }
+  return serverMatches;
+}
+
+// A server hit matched every query token somewhere in the message; its excerpt
+// may not contain them all, so it still ranks as the weakest message match.
+const SERVER_MESSAGE_MATCH_SCORE = 132;
+
+function resolveMessageMatch(
+  thread: SidebarSearchThread,
+  query: string,
+  queryTokens: readonly string[],
+  serverMatch: SidebarSearchServerThreadMatch | undefined,
+): ReturnType<typeof scoreMessage> {
+  const localMatch = scoreMessage(thread.messages, query, queryTokens);
+  if (!serverMatch) {
+    return localMatch;
+  }
+  const messageMatchCount = Math.max(localMatch.messageMatchCount, serverMatch.matchCount);
+  if (localMatch.score !== null) {
+    return { ...localMatch, messageMatchCount };
+  }
+  const excerptMatch = scoreMessage([{ text: serverMatch.excerpt }], query, queryTokens);
+  return {
+    messageMatchCount,
+    score: excerptMatch.score ?? SERVER_MESSAGE_MATCH_SCORE,
+    snippet: excerptMatch.snippet ?? buildMessageSnippet(serverMatch.excerpt, query, queryTokens),
+  };
+}
+
 export function matchSidebarSearchThreads(
   threads: readonly SidebarSearchThread[],
   query: string,
   limit = 8,
+  serverMatches?: ReadonlyMap<string, SidebarSearchServerThreadMatch>,
 ): SidebarSearchThreadMatch[] {
   const normalizedQuery = normalizeText(query);
   const queryTokens = tokenizeQuery(query);
@@ -390,7 +454,12 @@ export function matchSidebarSearchThreads(
       const projectName = normalizeText(thread.projectName);
       const projectRemoteName = normalizeText(thread.projectRemoteName);
       const spaceName = normalizeText(thread.spaceName);
-      const messageMatch = scoreMessage(thread.messages, normalizedQuery, queryTokens);
+      const messageMatch = resolveMessageMatch(
+        thread,
+        normalizedQuery,
+        queryTokens,
+        serverMatches?.get(thread.id),
+      );
       let score: number | null = null;
       let matchKind: SidebarSearchThreadMatch["matchKind"] = "title";
       let snippet: string | null = null;

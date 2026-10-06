@@ -322,6 +322,7 @@ import {
   ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerKeepAwakeUpdatedPayload,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
@@ -483,6 +484,12 @@ export const WsOrchestrationGetThreadDetailSnapshotRpc = Rpc.make(
     error: WsRpcError,
   },
 );
+
+export const WsOrchestrationSearchThreadsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.searchThreads, {
+  payload: OrchestrationRpcSchemas.searchThreads.input,
+  success: OrchestrationRpcSchemas.searchThreads.output,
+  error: WsRpcError,
+});
 
 export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.replayEvents, {
   payload: OrchestrationRpcSchemas.replayEvents.input,
@@ -1531,6 +1538,13 @@ export const WsSubscribeServerSettingsRpc = Rpc.make(WS_METHODS.subscribeServerS
   stream: true,
 });
 
+export const WsSubscribeServerKeepAwakeRpc = Rpc.make(WS_METHODS.subscribeServerKeepAwake, {
+  payload: Schema.Struct({}),
+  success: ServerKeepAwakeUpdatedPayload,
+  error: WsRpcError,
+  stream: true,
+});
+
 export const WsProviderGetComposerCapabilitiesRpc = Rpc.make(
   WS_METHODS.providerGetComposerCapabilities,
   {
@@ -1897,6 +1911,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
   WsOrchestrationGetThreadDetailSnapshotRpc,
+  WsOrchestrationSearchThreadsRpc,
   WsOrchestrationRepairStateRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
@@ -2005,6 +2020,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerProviderStatusesRpc,
+  WsSubscribeServerKeepAwakeRpc,
   WsSubscribeServerSettingsRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,

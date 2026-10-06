@@ -11,7 +11,7 @@ import { KeybindingCommand, KeybindingRule, ResolvedKeybindingsConfig } from "./
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
-import { ServerSettingsPatch, ServerSettingsView } from "./settings";
+import { KeepAwakeMode, ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
@@ -585,6 +585,19 @@ export const ServerSettingsUpdatedPayload = Schema.Struct({
   settings: ServerSettingsView,
 });
 export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.Type;
+
+export const ServerKeepAwakeState = Schema.Struct({
+  available: Schema.Boolean,
+  mode: KeepAwakeMode,
+  active: Schema.Boolean,
+  error: Schema.NullOr(Schema.String),
+});
+export type ServerKeepAwakeState = typeof ServerKeepAwakeState.Type;
+
+export const ServerKeepAwakeUpdatedPayload = Schema.Struct({
+  keepAwake: ServerKeepAwakeState,
+});
+export type ServerKeepAwakeUpdatedPayload = typeof ServerKeepAwakeUpdatedPayload.Type;
 
 export const ServerLifecycleWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,

@@ -104,6 +104,8 @@ import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
@@ -346,6 +348,7 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
+  const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
@@ -429,6 +432,9 @@ function SettingsRouteView() {
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
   const isInstallSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
   const hiddenProviderCount = new Set(settings.hiddenProviders).size;
+  const enabledProviderSelectOptions = PROVIDER_SELECT_OPTIONS.filter(
+    (provider) => !settings.disabledProviders.includes(provider),
+  );
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const isProviderActivityDirty =
     settings.disabledProviders.length !== defaults.disabledProviders.length ||
@@ -655,20 +661,30 @@ function SettingsRouteView() {
           }
           control={
             <SettingsSelectControl
-              value={settings.defaultProvider}
+              value={
+                settings.disabledProviders.includes(settings.defaultProvider)
+                  ? null
+                  : settings.defaultProvider
+              }
+              disabled={enabledProviderSelectOptions.length === 0}
               onValueChange={(value) => {
-                if (!isProviderSelectOption(value)) return;
+                if (!isProviderSelectOption(value) || settings.disabledProviders.includes(value))
+                  return;
                 updateSettings({ defaultProvider: value });
               }}
               ariaLabel="Default provider"
               valueContent={
-                <ProviderOptionLabel
-                  provider={settings.defaultProvider}
-                  label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
-                />
+                settings.disabledProviders.includes(settings.defaultProvider) ? (
+                  "Choose an enabled provider"
+                ) : (
+                  <ProviderOptionLabel
+                    provider={settings.defaultProvider}
+                    label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
+                  />
+                )
               }
             >
-              {PROVIDER_SELECT_OPTIONS.map((provider) => (
+              {enabledProviderSelectOptions.map((provider) => (
                 <SelectItem hideIndicator key={provider} value={provider}>
                   <ProviderOptionLabel
                     provider={provider}
@@ -1480,6 +1496,13 @@ function SettingsRouteView() {
           ariaLabel: "Automatically open simulator",
         })}
       </SettingsSection>
+
+      <KeepAwakeSettingsSection
+        state={keepAwake}
+        mode={settings.keepAwakeMode}
+        defaultMode={defaults.keepAwakeMode}
+        onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
+      />
 
       <SettingsSection title="Review">
         <SettingsRow
