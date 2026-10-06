@@ -2853,7 +2853,11 @@ diffs-container {
 /* Panel collapsed: the route body is the whole block, so its left corners round too. They
    wait for the panel to slide most of the way out, so no notch opens beside it meanwhile;
    opening squares them at once. */
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"]) {
+[data-sidebar-layout="rail"]:has(
+  [data-slot="sidebar"][data-side="left"][data-state="collapsed"]:not(
+      :where([data-collapsible="compact"])
+    )
+) {
   --app-rail-block-radii: var(--app-rail-inset-radius);
   --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius);
   --app-rail-corner-delay: 180ms;
@@ -2952,10 +2956,20 @@ diffs-container {
 
 /* Panel collapsed: its zero-width box must not leave a border line next to the rail. The
    border stays until the slide ends, so the shrinking panel keeps its edges. */
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+[data-sidebar-layout="rail"]:has(
+    [data-slot="sidebar"][data-side="left"][data-state="collapsed"]:not(
+        :where([data-collapsible="compact"])
+      )
+  )
   .app-rail-panel {
   border-width: 0;
   transition: border-width 0s linear 300ms;
+}
+
+/* Compact rows live inside the rail; their empty panel must reserve no border width. */
+[data-sidebar-layout="rail"]
+  .app-rail-panel:has([data-sidebar-compact-rail="true"][data-state="collapsed"]) {
+  border-width: 0;
 }
 
 /* Short divider on the shell band above the seam, detached from the band's edges, marking
@@ -2995,7 +3009,11 @@ diffs-container {
   opacity: 0;
 }
 
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+[data-sidebar-layout="rail"]:has(
+    [data-slot="sidebar"][data-side="left"][data-state="collapsed"]:not(
+        :where([data-collapsible="compact"])
+      )
+  )
   .app-rail-header-divider {
   opacity: 0;
 }
@@ -3057,6 +3075,207 @@ diffs-container {
   padding-left: calc(
     var(--desktop-top-bar-traffic-light-gutter, 90px) - var(--app-rail-width)
   ) !important;
+}
+
+/* Compact rows stay mounted, preserving section state and scroll until explicitly expanded. */
+:is(
+  [data-slot="activity-completion-status"],
+  [data-slot="sidebar-thread-status"]
+)[data-shortcut-hidden="true"] {
+  display: none;
+}
+
+[data-sidebar-compact="true"] :is([data-slot="kbd"], [data-slot="sidebar-section-toolbar"]) {
+  display: none;
+}
+
+:root[data-runtime="electron"]
+  [data-sidebar-compact-mode="true"]
+  .desktop-top-bar-traffic-light-gutter:not(.app-shell-top-strip) {
+  padding-left: max(
+    0px,
+    calc(
+      var(--desktop-top-bar-traffic-light-gutter, 90px) - var(--app-rail-width) -
+        var(--sidebar-compact-reserved-width, var(--sidebar-width-compact))
+    )
+  ) !important;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-compact-trigger"] {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-panel-controls"] {
+  min-height: 42px;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* The collapsed conversation list shares the outer rail's free space, beneath
+   navigation and above activity/usage. The header toggle remains in the chat. */
+[data-sidebar-compact-rail="true"][data-sidebar-compact="true"]
+  :is([data-slot="sidebar-panel-controls"], [data-slot="activity-scope-header"]) {
+  display: none;
+}
+
+[data-sidebar-compact="true"]
+  [data-slot="sidebar-panel-controls"]
+  > :not([data-slot="sidebar-compact-trigger"]) {
+  display: none;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-menu-button"] {
+  justify-content: center;
+  gap: 0;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-menu-button"] > span:not(:first-child) {
+  display: none;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-title"] {
+  visibility: hidden;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-metadata"] {
+  display: none;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-title"] {
+  width: 0;
+  flex: 0 0 0;
+}
+
+[data-sidebar-compact="true"] [data-slot="activity-thread-button"] {
+  width: 36px;
+  height: 36px;
+  margin-inline: auto;
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+
+[data-sidebar-compact="true"] [data-thread-item]:has(> [data-slot="activity-thread-button"]) {
+  width: 36px;
+  margin-inline: auto;
+}
+
+[data-sidebar-compact="true"] [data-slot="activity-thread-identity"] {
+  position: relative;
+  justify-content: center;
+  min-height: 20px;
+  gap: 0;
+  padding-right: 0;
+  overflow: visible;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-provider"],
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-provider"] > span:not([aria-label]),
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-provider"] > span > svg {
+  width: 20px;
+  height: 20px;
+}
+
+[data-sidebar-compact="true"]
+  [data-slot="sidebar-thread-provider"]
+  > :is(svg, [data-slot="central-icon"]) {
+  width: 20px;
+  height: 20px;
+}
+
+[data-sidebar-compact="true"]
+  [data-slot="activity-thread-identity"]
+  > :is([aria-label="Scheduled"], [aria-label="Unsent draft"]) {
+  position: absolute;
+  top: -4px;
+  right: 0;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-actions"],
+[data-sidebar-compact="true"]
+  [data-slot="sidebar-thread-trailing"]
+  > :not([data-slot="sidebar-thread-status"]) {
+  display: none;
+}
+
+[data-sidebar-compact="true"] [data-slot="activity-completion-status"],
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-status"] {
+  display: inline-flex;
+  opacity: 1;
+  visibility: visible;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-menu-sub"] {
+  margin-inline: 0;
+  padding-inline: 0;
+  border: 0;
+}
+
+[data-sidebar-compact="true"]
+  :is([data-slot="sidebar-menu-sub-button"], [data-thread-item][role="button"]) {
+  position: relative;
+  justify-content: center;
+  padding-inline: 8px;
+  gap: 0;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-trailing"] {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 0;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-thread-compact-provider"] {
+  display: inline-flex;
+}
+
+[data-sidebar-compact="true"]
+  :is([data-slot="sidebar-menu-sub-button"], [data-thread-item][role="button"]):has(
+    [data-slot="sidebar-thread-compact-provider"]
+  )
+  > :not([data-slot]) {
+  display: none;
+}
+
+[data-sidebar-compact="true"]
+  :is(
+    [data-slot="activity-section-label"],
+    [data-slot="sidebar-section-toggle"],
+    [data-slot="sidebar-list-section-header"]
+  ) {
+  justify-content: center;
+  padding-inline: 0;
+  white-space: nowrap;
+}
+
+[data-sidebar-compact="true"]
+  :is(
+    [data-slot="activity-section-label"],
+    [data-slot="sidebar-section-toggle"],
+    [data-slot="sidebar-list-section-header"]
+  )
+  span {
+  font-size: var(--text-ui-xs);
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-list-section-header"] > div {
+  padding-right: 0;
+}
+
+[data-sidebar-compact="true"] [data-slot="activity-scope-header"] {
+  visibility: hidden;
+}
+
+[data-sidebar-compact="true"]
+  [data-slot="sidebar-section-toggle"][data-compact-label="true"]
+  > :not([data-slot="sidebar-section-compact-label"]) {
+  display: none;
+}
+
+[data-sidebar-compact="true"] [data-slot="sidebar-section-compact-label"] {
+  display: inline-flex;
 }
 
 /* Continuous ("squircle") corners, opt-in with the `squircle` class (composer, user

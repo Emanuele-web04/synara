@@ -23,6 +23,7 @@ export function SidebarSectionToolbar({
   const revealOnHover = revealOnHoverProp ?? false;
   return (
     <div
+      data-slot="sidebar-section-toolbar"
       className={cn(
         "flex items-center gap-1.5",
         placement === "inline" ? "-mr-1" : "absolute top-1 right-1.5",

@@ -61,6 +61,7 @@ export function SidebarCollapsibleSection({
   className,
   headerClassName,
   headingLevel,
+  compactLabel,
 }: {
   label: string;
   open: boolean;
@@ -73,6 +74,8 @@ export function SidebarCollapsibleSection({
   headerClassName?: string;
   /** Wraps the toggle in a heading where the section is a landmark (the code review list). */
   headingLevel?: 2;
+  /** Alternate icon/count for narrow conversation rails. */
+  compactLabel?: ReactNode;
 }) {
   const toggle = (
     <button
@@ -83,10 +86,21 @@ export function SidebarCollapsibleSection({
         headerClassName,
       )}
       aria-expanded={open}
+      aria-label={compactLabel ? label : undefined}
+      data-slot="sidebar-section-toggle"
+      data-compact-label={compactLabel ? "true" : undefined}
       onClick={onToggle}
     >
       <span className={cn("min-w-0 truncate", SIDEBAR_SECTION_LABEL_CLASS_NAME)}>{label}</span>
       <DisclosureChevron open={open} className="text-muted-foreground/58" />
+      {compactLabel ? (
+        <span
+          data-slot="sidebar-section-compact-label"
+          className="hidden items-center justify-center gap-1 text-ui-xs"
+        >
+          {compactLabel}
+        </span>
+      ) : null}
     </button>
   );
   return (

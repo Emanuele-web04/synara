@@ -17,6 +17,7 @@ import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
+import { readSidebarUiState } from "../components/Sidebar.uiState";
 import { isElectron } from "../env";
 import { matchesFixedShortcut } from "../fixedShortcuts";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
@@ -570,7 +571,14 @@ function ChatRouteLayout() {
   const railActiveItem = useRailShellStore((store) => store.activeItem);
   const railPanelView = useRailShellStore((store) => store.panelView);
   const selectRailPanelItem = useRailShellStore((store) => store.selectPanelItem);
+  const [activityViewEnabled, setActivityViewEnabled] = useState(
+    () => readSidebarUiState().activityViewEnabled,
+  );
   const railHidesPanel = !railItemShowsPanel(railActiveItem);
+  const compactThreadSidebar =
+    activityViewEnabled &&
+    !isEditorView &&
+    (railActiveItem === "home" || railActiveItem === "spaces");
   const resolvedSidebarOpen = isEditorView || railHidesPanel ? false : sidebarOpen;
   // Toggling the panel open on a full-width route brings back the current panel item.
   const handleSidebarOpenChange = useCallback(
@@ -584,6 +592,7 @@ function ChatRouteLayout() {
   );
   // ThreadSidebar portals its AppRail into this element, left of the panel.
   const [railSlot, setRailSlot] = useState<HTMLDivElement | null>(null);
+  const [compactThreadAnchor, setCompactThreadAnchor] = useState<HTMLDivElement | null>(null);
   // The route column slides with the panel; the leading controls dock needs it to stay put.
   const [routeColumn, setRouteColumn] = useState<HTMLDivElement | null>(null);
 
@@ -592,15 +601,20 @@ function ChatRouteLayout() {
   const sidebarElement = (
     <Sidebar
       side="left"
-      collapsible="offcanvas"
+      collapsible={compactThreadSidebar ? "compact" : "offcanvas"}
+      compactInRail={compactThreadSidebar}
+      compactAnchor={compactThreadAnchor}
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
-      className={cn("h-full text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
-      gapClassName={SIDEBAR_OFFCANVAS_MOTION_CLASS}
+      className={cn(
+        "h-full text-foreground",
+        !compactThreadSidebar && SIDEBAR_OFFCANVAS_MOTION_CLASS,
+      )}
+      gapClassName={compactThreadSidebar ? "" : SIDEBAR_OFFCANVAS_MOTION_CLASS}
       transparentSurface
       resizable={THREAD_SIDEBAR_RESIZABLE}
     >
-      <ThreadSidebar />
+      <ThreadSidebar onActivityViewEnabledChange={setActivityViewEnabled} />
     </Sidebar>
   );
 
@@ -633,13 +647,26 @@ function ChatRouteLayout() {
       open={resolvedSidebarOpen}
       onOpenChange={handleSidebarOpenChange}
       className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
-      style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
+      style={
+        {
+          "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px`,
+          "--sidebar-compact-reserved-width": "0px",
+        } as CSSProperties
+      }
       data-sidebar-side="left"
       data-sidebar-layout="rail"
+      data-sidebar-compact-mode={compactThreadSidebar ? "true" : undefined}
     >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
-      <AppRailSlotProvider value={railSlot}>
+      <AppRailSlotProvider
+        value={railSlot}
+        compactThreadSlotRef={
+          compactThreadSidebar && !resolvedSidebarOpen && !isMobile
+            ? setCompactThreadAnchor
+            : undefined
+        }
+      >
         <SidebarLeadingControlsDock routeColumn={routeColumn} railSlot={railSlot}>
           {isMobile ? (
             // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
@@ -650,7 +677,12 @@ function ChatRouteLayout() {
               <AppShellTopStrip />
               <div className="flex min-h-0 flex-1">
                 <div ref={setRailSlot} className="flex shrink-0" />
-                <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
+                <div
+                  className={cn(
+                    "app-rail-panel relative flex shrink-0",
+                    compactThreadSidebar ? "overflow-visible" : "overflow-hidden [contain:paint]",
+                  )}
+                >
                   {sidebarElement}
                 </div>
               </div>
