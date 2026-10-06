@@ -4203,8 +4203,8 @@ describe("ProviderRuntimeIngestion", () => {
       });
       await harness.drain();
 
-      // Each delta re-arms the delivery-mode TTL, so a turn that keeps streaming
-      // past it stays buffered instead of turning live mid-message.
+      // Silence must not expire an active turn's policy, buffered text, or
+      // the message association needed to finalize without item.completed.
       vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
       try {
         vi.setSystemTime(Date.now() + initialSilenceMs);
