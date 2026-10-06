@@ -76,6 +76,116 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it.each([undefined, "generation-one"])(
+    "keeps a reused request ID paired with its original question (%s)",
+    (lifecycleGeneration) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "first-question",
+            sequence: 1,
+            kind: "user-input.requested",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+              questions: [{ id: "q", header: "Q", question: "First question?", options: [] }],
+            },
+          }),
+          makeActivity({
+            id: "first-answer",
+            sequence: 2,
+            kind: "user-input.resolved",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+              answers: { q: "First answer" },
+            },
+          }),
+          makeActivity({
+            id: "second-question",
+            sequence: 3,
+            kind: "user-input.requested",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration: "generation-two" } : {}),
+              questions: [{ id: "q", header: "Q", question: "Second question?", options: [] }],
+            },
+          }),
+        ],
+        undefined,
+      );
+      expect(entries).toHaveLength(2);
+      expect(entries[0]).toMatchObject({
+        id: "first-answer",
+        userInputExchange: [{ question: "First question?", answer: "First answer" }],
+      });
+      expect(entries[1]).toMatchObject({
+        id: "second-question",
+        activityKind: "user-input.requested",
+      });
+    },
+  );
+
+  it("does not settle a question from another lifecycle generation", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          payload: {
+            requestId: "reused",
+            lifecycleGeneration: "new",
+            questions: [{ id: "q", header: "Q", question: "New question?", options: [] }],
+          },
+        }),
+        makeActivity({
+          id: "stale-answer",
+          sequence: 2,
+          kind: "user-input.resolved",
+          payload: {
+            requestId: "reused",
+            lifecycleGeneration: "old",
+            answers: { q: "Old answer" },
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["asked", "stale-answer"]);
+    expect(entries[1]?.userInputExchange).toBeUndefined();
+  });
+
+  it("refreshes a cached exchange when its requested activity is hydrated", () => {
+    const requested = makeActivity({
+      id: "asked",
+      sequence: 1,
+      kind: "user-input.requested",
+      payload: {
+        requestId: "req",
+        questions: [{ id: "q", header: "Q", question: "Original?", options: [] }],
+      },
+    });
+    const resolved = makeActivity({
+      id: "answered",
+      sequence: 2,
+      kind: "user-input.resolved",
+      payload: { requestId: "req", answers: { q: "Yes" } },
+    });
+    const first = deriveWorkLogEntries([requested, resolved], undefined);
+    expect(first[0]?.userInputExchange?.[0]?.question).toBe("Original?");
+    const hydrated = {
+      ...requested,
+      payload: {
+        requestId: "req",
+        questions: [{ id: "q", header: "Q", question: "Hydrated question?", options: [] }],
+      },
+    };
+    expect(
+      deriveWorkLogEntries([hydrated, resolved], undefined)[0]?.userInputExchange?.[0]?.question,
+    ).toBe("Hydrated question?");
+  });
+
   it("keeps an unanswered question as a plain row", () => {
     const entries = deriveWorkLogEntries(
       [

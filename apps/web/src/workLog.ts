@@ -21,6 +21,7 @@ import {
 } from "@synara/shared/subagents";
 import {
   approvalRequestKindFromRequestType,
+  pendingRequestInstanceKey,
   type ApprovalRequestKind,
 } from "@synara/shared/threadSummary";
 import {
@@ -972,19 +973,30 @@ function formatUserInputAnswer(
   return text.length > 0 ? text : null;
 }
 
-const userInputExchangeEntryCache = new WeakMap<DerivedWorkLogEntry, DerivedWorkLogEntry>();
+const userInputExchangeEntryCache = new WeakMap<
+  DerivedWorkLogEntry,
+  { request: OrchestrationThreadActivity; entry: DerivedWorkLogEntry }
+>();
 
-// Folds each answered question into its "User input submitted" row and drops the
-// matching "User input requested" row, so the pair renders once as an exchange.
-// Unanswered requests keep their plain row.
+// Replay requests in order so a reused ID cannot pair an old answer with a newer
+// question. Only the exact requested row represented by an exchange is removed.
 function withUserInputExchanges(
   entries: DerivedWorkLogEntry[],
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
 ): DerivedWorkLogEntry[] {
   if (!entries.some((entry) => entry.activityKind === "user-input.resolved")) return entries;
-  const questionsByRequestId = new Map<string, ReadonlyArray<UserInputQuestion>>();
-  const requestIdByActivityId = new Map<string, string>();
-  const answersByActivityId = new Map<string, Record<string, unknown> | null>();
+  const openRequests = new Map<
+    string,
+    { request: OrchestrationThreadActivity; questions: ReadonlyArray<UserInputQuestion> }
+  >();
+  const pairsByResolvedId = new Map<
+    string,
+    {
+      request: OrchestrationThreadActivity;
+      questions: ReadonlyArray<UserInputQuestion>;
+      answers: Record<string, unknown> | null;
+    }
+  >();
   for (const activity of ordered) {
     if (activity.kind !== "user-input.requested" && activity.kind !== "user-input.resolved") {
       continue;
@@ -992,42 +1004,46 @@ function withUserInputExchanges(
     const payload = asRecord(activity.payload);
     const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
     if (!requestId) continue;
-    requestIdByActivityId.set(activity.id, requestId);
+    const generation =
+      typeof payload?.lifecycleGeneration === "string" && payload.lifecycleGeneration.length > 0
+        ? payload.lifecycleGeneration
+        : undefined;
+    const key = pendingRequestInstanceKey(requestId, generation);
     if (activity.kind === "user-input.requested") {
       const questions = parseUserInputQuestions(payload);
-      if (questions) questionsByRequestId.set(requestId, questions);
+      // An invalid replacement must not leave an earlier question available to pair.
+      openRequests.delete(key);
+      if (questions) openRequests.set(key, { request: activity, questions });
     } else {
-      answersByActivityId.set(activity.id, asRecord(payload?.answers));
+      const pending = openRequests.get(key);
+      if (pending) {
+        pairsByResolvedId.set(activity.id, { ...pending, answers: asRecord(payload?.answers) });
+        openRequests.delete(key);
+      }
     }
   }
-  const answeredRequestIds = new Set<string>();
+  const answeredActivityIds = new Set<string>();
   const withExchanges = entries.map((entry) => {
     if (entry.activityKind !== "user-input.resolved") return entry;
-    const requestId = requestIdByActivityId.get(entry.id);
-    const questions = requestId ? questionsByRequestId.get(requestId) : undefined;
-    if (!requestId || !questions) return entry;
-    answeredRequestIds.add(requestId);
+    const pair = pairsByResolvedId.get(entry.id);
+    if (!pair) return entry;
+    answeredActivityIds.add(pair.request.id);
     const cached = userInputExchangeEntryCache.get(entry);
-    if (cached) return cached;
-    const answers = answersByActivityId.get(entry.id) ?? null;
+    if (cached?.request === pair.request) return cached.entry;
     const exchangeEntry: DerivedWorkLogEntry = {
       ...entry,
-      userInputExchange: questions.map((question) => ({
+      userInputExchange: pair.questions.map((question) => ({
         id: question.id,
         header: question.header,
         question: question.question,
         options: question.options.map((option) => option.label),
-        answer: formatUserInputAnswer(answers, question),
+        answer: formatUserInputAnswer(pair.answers, question),
       })),
     };
-    userInputExchangeEntryCache.set(entry, exchangeEntry);
+    userInputExchangeEntryCache.set(entry, { request: pair.request, entry: exchangeEntry });
     return exchangeEntry;
   });
-  return withExchanges.filter((entry) => {
-    if (entry.activityKind !== "user-input.requested") return true;
-    const requestId = requestIdByActivityId.get(entry.id);
-    return !requestId || !answeredRequestIds.has(requestId);
-  });
+  return withExchanges.filter((entry) => !answeredActivityIds.has(entry.id));
 }
 
 const derivedWorkLogEntryCache = new WeakMap<OrchestrationThreadActivity, DerivedWorkLogEntry>();
