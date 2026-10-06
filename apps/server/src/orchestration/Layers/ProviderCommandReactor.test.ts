@@ -85,6 +85,7 @@ import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import {
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
+  providerThreadProcessedConsumerName,
 } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
@@ -1632,6 +1633,212 @@ describe("ProviderCommandReactor", () => {
       );
       expect(after.lastAckedSequence).toBeGreaterThanOrEqual(response.sequence);
     });
+
+    it.each(["inflight", "retry"] as const)(
+      "recovers a fenced %s cache response after restart while another lane pins ACK",
+      async (state) => {
+        const observation = expiredCacheObservation();
+        const harness = await createCacheHarness(() => observation, false);
+        const threadId = ThreadId.makeUnsafe("thread-1");
+        const now = new Date().toISOString();
+        const source = await dispatchHarnessUserTurn(harness, {
+          messageId: `cache-fenced-${state}-message`,
+          text: "Recover this saved cache response",
+          createdAt: now,
+        });
+        const review = {
+          reviewId: `cache-fenced-${state}-review`,
+          messageId: asMessageId(`cache-fenced-${state}-message`),
+          sourceEventSequence: source.sequence,
+          assessment: observation,
+          status: "pending" as const,
+          createdAt: now,
+        };
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.claude-cache.set",
+            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-review-set`),
+            threadId,
+            review,
+            expectedReviewId: null,
+            createdAt: now,
+          }),
+        );
+        const key = {
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: source.sequence,
+        };
+        await Effect.runPromise(
+          harness.deliveryRepository.claim({
+            ...key,
+            threadId,
+            claimOwner: "previous-process",
+            claimedAt: now,
+            claimExpiresAt: now,
+          }),
+        );
+        await Effect.runPromise(
+          harness.deliveryRepository.complete({
+            ...key,
+            claimOwner: "previous-process",
+            completedAt: now,
+          }),
+        );
+        const peer = ThreadId.makeUnsafe(`cache-fenced-${state}-peer`);
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-peer-create`),
+            threadId: peer,
+            projectId: asProjectId("project-1"),
+            title: "Pinned peer",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-peer-session`),
+            threadId: peer,
+            session: {
+              threadId: peer,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              updatedAt: now,
+              lastError: null,
+            },
+            createdAt: now,
+          }),
+        );
+        const prefix = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
+        for (const event of prefix)
+          await Effect.runPromise(
+            harness.deliveryRepository.advanceCursor({
+              consumerName: key.consumerName,
+              eventSequence: event.sequence,
+              updatedAt: now,
+            }),
+          );
+        const pinned = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.task.stop",
+            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-peer-pin`),
+            threadId: peer,
+            taskId: "pinned-peer-task",
+            createdAt: now,
+          }),
+        );
+        const response = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-continue`),
+            threadId,
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "continue",
+            createdAt: now,
+          }),
+        );
+        const responseKey = { ...key, eventSequence: response.sequence };
+        await Effect.runPromise(
+          harness.deliveryRepository.claim({
+            ...responseKey,
+            threadId,
+            claimOwner: "previous-process",
+            claimedAt: now,
+            claimExpiresAt: now,
+          }),
+        );
+        if (state === "retry")
+          await Effect.runPromise(
+            harness.deliveryRepository.markRetryable({
+              ...responseKey,
+              expectedClaimOwner: "previous-process",
+              error: "Confirmed pre-dispatch rejection",
+              updatedAt: now,
+            }),
+          );
+        // Prior quarantine left a durable fence covering a later asynchronous
+        // cache response, whose source lane completed at claim rather than send.
+        await Effect.runPromise(
+          harness.deliveryRepository.recordThreadProcessedSequence({
+            threadId,
+            eventSequence: response.sequence,
+            updatedAt: now,
+          }),
+        );
+        expect(
+          await Effect.runPromise(
+            harness.deliveryRepository.listRetryableDeliveries(key.consumerName),
+          ),
+        ).toEqual([]);
+        const fresh = await harness.restartReactor();
+        const entered = Deferred.makeUnsafe<void>();
+        const release = Deferred.makeUnsafe<void>();
+        harness.stopTask.mockImplementation(() =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        );
+        const startup = fresh.start();
+        try {
+          await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("1 second")));
+          await waitFor(
+            async () =>
+              Option.getOrUndefined(
+                await Effect.runPromise(harness.deliveryRepository.getDelivery(responseKey)),
+              )?.state === (state === "retry" ? "succeeded" : "uncertain"),
+          );
+          expect(
+            Option.getOrThrow(
+              await Effect.runPromise(
+                harness.deliveryRepository.getConsumerState(key.consumerName),
+              ),
+            ).lastAckedSequence,
+          ).toBeLessThan(pinned.sequence);
+          if (state === "inflight")
+            await waitFor(
+              async () =>
+                (await readHarnessThread(harness))?.claudeCacheReview?.status === "uncertain",
+            );
+          expect(harness.sendTurn).toHaveBeenCalledTimes(state === "retry" ? 1 : 0);
+        } finally {
+          await Effect.runPromise(Deferred.succeed(release, undefined));
+          await startup;
+        }
+        if (state === "retry") {
+          const beforeFence = await Effect.runPromise(
+            harness.deliveryRepository.getConsumerState(
+              providerThreadProcessedConsumerName(threadId),
+            ),
+          );
+          const callsBefore = harness.stopTask.mock.calls.length;
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.task.stop",
+              commandId: CommandId.makeUnsafe("cache-fenced-normal-after-recovery"),
+              threadId,
+              taskId: "normal-task",
+              createdAt: now,
+            }),
+          );
+          await waitFor(() => harness.stopTask.mock.calls.length > callsBefore);
+          await Effect.runPromise(fresh.reactor.drain);
+          expect(
+            await Effect.runPromise(
+              harness.deliveryRepository.getConsumerState(
+                providerThreadProcessedConsumerName(threadId),
+              ),
+            ),
+          ).toEqual(beforeFence);
+        }
+      },
+    );
 
     it("retains completion context while parked and consumes it only after Continue sends", async () => {
       const { harness } = await createCompactionHarness();
