@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import crypto from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
@@ -2521,6 +2522,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 requireExecutable: true,
               }) as AntigravityChildProcess);
           child = spawnProcess(context.binaryPath, args, {
+            lowerPriority: yield* providerProcessPriorityEnabled,
             cwd: context.session.cwd ?? serverConfig.cwd,
             env: buildAntigravityTurnProcessEnvironment({
               eventFile,

@@ -21,7 +21,6 @@ import {
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderInstanceId,
-  type ProviderSession,
   type ServerVoiceTranscriptionResult,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -48,9 +47,11 @@ import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.t
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   CodexAppServerManager,
+  CodexSessionAuthInvalidatedError,
   parseCodexUserInputQuestions,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
+  type CodexSessionInspection,
 } from "../../codexAppServerManager.ts";
 import {
   evaluateAcpTurnIdleTick,
@@ -119,8 +120,18 @@ interface CodexTurnWatchdogEntry {
   lastActivityAt: number;
 }
 
+const stampEvent = (event: ProviderEvent, instanceId: string | undefined): ProviderEvent =>
+  event.providerInstanceId === undefined && instanceId
+    ? { ...event, providerInstanceId: instanceId }
+    : event;
+
 type CodexRuntimeIngressItem = {
   readonly nativeEvent: ProviderEvent;
+  readonly inspect: () => Promise<CodexSessionInspection | undefined>;
+  readonly isAuthRejected: () => boolean;
+  readonly validationKey: object | undefined;
+  readonly rejectInspection: () => void;
+  readonly trustedClose: boolean;
   readonly runtimeEvents: ReadonlyArray<ProviderRuntimeEvent>;
   readonly bytes: number;
 };
@@ -2544,18 +2555,26 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }
             yield* nativeEventLogger.write(event, event.threadId);
           });
-        const stampEventWithLiveSession = (event: ProviderEvent): ProviderEvent => {
-          const session = manager
-            .listSessions()
-            .find((entry: ProviderSession) => entry.threadId === event.threadId);
-          return event.providerInstanceId === undefined && session?.providerInstanceId
-            ? { ...event, providerInstanceId: session.providerInstanceId }
-            : event;
-        };
+        const filterRuntimeEvents = (
+          event: ProviderEvent,
+          events: ReadonlyArray<ProviderRuntimeEvent>,
+        ) =>
+          events.filter(
+            (runtimeEvent) =>
+              runtimeEvent.type !== "event.unmapped" ||
+              (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(event.method) &&
+                shouldSurfaceUnmappedEvent(event)),
+          );
 
-        const ingress = yield* makeBoundedCallbackIngress<CodexRuntimeIngressItem, never, never>(
-          (item) =>
+        const ingress = yield* makeBoundedCallbackIngress<
+          CodexRuntimeIngressItem,
+          never,
+          never,
+          CodexSessionInspection | null | undefined
+        >(
+          (item, inspection) =>
             Effect.gen(function* () {
+              if (!item.trustedClose && (inspection === null || item.isAuthRejected())) return;
               yield* writeNativeEvent(item.nativeEvent).pipe(
                 Effect.catchCause((cause) =>
                   Effect.logWarning("Codex native event logging failed", {
@@ -2575,9 +2594,34 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
                 });
                 return;
               }
-              yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+              if (item.trustedClose || !item.isAuthRejected())
+                yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
             }),
           {
+            prepareConcurrency: 8,
+            prepareKey: (item) => (item.trustedClose ? undefined : item.validationKey),
+            prepare: ({
+              inspect,
+              trustedClose,
+              isAuthRejected,
+              rejectInspection,
+              nativeEvent: { threadId },
+            }) => {
+              if (trustedClose) return Promise.resolve(undefined);
+              if (isAuthRejected()) return Promise.resolve(null);
+              return Promise.resolve()
+                .then(inspect)
+                .catch((error: unknown) => {
+                  if (error instanceof CodexSessionAuthInvalidatedError) return null;
+                  rejectInspection();
+                  void Effect.runPromise(
+                    Effect.logError("Codex callback auth inspection failed; origin rejected", {
+                      threadId,
+                    }),
+                  );
+                  return null;
+                });
+            },
             capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
             maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
             terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
@@ -2585,26 +2629,19 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             sizeOf: (item) => item.bytes,
           },
         );
+        let nextDroppedWarning = 1;
         const listener = (event: ProviderEvent) => {
-          const stampedEvent = stampEventWithLiveSession(event);
+          const origin = manager.getSessionEventOrigin(event.threadId, event.lifecycleGeneration);
+          const stampedEvent = stampEvent(event, origin.providerInstanceId);
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
-            mapToRuntimeEvents(
-              stampedEvent,
-              stampedEvent.threadId,
-              manager.getSessionCodexOptions(stampedEvent.threadId),
-            ),
+            mapToRuntimeEvents(stampedEvent, stampedEvent.threadId, origin.codexOptions),
           );
           const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",
           );
-          const sizedRuntimeEvents = mappedRuntimeEvents
-            .filter(
-              (runtimeEvent) =>
-                runtimeEvent.type !== "event.unmapped" ||
-                (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(stampedEvent.method) &&
-                  shouldSurfaceUnmappedEvent(stampedEvent)),
-            )
-            .map(compactProviderRuntimeEventForIngress);
+          const sizedRuntimeEvents = filterRuntimeEvents(stampedEvent, mappedRuntimeEvents).map(
+            compactProviderRuntimeEventForIngress,
+          );
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
@@ -2612,10 +2649,31 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           );
           const result = ingress.offer({
             nativeEvent: nativeEvent.event,
+            inspect: origin.inspect,
+            isAuthRejected: origin.isAuthRejected,
+            validationKey: origin.validationKey,
+            rejectInspection: origin.rejectInspection,
+            // This notice is authored by the manager, not by provider stdout.
+            // Stale auth must suppress provider output but still durably close its session.
+            trustedClose: event.kind === "session" && event.method === "session/closed",
             runtimeEvents,
             bytes:
               nativeEvent.bytes + sizedRuntimeEvents.reduce((total, item) => total + item.bytes, 0),
           });
+          if (result === "dropped" || result === "evicted-for-terminal") {
+            const status = ingress.status();
+            // Report the first loss and exponentially spaced totals, not one warning per delta.
+            if (status.dropped >= nextDroppedWarning) {
+              while (nextDroppedWarning <= status.dropped) nextDroppedWarning *= 2;
+              void Effect.runPromise(
+                Effect.logWarning("Codex callback ingress dropped provider events", {
+                  threadId: stampedEvent.threadId,
+                  method: stampedEvent.method,
+                  status,
+                }),
+              );
+            }
+          }
           if (result === "terminal-overflow") {
             // This means the reserved terminal budget itself was exhausted.
             // The runtime reconciler remains the final recovery fence.

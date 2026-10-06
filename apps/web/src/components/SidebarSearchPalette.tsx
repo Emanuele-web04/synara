@@ -75,6 +75,12 @@ import {
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import type { ThreadImportTarget } from "~/lib/threadImport";
+import type { SettingsSectionId } from "~/settingsNavigation";
+import {
+  rankSettingsSearchEntries,
+  settingsSearchEntryTarget,
+  settingsSectionLabel,
+} from "~/settingsSearchIndex";
 
 // Palette skin — shared with the ⌘P workspace palette so both surfaces read as one
 // menu: 44px bare input, settings-scale type, 30px squircle rows, single keycap pills.
@@ -111,7 +117,7 @@ interface SidebarSearchPaletteProps {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: SettingsSectionId, options?: { target?: string }) => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
@@ -491,6 +497,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     query.trim().length > 0 &&
     (themeCommandItems.length > 0 || matchedCurrentThemes.length > 0);
   const matchedProjects = isBrowsing ? [] : matchSidebarSearchProjects(props.projects, query);
+  const matchedSettings = isBrowsing ? [] : rankSettingsSearchEntries(query, 12);
   // Scoring normalizes and scans every message of every thread; keep it keyed
   // on the thread set and query so highlight/keyboard/state re-renders and
   // unrelated store flushes do not rescore the whole workspace.
@@ -502,6 +509,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     matchedActions.length > 0 ||
     themeCommandItems.length > 0 ||
     matchedCurrentThemes.length > 0 ||
+    matchedSettings.length > 0 ||
     matchedProjects.length > 0 ||
     matchedThreads.length > 0;
   const importFieldLabel = importProvider === "codex" ? "Thread ID" : "Session ID";
@@ -661,6 +669,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
           <span className="size-3.5 shrink-0" aria-hidden="true" />
         )}
         <span className={PALETTE_TEXT_CLASS}>{action.label}</span>
+        {action.metaLabel ? <span className={PALETTE_META_CLASS}>{action.metaLabel}</span> : null}
         {action.shortcutLabel ? (
           <ShortcutKbd shortcutLabel={action.shortcutLabel} className={PALETTE_KBD_CLASS} />
         ) : null}
@@ -1058,6 +1067,27 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   </CommandGroup>
                 ) : null}
 
+                {matchedSettings.length > 0 ? (
+                  <CommandGroup>
+                    <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
+                      <span>Settings</span>
+                    </CommandGroupLabel>
+                    {matchedSettings.map((entry) =>
+                      renderActionItem({
+                        id: `setting:${entry.id}`,
+                        label: entry.title,
+                        description: entry.keywords,
+                        metaLabel: settingsSectionLabel(entry.section),
+                        icon: SettingsIcon,
+                        run: () => {
+                          const target = settingsSearchEntryTarget(entry);
+                          props.onOpenSettings(entry.section, target ? { target } : undefined);
+                        },
+                      }),
+                    )}
+                  </CommandGroup>
+                ) : null}
+
                 {!isBrowsing && matchedProjects.length > 0 ? (
                   <CommandGroup>
                     <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
@@ -1237,7 +1267,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </>
                   )
                 ) : !hasSearchResults ? (
-                  <div className={PALETTE_STATUS_CLASS}>No matches.</div>
+                  <div className={PALETTE_STATUS_CLASS}>No results.</div>
                 ) : null}
               </CommandStatus>
             </Command>

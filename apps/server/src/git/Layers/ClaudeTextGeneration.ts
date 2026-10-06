@@ -33,7 +33,7 @@ import {
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
 import { ServerConfig } from "../../config.ts";
-import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
+import { spawnProviderProcess } from "../../platform/effectProcessRuntime.ts";
 import { forceTeardownEffectProcessTree } from "../../platform/supervisedProcessTeardown.ts";
 import { buildClaudeInstanceProcessEnv } from "../../provider/claudeEnvironment.ts";
 
@@ -218,27 +218,18 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
         "--tools",
         "",
       ];
-      const command = makeEffectProcessCommand(binaryPath, args, {
+      const child = yield* spawnProviderProcess(commandSpawner, binaryPath, args, {
         cwd: isolatedCwd,
         env,
         // Auxiliary generation has no state to preserve. A hard scoped kill
         // avoids waiting forever when a CLI or descendant ignores SIGTERM.
         killSignal: "SIGKILL",
         stdin: { stream: Stream.make(new TextEncoder().encode(prompt)) },
-      });
-
-      const child = yield* commandSpawner
-        .spawn(command)
-        .pipe(
-          Effect.mapError((cause) =>
-            normalizeClaudeError(
-              binaryPath,
-              operation,
-              cause,
-              "Failed to spawn Claude CLI process",
-            ),
-          ),
-        );
+      }).pipe(
+        Effect.mapError((cause) =>
+          normalizeClaudeError(binaryPath, operation, cause, "Failed to spawn Claude CLI process"),
+        ),
+      );
       const [stdout, stderr, exitCode] = yield* collectClaudeChildWithInterruptKill(
         Effect.all(
           [
