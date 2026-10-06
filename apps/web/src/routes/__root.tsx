@@ -73,6 +73,7 @@ import {
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
+import { registerThreadDetailSyncRetry, retryThreadDetailSync } from "../threadDetailSyncRetry";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
@@ -1492,6 +1493,8 @@ function EventRouter() {
       );
     };
 
+    const threadOverflowToastId = (threadId: ThreadId) => `stream-overflow:thread:${threadId}`;
+
     // Single choke point for handing a thread detail event to the reducer.
     // The reducer silently ignores detail events for a thread the store no
     // longer holds (pruned by a shell full sync, evicted, deleted), and domain
@@ -1500,7 +1503,8 @@ function EventRouter() {
     // resume would then skip them forever. When the thread is missing, drop
     // the resume bookkeeping and re-snapshot through the projection instead.
     const applyFencedThreadEvent = (threadId: ThreadId, event: OrchestrationEvent): boolean => {
-      if (!getThreadFromState(useStore.getState(), threadId)) {
+      const state = useStore.getState();
+      if (!getThreadFromState(state, threadId)) {
         threadSnapshotSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         clearThreadDetailResumeCursor(threadId);
@@ -1512,6 +1516,10 @@ function EventRouter() {
       threadSnapshotSequenceById.set(threadId, event.sequence);
       advanceThreadDetailResumeCursor(threadId, event.sequence);
       queueDomainEvent(event);
+      if (state.threadDetailSyncById?.[threadId] === "failed") {
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        toastManager.close(threadOverflowToastId(threadId));
+      }
       // Any applied event — live or replayed — is fresh activity: drop the
       // replay backoff so a subsequently lost event repairs at base cadence.
       const backoff = threadCatchupBackoffById.get(threadId);
@@ -1601,6 +1609,34 @@ function EventRouter() {
         .then(operation);
       return reconcileThreadSubscriptionsChain;
     };
+
+    const unregisterThreadDetailSyncRetry = registerThreadDetailSyncRetry((threadId) =>
+      enqueueThreadSubscriptionOperation(async () => {
+        if (disposed || !subscribedThreadIds.has(threadId)) return;
+        // Both retry surfaces use the owner's normal cursor/fence initialization.
+        beginThreadSubscription(threadId);
+        const generation = threadSubscriptionGenerationById.get(threadId);
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        try {
+          await api.orchestration.subscribeThread(buildThreadSubscribeInput(threadId));
+        } catch {
+          if (
+            disposed ||
+            !subscribedThreadIds.has(threadId) ||
+            threadSubscriptionGenerationById.get(threadId) !== generation
+          )
+            return;
+          useStore.getState().markThreadDetailSyncFailed(threadId);
+          toastManager.add({
+            id: threadOverflowToastId(threadId),
+            type: "error",
+            title: "Unable to resume thread updates",
+            description: "Try again when the server responds.",
+            data: { threadId },
+          });
+        }
+      }),
+    );
 
     const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
       const nextThreadIds = [...threadIds];
@@ -2226,6 +2262,7 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        toastManager.close(threadOverflowToastId(threadId));
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
         // even when it is lower than the previous one (server-side reset).
@@ -2285,7 +2322,9 @@ function EventRouter() {
     });
     const unsubShellStreamFailure = onShellStreamFailure(() => {
       if (disposed) return;
+      const toastId = "stream-overflow:shell";
       toastManager.add({
+        id: toastId,
         type: "error",
         title: "Workspace updates paused",
         description:
@@ -2294,6 +2333,7 @@ function EventRouter() {
         actionProps: {
           children: "Retry updates",
           onClick: () => {
+            toastManager.close(toastId);
             if (disposed) return;
             // Reset only the shell snapshot fence. Thread subscriptions and
             // their applied cursors stay on the existing connection.
@@ -2319,41 +2359,30 @@ function EventRouter() {
       }
       // Overflow retries preserve the last applied cursor, including exhaustion.
       // Other terminal faults still request a fresh snapshot on resubscribe.
-      if (failure.code !== ORCHESTRATION_STREAM_OVERFLOW_CODE)
+      if (failure.code !== ORCHESTRATION_STREAM_OVERFLOW_CODE) {
         clearThreadDetailResumeCursor(threadId);
-      threadSnapshotSequenceById.delete(threadId);
+        threadSnapshotSequenceById.delete(threadId);
+      }
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
       if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        const toastId = threadOverflowToastId(threadId);
+        const threadTitle = getThreadFromState(useStore.getState(), threadId)?.title;
+        const threadLabel = threadTitle ? `“${threadTitle}”` : "this thread";
         toastManager.add({
+          id: toastId,
           type: "error",
           title: "Thread updates paused",
-          description:
-            "The thread's update stream could not keep up after repeated retries. Retry to resume updates.",
+          description: `The update stream for ${threadLabel} could not keep up after repeated retries. Retry to resume updates.`,
           timeout: 0,
+          data: { threadId },
           actionProps: {
             children: "Retry updates",
             onClick: () => {
+              toastManager.close(toastId);
               if (disposed || !subscribedThreadIds.has(threadId)) return;
-              const generation = threadSubscriptionGenerationById.get(threadId);
-              useStore.getState().clearThreadDetailSyncFailure(threadId);
-              void api.orchestration
-                .subscribeThread(buildThreadSubscribeInput(threadId))
-                .catch(() => {
-                  if (
-                    disposed ||
-                    !subscribedThreadIds.has(threadId) ||
-                    threadSubscriptionGenerationById.get(threadId) !== generation
-                  )
-                    return;
-                  useStore.getState().markThreadDetailSyncFailed(threadId);
-                  toastManager.add({
-                    type: "error",
-                    title: "Unable to resume thread updates",
-                    description: "Try again when the server responds.",
-                  });
-                });
+              void retryThreadDetailSync(threadId).catch(() => undefined);
             },
           },
         });
@@ -2671,6 +2700,7 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();
+      unregisterThreadDetailSyncRetry();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
       // only the visible threads. Keeping those avoids blanking the open chat, and

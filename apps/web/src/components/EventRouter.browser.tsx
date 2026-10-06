@@ -73,6 +73,7 @@ import {
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
 import {
+  acknowledgeStartupAnnouncementsForTest,
   createBrowserTestServerConfig,
   createBrowserTestServerSettings,
   createFullscreenTestHost,
@@ -89,6 +90,7 @@ import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
 // Pre-transform the compiler-heavy component before the first hydration deadline.
 // This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
 import "./ChatView";
+import { toastManager } from "./ui/toast";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-other-browser-test");
@@ -451,7 +453,7 @@ const worker = setupWorker(
 async function mountApp(options?: {
   routeThreadId?: ThreadId;
   waitForThreadId?: ThreadId | null;
-}): Promise<{ cleanup: () => Promise<void> }> {
+}): Promise<{ router: ReturnType<typeof getRouter>; cleanup: () => Promise<void> }> {
   const host = createFullscreenTestHost();
 
   const routeThreadId = options?.routeThreadId ?? THREAD_ID;
@@ -489,6 +491,7 @@ async function mountApp(options?: {
   let cleanedUp = false;
 
   return {
+    router,
     cleanup: async () => {
       if (cleanedUp) return;
       cleanedUp = true;
@@ -509,6 +512,32 @@ function sendThreadEventPush(event: OrchestrationEvent) {
     kind: "event",
     event,
   });
+}
+
+function resumedThreadEvent(): Extract<OrchestrationEvent, { type: "thread.message-sent" }> {
+  return {
+    sequence: 2,
+    eventId: EventId.makeUnsafe("event-overflow-resume-2"),
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    occurredAt: NOW_ISO,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.message-sent",
+    payload: {
+      threadId: THREAD_ID,
+      messageId: MessageId.makeUnsafe("msg-overflow-resumed"),
+      role: "assistant",
+      text: "Resumed from the applied cursor",
+      turnId: TurnId.makeUnsafe("turn-overflow-resume"),
+      source: "native",
+      streaming: true,
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+    },
+  };
 }
 
 function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
@@ -582,6 +611,8 @@ describe("EventRouter scoped orchestration sync", () => {
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
     localStorage.clear();
+    acknowledgeStartupAnnouncementsForTest(fixture.serverConfig);
+    toastManager.close();
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -635,26 +666,38 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       const previousShell = subscribeShellRequestCount;
       const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
-      for (const listener of shellStreamFailureListeners)
-        listener({
-          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
-          error: new Error("Stream overflow retry budget exhausted"),
-        });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const listener of shellStreamFailureListeners)
+          listener({
+            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+            error: new Error("Stream overflow retry budget exhausted"),
+          });
+      }
+      await vi.waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+            (element) => element.textContent === "Workspace updates paused",
+          ),
+        ).toHaveLength(1),
+      );
       await expect
         .element(page.getByText("Workspace updates paused", { exact: true }))
         .toBeVisible();
       await page.getByRole("button", { name: "Retry updates", exact: true }).click();
       await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
       expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("marks exhausted thread overflow as failed while retaining its applied cursor", async () => {
+  it("resumes exhausted thread overflow without a detail snapshot", async () => {
     const mounted = await mountApp();
     try {
-      advanceThreadDetailResumeCursor(THREAD_ID, 42);
+      const previousSnapshots = getThreadDetailSnapshotRequestCount;
       const previousShell = subscribeShellRequestCount;
       const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
       for (const listener of threadSnapshotFailureListeners)
@@ -666,16 +709,100 @@ describe("EventRouter scoped orchestration sync", () => {
       expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
       expect(buildThreadSubscribeInput(THREAD_ID)).toEqual({
         threadId: THREAD_ID,
-        afterSequence: 42,
+        afterSequence: 1,
       });
       expect(subscribeShellRequestCount).toBe(previousShell);
       expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
       await expect.element(page.getByText("Thread updates paused", { exact: true })).toBeVisible();
+      delayNextThreadSnapshot = true; // A cursor resume delivers only subsequent events.
       await page.getByRole("button", { name: "Retry updates", exact: true }).click();
       await vi.waitFor(() =>
         expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe((previousThread ?? 0) + 1),
       );
       expect(subscribeShellRequestCount).toBe(previousShell);
+      sendThreadEventPush(resumedThreadEvent());
+      await vi.waitFor(() =>
+        expect(
+          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+            (message) => message.text === "Resumed from the applied cursor",
+          ),
+        ).toBe(true),
+      );
+      expect(getThreadDetailSnapshotRequestCount).toBe(previousSnapshots);
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("deduplicates overflow notices and scopes them to their thread", async () => {
+    fixture.snapshot = {
+      ...fixture.snapshot,
+      threads: [
+        ...fixture.snapshot.threads,
+        { ...fixture.snapshot.threads[0]!, id: OTHER_THREAD_ID, title: "Other thread" },
+      ],
+    };
+    const mounted = await mountApp();
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const listener of threadSnapshotFailureListeners)
+          listener({
+            threadId: THREAD_ID,
+            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+            error: new Error("overflow exhausted"),
+          });
+      }
+      await vi.waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+            (element) => element.textContent === "Thread updates paused",
+          ),
+        ).toHaveLength(1),
+      );
+      await expect.element(page.getByText(/The update stream for.*Root test thread/)).toBeVisible();
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
+      await vi.waitFor(() =>
+        expect(threadStreamRequestIdByThreadId.has(OTHER_THREAD_ID)).toBe(true),
+      );
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("clears an exhausted failure when a reconnected cursor stream applies an event", async () => {
+    const mounted = await mountApp();
+    try {
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("overflow exhausted"),
+        });
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+      const previous = subscribeThreadRequestCountById.get(THREAD_ID) ?? 0;
+      delayNextThreadSnapshot = true;
+      sendServerWelcomePush();
+      await vi.waitFor(() =>
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previous + 1),
+      );
+      sendThreadEventPush(resumedThreadEvent());
+      await vi.waitFor(() =>
+        expect(
+          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+            (message) => message.text === "Resumed from the applied cursor",
+          ),
+        ).toBe(true),
+      );
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).not.toBe("failed");
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

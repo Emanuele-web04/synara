@@ -1314,6 +1314,16 @@ export class WsTransport {
     }
   }
 
+  private emitShellStreamFailure(failure: WsShellStreamFailure): void {
+    for (const listener of this.shellStreamFailureListeners) {
+      try {
+        listener(failure);
+      } catch {
+        // Listener errors must not break transport streams.
+      }
+    }
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
@@ -2166,10 +2176,7 @@ export class WsTransport {
               return;
             }
 
-            if (
-              restart &&
-              getStreamFailureCode(exit.cause) === ORCHESTRATION_STREAM_OVERFLOW_CODE
-            ) {
+            if (getStreamFailureCode(exit.cause) === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
               const attempt =
                 performance.now() - streamStartedAt >= STABLE_STREAM_LIFETIME_MS
                   ? 0
@@ -2253,13 +2260,7 @@ export class WsTransport {
               key === "orchestration.shell" &&
               getStreamFailureCode(exit.cause) === ORCHESTRATION_STREAM_OVERFLOW_CODE
             ) {
-              for (const listener of this.shellStreamFailureListeners) {
-                try {
-                  listener({ code: ORCHESTRATION_STREAM_OVERFLOW_CODE, error });
-                } catch {
-                  /* Listener errors must not break recovery. */
-                }
-              }
+              this.emitShellStreamFailure({ code: ORCHESTRATION_STREAM_OVERFLOW_CODE, error });
             }
             // Server-diagnosed snapshot faults clear only when the server
             // heals (restart bootstrap, repair, deferred catch-up). Surfacing

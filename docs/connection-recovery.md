@@ -11,6 +11,9 @@ starts the existing coalesced reconnect ladder. This exceeds the observed 45–6
 second stalls and bounds half-open connections used by paired remote clients.
 Socket errors and closures still start recovery immediately. A monotonic clock
 measures silence; background timer throttling can delay detection.
+Network-online and visibility changes do not shorten that bound: neither proves
+that the server has stopped responding, and a short wake-up timeout would also
+replace connections during ordinary server stalls.
 
 WebSocket upgrades allow 90 seconds before recovery. The feature-socket readiness
 probe allows 180 seconds even if keepalive pongs arrive without its RPC response.
@@ -34,7 +37,11 @@ Unsubscribe, disposal and session replacement cancel keyed retries.
 After exhaustion, the client stops automatic retries and surfaces a failed thread
 synchronization state and a compact thread/workspace-updates toast, including when
 cached messages remain visible. **Retry updates** reopens only the affected stream;
-thread retries retain their cursor, while shell retries reset the shell snapshot fence. Exhaustion
-does not clear thread cursors or reconnect the whole transport. The server owns its
+thread retries retain their cursor and event fence and run through the same
+subscription queue as other thread synchronization operations. Shell retries reset
+the shell snapshot fence. Thread notices have stable identities and route-scoped
+thread context; retry closes the notice, and an applied event after recovery clears
+the failed state. Exhaustion does not clear thread cursors or reconnect the whole
+transport. The server owns its
 bounded event buffers and resume/snapshot policy; this client change does not edit
 server handlers or their buffering hooks.
