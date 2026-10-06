@@ -73,7 +73,13 @@ it("supports keyboard selection and keeps the custom editor within a narrow view
   await render(<Harness />);
   const picker = page.getByRole("combobox", { name: "Source control writing style" });
   (picker.element() as HTMLElement).focus();
-  await userEvent.keyboard("{Enter}{End}{Enter}");
+  await userEvent.keyboard("{Enter}");
+  const selectedOption = page.getByRole("option", { name: "Repository conventions", exact: true });
+  await expect.element(selectedOption).toHaveFocus();
+  await userEvent.keyboard("{End}");
+  const customOption = page.getByRole("option", { name: "Custom instructions", exact: true });
+  await expect.element(customOption).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
   const field = page.getByRole("textbox", { name: "Custom source control writing instructions" });
   await expect.element(field).toBeVisible();
   await field.fill("Keep titles concise.");

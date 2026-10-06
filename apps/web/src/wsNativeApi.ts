@@ -64,7 +64,7 @@ import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
 import { isMacNavigatorPlatform } from "./lib/utils";
-import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
+import { WsTransport, type WsThreadStreamFailure, type WsShellStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
@@ -174,6 +174,7 @@ const computerEventListeners = createListenerRegistry<ComputerEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
+const shellStreamFailureListeners = createListenerRegistry<WsShellStreamFailure>();
 const threadStreamFailureListeners = createListenerRegistry<WsThreadStreamFailure>();
 const fallbackBrowserStateListeners = createListenerRegistry<ThreadBrowserState>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
@@ -199,6 +200,7 @@ function clearWsNativeApiListeners(): void {
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
   threadStreamFailureListeners.clear();
+  shellStreamFailureListeners.clear();
   fallbackBrowserStateListeners.clear();
 }
 
@@ -457,6 +459,14 @@ export function onThreadStreamFailure(
   return () => void unsubscribe();
 }
 
+/** Subscribe to an exhausted shell stream; retrying it does not reconnect other streams. */
+export function onShellStreamFailure(
+  listener: (failure: WsShellStreamFailure) => void,
+): () => void {
+  const unsubscribe = shellStreamFailureListeners.subscribe(listener);
+  return () => void unsubscribe();
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) {
     if (instance.transport.getState() !== "disposed") {
@@ -532,6 +542,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
     orchestrationThreadEventListeners.emit(message.data);
+  });
+  transport.onShellStreamFailure((failure) => {
+    shellStreamFailureListeners.emit(failure);
   });
   transport.onThreadStreamFailure((failure) => {
     threadStreamFailureListeners.emit(failure);

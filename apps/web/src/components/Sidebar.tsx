@@ -280,6 +280,7 @@ import {
 } from "./SidebarActivityView";
 import { DesktopUpdateRailButton } from "./DesktopUpdateRailButton";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
+import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { RailAutomationsPanel } from "./RailAutomationsPanel";
@@ -1162,7 +1163,15 @@ function shouldShowActivityOnboarding(): boolean {
   }
 }
 
-function SidebarActivityBellButton({
+function markActivityOnboardingSeen() {
+  try {
+    window.localStorage.setItem(ACTIVITY_ONBOARDING_STORAGE_KEY, "seen");
+  } catch {
+    // Storage can be unavailable in private or restricted browser contexts.
+  }
+}
+
+export function SidebarActivityBellButton({
   active,
   showUnreadDot,
   shortcutLabel,
@@ -1174,32 +1183,31 @@ function SidebarActivityBellButton({
   onClick: () => void;
 }) {
   const [onboardingVisible, setOnboardingVisible] = useState(shouldShowActivityOnboarding);
-  const [tooltipOpen, setTooltipOpen] = useState(onboardingVisible);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const startupSettled = useAnnouncementSheetSlotStore((state) => state.startupSettled);
+  const { open: onboardingOpen } = useAnnouncementSheetSlot(onboardingVisible && startupSettled);
 
   useEffect(() => {
-    if (!onboardingVisible) return;
-    try {
-      window.localStorage.setItem(ACTIVITY_ONBOARDING_STORAGE_KEY, "seen");
-    } catch {
-      // Storage can be unavailable in private or restricted browser contexts.
-    }
+    if (!onboardingOpen) return;
+    markActivityOnboardingSeen();
     const timeout = window.setTimeout(() => {
       setOnboardingVisible(false);
       setTooltipOpen(false);
     }, ACTIVITY_ONBOARDING_DURATION_MS);
     return () => window.clearTimeout(timeout);
-  }, [onboardingVisible]);
+  }, [onboardingOpen]);
 
   const dismissOnboarding = () => {
+    if (onboardingVisible) markActivityOnboardingSeen();
     setOnboardingVisible(false);
     setTooltipOpen(false);
   };
 
   return (
     <Tooltip
-      open={tooltipOpen}
+      open={onboardingVisible ? onboardingOpen : tooltipOpen}
       onOpenChange={(open) => {
-        if (onboardingVisible && !open) return;
+        if (onboardingVisible) return;
         setTooltipOpen(open);
       }}
     >
@@ -6662,7 +6670,7 @@ export default function Sidebar() {
     !isOnInbox;
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
-    onOpenFeedback: openFeedbackDialog,
+    onOpenFeedback: () => openFeedbackDialog(),
     // The rail customizes from its "…" menu.
     onCustomizeSidebar: null,
   };
@@ -8000,7 +8008,7 @@ export default function Sidebar() {
           onOpenSettings={() => {
             void navigate({ to: "/settings" });
           }}
-          onOpenFeedback={openFeedbackDialog}
+          onOpenFeedback={() => openFeedbackDialog()}
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",

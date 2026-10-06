@@ -56,6 +56,11 @@ import {
   type GitWorkingTreePatch,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  gitSubcommand,
+  tryWithGitCommandAdmission,
+  withGitCommandAdmission,
+} from "./GitCommandAdmission.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
@@ -73,7 +78,7 @@ const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX = Duration.seconds(300);
 // latency). Align with the success refresh interval.
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
-type StatusUpstreamRefreshResult = "refreshed" | "failed";
+type StatusUpstreamRefreshResult = "refreshed" | "failed" | "skipped";
 
 interface StatusUpstreamRefreshCacheKeyFields {
   readonly cwd: string;
@@ -100,6 +105,7 @@ export function makeStatusUpstreamRefreshCacheTimeToLive() {
       key: StatusUpstreamRefreshCacheKeyFields,
     ): Duration.Duration {
       const mapKey = statusUpstreamRefreshBackoffMapKey(key);
+      if (Exit.isSuccess(exit) && exit.value === "skipped") return Duration.seconds(1);
       if (Exit.isSuccess(exit) && exit.value === "refreshed") {
         consecutiveFailures.delete(mapKey);
         return STATUS_UPSTREAM_REFRESH_INTERVAL;
@@ -910,6 +916,37 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       });
     }
 
+    const executeWithoutAdmission = execute;
+    const prepareCommandInput = (input: ExecuteGitInput): ExecuteGitInput => {
+      const subcommand = gitSubcommand(input.args);
+      return {
+        ...input,
+        args: [...input.args],
+        ...(subcommand === "push" ||
+        subcommand === "fetch" ||
+        subcommand === "pull" ||
+        subcommand === "clone"
+          ? { env: { ...input.env, GIT_TERMINAL_PROMPT: "0" } }
+          : {}),
+      };
+    };
+    execute = (input) =>
+      Effect.suspend(() => {
+        const commandInput = prepareCommandInput(input);
+        return withGitCommandAdmission(
+          commandInput,
+          Effect.suspend(() => executeWithoutAdmission(commandInput)),
+        );
+      });
+    const tryExecute = (input: ExecuteGitInput) =>
+      Effect.suspend(() => {
+        const commandInput = prepareCommandInput(input);
+        return tryWithGitCommandAdmission(
+          commandInput,
+          Effect.suspend(() => executeWithoutAdmission(commandInput)),
+        );
+      });
+
     const executeGit = (
       operation: string,
       cwd: string,
@@ -1172,16 +1209,22 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const resolveCurrentUpstream = (
       cwd: string,
+      immediate = false,
     ): Effect.Effect<
       { upstreamRef: string; remoteName: string; upstreamBranch: string } | null,
       GitCommandError
     > =>
       Effect.gen(function* () {
-        const upstreamRef = yield* runGitStdout(
-          "GitCore.resolveCurrentUpstream",
-          cwd,
-          ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
-          true,
+        const args = ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"];
+        const upstreamRef = yield* (
+          immediate
+            ? tryExecute({
+                operation: "GitCore.resolveCurrentUpstream",
+                cwd,
+                args,
+                allowNonZeroExit: true,
+              }).pipe(Effect.map((result) => (Option.isSome(result) ? result.value.stdout : "")))
+            : runGitStdout("GitCore.resolveCurrentUpstream", cwd, args, true)
         ).pipe(Effect.map((stdout) => stdout.trim()));
 
         if (upstreamRef.length === 0 || upstreamRef === "@{upstream}") {
@@ -1205,32 +1248,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const fetchUpstreamRef = (
-      cwd: string,
-      upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
-    ): Effect.Effect<void, GitCommandError> => {
-      const refspec = `+refs/heads/${upstream.upstreamBranch}:refs/remotes/${upstream.upstreamRef}`;
-      return runGit(
-        "GitCore.fetchUpstreamRef",
-        cwd,
-        ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
-        true,
-      );
-    };
-
     const fetchUpstreamRefForStatus = (
       cwd: string,
       upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
-    ): Effect.Effect<void, GitCommandError> => {
+    ): Effect.Effect<StatusUpstreamRefreshResult, GitCommandError> => {
       const refspec = `+refs/heads/${upstream.upstreamBranch}:refs/remotes/${upstream.upstreamRef}`;
-      return executeGit(
-        "GitCore.fetchUpstreamRefForStatus",
+      // Explicit remote-tracking refs are sufficient for status. FETCH_HEAD
+      // belongs to user fetch workflows that may still be resolving its commit.
+      const args = [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        upstream.remoteName,
+        refspec,
+      ];
+      return tryExecute({
+        operation: "GitCore.fetchUpstreamRefForStatus",
         cwd,
-        ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
-        {
-          timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
-        },
-      ).pipe(Effect.asVoid);
+        args,
+        allowNonZeroExit: true,
+        timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
+      }).pipe(
+        Effect.flatMap((result) => {
+          if (Option.isNone(result)) return Effect.succeed("skipped" as const);
+          if (result.value.code === 0) return Effect.succeed("refreshed" as const);
+          return Effect.fail(
+            createGitCommandError(
+              "GitCore.fetchUpstreamRefForStatus",
+              cwd,
+              args,
+              result.value.stderr.trim() ||
+                `${commandLabel(args)} failed: code=${result.value.code}`,
+            ),
+          );
+        }),
+      );
     };
 
     const upstreamRefreshPolicy = makeStatusUpstreamRefreshCacheTimeToLive();
@@ -1243,7 +1296,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           remoteName: cacheKey.remoteName,
           upstreamBranch: cacheKey.upstreamBranch,
         }).pipe(
-          Effect.as("refreshed" as const),
           Effect.catch((cause) => {
             const failures = upstreamRefreshPolicy.getFailureCount(cacheKey);
             const logFields = {
@@ -1272,7 +1324,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const refreshStatusUpstreamIfStale = (cwd: string): Effect.Effect<void, GitCommandError> =>
       Effect.gen(function* () {
-        const upstream = yield* resolveCurrentUpstream(cwd);
+        const upstream = yield* resolveCurrentUpstream(cwd, true);
         if (!upstream) return;
         yield* Cache.get(
           statusUpstreamRefreshCache,
@@ -1285,12 +1337,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
 
-    const refreshCheckedOutBranchUpstream = (cwd: string): Effect.Effect<void, GitCommandError> =>
-      Effect.gen(function* () {
-        const upstream = yield* resolveCurrentUpstream(cwd);
-        if (!upstream) return;
-        yield* fetchUpstreamRef(cwd, upstream);
-      });
+    const scheduleStatusUpstreamRefresh = (cwd: string) =>
+      refreshStatusUpstreamIfStale(cwd).pipe(
+        Effect.catchIf(isMissingGitCwdError, () => Effect.void),
+        Effect.ignoreCause({ log: true }),
+        Effect.forkIn(statusRefreshScope),
+        Effect.asVoid,
+      );
 
     const resolveDefaultBranchName = (
       cwd: string,
@@ -1563,10 +1616,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         if (refreshUpstream) {
-          yield* refreshStatusUpstreamIfStale(cwd).pipe(
-            Effect.catchIf(isMissingGitCwdError, () => Effect.void),
-            Effect.ignoreCause({ log: true }),
-          );
+          yield* scheduleStatusUpstreamRefresh(cwd);
         }
 
         const statusStdout = yield* runGitNulMetadata("GitCore.statusDetails.status", cwd, [
@@ -1741,7 +1791,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const readActionStatus: GitCoreShape["readActionStatus"] = (cwd) =>
       Effect.gen(function* () {
-        yield* refreshStatusUpstreamIfStale(cwd).pipe(Effect.ignoreCause({ log: true }));
+        yield* scheduleStatusUpstreamRefresh(cwd);
         const headers: string[] = [];
         let hasWorkingTreeChanges = false;
         yield* executeGit(
@@ -1824,11 +1874,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const details = yield* readStatusDetails(input.cwd, false);
         if (details.hasUpstream) {
-          yield* refreshStatusUpstreamIfStale(input.cwd).pipe(
-            Effect.catchIf(isMissingGitCwdError, () => Effect.void),
-            Effect.ignoreCause({ log: true }),
-            Effect.forkIn(statusRefreshScope),
-          );
+          yield* scheduleStatusUpstreamRefresh(input.cwd);
         }
         return {
           branch: details.branch,
@@ -4056,7 +4102,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         // Refresh upstream refs in the background so checkout remains responsive.
         yield* Effect.forkScoped(
-          refreshCheckedOutBranchUpstream(input.cwd).pipe(Effect.ignoreCause({ log: true })),
+          refreshStatusUpstreamIfStale(input.cwd).pipe(Effect.ignoreCause({ log: true })),
         );
       });
 

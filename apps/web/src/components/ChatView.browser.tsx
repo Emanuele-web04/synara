@@ -78,6 +78,8 @@ import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { showContextMenuFallback } from "../contextMenuFallback";
 import { useRightDockStore } from "../rightDockStore";
+import { dockTerminalThreadId } from "../lib/dockTerminalScope";
+import { collectLeaves } from "../splitView.logic";
 import { GITHUB_INBOX_DOCK_HOST_ID } from "../rightDockStore.logic";
 import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { resolveSplitViewPaneIdForThread, useSplitViewStore } from "../splitViewStore";
@@ -4265,15 +4267,20 @@ describe("ChatView transcript geometry (full app)", () => {
                           ? `provider-handoff:${commandId}`
                           : `provider-handoff-failed:${commandId}`,
                       ),
-                      createdAt: NOW_ISO,
+                      createdAt: new Date().toISOString(),
                       kind:
                         outcome === "completed" ? "provider.handoff" : "provider.handoff.failed",
                       summary: outcome === "completed" ? "Handed off" : "Handoff failed",
                       tone: outcome === "completed" ? ("info" as const) : ("error" as const),
                       turnId: null,
                       sequence: 950,
-                      payload:
-                        outcome === "completed" ? {} : { detail: "Claude CLI is not signed in." },
+                      payload: {
+                        sourceProvider: thread.modelSelection.provider,
+                        sourceModel: thread.modelSelection.model,
+                        targetProvider: "claudeAgent",
+                        targetModel: "claude-sonnet-4-6",
+                        ...(outcome === "failed" ? { detail: "Claude CLI is not signed in." } : {}),
+                      },
                     },
                   ],
                 },
@@ -4340,6 +4347,24 @@ describe("ChatView transcript geometry (full app)", () => {
           threadId: THREAD_ID,
           providerHandoff: true,
           modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        });
+        const handoffActivity = fixture.snapshot.threads
+          .find((thread) => thread.id === THREAD_ID)!
+          .activities.find((activity) => activity.kind === "provider.handoff")!;
+        const sentTurn = mounted.commands[turnStartIndex]!;
+        expect(sentTurn.type).toBe("thread.turn.start");
+        if (sentTurn.type !== "thread.turn.start") throw new Error("Expected turn start");
+        expect(Date.parse(sentTurn.createdAt)).toBeGreaterThan(
+          Date.parse(handoffActivity.createdAt),
+        );
+        await vi.waitFor(() => {
+          const divider = document.querySelector('[data-provider-handoff-divider="true"]')!;
+          const userMessage = [...document.querySelectorAll('[data-message-role="user"]')].find(
+            (row) => (row.textContent ?? "").includes("Review the reconnect fix"),
+          )!;
+          expect(
+            divider.compareDocumentPosition(userMessage) & Node.DOCUMENT_POSITION_FOLLOWING,
+          ).toBeTruthy();
         });
         // The message only goes out once the target is up, and to the target.
         expect(turnStartIndex).toBeGreaterThan(handoffIndex);
@@ -7155,104 +7180,192 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("runs project scripts from worktree draft threads at the worktree cwd", async () => {
-    useComposerDraftStore.setState({
-      draftThreadsByThreadId: {
-        [THREAD_ID]: {
-          projectId: PROJECT_ID,
-          createdAt: NOW_ISO,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          entryPoint: "chat",
-          branch: "feature/draft",
-          worktreePath: "/repo/worktrees/feature-draft",
-          envMode: "worktree",
+  it.each(["button", "draft shortcut", "split button"] as const)(
+    "runs project scripts in the right dock at the worktree cwd via %s",
+    async (entryPoint) => {
+      useComposerDraftStore.setState({
+        draftThreadsByThreadId: {
+          [THREAD_ID]: {
+            projectId: PROJECT_ID,
+            createdAt: NOW_ISO,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            entryPoint: "chat",
+            branch: "feature/draft",
+            worktreePath: "/repo/worktrees/feature-draft",
+            envMode: "worktree",
+          },
         },
-      },
-      projectDraftThreadIdByProjectId: {
-        [PROJECT_ID]: THREAD_ID,
-      },
-    });
-
-    const mounted = await mountChatView({
-      viewport: { ...DEFAULT_VIEWPORT, width: 1_400 },
-      snapshot: withProjectScripts(createDraftOnlySnapshot(), [
-        {
-          id: "test",
-          name: "Test",
-          command: "bun run test",
-          icon: "test",
-          runOnWorktreeCreate: false,
+        projectDraftThreadIdByProjectId: {
+          [PROJECT_ID]: THREAD_ID,
         },
-      ]),
-      // The empty landing runs minimal chrome with no scripts control, so drafts
-      // reach scripts through their keybindings; drive the same runProjectScript
-      // path the way a user would.
-      configureFixture: (nextFixture) => {
-        nextFixture.serverConfig = {
-          ...nextFixture.serverConfig,
-          keybindings: [
-            {
-              command: "script.test.run",
-              shortcut: {
-                key: "t",
-                metaKey: false,
-                ctrlKey: false,
-                shiftKey: true,
-                altKey: true,
-                modKey: true,
-              },
-            },
-          ],
-        };
-      },
-    });
-
-    try {
-      await waitForServerConfigToApply();
-      await dispatchConfiguredShortcutWhenReady(window, {
-        key: "t",
-        shiftKey: true,
-        altKey: true,
       });
 
-      await vi.waitFor(
-        () => {
-          const openRequest = wsRequests.find(
-            (request) =>
-              request._tag === WS_METHODS.terminalOpen &&
-              request.cwd === "/repo/worktrees/feature-draft",
-          );
-          expect(openRequest).toMatchObject({
-            _tag: WS_METHODS.terminalOpen,
-            threadId: THREAD_ID,
-            cwd: "/repo/worktrees/feature-draft",
-            env: {
-              SYNARA_PROJECT_ROOT: "/repo/project",
-              SYNARA_WORKTREE_PATH: "/repo/worktrees/feature-draft",
-            },
-          });
-        },
-        { timeout: 8_000, interval: 16 },
-      );
+      const baseSnapshot =
+        entryPoint === "draft shortcut"
+          ? createDraftOnlySnapshot()
+          : createSnapshotForTargetUser({
+              targetMessageId: MessageId.makeUnsafe("action-button-worktree"),
+              targetText: "Keep this chat visible",
+            });
+      const snapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          envMode: "worktree",
+          worktreePath: "/repo/worktrees/feature-draft",
+        })),
+      };
+      useRightDockStore.setState({ dockStateByThreadId: {} });
 
-      await vi.waitFor(
-        () => {
-          const writeRequest = wsRequests.find(
-            (request) => request._tag === WS_METHODS.terminalWrite,
-          );
-          expect(writeRequest).toMatchObject({
-            _tag: WS_METHODS.terminalWrite,
-            threadId: THREAD_ID,
-            data: "bun run test\r",
-          });
+      const mounted = await mountChatView({
+        viewport: { ...DEFAULT_VIEWPORT, width: 1_800 },
+        snapshot: withProjectScripts(
+          entryPoint === "split button" ? addThreadToSnapshot(snapshot, OTHER_THREAD_ID) : snapshot,
+          [
+            {
+              id: "test",
+              name: "Test",
+              command: "bun run test",
+              icon: "test",
+              runOnWorktreeCreate: false,
+            },
+          ],
+        ),
+        // The empty landing runs minimal chrome with no scripts control, so drafts
+        // reach scripts through their keybindings; drive the same runProjectScript
+        // path the way a user would.
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            keybindings: [
+              {
+                command: "script.test.run",
+                shortcut: {
+                  key: "t",
+                  metaKey: false,
+                  ctrlKey: false,
+                  shiftKey: true,
+                  altKey: true,
+                  modKey: true,
+                },
+              },
+            ],
+          };
         },
-        { timeout: 8_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
-    }
-  });
+      });
+
+      try {
+        await waitForServerConfigToApply();
+        if (entryPoint === "split button") {
+          const splitViewId = useSplitViewStore.getState().createFromDrop({
+            sourceThreadId: THREAD_ID,
+            ownerProjectId: PROJECT_ID,
+            droppedThreadId: OTHER_THREAD_ID,
+            direction: "horizontal",
+            side: "second",
+          });
+          const splitView = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+          const actionPaneId = resolveSplitViewPaneIdForThread(splitView, THREAD_ID)!;
+          useSplitViewStore
+            .getState()
+            .setPanePanelState(splitViewId, actionPaneId, { panel: "diff" });
+          await mounted.router.navigate({
+            to: "/$threadId",
+            params: { threadId: THREAD_ID },
+            search: () => ({ splitViewId }),
+          });
+          await vi.waitFor(() =>
+            expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
+          );
+        }
+        if (entryPoint !== "draft shortcut") {
+          await page.getByRole("button", { name: "Run Test", exact: true }).first().click();
+        } else {
+          await dispatchConfiguredShortcutWhenReady(window, {
+            key: "t",
+            shiftKey: true,
+            altKey: true,
+          });
+        }
+
+        await vi.waitFor(
+          () => {
+            const openRequest = wsRequests.find(
+              (request) =>
+                request._tag === WS_METHODS.terminalOpen &&
+                request.cwd === "/repo/worktrees/feature-draft",
+            );
+            expect(openRequest).toMatchObject({
+              _tag: WS_METHODS.terminalOpen,
+              threadId: dockTerminalThreadId(THREAD_ID),
+              cwd: "/repo/worktrees/feature-draft",
+              env: {
+                SYNARA_PROJECT_ROOT: "/repo/project",
+                SYNARA_WORKTREE_PATH: "/repo/worktrees/feature-draft",
+              },
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        await vi.waitFor(
+          () => {
+            const writeRequest = wsRequests.find(
+              (request) => request._tag === WS_METHODS.terminalWrite,
+            );
+            expect(writeRequest).toMatchObject({
+              _tag: WS_METHODS.terminalWrite,
+              threadId: dockTerminalThreadId(THREAD_ID),
+              data: "bun run test\r",
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await expect.element(page.getByRole("complementary", { name: "Terminal" })).toBeVisible();
+        const terminalSelector =
+          entryPoint === "split button"
+            ? '[data-split-pane-focused] aside[aria-label="Terminal"]'
+            : '[data-right-dock-content] aside[aria-label="Terminal"]';
+        expect(document.querySelector(terminalSelector)).not.toBeNull();
+        if (entryPoint === "split button") {
+          expect(mounted.router.state.location.search.splitViewId).toBeDefined();
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2);
+        }
+        expect((await waitForComposerEditor()).getBoundingClientRect().width).toBeGreaterThan(0);
+        if (entryPoint === "split button") {
+          const openedSessionIds = new Set(
+            wsRequests
+              .filter((request) => request._tag === WS_METHODS.terminalOpen)
+              .map((request) => request.terminalId),
+          );
+          await page.getByRole("button", { name: "Hide terminal", exact: true }).click();
+          await expect
+            .element(page.getByRole("complementary", { name: "Terminal" }))
+            .not.toBeInTheDocument();
+          await page
+            .getByRole("button", { name: "Toggle right sidebar", exact: true })
+            .first()
+            .click();
+          await expect.element(page.getByRole("complementary", { name: "Terminal" })).toBeVisible();
+          expect(
+            new Set(
+              wsRequests
+                .filter((request) => request._tag === WS_METHODS.terminalOpen)
+                .map((request) => request.terminalId),
+            ),
+          ).toEqual(openedSessionIds);
+          const splitViewId = mounted.router.state.location.search.splitViewId!;
+          const splitView = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+          expect(
+            collectLeaves(splitView.root).find((leaf) => leaf.threadId === THREAD_ID)?.panel.panel,
+          ).toBe("diff");
+        }
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("cycles model effort with Shift+Tab in the existing model picker", async () => {
     localStorage.setItem("synara:app-settings:v1", JSON.stringify({ composerEffortSlider: true }));
@@ -8265,15 +8378,25 @@ describe("ChatView transcript geometry (full app)", () => {
       const actionButtons = document.querySelectorAll<HTMLButtonElement>(
         'button[aria-label="Queued follow-up actions"]',
       );
+      await page.getByRole("button", { name: "Steer", exact: true }).first().hover();
+      await expect
+        .element(page.getByText("Send this follow-up now to redirect the current work."))
+        .toHaveTextContent(
+          "Send this follow-up now to redirect the current work. If native steering is unavailable, stop the current turn and start a new one.",
+        );
+      expect(
+        document.querySelectorAll('button[aria-label="Delete queued follow-up"]'),
+      ).toHaveLength(2);
       actionButtons[0]?.click();
 
       const editMenuItem = await waitForElement(
         () =>
           Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-item"]')).find(
-            (item) => item.textContent?.trim() === "Edit queued prompt",
+            (item) => item.textContent?.trim() === "Edit queued follow-up",
           ) ?? null,
-        "Unable to find edit queued prompt menu item.",
+        "Unable to find edit queued follow-up menu item.",
       );
+      expect(document.querySelectorAll('[data-slot="menu-item"]')).toHaveLength(1);
       editMenuItem.click();
 
       await vi.waitFor(
@@ -11225,7 +11348,7 @@ describe("ChatView transcript geometry (full app)", () => {
           const request = wsRequests.find(
             (candidate) =>
               candidate._tag === WS_METHODS.terminalOpen &&
-              candidate.threadId === newThreadId &&
+              candidate.threadId === dockTerminalThreadId(newThreadId) &&
               candidate.cwd === worktreePath,
           );
           expect(
@@ -11257,7 +11380,7 @@ describe("ChatView transcript geometry (full app)", () => {
           const request = wsRequests.find(
             (candidate) =>
               candidate._tag === WS_METHODS.terminalWrite &&
-              candidate.threadId === newThreadId &&
+              candidate.threadId === dockTerminalThreadId(newThreadId) &&
               candidate.data === "printf setup\r",
           );
           expect(request).toBeTruthy();

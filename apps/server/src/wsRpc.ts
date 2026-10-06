@@ -9,6 +9,7 @@ import {
   DEFAULT_TERMINAL_ID,
   DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
   WS_BOOTSTRAP_PATH,
@@ -595,29 +596,29 @@ const makeWsRpcHandlersLayer = () =>
               sidechatExpiryReactor.viewEnded(threadId),
             ).pipe(Effect.as(stream)),
           );
-      const recordThreadStreamDrop = (threadId: string, report: LiveUiStreamDropReport) =>
+      const recordThreadStreamOverflow = (threadId: string, report: LiveUiStreamDropReport) =>
         threadDiagnostics
           .recordOperationalDiagnostic({
             threadId,
             source: "server",
-            kind: "ws.thread-stream-events-dropped",
-            severity: "error",
-            code: "THREAD_STREAM_EVENTS_DROPPED",
+            kind: "ws.thread-stream-overflow",
+            severity: "warning",
+            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
             detail: {
               label: report.label,
               capacity: report.capacity,
-              droppedAtLeast: report.droppedAtLeast,
+              retainedSerializedBytes: report.retainedSerializedBytes ?? null,
+              maxSerializedBytes: report.maxSerializedBytes ?? null,
+              retryable: true,
             },
             occurredAt: new Date().toISOString(),
           })
           .pipe(
             Effect.catch((error) =>
-              Effect.logWarning("Failed to persist thread stream drop diagnostic.", {
+              Effect.logWarning("Failed to persist thread stream overflow diagnostic.", {
                 error: String(error),
               }),
             ),
-            (diagnostic) => Effect.sync(() => Effect.runFork(diagnostic)),
-            Effect.andThen(failLiveUiStreamForSnapshotResync(report)),
           );
       const recordThreadResnapshotRequired = (
         threadId: string,
@@ -1440,13 +1441,12 @@ const makeWsRpcHandlersLayer = () =>
                 tracker: resnapshotEscalationTracker,
               },
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
-                Effect.map((stream) =>
-                  bufferLiveUiStream(stream.pipe(Stream.filter(isShellRelevantEvent)), {
-                    label: "orchestration.shell",
-                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
-                  }),
-                ),
+                Effect.map((stream) => stream.pipe(Stream.filter(isShellRelevantEvent))),
               ),
+              liveBufferOptions: {
+                label: "orchestration.shell",
+                onDroppedEvents: () => Effect.void,
+              },
               snapshot: projectionReadModelQuery
                 .getShellSnapshot()
                 .pipe(
@@ -1515,18 +1515,16 @@ const makeWsRpcHandlersLayer = () =>
                 recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
-                  bufferLiveUiStream(
-                    stream.pipe(
-                      Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
-                      Stream.map(sanitizeOrchestrationEventProviderOptions),
-                    ),
-                    {
-                      label: "orchestration.thread-detail",
-                      onDroppedEvents: (report) => recordThreadStreamDrop(input.threadId, report),
-                    },
+                  stream.pipe(
+                    Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                    Stream.map(sanitizeOrchestrationEventProviderOptions),
                   ),
                 ),
               ),
+              liveBufferOptions: {
+                label: "orchestration.thread-detail",
+                onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
+              },
               snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
                 Effect.flatMap(
                   Option.match({

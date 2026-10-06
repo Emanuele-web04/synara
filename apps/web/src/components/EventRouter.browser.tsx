@@ -8,6 +8,7 @@ import {
   DEVICE_WS_METHODS,
   COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   ProjectId,
   ThreadId,
   TurnId,
@@ -24,6 +25,7 @@ import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { page } from "vitest/browser";
 
 const threadSnapshotFailureListeners = vi.hoisted(
   () =>
@@ -36,10 +38,20 @@ const threadSnapshotFailureListeners = vi.hoisted(
     >(),
 );
 
+const shellStreamFailureListeners = vi.hoisted(
+  () => new Set<(failure: { readonly code: string | null; readonly error: Error }) => void>(),
+);
+
 vi.mock("../wsNativeApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../wsNativeApi")>();
   return {
     ...actual,
+    onShellStreamFailure: (
+      listener: (failure: { readonly code: string | null; readonly error: Error }) => void,
+    ) => {
+      shellStreamFailureListeners.add(listener);
+      return () => shellStreamFailureListeners.delete(listener);
+    },
     onThreadStreamFailure: (
       listener: typeof threadSnapshotFailureListeners extends Set<infer T> ? T : never,
     ) => {
@@ -61,18 +73,23 @@ import {
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
 import {
+  acknowledgeStartupAnnouncementsForTest,
   createBrowserTestServerConfig,
   createBrowserTestServerSettings,
   createFullscreenTestHost,
 } from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
-import { resetThreadDetailResumeCursorsForTests } from "../threadDetailResumeCursors";
+import {
+  buildThreadSubscribeInput,
+  resetThreadDetailResumeCursorsForTests,
+} from "../threadDetailResumeCursors";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
-import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
 // Pre-transform the compiler-heavy component before the first hydration deadline.
 // This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
 import "./ChatView";
+import { toastManager } from "./ui/toast";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-other-browser-test");
@@ -436,7 +453,7 @@ const worker = setupWorker(
 async function mountApp(options?: {
   routeThreadId?: ThreadId;
   waitForThreadId?: ThreadId | null;
-}): Promise<{ cleanup: () => Promise<void> }> {
+}): Promise<{ router: ReturnType<typeof getRouter>; cleanup: () => Promise<void> }> {
   const host = createFullscreenTestHost();
 
   const routeThreadId = options?.routeThreadId ?? THREAD_ID;
@@ -474,6 +491,7 @@ async function mountApp(options?: {
   let cleanedUp = false;
 
   return {
+    router,
     cleanup: async () => {
       if (cleanedUp) return;
       cleanedUp = true;
@@ -494,6 +512,32 @@ function sendThreadEventPush(event: OrchestrationEvent) {
     kind: "event",
     event,
   });
+}
+
+function resumedThreadEvent(): Extract<OrchestrationEvent, { type: "thread.message-sent" }> {
+  return {
+    sequence: 2,
+    eventId: EventId.makeUnsafe("event-overflow-resume-2"),
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    occurredAt: NOW_ISO,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.message-sent",
+    payload: {
+      threadId: THREAD_ID,
+      messageId: MessageId.makeUnsafe("msg-overflow-resumed"),
+      role: "assistant",
+      text: "Resumed from the applied cursor",
+      turnId: TurnId.makeUnsafe("turn-overflow-resume"),
+      source: "native",
+      streaming: true,
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+    },
+  };
 }
 
 function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
@@ -555,6 +599,7 @@ describe("EventRouter scoped orchestration sync", () => {
   beforeEach(async () => {
     await resetWsNativeApiForTest();
     threadSnapshotFailureListeners.clear();
+    shellStreamFailureListeners.clear();
     fixture = buildFixture();
     document.body.innerHTML = "";
     shellStreamRequestId = null;
@@ -566,6 +611,8 @@ describe("EventRouter scoped orchestration sync", () => {
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
     localStorage.clear();
+    acknowledgeStartupAnnouncementsForTest(fixture.serverConfig);
+    toastManager.close();
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -612,6 +659,248 @@ describe("EventRouter scoped orchestration sync", () => {
   afterEach(() => {
     vi.useRealTimers();
     document.body.innerHTML = "";
+  });
+
+  it("surfaces exhausted shell overflow and retries only the shell subscription", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousShell = subscribeShellRequestCount;
+      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const listener of shellStreamFailureListeners)
+          listener({
+            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+            error: new Error("Stream overflow retry budget exhausted"),
+          });
+      }
+      await vi.waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+            (element) => element.textContent === "Workspace updates paused",
+          ),
+        ).toHaveLength(1),
+      );
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("dismisses workspace overflow after a reconnected shell snapshot", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousShell = subscribeShellRequestCount;
+      for (const listener of shellStreamFailureListeners)
+        listener({
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("Stream overflow retry budget exhausted"),
+        });
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .toBeVisible();
+      sendServerWelcomePush();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("resumes exhausted thread overflow without a detail snapshot", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousSnapshots = getThreadDetailSnapshotRequestCount;
+      const previousShell = subscribeShellRequestCount;
+      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("Stream overflow retry budget exhausted"),
+        });
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+      expect(buildThreadSubscribeInput(THREAD_ID)).toEqual({
+        threadId: THREAD_ID,
+        afterSequence: 1,
+      });
+      expect(subscribeShellRequestCount).toBe(previousShell);
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+      await expect.element(page.getByText("Thread updates paused", { exact: true })).toBeVisible();
+      delayNextThreadSnapshot = true; // A cursor resume delivers only subsequent events.
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() =>
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe((previousThread ?? 0) + 1),
+      );
+      expect(subscribeShellRequestCount).toBe(previousShell);
+      sendThreadEventPush(resumedThreadEvent());
+      await vi.waitFor(() =>
+        expect(
+          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+            (message) => message.text === "Resumed from the applied cursor",
+          ),
+        ).toBe(true),
+      );
+      expect(getThreadDetailSnapshotRequestCount).toBe(previousSnapshots);
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("deduplicates overflow notices and scopes them to their thread", async () => {
+    fixture.snapshot = {
+      ...fixture.snapshot,
+      threads: [
+        ...fixture.snapshot.threads,
+        { ...fixture.snapshot.threads[0]!, id: OTHER_THREAD_ID, title: "Other thread" },
+      ],
+    };
+    const mounted = await mountApp();
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const listener of threadSnapshotFailureListeners)
+          listener({
+            threadId: THREAD_ID,
+            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+            error: new Error("overflow exhausted"),
+          });
+      }
+      await vi.waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+            (element) => element.textContent === "Thread updates paused",
+          ),
+        ).toHaveLength(1),
+      );
+      await expect.element(page.getByText(/The update stream for.*Root test thread/)).toBeVisible();
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
+      await vi.waitFor(() =>
+        expect(threadStreamRequestIdByThreadId.has(OTHER_THREAD_ID)).toBe(true),
+      );
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("clears an exhausted failure when a reconnected cursor stream applies an event", async () => {
+    const mounted = await mountApp();
+    try {
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("overflow exhausted"),
+        });
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+      const previous = subscribeThreadRequestCountById.get(THREAD_ID) ?? 0;
+      delayNextThreadSnapshot = true;
+      sendServerWelcomePush();
+      await vi.waitFor(() =>
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previous + 1),
+      );
+      sendThreadEventPush(resumedThreadEvent());
+      await vi.waitFor(() =>
+        expect(
+          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+            (message) => message.text === "Resumed from the applied cursor",
+          ),
+        ).toBe(true),
+      );
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).not.toBe("failed");
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each(["thread", "shell"])(
+    "surfaces one %s retry rejection even while the paused notice exits",
+    async (scope) => {
+      const mounted = await mountApp();
+      const api = createWsNativeApi();
+      const subscribe = vi
+        .spyOn(api.orchestration, scope === "thread" ? "subscribeThread" : "subscribeShell")
+        .mockRejectedValue(new Error("Server is still unavailable"));
+      const title =
+        scope === "thread"
+          ? "Unable to resume thread updates"
+          : "Unable to resume workspace updates";
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (scope === "thread") {
+            for (const listener of threadSnapshotFailureListeners)
+              listener({
+                threadId: THREAD_ID,
+                code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+                error: new Error("overflow exhausted"),
+              });
+          } else {
+            for (const listener of shellStreamFailureListeners)
+              listener({
+                code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+                error: new Error("overflow exhausted"),
+              });
+          }
+          await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+          await expect.element(page.getByText(title, { exact: true })).toBeVisible();
+          await vi.waitFor(() =>
+            expect(
+              [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+                (element) => element.textContent === title,
+              ),
+            ).toHaveLength(1),
+          );
+        }
+      } finally {
+        subscribe.mockRestore();
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("ignores a retry rejection after the thread consumer is disposed", async () => {
+    const mounted = await mountApp();
+    let rejectRetry: (error: Error) => void = () => undefined;
+    const retry = new Promise<void>((_resolve, reject) => {
+      rejectRetry = reject;
+    });
+    const api = createWsNativeApi();
+    const subscribe = vi.spyOn(api.orchestration, "subscribeThread").mockReturnValueOnce(retry);
+    try {
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("overflow exhausted"),
+        });
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalled());
+      await mounted.cleanup();
+      const priorSync = useStore.getState().threadDetailSyncById?.[THREAD_ID];
+      rejectRetry(new Error("Connection stopped after leaving the thread"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe(priorSync);
+    } finally {
+      subscribe.mockRestore();
+      await mounted.cleanup();
+    }
   });
 
   it.each(["archive", "thread removal", "project removal"])(
@@ -1112,105 +1401,125 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   }, 60_000);
 
-  it("polls a subscribed running thread to recover missed detail events", async () => {
-    const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
-    fixture = {
-      ...fixture,
-      snapshot: createSnapshot({
-        latestTurn: {
-          turnId: runningTurnId,
-          state: "running",
-          requestedAt: "2026-03-04T12:00:04.000Z",
-          startedAt: "2026-03-04T12:00:04.500Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-        session: {
-          threadId: THREAD_ID,
-          status: "running",
-          providerName: "opencode",
-          runtimeMode: "full-access",
-          activeTurnId: runningTurnId,
-          lastError: null,
+  it.each(["healthy", "exhausted"])(
+    "polls a running thread with a %s stream without hiding an exhausted stream failure",
+    async (streamState) => {
+      const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
+      fixture = {
+        ...fixture,
+        snapshot: createSnapshot({
+          latestTurn: {
+            turnId: runningTurnId,
+            state: "running",
+            requestedAt: "2026-03-04T12:00:04.000Z",
+            startedAt: "2026-03-04T12:00:04.500Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: runningTurnId,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:04.500Z",
+          },
           updatedAt: "2026-03-04T12:00:04.500Z",
-        },
-        updatedAt: "2026-03-04T12:00:04.500Z",
-      }),
-    };
+        }),
+      };
 
-    const assistantMessage = {
-      sequence: 2,
-      eventId: EventId.makeUnsafe("event-catchup-assistant"),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      occurredAt: "2026-03-04T12:00:05.000Z",
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "thread.message-sent",
-      payload: {
-        threadId: THREAD_ID,
-        messageId: MessageId.makeUnsafe("msg-catchup-assistant"),
-        role: "assistant",
-        text: "Recovered by periodic catch-up",
-        turnId: runningTurnId,
-        source: "native",
-        streaming: false,
-        createdAt: "2026-03-04T12:00:05.000Z",
-        updatedAt: "2026-03-04T12:00:05.000Z",
-      },
-    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-    const sessionReady = {
-      sequence: 3,
-      eventId: EventId.makeUnsafe("event-catchup-session-ready"),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      occurredAt: "2026-03-04T12:00:06.000Z",
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "thread.session-set",
-      payload: {
-        threadId: THREAD_ID,
-        session: {
+      const assistantMessage = {
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-catchup-assistant"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
           threadId: THREAD_ID,
-          status: "ready",
-          providerName: "opencode",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-03-04T12:00:06.000Z",
+          messageId: MessageId.makeUnsafe("msg-catchup-assistant"),
+          role: "assistant",
+          text: "Recovered by periodic catch-up",
+          turnId: runningTurnId,
+          source: "native",
+          streaming: false,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
         },
-      },
-    } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
-    replayEvents = [assistantMessage, sessionReady];
-
-    const mounted = await mountApp();
-
-    try {
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          expect(
-            thread?.messages.some(
-              (message) =>
-                message.id === MessageId.makeUnsafe("msg-catchup-assistant") &&
-                message.text === "Recovered by periodic catch-up" &&
-                message.streaming === false,
-            ),
-          ).toBe(true);
-          expect(thread?.session?.orchestrationStatus).toBe("ready");
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const sessionReady = {
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-catchup-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:06.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:06.000Z",
+          },
         },
-        { timeout: 5_000, interval: 16 },
-      );
-      expect(replayRequestCursors).toContain(1);
-    } finally {
-      fixture = buildFixture();
-      await mounted.cleanup();
-    }
-  });
+      } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+      const mounted = await mountApp();
+
+      try {
+        if (streamState === "exhausted") {
+          for (const listener of threadSnapshotFailureListeners)
+            listener({
+              threadId: THREAD_ID,
+              code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+              error: new Error("overflow exhausted"),
+            });
+          expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+        }
+        replayEvents = [assistantMessage, sessionReady];
+        await vi.waitFor(
+          () => {
+            const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+            expect(
+              thread?.messages.some(
+                (message) =>
+                  message.id === MessageId.makeUnsafe("msg-catchup-assistant") &&
+                  message.text === "Recovered by periodic catch-up" &&
+                  message.streaming === false,
+              ),
+            ).toBe(true);
+            expect(thread?.session?.orchestrationStatus).toBe("ready");
+          },
+          { timeout: 5_000, interval: 16 },
+        );
+        expect(replayRequestCursors).toContain(1);
+        if (streamState === "exhausted") {
+          expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+          await expect
+            .element(page.getByText("Thread updates paused", { exact: true }))
+            .toBeVisible();
+          await expect
+            .element(page.getByRole("button", { name: "Retry updates", exact: true }))
+            .toBeVisible();
+        }
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("limits skipped projection reconciles to 72 seconds since the last snapshot", async () => {
     const turnId = TurnId.makeUnsafe("turn-reconcile-deadline");
