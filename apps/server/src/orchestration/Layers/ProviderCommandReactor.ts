@@ -7965,8 +7965,17 @@ const make = Effect.gen(function* () {
         isProviderIntentEvent(event) &&
         isProviderSideEffectIntent(event) &&
         !isQuarantineExemptProviderIntent(event) &&
-        event.sequence <= (yield* readQuarantinedProcessedThrough(event.aggregateId))
+        event.sequence <= (yield* readQuarantinedProcessedThrough(event.aggregateId)) &&
+        Option.isNone(
+          yield* deliveryRepository.getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: event.sequence,
+          }),
+        )
       ) {
+        // A fence proves this lane processed the source row, not completion of
+        // an asynchronous cache response. Existing deliveries must cross their
+        // durable state recovery boundary even while another lane pins ACK.
         yield* requireCursorAdvance(event);
         return;
       }
@@ -8475,9 +8484,7 @@ const make = Effect.gen(function* () {
             : processOrderedEvent(event),
         ).pipe(
           Effect.tap(() =>
-            event.type === "thread.deleted" ||
-            quarantinedThreads.has(event.aggregateId) ||
-            (quarantinedProcessedThrough.get(event.aggregateId) ?? 0) > 0
+            event.type === "thread.deleted" || quarantinedThreads.has(event.aggregateId)
               ? recordQuarantinedProcessed(event)
               : Effect.void,
           ),
