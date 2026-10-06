@@ -1,9 +1,10 @@
-import { Deferred, Effect } from "effect";
+import { Deferred, Effect, Option } from "effect";
 
 import { GitCommandError } from "../Errors.ts";
 import type { ExecuteGitInput } from "../Services/GitCore.ts";
 
-const GIT_SHORT_COMMAND_PERMITS = 6;
+const GIT_READ_COMMAND_PERMITS = 4;
+const GIT_CHECKPOINT_COMMAND_PERMITS = 2;
 const GIT_LONG_COMMAND_PERMITS = 2;
 const GIT_COMMAND_MAX_QUEUED_PER_CLASS = 128;
 const GIT_COMMAND_ADMISSION_WARNING_MS = 2_000;
@@ -19,9 +20,14 @@ type Ticket = {
   state: "queued" | "running" | "released";
 };
 
-// Independent FIFO classes reserve checkpoint/read capacity even while hooks or
-// network commands wait indefinitely. Both classes are shared by live instances.
-const shortCommands: AdmissionClass = { permits: GIT_SHORT_COMMAND_PERMITS, queue: [], running: 0 };
+// Three module-global FIFO classes reserve checkpoint capacity independently of
+// reads and network/hooks. All live GitCore instances in this module share them.
+const readCommands: AdmissionClass = { permits: GIT_READ_COMMAND_PERMITS, queue: [], running: 0 };
+const checkpointCommands: AdmissionClass = {
+  permits: GIT_CHECKPOINT_COMMAND_PERMITS,
+  queue: [],
+  running: 0,
+};
 const longCommands: AdmissionClass = { permits: GIT_LONG_COMMAND_PERMITS, queue: [], running: 0 };
 
 export function gitSubcommand(args: ReadonlyArray<string>): string | undefined {
@@ -64,9 +70,10 @@ const releaseTicket = (ticket: Ticket): void => {
   ticket.state = "released";
 };
 
-export const withGitCommandAdmission = <A, E, R>(
+const admit = <A, E, R>(
   input: ExecuteGitInput,
   execution: Effect.Effect<A, E, R>,
+  onBusy?: Effect.Effect<A>,
 ): Effect.Effect<A, E | GitCommandError, R> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
@@ -79,7 +86,12 @@ export const withGitCommandAdmission = <A, E, R>(
         subcommand === "fetch" ||
         subcommand === "clone"
           ? longCommands
-          : shortCommands;
+          : input.operation.startsWith("CheckpointStore.")
+            ? checkpointCommands
+            : readCommands;
+      // Opportunistic refreshes never enqueue or bypass a waiting user command.
+      if (onBusy && (group.running >= group.permits || group.queue.length > 0))
+        return yield* onBusy;
       if (group.queue.length >= GIT_COMMAND_MAX_QUEUED_PER_CLASS) {
         return yield* new GitCommandError({
           operation: input.operation,
@@ -120,4 +132,19 @@ export const withGitCommandAdmission = <A, E, R>(
         }),
       ).pipe(Effect.ensuring(Effect.sync(() => releaseTicket(ticket))));
     }),
+  );
+
+export const withGitCommandAdmission = <A, E, R>(
+  input: ExecuteGitInput,
+  execution: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | GitCommandError, R> => admit(input, execution);
+
+export const tryWithGitCommandAdmission = <A, E, R>(
+  input: ExecuteGitInput,
+  execution: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<A>, E | GitCommandError, R> =>
+  admit(
+    input,
+    execution.pipe(Effect.map((value): Option.Option<A> => Option.some(value))),
+    Effect.succeed(Option.none()),
   );
