@@ -8,6 +8,7 @@ import {
   DEVICE_WS_METHODS,
   COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   ProjectId,
   ThreadId,
   TurnId,
@@ -24,6 +25,7 @@ import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { page } from "vitest/browser";
 
 const threadSnapshotFailureListeners = vi.hoisted(
   () =>
@@ -36,10 +38,20 @@ const threadSnapshotFailureListeners = vi.hoisted(
     >(),
 );
 
+const shellStreamFailureListeners = vi.hoisted(
+  () => new Set<(failure: { readonly code: string | null; readonly error: Error }) => void>(),
+);
+
 vi.mock("../wsNativeApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../wsNativeApi")>();
   return {
     ...actual,
+    onShellStreamFailure: (
+      listener: (failure: { readonly code: string | null; readonly error: Error }) => void,
+    ) => {
+      shellStreamFailureListeners.add(listener);
+      return () => shellStreamFailureListeners.delete(listener);
+    },
     onThreadStreamFailure: (
       listener: typeof threadSnapshotFailureListeners extends Set<infer T> ? T : never,
     ) => {
@@ -66,9 +78,13 @@ import {
   createFullscreenTestHost,
 } from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
-import { resetThreadDetailResumeCursorsForTests } from "../threadDetailResumeCursors";
+import {
+  advanceThreadDetailResumeCursor,
+  buildThreadSubscribeInput,
+  resetThreadDetailResumeCursorsForTests,
+} from "../threadDetailResumeCursors";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
-import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
 // Pre-transform the compiler-heavy component before the first hydration deadline.
 // This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
@@ -554,6 +570,7 @@ describe("EventRouter scoped orchestration sync", () => {
   beforeEach(async () => {
     await resetWsNativeApiForTest();
     threadSnapshotFailureListeners.clear();
+    shellStreamFailureListeners.clear();
     fixture = buildFixture();
     document.body.innerHTML = "";
     shellStreamRequestId = null;
@@ -611,6 +628,85 @@ describe("EventRouter scoped orchestration sync", () => {
   afterEach(() => {
     vi.useRealTimers();
     document.body.innerHTML = "";
+  });
+
+  it("surfaces exhausted shell overflow and retries only the shell subscription", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousShell = subscribeShellRequestCount;
+      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+      for (const listener of shellStreamFailureListeners)
+        listener({
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("Stream overflow retry budget exhausted"),
+        });
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("marks exhausted thread overflow as failed while retaining its applied cursor", async () => {
+    const mounted = await mountApp();
+    try {
+      advanceThreadDetailResumeCursor(THREAD_ID, 42);
+      const previousShell = subscribeShellRequestCount;
+      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("Stream overflow retry budget exhausted"),
+        });
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+      expect(buildThreadSubscribeInput(THREAD_ID)).toEqual({
+        threadId: THREAD_ID,
+        afterSequence: 42,
+      });
+      expect(subscribeShellRequestCount).toBe(previousShell);
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+      await expect.element(page.getByText("Thread updates paused", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() =>
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe((previousThread ?? 0) + 1),
+      );
+      expect(subscribeShellRequestCount).toBe(previousShell);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("ignores a retry rejection after the thread consumer is disposed", async () => {
+    const mounted = await mountApp();
+    let rejectRetry: (error: Error) => void = () => undefined;
+    const retry = new Promise<void>((_resolve, reject) => {
+      rejectRetry = reject;
+    });
+    const api = createWsNativeApi();
+    const subscribe = vi.spyOn(api.orchestration, "subscribeThread").mockReturnValueOnce(retry);
+    try {
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("overflow exhausted"),
+        });
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalled());
+      await mounted.cleanup();
+      const priorSync = useStore.getState().threadDetailSyncById?.[THREAD_ID];
+      rejectRetry(new Error("Connection stopped after leaving the thread"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe(priorSync);
+    } finally {
+      subscribe.mockRestore();
+      await mounted.cleanup();
+    }
   });
 
   it.each(["archive", "thread removal", "project removal"])(

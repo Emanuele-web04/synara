@@ -6,6 +6,7 @@
 import { recordRendererActivity, rendererRpcActivity } from "./lib/rendererErrorDiagnostics";
 
 import {
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   WS_BOOTSTRAP_METHOD,
@@ -236,7 +237,6 @@ const makeRpcClient = RpcClient.make(
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
-const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
 const INITIAL_RECONNECT_RETRY_MS = 500;
 const MAX_RECONNECT_RETRY_MS = 5_000;
 
@@ -366,24 +366,120 @@ export async function negotiateOverHttp(
   return Option.isSome(result) ? result.value : null;
 }
 
+// A 90s upgrade budget covers observed 45–60s stalls plus startup/transfer
+// overhead. Open sockets tolerate long stalls but still recover half-open paths.
+const SOCKET_OPEN_TIMEOUT_MS = 90_000;
+const SOCKET_SILENCE_TIMEOUT_MS = 180_000;
+const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 180_000;
+const MAX_STREAM_OVERFLOW_RETRIES = 8;
+
 function makeProtocolLayer(url: string, onFailure?: () => void) {
-  const socketLayer = Socket.layerWebSocket(url).pipe(
+  const socketLayer = Socket.layerWebSocket(url, { openTimeout: SOCKET_OPEN_TIMEOUT_MS }).pipe(
     Layer.provide(Socket.layerWebSocketConstructorGlobal),
   );
   // JSON keeps the wire format symmetric with any server build: a serialization
   // mismatch on this single multiplexed socket is a hard connect failure, and the
   // desktop/dev setup routinely runs web and server on independently-built copies.
   return Layer.effect(RpcClient.Protocol)(
-    Effect.map(RpcClient.makeProtocolSocket(), (protocol) => ({
-      ...protocol,
-      run: (writeResponse) =>
-        protocol.run((response) => {
-          // The socket library retries its connection, but its failed RPCs and
-          // subscriptions have already ended. Rebuild the whole client session.
-          if (response._tag === "ClientProtocolError") onFailure?.();
-          return writeResponse(response);
-        }),
-    })),
+    RpcClient.Protocol.make(
+      Effect.fnUntraced(function* (writeResponse) {
+        const socket = yield* Socket.Socket;
+        const serialization = yield* RpcSerialization.RpcSerialization;
+        const parser = serialization.makeUnsafe();
+        const write = yield* socket.writer;
+        let currentError: RpcClientError.RpcClientError | undefined;
+        let lastServerFrameAt: number | undefined;
+        const reportFailure = (error: RpcClientError.RpcClientError) => {
+          if (currentError) return Effect.void;
+          currentError = error;
+          onFailure?.();
+          return writeResponse({ _tag: "ClientProtocolError", error });
+        };
+
+        // Reuse Effect's socket, serialization and RPC buffering/acknowledgement
+        // machinery. Its default protocol pinger replaces an open connection
+        // after one missed 5s pong; a blocked server cannot answer that pong.
+        // Any inbound frame proves liveness, even if a pong is queued behind
+        // a snapshot. Three minutes of silence bounds half-open remote paths
+        // without replacing connections during observed 45–60s stalls.
+        yield* socket
+          .runRaw(
+            (message) => {
+              lastServerFrameAt = performance.now();
+              try {
+                const responses = parser.decode(message) as Array<
+                  Parameters<Parameters<RpcClient.Protocol["Service"]["run"]>[0]>[0]
+                >;
+                return Effect.forEach(responses, writeResponse, { discard: true });
+              } catch (cause) {
+                return reportFailure(
+                  new RpcClientError.RpcClientError({
+                    reason: new RpcClientError.RpcClientDefect({
+                      message: "Error decoding message",
+                      cause,
+                    }),
+                  }),
+                );
+              }
+            },
+            {
+              onOpen: Effect.sync(() => {
+                lastServerFrameAt = performance.now();
+              }),
+            },
+          )
+          .pipe(
+            Effect.flatMap(() =>
+              reportFailure(
+                new RpcClientError.RpcClientError({
+                  reason: new Socket.SocketCloseError({ code: 1000 }),
+                }),
+              ),
+            ),
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+              const error = Cause.squash(cause);
+              return reportFailure(
+                new RpcClientError.RpcClientError({
+                  reason: Schema.is(Socket.SocketError)(error)
+                    ? error.reason
+                    : new RpcClientError.RpcClientDefect({
+                        message: "Socket protocol failed",
+                        cause: error,
+                      }),
+                }),
+              );
+            }),
+            Effect.forkScoped,
+          );
+        yield* Effect.suspend(() => {
+          if (currentError) return Effect.void;
+          if (
+            lastServerFrameAt !== undefined &&
+            performance.now() - lastServerFrameAt >= SOCKET_SILENCE_TIMEOUT_MS
+          ) {
+            return reportFailure(
+              new RpcClientError.RpcClientError({
+                reason: new Socket.SocketReadError({
+                  cause: new Error("No server frames received for 180000ms"),
+                }),
+              }),
+            );
+          }
+          const encoded = parser.encode({ _tag: "Ping" });
+          return encoded === undefined ? Effect.void : write(encoded);
+        }).pipe(Effect.delay("5 seconds"), Effect.ignore, Effect.forever, Effect.forkScoped);
+        return {
+          send(request) {
+            if (currentError) return Effect.fail(currentError);
+            const encoded = parser.encode(request);
+            return encoded === undefined ? Effect.void : Effect.orDie(write(encoded));
+          },
+          supportsAck: true,
+          supportsTransferables: false,
+        };
+      }),
+    ),
   ).pipe(Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)));
 }
 
@@ -411,6 +507,8 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   // and recover via the slow snapshot-fault retry (see startStream).
   "ORCHESTRATION_RESNAPSHOT_REQUIRED",
   "ORCHESTRATION_SNAPSHOT_STALLED",
+  // Retry only the overflowing subscription, preserving its applied cursor.
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
   // A server that does not offer Tasks (Stable) refuses its stream for good;
   // reconnecting the socket would only be refused again.
@@ -740,6 +838,8 @@ export function threadStreamInputsEqual(left: unknown, right: unknown): boolean 
   return leftEntries.every(([key, value]) => (right as Record<string, unknown>)[key] === value);
 }
 
+export type WsShellStreamFailure = Omit<WsThreadStreamFailure, "threadId">;
+
 export interface WsThreadStreamFailure {
   readonly threadId: string;
   readonly code: string | null;
@@ -786,6 +886,7 @@ export class WsTransport {
   private readonly compatibilityResultListeners = new Set<
     (compatibility: WsBootstrapNegotiateResult | null) => void
   >();
+  private readonly shellStreamFailureListeners = new Set<(failure: WsShellStreamFailure) => void>();
   private readonly threadStreamFailureListeners = new Set<
     (failure: WsThreadStreamFailure) => void
   >();
@@ -814,6 +915,7 @@ export class WsTransport {
   private readonly streamResnapshotRetries = new Map<string, number>();
   private readonly projectFileWatchRetries = new Map<string, number>();
   private readonly streamCapacityRetryTimers = new Map<string, number>();
+  private readonly streamOverflowRetries = new Map<string, number>();
   private readonly streamCompletionRetries = new Map<string, number>();
   private readonly streamCompletionRetryTimers = new Map<string, number>();
   private readonly activeThreadStreamInputs = new Map<string, unknown>();
@@ -1194,6 +1296,14 @@ export class WsTransport {
     };
   }
 
+  /** Fires when the shell subscription exhausts its local overflow retries. */
+  onShellStreamFailure(listener: (failure: WsShellStreamFailure) => void): () => void {
+    this.shellStreamFailureListeners.add(listener);
+    return () => {
+      this.shellStreamFailureListeners.delete(listener);
+    };
+  }
+
   private emitThreadStreamFailure(failure: WsThreadStreamFailure): void {
     for (const listener of this.threadStreamFailureListeners) {
       try {
@@ -1219,6 +1329,7 @@ export class WsTransport {
     this.projectFileSubscriptions.clear();
     this.projectAgentSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
+    this.shellStreamFailureListeners.clear();
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
     void this.clientPromise.catch(() => undefined);
@@ -1331,11 +1442,19 @@ export class WsTransport {
           // Defer teardown out of the failing protocol fiber, and fence failures
           // from an old socket so they cannot replace a newer healthy session.
           queueMicrotask(() => {
-            if (this.disposed || this.sessionVersion !== sessionVersion || this.reconnectPromise) {
-              return;
+            const recover = () => {
+              if (this.disposed || this.sessionVersion !== sessionVersion) return;
+              if (this.state !== "open") this.setCompatibility(null);
+              void this.reconnect().catch(() => undefined);
+            };
+            // A close may arrive just after the probe sets "open", before an
+            // active recovery promise has settled. Recheck after it settles;
+            // otherwise that new socket can remain closed without a retry.
+            if (this.reconnectPromise) {
+              void this.reconnectPromise.then(recover, () => undefined);
+            } else {
+              recover();
             }
-            if (this.state !== "open") this.setCompatibility(null);
-            void this.reconnect().catch(() => undefined);
           });
         }),
       );
@@ -1465,6 +1584,7 @@ export class WsTransport {
     this.streamThreadBootstrapRetries.delete(key);
     this.streamResnapshotRetries.delete(key);
     this.projectFileWatchRetries.delete(key);
+    this.streamOverflowRetries.delete(key);
   }
 
   private resetAllStreamCapacityRetries(): void {
@@ -1477,6 +1597,7 @@ export class WsTransport {
     this.streamThreadBootstrapRetries.clear();
     this.streamResnapshotRetries.clear();
     this.projectFileWatchRetries.clear();
+    this.streamOverflowRetries.clear();
   }
 
   private clearStreamCompletionRetryTimer(key: string): void {
@@ -2045,6 +2166,35 @@ export class WsTransport {
               return;
             }
 
+            if (
+              restart &&
+              getStreamFailureCode(exit.cause) === ORCHESTRATION_STREAM_OVERFLOW_CODE
+            ) {
+              const attempt =
+                performance.now() - streamStartedAt >= STABLE_STREAM_LIFETIME_MS
+                  ? 0
+                  : (this.streamOverflowRetries.get(key) ?? 0);
+              if (attempt < MAX_STREAM_OVERFLOW_RETRIES) {
+                this.streamOverflowRetries.set(key, attempt + 1);
+                // A snapshot alone does not establish recovery. Back off repeated
+                // overflow up to 16s, without dropping the last applied cursor.
+                const delay = Math.min(16_000, 250 * 2 ** Math.min(attempt, 6));
+                this.clearStreamCapacityRetryTimer(key);
+                const timeoutId = window.setTimeout(() => {
+                  if (this.streamCapacityRetryTimers.get(key) !== timeoutId) return;
+                  this.streamCapacityRetryTimers.delete(key);
+                  if (
+                    !this.disposed &&
+                    this.sessionVersion === streamSessionVersion &&
+                    !this.streamCleanups.has(key)
+                  )
+                    restart();
+                }, delay);
+                this.streamCapacityRetryTimers.set(key, timeoutId);
+                return;
+              }
+            }
+
             const previousFileWatchAttempts =
               performance.now() - streamStartedAt >= STABLE_STREAM_LIFETIME_MS
                 ? 0
@@ -2098,6 +2248,18 @@ export class WsTransport {
                 code: getStreamFailureCode(exit.cause),
                 error,
               });
+            }
+            if (
+              key === "orchestration.shell" &&
+              getStreamFailureCode(exit.cause) === ORCHESTRATION_STREAM_OVERFLOW_CODE
+            ) {
+              for (const listener of this.shellStreamFailureListeners) {
+                try {
+                  listener({ code: ORCHESTRATION_STREAM_OVERFLOW_CODE, error });
+                } catch {
+                  /* Listener errors must not break recovery. */
+                }
+              }
             }
             // Server-diagnosed snapshot faults clear only when the server
             // heals (restart bootstrap, repair, deferred catch-up). Surfacing
@@ -2173,6 +2335,7 @@ export class WsTransport {
       this.streamThreadBootstrapRetries.delete(key);
       this.streamResnapshotRetries.delete(key);
       this.projectFileWatchRetries.delete(key);
+      this.streamOverflowRetries.delete(key);
     }
     this.streamCompletionRetries.delete(key);
     this.activeThreadStreamInputs.delete(key);

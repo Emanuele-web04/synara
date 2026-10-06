@@ -60,6 +60,7 @@ import {
 } from "./wsTransport";
 import {
   advanceThreadDetailResumeCursor,
+  buildThreadSubscribeInput,
   hasThreadDetailResumeCursor,
   resetThreadDetailResumeCursorsForTests,
 } from "./threadDetailResumeCursors";
@@ -159,6 +160,7 @@ interface WsTransportInternals {
   readonly streamResnapshotRetries: Map<string, number>;
   readonly projectFileWatchRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
+  readonly streamOverflowRetries: Map<string, number>;
   readonly streamCompletionRetries: Map<string, number>;
   readonly streamCompletionRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
@@ -209,6 +211,7 @@ function makeBareTransport(): {
     streamResnapshotRetries: new Map(),
     projectFileWatchRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
+    streamOverflowRetries: new Map(),
     streamCompletionRetries: new Map(),
     streamCompletionRetryTimers: new Map(),
     activeThreadStreamInputs: new Map(),
@@ -216,6 +219,7 @@ function makeBareTransport(): {
     projectFileSubscriptions: new Map(),
     projectAgentSubscriptions: new Map(),
     threadStreamFailureListeners: new Set(),
+    shellStreamFailureListeners: new Set(),
     disposed: false,
     lifetime: new AbortController(),
     sessionVersion: 1,
@@ -613,7 +617,10 @@ describe("WsTransport", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(sockets).toHaveLength(1);
       expect(transport.getState()).toBe("connecting");
-      await vi.advanceTimersByTimeAsync(10_501);
+      await vi.advanceTimersByTimeAsync(89_000);
+      expect(sockets).toHaveLength(1);
+      expect(transport.getState()).toBe("connecting");
+      await vi.advanceTimersByTimeAsync(1501);
       expect(sockets[0]!.readyState).toBe(MockWebSocket.CLOSED);
       expect(sockets).toHaveLength(2);
       expect(transport.getState()).toBe("connecting");
@@ -1023,6 +1030,88 @@ describe("WsTransport", () => {
       expect(reconnect).not.toHaveBeenCalled();
     } finally {
       resetThreadDetailResumeCursorsForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["orchestration.shell", "orchestration.thread:thread-overflow"])(
+    "retries an overflowing %s stream locally and preserves the thread resume cursor",
+    async (key) => {
+      vi.useFakeTimers();
+      bindWindowTimersToCurrentGlobals();
+      resetThreadDetailResumeCursorsForTests();
+      try {
+        const { internals } = makeBareTransport();
+        const threadId = ThreadId.makeUnsafe("thread-overflow");
+        advanceThreadDetailResumeCursor(threadId, 100);
+        const restartedInputs: unknown[] = [];
+        const restart = () => restartedInputs.push(buildThreadSubscribeInput(threadId));
+        const reconnect = vi.mocked(internals.reconnect);
+        const cause = Cause.fail({ code: "ORCHESTRATION_STREAM_OVERFLOW", retryable: true });
+
+        expect(shouldReconnectAfterStreamFailure(cause)).toBe(false);
+        internals.startStream(
+          {},
+          key,
+          Stream.fail({ code: "ORCHESTRATION_STREAM_OVERFLOW", retryable: true }),
+          () => undefined,
+          restart,
+        );
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(250);
+
+        expect(restartedInputs).toEqual([{ threadId: "thread-overflow", afterSequence: 100 }]);
+        expect(reconnect).not.toHaveBeenCalled();
+      } finally {
+        resetThreadDetailResumeCursorsForTests();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("backs off repeated overflow locally and cancels the pending retry on unsubscribe", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.shell";
+    const restart = vi.fn();
+    try {
+      for (const delay of [250, 500, 1000, 2000, 4000, 8000, 16000]) {
+        internals.startStream(
+          {},
+          key,
+          Stream.fail({
+            code: "ORCHESTRATION_STREAM_OVERFLOW",
+            retryable: true,
+          }),
+          () => undefined,
+          restart,
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const before = restart.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(restart).toHaveBeenCalledTimes(before);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(restart).toHaveBeenCalledTimes(before + 1);
+      }
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({
+          code: "ORCHESTRATION_STREAM_OVERFLOW",
+          retryable: true,
+        }),
+        () => undefined,
+        restart,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await internals.stopStream(key);
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(restart).toHaveBeenCalledTimes(7);
+      expect(internals.reconnect).not.toHaveBeenCalled();
+      expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
+      expect(internals.streamOverflowRetries.has(key)).toBe(false);
+    } finally {
       vi.useRealTimers();
     }
   });
@@ -2357,4 +2446,413 @@ describe("WsTransport", () => {
 
     expect(listener).not.toHaveBeenCalled();
   });
+});
+
+it("keeps a silent open socket and RPC alive until a late response", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        jsonResponse(200, {
+          ...NEGOTIATION_RESULT,
+        }),
+      ),
+    ),
+  );
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const transport = new WsTransport("ws://localhost:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0]!;
+    socket.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    socket.onSend = null;
+    const start = socket.sent.length;
+    const pending = transport.request(
+      WS_METHODS.terminalClose,
+      { threadId: "late-rpc", terminalId: "terminal-1" },
+      {
+        timeoutMs: null,
+      },
+    );
+    const verdict = pending.catch((error) => error);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(sockets).toHaveLength(1);
+    expect(transport.getState()).toBe("open");
+    expect(socket.readyState).toBe(MockWebSocket.OPEN);
+    socket.receive(JSON.stringify({ _tag: "Pong" }));
+    const request = socket.sent
+      .slice(start)
+      .map((data) => JSON.parse(String(data)))
+      .find((frame) => frame._tag === "Request" && frame.tag === WS_METHODS.terminalClose);
+    expect(request).toBeDefined();
+    const status = null;
+    socket.receive(
+      JSON.stringify({
+        _tag: "Exit",
+        requestId: request.id,
+        exit: { _tag: "Success", value: status },
+      }),
+    );
+    expect(await verdict).toBeUndefined();
+    socket.close(1006, "real connection loss after recovery");
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    sockets[1]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sockets).toHaveLength(2);
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it.each([false, true])(
+  "waits for a silent feature probe without reconnect loops (recovery: %s)",
+  async (recovery) => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+    );
+    const transport = new WsTransport("ws://localhost:3020");
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      if (recovery) {
+        sockets[0]!.serveVoidRpc();
+        await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+        const recovering = (transport as unknown as WsTransportInternals).reconnect();
+        void recovering.catch(() => undefined);
+        await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      }
+      const socket = sockets[recovery ? 1 : 0]!;
+      socket.open();
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(sockets).toHaveLength(recovery ? 2 : 1);
+      expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      expect(transport.getState()).toBe("connecting");
+      const request = socket.sent
+        .map((data) => JSON.parse(String(data)))
+        .find(
+          (frame) =>
+            frame._tag === "Request" && frame.tag === ORCHESTRATION_WS_METHODS.unsubscribeShell,
+        );
+      expect(request).toBeDefined();
+      socket.receive(
+        JSON.stringify({
+          _tag: "Exit",
+          requestId: request.id,
+          exit: { _tag: "Success", value: null },
+        }),
+      );
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("allows a slow WebSocket upgrade without a short handshake reconnect loop", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+  );
+  const transport = new WsTransport("ws://localhost:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]!.readyState).toBe(MockWebSocket.CONNECTING);
+    sockets[0]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("disposes a silent feature probe and stops its keepalives promptly", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+  );
+  const transport = new WsTransport("ws://localhost:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0]!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await transport.dispose();
+    const sent = socket.sent.length;
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(sockets).toHaveLength(1);
+    expect(socket.sent).toHaveLength(sent);
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    expect(transport.getState()).toBe("disposed");
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("recovers a failed thread subscription on a responsive session using its latest cursor", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const { internals } = makeBareTransport();
+  const threadId = ThreadId.makeUnsafe("healthy-session-failed-subscription");
+  const input = { threadId, afterSequence: 5 };
+  const subscribe = vi
+    .fn()
+    .mockReturnValueOnce(Stream.fail(new Error("transport blip")))
+    .mockReturnValue(Stream.never);
+  const client = { [ORCHESTRATION_WS_METHODS.subscribeThread]: subscribe };
+  Object.assign(internals, { getClient: async () => client, emit: vi.fn() });
+  internals.threadSubscriptions.set(threadId, input);
+  try {
+    await internals.startThreadStream(client, threadId, input);
+    await vi.advanceTimersByTimeAsync(0);
+    advanceThreadDetailResumeCursor(threadId, 12);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(internals.reconnect).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(subscribe).toHaveBeenLastCalledWith({ threadId, afterSequence: 12 });
+  } finally {
+    internals.disposed = true;
+    await internals.stopStream(`orchestration.thread:${threadId}`);
+    resetThreadDetailResumeCursorsForTests();
+    vi.useRealTimers();
+  }
+});
+
+it.each([false, true])(
+  "recovers a half-open feature socket after prolonged silence (probe pending: %s)",
+  async (probePending) => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+    });
+    bindWindowTimersToCurrentGlobals();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+    );
+    resetThreadDetailResumeCursorsForTests();
+    const transport = new WsTransport("ws://remote.synara.test:3020");
+    const threadId = ThreadId.makeUnsafe("half-open-resume");
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      const socket = sockets[0]!;
+      if (probePending) socket.open();
+      else {
+        socket.serveVoidRpc();
+        await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+        // Leave a real stream pending on the multiplexed socket. The cursor
+        // represents successfully applied events, not unacknowledged input.
+        socket.onSend = null;
+        await transport.request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId });
+        advanceThreadDetailResumeCursor(threadId, 42);
+      }
+      await vi.advanceTimersByTimeAsync(175_000);
+      expect(sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+      const replacement = sockets[1]!;
+      replacement.onSend = (data) => {
+        const frame = JSON.parse(data);
+        if (frame._tag === "Ping") replacement.receive(JSON.stringify({ _tag: "Pong" }));
+        else if (
+          frame._tag === "Request" &&
+          frame.tag === ORCHESTRATION_WS_METHODS.unsubscribeShell
+        )
+          replacement.receive(
+            JSON.stringify({
+              _tag: "Exit",
+              requestId: frame.id,
+              exit: { _tag: "Success", value: null },
+            }),
+          );
+      };
+      replacement.open();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      if (!probePending) {
+        await vi.waitFor(() =>
+          expect(
+            sockets[1]!.sent
+              .map((data) => JSON.parse(String(data)))
+              .some(
+                (frame) =>
+                  frame.tag === ORCHESTRATION_WS_METHODS.subscribeThread &&
+                  frame.payload?.threadId === threadId &&
+                  frame.payload?.afterSequence === 42,
+              ),
+          ).toBe(true),
+        );
+      }
+    } finally {
+      await transport.dispose();
+      resetThreadDetailResumeCursorsForTests();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("uses any inbound server frame as liveness evidence even when pongs are absent", async () => {
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+  });
+  bindWindowTimersToCurrentGlobals();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+  );
+  const transport = new WsTransport("ws://remote.synara.test:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0]!;
+    socket.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    socket.onSend = null;
+    for (let interval = 0; interval < 3; interval++) {
+      await vi.advanceTimersByTimeAsync(120_000);
+      // A well-formed response from an expired request is still proof that
+      // the server-to-client path works; no pong ordering assumption is needed.
+      socket.receive(
+        JSON.stringify({
+          _tag: "Exit",
+          requestId: "9999999999",
+          exit: { _tag: "Success", value: null },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sockets).toHaveLength(1);
+    }
+    await vi.advanceTimersByTimeAsync(175_000);
+    expect(sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it.each(["orchestration.shell", "orchestration.thread:capped-overflow"])(
+  "surfaces exhausted overflow retries for %s without dropping the applied cursor",
+  async (key) => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    resetThreadDetailResumeCursorsForTests();
+    const { transport, internals } = makeBareTransport();
+    const threadId = ThreadId.makeUnsafe("capped-overflow");
+    advanceThreadDetailResumeCursor(threadId, 42);
+    internals.threadSubscriptions.set(threadId, { threadId });
+    const failure = vi.fn();
+    const unsubscribe =
+      key === "orchestration.shell"
+        ? transport.onShellStreamFailure(failure)
+        : transport.onThreadStreamFailure(failure);
+    const restart = vi.fn();
+    try {
+      for (const delay of [250, 500, 1000, 2000, 4000, 8000, 16000, 16000]) {
+        internals.startStream(
+          {},
+          key,
+          Stream.fail({ code: "ORCHESTRATION_STREAM_OVERFLOW", retryable: true }),
+          () => undefined,
+          restart,
+        );
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      expect(restart).toHaveBeenCalledTimes(8);
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_STREAM_OVERFLOW", retryable: true }),
+        () => undefined,
+        restart,
+      );
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(restart).toHaveBeenCalledTimes(8);
+      expect(failure).toHaveBeenCalledOnce();
+      expect(failure).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "ORCHESTRATION_STREAM_OVERFLOW" }),
+      );
+      expect(buildThreadSubscribeInput(threadId)).toEqual({ threadId, afterSequence: 42 });
+      expect(internals.reconnect).not.toHaveBeenCalled();
+      expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
+    } finally {
+      unsubscribe();
+      resetThreadDetailResumeCursorsForTests();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("bounds the feature probe even when server pongs keep arriving without its RPC reply", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+  );
+  const transport = new WsTransport("ws://remote.synara.test:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0]!;
+    socket.onSend = (data) => {
+      if (JSON.parse(String(data))._tag === "Ping")
+        socket.receive(JSON.stringify({ _tag: "Pong" }));
+    };
+    socket.open();
+    await vi.advanceTimersByTimeAsync(175000);
+    expect(sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10000);
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    sockets[1]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("renews the overflow retry budget only after a stream remains alive for ten seconds", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  bindWindowTimersToCurrentGlobals();
+  const { internals } = makeBareTransport();
+  const key = "orchestration.shell";
+  const restart = vi.fn();
+  internals.streamOverflowRetries.set(key, 8);
+  try {
+    internals.startStream(
+      {},
+      key,
+      Stream.fromEffect(
+        Effect.fail({ code: "ORCHESTRATION_STREAM_OVERFLOW", retryable: true }).pipe(
+          Effect.delay(10000),
+        ),
+      ),
+      () => undefined,
+      restart,
+    );
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(restart).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(restart).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restart).toHaveBeenCalledOnce();
+    expect(internals.streamOverflowRetries.get(key)).toBe(1);
+    expect(internals.reconnect).not.toHaveBeenCalled();
+  } finally {
+    await internals.stopStream(key);
+    vi.useRealTimers();
+  }
 });

@@ -1,5 +1,6 @@
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type OrchestrationEvent,
@@ -88,6 +89,7 @@ import {
   onServerSettingsUpdated,
   onServerWelcome,
   onThreadStreamFailure,
+  onShellStreamFailure,
 } from "../wsNativeApi";
 import {
   addWsCompatibilityIssueListener,
@@ -2281,19 +2283,82 @@ function EventRouter() {
         );
       }
     });
+    const unsubShellStreamFailure = onShellStreamFailure(() => {
+      if (disposed) return;
+      toastManager.add({
+        type: "error",
+        title: "Workspace updates paused",
+        description:
+          "The update stream could not keep up after repeated retries. Retry to resume workspace updates.",
+        timeout: 0,
+        actionProps: {
+          children: "Retry updates",
+          onClick: () => {
+            if (disposed) return;
+            // Reset only the shell snapshot fence. Thread subscriptions and
+            // their applied cursors stay on the existing connection.
+            shellSnapshotSequence = -1;
+            pendingShellEvents = [];
+            const generation = shellSubscriptionGeneration;
+            void api.orchestration.subscribeShell().catch(() => {
+              if (disposed || shellSubscriptionGeneration !== generation) return;
+              toastManager.add({
+                type: "error",
+                title: "Unable to resume workspace updates",
+                description: "Try again when the server responds.",
+              });
+            });
+          },
+        },
+      });
+    });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);
       if (disposed || !subscribedThreadIds.has(threadId)) {
         return;
       }
-      // The stream is dead with retries and reconnects exhausted: forget its
-      // cursor so a future resubscribe requests a fresh snapshot, and surface
-      // the failure so the thread view stops posing as an empty conversation.
-      clearThreadDetailResumeCursor(threadId);
+      // Overflow retries preserve the last applied cursor, including exhaustion.
+      // Other terminal faults still request a fresh snapshot on resubscribe.
+      if (failure.code !== ORCHESTRATION_STREAM_OVERFLOW_CODE)
+        clearThreadDetailResumeCursor(threadId);
       threadSnapshotSequenceById.delete(threadId);
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
+      if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        toastManager.add({
+          type: "error",
+          title: "Thread updates paused",
+          description:
+            "The thread's update stream could not keep up after repeated retries. Retry to resume updates.",
+          timeout: 0,
+          actionProps: {
+            children: "Retry updates",
+            onClick: () => {
+              if (disposed || !subscribedThreadIds.has(threadId)) return;
+              const generation = threadSubscriptionGenerationById.get(threadId);
+              useStore.getState().clearThreadDetailSyncFailure(threadId);
+              void api.orchestration
+                .subscribeThread(buildThreadSubscribeInput(threadId))
+                .catch(() => {
+                  if (
+                    disposed ||
+                    !subscribedThreadIds.has(threadId) ||
+                    threadSubscriptionGenerationById.get(threadId) !== generation
+                  )
+                    return;
+                  useStore.getState().markThreadDetailSyncFailed(threadId);
+                  toastManager.add({
+                    type: "error",
+                    title: "Unable to resume thread updates",
+                    description: "Try again when the server responds.",
+                  });
+                });
+            },
+          },
+        });
+      }
+
       if (
         failure.code === "THREAD_SNAPSHOT_NOT_FOUND" &&
         !threadSnapshotNotFoundRetryAttempted.has(threadId) &&
@@ -2622,6 +2687,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubThreadStreamFailure();
+      unsubShellStreamFailure();
       unsubThreadDetailEviction();
       unsubTerminalEvent();
       unsubDevServerEvent();
