@@ -2,7 +2,7 @@ import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
-import { useState } from "react";
+import { act, useState } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -16,6 +16,7 @@ import { FeatureTourDialog } from "./FeatureTourDialog";
 import { AppSnapWelcomeDialog } from "./AppSnapWelcomeDialog";
 import { Button } from "./ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "./ui/dialog";
+import { ToastProvider, toastManager } from "./ui/toast";
 
 let installation = "/first/worktrees";
 let flavor: "production" | "beta" = "production";
@@ -29,7 +30,11 @@ vi.mock("../lib/serverReactQuery", () => ({
 vi.mock("../betaFeatures", () => ({
   isBetaFeatureOn: (feature: string) => isBetaFeatureEnabled(feature, flavor),
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
+  useParams: () => null,
+  useSearch: () => ({}),
+}));
 
 const tourKey = "synara:feature-tour:since-0.9.2:v1";
 const importKey = "synara:project-import-announcement:v1";
@@ -165,6 +170,69 @@ it("waits for project import announcements instead of racing their shared slot",
     .toBeVisible();
   await page.getByRole("button", { name: "Skip tour" }).click();
 });
+
+it.each(["low", "high"] as const)(
+  "hands off from import to the tour within one second while a %s priority toast remains",
+  async (priority) => {
+    localStorage.removeItem(importKey);
+    await show(
+      <ToastProvider>
+        <ProjectImportAnnouncementDialog />
+        <FeatureTourDialog />
+      </ToastProvider>,
+    );
+    await expect.element(page.getByRole("dialog", { name: "Import projects" })).toBeVisible();
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "Date",
+      ],
+    });
+    // CSS animations use the browser clock; isolate the scheduler's latency here.
+    // The real-animation tests above cover waiting for exiting dialogs.
+    const animations = vi.spyOn(Element.prototype, "getAnimations").mockReturnValue([]);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let toastId: ReturnType<typeof toastManager.add> | undefined;
+    try {
+      await act(async () => {
+        toastId = toastManager.add({ title: "Startup notice", priority, timeout: 10_000 });
+      });
+      expect(document.querySelector('[data-slot="toast-title"]')?.textContent).toBe(
+        "Startup notice",
+      );
+      expect(document.querySelector("[data-feature-tour]")).toBeNull();
+      await act(async () => {
+        (page.getByRole("button", { name: "Not now" }).element() as HTMLButtonElement).click();
+      });
+      // Flush React between clock ticks so a restarted quiet timer counts against the budget.
+      for (let elapsed = 0; elapsed < 1_000; elapsed += 50) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+        expect(document.querySelectorAll('[data-slot="dialog-popup"]').length).toBeLessThanOrEqual(
+          1,
+        );
+      }
+      expect(document.querySelector("[data-feature-tour][data-open]")).not.toBeNull();
+      expect(useAnnouncementSheetSlotStore.getState().owner).not.toBeNull();
+      expect(document.querySelector('[data-slot="toast-title"]')?.textContent).toBe(
+        "Startup notice",
+      );
+      expect(JSON.parse(localStorage.getItem(importKey) ?? "[]")).toEqual([installation]);
+      expect(localStorage.getItem(tourKey)).toBeNull();
+    } finally {
+      await act(async () => {
+        if (toastId !== undefined) toastManager.close(toastId);
+      });
+      animations.mockRestore();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it("does not jump ahead of a slow AppSnap probe and then waits for its dismissal", async () => {
   let resolveProbe!: (value: { supported: true }) => void;

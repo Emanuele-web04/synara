@@ -21,15 +21,22 @@ import { AnnouncementSheet } from "./AnnouncementSheet";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { Button } from "./ui/button";
 
-/** Wait for other modals to leave the DOM, including their exit transitions. */
+/** Wait for other dialogs to leave the DOM, including their exit transitions. */
 function useOtherDialogOpen(enabled: boolean) {
   const [open, setOpen] = useState(true);
   useEffect(() => {
     if (!enabled) return;
     const update = () =>
       setOpen(
-        Boolean(
-          document.querySelector('[role="dialog"]:not([data-feature-tour]), [role="alertdialog"]'),
+        Array.from(
+          document.querySelectorAll(
+            '[role="dialog"]:not([data-feature-tour]), [role="alertdialog"]',
+          ),
+        ).some(
+          // Base UI toasts also have dialog/alertdialog roles. Waiting for those
+          // would delay the slot handoff until their timeout (or manual dismissal).
+          (dialog) =>
+            !dialog.closest('[data-slot="toast-viewport"], [data-slot="toast-viewport-anchored"]'),
         ),
       );
     update();
@@ -62,6 +69,7 @@ export function FeatureTourDialog() {
   const importAnnouncement = useProjectImportAnnouncement();
   const owner = useAnnouncementSheetSlotStore((state) => state.owner);
   const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
+  const settleStartup = useAnnouncementSheetSlotStore((state) => state.settleStartup);
   const replay = useFeatureTourStore((state) => state.replay);
   const needsTour = Boolean(
     installation && (replay || (!handedOff && !seen.includes(installation))),
@@ -70,6 +78,11 @@ export function FeatureTourDialog() {
   const [ready, setReady] = useState(false);
   const blocked =
     startupBlocking || importing || (importAnnouncement.visible && !handedOff) || otherDialog;
+  // This is the last startup surface, mounted after Safari/AppSnap probes settle.
+  // Passive coachmarks wait for the tour to be seen or dismissed before claiming.
+  useEffect(() => {
+    if (installation && !needsTour && !blocked && !handedOff) settleStartup();
+  }, [blocked, handedOff, installation, needsTour, settleStartup]);
   // AppSnap and Safari probes are resolved by the parent before this mounts. The
   // quiet interval lets the announcement queue and dialog exit animation settle.
   useEffect(() => {
