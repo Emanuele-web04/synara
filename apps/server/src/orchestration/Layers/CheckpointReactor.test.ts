@@ -881,6 +881,119 @@ describe("CheckpointReactor", () => {
     expect(rows[0]).toEqual({ cursor: finalHighWater, state: "inflight" });
   });
 
+  it.each(["legacy revert", "retained native completion"] as const)(
+    "settles a deleted thread's %s and stays alive after restart",
+    async (kind) => {
+      const harness = await createHarness({ startReactor: false, seedFilesystemCheckpoints: false });
+      const deleted = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      if (kind === "legacy revert") {
+        await Effect.runPromise(harness.engine.dispatch({
+          type: "thread.checkpoint.revert", commandId: CommandId.makeUnsafe("deleted-legacy-revert"),
+          threadId: deleted, turnCount: 0, scope: "thread", createdAt: now,
+        }));
+        await Effect.runPromise(harness.engine.dispatch({
+          type: "thread.activity.append", commandId: CommandId.makeUnsafe("deleted-legacy-failure"),
+          threadId: deleted, activity: { id: EventId.makeUnsafe("deleted-legacy-failure"),
+            kind: "checkpoint.revert.failed", tone: "error", summary: "Checkpoint revert failed",
+            payload: { turnCount: 0, detail: "Original failed revert" }, turnId: null, createdAt: now },
+          createdAt: now,
+        }));
+      } else {
+        const row = await Effect.runPromise(harness.runtimeEvents.append(nativeCompletion("deleted-native-tail", deleted)));
+        await Effect.runPromise(harness.runtimeEvents.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER, eventSequence: row.sequence, updatedAt: now,
+        }));
+      }
+      await Effect.runPromise(harness.engine.dispatch({
+        type: "thread.delete", commandId: CommandId.makeUnsafe("delete-checkpoint-history"), threadId: deleted, createdAt: now,
+      }));
+      const peerCwd = createGitRepository(); tempDirs.push(peerCwd);
+      const peer = await addCheckpointThread(harness, "deleted-history-peer", peerCwd);
+      await harness.start();
+      await settleCheckpointWork(harness.reactor.drain);
+      const restarted = await restartCheckpointReactor();
+      await Effect.runPromise(harness.runtimeEvents.append(nativeCompletion("peer-after-deleted-restart", peer)));
+      await settleCheckpointWork(restarted.drain);
+      expect(gitRefExists(peerCwd, checkpointRefForThreadTurn(peer, 1))).toBe(true);
+    },
+  );
+
+  it.each(["failed revert", "non-git completion", "undone completion"] as const)(
+    "adopts accepted legacy %s history silently",
+    async (kind) => {
+      const harness = await createHarness({ startReactor: false, seedFilesystemCheckpoints: false });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      if (kind === "failed revert") {
+        await Effect.runPromise(harness.engine.dispatch({
+          type: "thread.checkpoint.revert", commandId: CommandId.makeUnsafe("resolved-old-revert"),
+          threadId, turnCount: 0, scope: "thread", createdAt: now,
+        }));
+        await Effect.runPromise(harness.engine.dispatch({
+          type: "thread.activity.append", commandId: CommandId.makeUnsafe("resolved-old-revert-failure"), threadId,
+          activity: { id: EventId.makeUnsafe("resolved-old-revert-failure"), kind: "checkpoint.revert.failed",
+            tone: "error", summary: "Checkpoint revert failed", payload: { turnCount: 0, detail: "Already reported" },
+            turnId: null, createdAt: now }, createdAt: now,
+        }));
+      } else {
+        const turnId = asTurnId("accepted-old-turn");
+        if (kind === "undone completion") {
+          await Effect.runPromise(harness.engine.dispatch({
+            type: "thread.turn.diff.complete", commandId: CommandId.makeUnsafe("accepted-old-diff"), threadId, turnId,
+            completedAt: now, checkpointRef: checkpointRefForThreadTurn(threadId, 1), status: "ready", files: [], checkpointTurnCount: 1, createdAt: now,
+          }));
+          await Effect.runPromise(harness.engine.dispatch({ type: "thread.revert.complete", commandId: CommandId.makeUnsafe("accepted-old-undo"), threadId, turnCount: 0, createdAt: now }));
+        } else vi.spyOn(harness.checkpointStore, "isGitRepository").mockReturnValue(Effect.succeed(false));
+        const row = await Effect.runPromise(harness.runtimeEvents.append(nativeCompletion("accepted-old-native", threadId, turnId)));
+        await Effect.runPromise(harness.runtimeEvents.advanceConsumerCursor({ consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER, eventSequence: row.sequence, updatedAt: now }));
+      }
+      const before = (await Effect.runPromise(harness.engine.getReadModel())).threads.find((t) => t.id === threadId)!.activities;
+      const capture = vi.spyOn(harness.checkpointStore, "captureCheckpoint");
+      const restore = vi.spyOn(harness.checkpointStore, "restoreCheckpoint");
+      await harness.start(); await settleCheckpointWork(harness.reactor.drain);
+      const restarted = await restartCheckpointReactor(); await settleCheckpointWork(restarted.drain);
+      const after = (await Effect.runPromise(harness.engine.getReadModel())).threads.find((t) => t.id === threadId)!.activities;
+      expect(after).toEqual(before); expect(capture).not.toHaveBeenCalled(); expect(restore).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["timeout", "SQLITE_BUSY"] as const)(
+    "keeps pending checkpoint work recoverable after a transient %s lookup",
+    async (failure) => {
+      const harness = await createHarness({ seedFilesystemCheckpoints: false });
+      await harness.drain();
+      const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+      const original = query.getThreadDetailById;
+      let first = true;
+      vi.spyOn(query, "getThreadDetailById").mockImplementation((id) => {
+        if (id !== "thread-1" || !first) return original(id);
+        first = false;
+        return failure === "timeout" ? Effect.sleep("250 millis").pipe(Effect.andThen(original(id))) : Effect.fail(new PersistenceSqlError({
+          operation: "transient-checkpoint-read", detail: "Database temporarily busy", cause: { code: "SQLITE_BUSY" },
+        }));
+      });
+      await Effect.runPromise(harness.runtimeEvents.append(nativeCompletion(`transient-${failure}`, ThreadId.makeUnsafe("thread-1"))));
+      await settleCheckpointWork(harness.reactor.drain);
+      expect(gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1))).toBe(true);
+      const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find((t) => t.id === "thread-1")!;
+      expect(thread.activities.some((a) => a.kind === "checkpoint.capture.failed")).toBe(false);
+    },
+  );
+
+  it("caches non-Git workspace identity across native rows and lane scans", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-negative-checkpoint-")); tempDirs.push(cwd);
+    const harness = await createHarness({ seedFilesystemCheckpoints: false, projectWorkspaceRoot: cwd, threadWorktreePath: cwd, providerSessionCwd: cwd });
+    await harness.drain();
+    const classify = vi.spyOn(projectImportPaths, "canonicalImportPath");
+    for (let i = 0; i < 5; i++) {
+      await Effect.runPromise(harness.runtimeEvents.append({ type: "turn.started", eventId: EventId.makeUnsafe(`negative-start-${i}`),
+        provider: "codex", threadId: ThreadId.makeUnsafe("thread-1"), turnId: asTurnId(`negative-turn-${i}`), createdAt: new Date().toISOString(), payload: {} }));
+      await settleCheckpointWork(harness.reactor.drain);
+    }
+    expect(classify.mock.calls).toHaveLength(1);
+  });
+
   it("retains physical workspace identity across ordinary domain outcomes", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const identities = vi.spyOn(projectImportPaths, "canonicalImportPath");

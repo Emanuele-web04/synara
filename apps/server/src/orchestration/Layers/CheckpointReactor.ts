@@ -273,6 +273,15 @@ const make = Effect.gen(function* () {
     return latestCheckpoint?.turnId ?? thread.latestTurn?.turnId ?? null;
   });
 
+  const catchNoticeFailure = Effect.catchCause((cause: Cause.Cause<unknown>) =>
+    Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.logWarning(
+      "Checkpoint failure notice could not be published; durable settlement is retained",
+      { cause: Cause.pretty(cause) },
+    ),
+  );
+  const noticeThreadExists = (threadId: ThreadId) => orchestrationEngine.getReadModel().pipe(
+    Effect.map((model) => model.threads.some((thread) => thread.id === threadId && thread.deletedAt == null)),
+  );
   const appendRevertFailureActivity = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnCount: number;
@@ -281,6 +290,7 @@ const make = Effect.gen(function* () {
     readonly commandId?: CommandId;
     readonly resolvedTurnId?: TurnId | null;
   }) {
+    if (!(yield* noticeThreadExists(input.threadId))) return;
     if (input.commandId) {
       const accepted =
         yield* sql`SELECT 1 FROM orchestration_command_receipts WHERE command_id = ${input.commandId} AND aggregate_kind = 'thread' AND aggregate_id = ${input.threadId} AND status = 'accepted'`.pipe(
@@ -321,7 +331,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
-  });
+  }, catchNoticeFailure);
 
   const appendCheckpointIssueActivity = (input: {
     readonly threadId: ThreadId;
@@ -332,6 +342,7 @@ const make = Effect.gen(function* () {
     readonly commandId?: CommandId;
   }) =>
     Effect.gen(function* () {
+      if (!(yield* noticeThreadExists(input.threadId))) return;
       if (input.commandId) {
         const accepted =
           yield* sql`SELECT 1 FROM orchestration_command_receipts WHERE command_id = ${input.commandId} AND aggregate_kind = 'thread' AND aggregate_id = ${input.threadId} AND status = 'accepted'`.pipe(
@@ -403,7 +414,7 @@ const make = Effect.gen(function* () {
         },
         createdAt: input.createdAt,
       });
-    });
+    }).pipe(catchNoticeFailure);
 
   const resolveSessionRuntimeForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const thread = yield* projectionSnapshotQuery
@@ -1784,6 +1795,7 @@ const make = Effect.gen(function* () {
   let startupRuntimeFence = 0;
   let legacyDomainFrom = 0;
   let runtimeAdoptionFence = 0;
+  let startupIngestionFence = 0;
   let rescanRequested = false;
   let rescanInProgress = false;
   let workspaceConfigurationSequence = 0;
@@ -1795,6 +1807,7 @@ const make = Effect.gen(function* () {
     readonly projectId: ProjectId | undefined;
     readonly fallbackCwd: string | undefined;
     readonly sourceCwd: string | undefined;
+    readonly classifiedAt: number;
   };
   const keys = new Map<string, WorkspaceSelection>();
   const changedWorkspaceThreads = new Set<string>();
@@ -1859,7 +1872,7 @@ const make = Effect.gen(function* () {
     let observedCwd: { readonly source: string; readonly physical: string } | undefined;
     // A turn may initialize Git after its start row. Recheck missing Git until
     // discovered; each operation then keeps its captured classification/cwd.
-    if (cached !== undefined && cached.isGitRepository && !changedWorkspaceThreads.has(threadId)) {
+    if (cached !== undefined && (cached.isGitRepository || Date.now() - cached.classifiedAt < 1_000) && !changedWorkspaceThreads.has(threadId)) {
       if (!changedSessionThreads.has(threadId)) return cached;
       const session = yield* resolveSessionRuntimeForThread(threadId);
       const candidateCwd = Option.isSome(session) ? session.value.cwd : cached.fallbackCwd;
@@ -1896,6 +1909,7 @@ const make = Effect.gen(function* () {
       cwd: workspace?.cwd,
       sourceCwd: workspace?.sourceCwd,
       isGitRepository: workspace?.isGitRepository ?? false,
+      classifiedAt: Date.now(),
       projectId: thread?.projectId,
       fallbackCwd:
         thread && project ? resolveThreadWorkspaceCwd({ thread, projects: [project] }) : undefined,
@@ -1964,6 +1978,21 @@ const make = Effect.gen(function* () {
     );
     if (receipt.length)
       return yield* settleProvenDelivery(domainConsumer, event.sequence, event.payload.threadId);
+    if (event.sequence <= adoptionFence) {
+      const failure = yield* sql`SELECT 1 FROM orchestration_events AS outcome
+        WHERE outcome.stream_id = ${event.payload.threadId} AND outcome.event_type = 'thread.activity-appended'
+          AND outcome.sequence > ${event.sequence}
+          AND json_extract(outcome.payload_json, '$.activity.kind') = 'checkpoint.revert.failed'
+          AND json_extract(outcome.payload_json, '$.activity.payload.turnCount') = ${event.payload.turnCount}
+          AND NOT EXISTS (SELECT 1 FROM orchestration_events AS next
+            WHERE next.stream_id = outcome.stream_id AND next.event_type = 'thread.checkpoint-revert-requested'
+              AND next.sequence > ${event.sequence} AND next.sequence < outcome.sequence)
+        LIMIT 1`.pipe(Effect.orDie);
+      if (failure.length) {
+        yield* settleProvenDelivery(domainConsumer, event.sequence, event.payload.threadId);
+        return;
+      }
+    }
     const previous = yield* deliveries.getDelivery(input).pipe(Effect.orDie);
     if (Option.isSome(previous)) {
       const delivery = previous.value;
@@ -2132,10 +2161,19 @@ const make = Effect.gen(function* () {
               .pipe(Effect.orDie)
           : false;
       if (!proven) {
-        yield* uncertain(
-          "A native completion present before checkpoint startup has no immutable checkpoint outcome; the current workspace was not recaptured during recovery.",
+        const interruptedPlaceholder = thread?.checkpoints.some(
+          (checkpoint) => checkpoint.turnId === event.turnId && checkpoint.status === "missing",
         );
-        return;
+        // Ingestion acceptance is not proof of a new Git snapshot. It does
+        // prove this legacy row was handled; non-Git, undone and ignored turns
+        // must not acquire a fresh error merely because this consumer is new.
+        if (sequence > startupIngestionFence || interruptedPlaceholder) {
+          yield* uncertain(
+            "A native completion present before checkpoint startup has no immutable checkpoint outcome; the current workspace was not recaptured during recovery.",
+          );
+          return;
+        }
+        yield* Effect.logDebug("Accepted legacy native checkpoint history adopted without recapture");
       }
     }
     let successful = true;
@@ -2183,6 +2221,8 @@ const make = Effect.gen(function* () {
   type UnavailableWorkspace = {
     readonly threadId: ThreadId;
     readonly ready: Deferred.Deferred<void, unknown>;
+    replayOnRecovery: boolean;
+    readonly observedWorkspaceClock: number;
     runtimePin: number;
     domainPin: number;
     runtimeFrom: number;
@@ -2191,6 +2231,29 @@ const make = Effect.gen(function* () {
     domainThrough: number;
   };
   const unavailableWorkspaces = new Map<string, UnavailableWorkspace>();
+  let workspaceClock = 0;
+  let evictedWorkspaceClock = 0;
+  const workspaceWorkClocks = new Map<string, number>();
+  const recordWorkspaceWork = (key: string) => {
+    if (unavailableWorkspaces.size === 0) return;
+    workspaceWorkClocks.set(key, ++workspaceClock);
+    if (workspaceWorkClocks.size > CHECKPOINT_REACTOR_CAPACITY) {
+      workspaceWorkClocks.delete(workspaceWorkClocks.keys().next().value!);
+      evictedWorkspaceClock = workspaceClock;
+    }
+  };
+  const definitiveWorkspaceFailure = (cause: Cause.Cause<unknown>) => {
+    let error = Cause.squash(cause);
+    for (let depth = 0; depth < 8 && typeof error === "object" && error !== null; depth++) {
+      if ("code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EACCES" || error.code === "EPERM")) return true;
+      error = "cause" in error ? error.cause : undefined;
+    }
+    return false;
+  };
+  const invalidateNonGitCompletion = (event: ProviderRuntimeEvent) => {
+    if (event.type === "turn.completed" && keys.get(event.threadId)?.isGitRepository === false) keys.delete(event.threadId);
+  };
+
   // Failed identity recovery has its own bounded read-only execution budget;
   // it cannot occupy normal workspace workers or decode 256 pages in parallel.
   const recoverySlots = yield* Semaphore.make(2);
@@ -2323,8 +2386,8 @@ const make = Effect.gen(function* () {
       // already have edited an alias, so none of this pending range may mutate.
       const configuration = workspaceConfigurationSequence;
       let recovered: WorkspaceSelection | undefined;
-      for (let attempt = 0; attempt < 3 && !stopping; attempt++) {
-        yield* Effect.sleep(50 * (attempt + 1));
+      for (let attempt = 0; !stopping && (pending.replayOnRecovery || attempt < 3); attempt++) {
+        yield* Effect.sleep(Math.min(1_000, 50 * (attempt + 1)));
         const resolved = yield* workspaceForThread(pending.threadId, false).pipe(
           Effect.timeoutOption(200),
           Effect.exit,
@@ -2333,8 +2396,24 @@ const make = Effect.gen(function* () {
           recovered = resolved.value.value;
           break;
         }
+        if (resolved._tag === "Failure" && definitiveWorkspaceFailure(resolved.cause)) pending.replayOnRecovery = false;
       }
       if (stopping) return;
+      if (pending.replayOnRecovery && recovered !== undefined) {
+        // Transient latency is not proof that an operation is lost. Resume its
+        // durable range unless a peer has already touched this physical checkout
+        // while its identity was unknown (or bounded evidence was evicted).
+        const unsafeAlias = (workspaceWorkClocks.get(recovered.key) ?? 0) > pending.observedWorkspaceClock || evictedWorkspaceClock > pending.observedWorkspaceClock;
+        if (!unsafeAlias) {
+          publishWorkspaceSelection(pending.threadId, recovered, configuration);
+          unavailableWorkspaces.delete(pending.threadId);
+          if (unavailableWorkspaces.size === 0) workspaceWorkClocks.clear();
+          rescanRequested = true;
+          Queue.offerUnsafe(wake, undefined);
+          return;
+        }
+        pending.replayOnRecovery = false;
+      }
       // Admission may be behind the journals while lookup waits. Fence both
       // durable sources once, before exposing the recovered identity, so rows
       // committed during that wait cannot become fresh work after a peer Undo.
@@ -2429,6 +2508,8 @@ const make = Effect.gen(function* () {
           pending = {
             threadId,
             ready: Deferred.makeUnsafe<void, unknown>(),
+            replayOnRecovery: selected._tag === "Failure" && !definitiveWorkspaceFailure(selected.cause),
+            observedWorkspaceClock: workspaceClock,
             runtimePin: floor.runtimeFrom,
             domainPin: floor.domainFrom,
             runtimeFrom: floor.runtimeFrom,
@@ -2438,7 +2519,7 @@ const make = Effect.gen(function* () {
           };
           unavailableWorkspaces.set(threadId, pending);
           created = true;
-          yield* claimUnavailableRow(source, sequence, threadId).pipe(
+          yield* (pending.replayOnRecovery ? Effect.void : claimUnavailableRow(source, sequence, threadId)).pipe(
             Effect.catchCause((cause) =>
               Deferred.failCause(pending!.ready, cause).pipe(
                 Effect.andThen(Effect.failCause(cause)),
@@ -2447,14 +2528,14 @@ const make = Effect.gen(function* () {
           );
           yield* Deferred.succeed(pending.ready, undefined);
           yield* Effect.logWarning(
-            "checkpoint workspace unavailable; pending operations will not be replayed",
+            pending.replayOnRecovery ? "Checkpoint workspace lookup delayed; durable work retained for retry" : "checkpoint workspace unavailable; pending operations will not be replayed",
             { operation: "workspace resolution" },
           );
         }
       }
       if (!created) {
         yield* Deferred.await(pending.ready);
-        yield* claimUnavailableRow(source, sequence, threadId);
+        if (!pending.replayOnRecovery) yield* claimUnavailableRow(source, sequence, threadId);
         // If the old recovery finished during the claim, keep the new row
         // pinned and schedule another bounded settlement pass.
         const current = unavailableWorkspaces.get(threadId);
@@ -2592,7 +2673,7 @@ const make = Effect.gen(function* () {
                           ),
                         );
               refreshFences = true;
-              yield* withPinnedWorkspaceLease(work).pipe(
+              yield* withPinnedWorkspaceLease(Effect.sync(() => recordWorkspaceWork(lane.key)).pipe(Effect.andThen(work))).pipe(
                 Effect.provideService(PinnedCheckpointWorkspace, {
                   cwd: selectedWorkspace.cwd,
                   identity: selectedWorkspace.cwd === undefined ? undefined : selectedWorkspace.key,
@@ -2609,6 +2690,7 @@ const make = Effect.gen(function* () {
           const selectedWorkspace = domainWorkspace;
           if (selectedWorkspace?.key === lane.key) {
             refreshFences = true;
+            recordWorkspaceWork(lane.key);
             yield* processDurableDomain(nextDomain).pipe(
               Effect.provideService(PinnedCheckpointWorkspace, {
                 cwd: selectedWorkspace.cwd,
@@ -2854,6 +2936,7 @@ const make = Effect.gen(function* () {
           const ingestionCursor = yield* runtimeRepository.getConsumerCursor(
             PROVIDER_RUNTIME_INGESTION_CONSUMER,
           );
+          startupIngestionFence = ingestionCursor;
           // These immutable cuts survive restart. A missing cut is legacy or
           // incomplete protocol evidence even when a domain consumer exists;
           // adopt high-water conservatively. Neither ACK pump advances the cuts.
@@ -2917,6 +3000,7 @@ const make = Effect.gen(function* () {
       yield* Effect.forkScoped(
         Stream.runForEach(runtimeEvents, (row) =>
           Effect.sync(() => {
+            invalidateNonGitCompletion(row.event);
             runtimeFence = Math.max(runtimeFence, row.sequence);
             Queue.offerUnsafe(wake, undefined);
           }),
@@ -2927,7 +3011,7 @@ const make = Effect.gen(function* () {
       yield* Effect.forkScoped(
         Stream.runForEach(providerService.streamEvents, (event) =>
           runtimeRelevant(event)
-            ? runtimeRepository.append(event).pipe(
+            ? Effect.sync(() => invalidateNonGitCompletion(event)).pipe(Effect.andThen(runtimeRepository.append(event)),
                 Effect.tap((row) =>
                   Effect.sync(() => {
                     runtimeFence = Math.max(runtimeFence, row.sequence);
