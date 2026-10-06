@@ -2155,8 +2155,19 @@ const make = Effect.gen(function* () {
     }
     // Multi-folder projects grant their extra folders natively; refuse the chats that
     // could not honor them rather than silently dropping folders.
-    const additionalDirectories =
-      (yield* resolveThreadWorkspaceProject(thread))?.additionalFolders ?? [];
+    const workspaceProject = yield* projectionSnapshotQuery
+      .getProjectShellById(thread.projectId)
+      .pipe(
+        Effect.mapError(
+          () =>
+            new ProviderAdapterValidationError({
+              provider: preferredProvider,
+              operation: "thread.turn.start",
+              issue: "Could not load the project's folder access configuration. Retry the turn.",
+            }),
+        ),
+      );
+    const additionalDirectories = Option.getOrUndefined(workspaceProject)?.additionalFolders ?? [];
     if (additionalDirectories.length > 0) {
       const folderIssue = projectFoldersSessionIssue({
         provider: preferredProvider,

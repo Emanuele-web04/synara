@@ -469,6 +469,24 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   );
 }
 
+/** Keeps the two worktree RPCs behind the same project eligibility check. */
+export function makeProjectWorktreeGuard<E1, R1, E2, R2>(dependencies: {
+  readonly canonicalizeWorkspaceRoot: (cwd: string) => Effect.Effect<string, E1, R1>;
+  readonly getActiveProjectByWorkspaceRoot: (
+    cwd: string,
+  ) => Effect.Effect<Option.Option<OrchestrationProject>, E2, R2>;
+}) {
+  return (cwd: string) =>
+    dependencies.canonicalizeWorkspaceRoot(cwd).pipe(
+      Effect.flatMap(dependencies.getActiveProjectByWorkspaceRoot),
+      Effect.flatMap((project) =>
+        Option.isSome(project) && (project.value.additionalFolders ?? []).length > 0
+          ? Effect.fail(new WsRpcError({ message: PROJECT_FOLDERS_WORKTREE_ISSUE }))
+          : Effect.void,
+      ),
+    );
+}
+
 const makeWsRpcHandlersLayer = () =>
   AdmittedWsFeatureRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -702,17 +720,6 @@ const makeWsRpcHandlersLayer = () =>
         effect: Effect.Effect<A, E, R>,
         fallbackMessage: string,
       ) => effect.pipe(Effect.mapError((cause) => toPullRequestsRpcError(cause, fallbackMessage)));
-      // Fail before git runs: the turn would refuse a multi-folder worktree chat anyway,
-      // and creating the worktree first would leave it orphaned.
-      const refuseMultiFolderProjectWorktree = (cwd: string) =>
-        projectionReadModelQuery.getActiveProjectByWorkspaceRoot(cwd).pipe(
-          Effect.catch(() => Effect.succeed(Option.none<OrchestrationProject>())),
-          Effect.flatMap((project) =>
-            Option.isSome(project) && (project.value.additionalFolders ?? []).length > 0
-              ? Effect.fail(new WsRpcError({ message: PROJECT_FOLDERS_WORKTREE_ISSUE }))
-              : Effect.void,
-          ),
-        );
       const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (
         workspaceRoot: string,
         options: { readonly createIfMissing?: boolean } = {},
@@ -761,6 +768,11 @@ const makeWsRpcHandlersLayer = () =>
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         );
+      });
+      // Fail before Git runs; a refused turn must not leave an orphaned worktree.
+      const refuseMultiFolderProjectWorktree = makeProjectWorktreeGuard({
+        canonicalizeWorkspaceRoot: canonicalizeProjectWorkspaceRoot,
+        getActiveProjectByWorkspaceRoot: projectionReadModelQuery.getActiveProjectByWorkspaceRoot,
       });
       // One mkdir loop shared by every container kind; the relative directory set is the
       // only thing that varies (general chats scaffold work/outputs, Studio mirrors the

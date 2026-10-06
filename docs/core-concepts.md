@@ -109,7 +109,9 @@ Multi-folder projects have two limits for now:
 - Only Codex and Claude can be granted the extra folders. Other providers refuse the chat instead
   of silently working without them.
 
-The folder set is fixed when the project is created.
+The folder set is fixed when the project is created. Git actions, checkpoint diffs, and file undo
+cover only the primary folder. Edits in additional folders must be reviewed and
+recovered in those folders separately.
 
 ## Tasks and turns
 

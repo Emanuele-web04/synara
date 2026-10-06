@@ -820,6 +820,7 @@ describe("ProviderCommandReactor", () => {
       Effect.runPromise(PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid));
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     // Fault injection for command admission. The reactor resolves
     // `dispatch` off the shared engine service on every call, so swapping the
     // property here is observed by the reactor without rebuilding the layer.
@@ -928,6 +929,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      snapshotQuery,
       seedCompletion: () =>
         runtime!.runPromise(sql`
         INSERT INTO agent_gateway_completions
@@ -1257,6 +1259,25 @@ describe("ProviderCommandReactor", () => {
       expect(sentInput?.indexOf("<project_folders>") ?? -1).toBeLessThan(
         sentInput?.indexOf("Rename the shared field") ?? Number.POSITIVE_INFINITY,
       );
+    });
+
+    it("does not start a provider without folder grants when the owning project lookup fails", async () => {
+      const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
+      const lookup = vi
+        .spyOn(harness.snapshotQuery, "getProjectShellById")
+        .mockImplementation(() =>
+          Effect.fail(
+            new PersistenceSqlError({ operation: "project shell", detail: "lookup unavailable" }),
+          ),
+        );
+      try {
+        await dispatchTurn(harness, "lookup-failure");
+        await harness.drain();
+        expect(harness.startSession).not.toHaveBeenCalled();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+      } finally {
+        lookup.mockRestore();
+      }
     });
 
     it("keeps single-folder projects unchanged", async () => {

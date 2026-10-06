@@ -543,7 +543,8 @@ export function CreateProjectDialog(props: {
                   />
                   {additionalFolders.length > 0 ? (
                     <p className="text-ui-xs text-muted-foreground/70">
-                      Chats in a multi-folder project run in Local mode with Codex or Claude.
+                      Chats in a multi-folder project run in Local mode with Codex or Claude. Git
+                      actions and file undo cover only the primary folder.
                     </p>
                   ) : null}
                 </div>
