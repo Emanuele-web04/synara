@@ -163,7 +163,7 @@ const make = Effect.gen(function* () {
   const associateTurnStartBaseline = (
     event: Extract<ProviderRuntimeEvent, { type: "turn.started" }>,
   ) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       if (event.turnId === undefined) {
         return;
       }
@@ -180,6 +180,27 @@ const make = Effect.gen(function* () {
 
       // An absent preparation may have timed out or been cancelled. Never scan
       // at turn.started: provider edits could already be part of that baseline.
+      // Only Studio workspaces need this feedback. Resolve their identity, but
+      // never scan files to reconstruct a provider-native turn's initial state.
+      if (!(yield* resolveStudioScanRoot(event.threadId))) return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: serverCommandId("studio-baseline-unavailable"),
+        threadId: event.threadId,
+        activity: {
+          id: EventId.makeUnsafe(crypto.randomUUID()),
+          tone: "info",
+          kind: "checkpoint.baseline.skipped",
+          summary: "Studio output baseline unavailable for this turn",
+          payload: {
+            detail:
+              "No pre-dispatch Studio baseline was prepared. Native provider turns may start without a Synara send; Studio output indexing is unavailable for this turn. Files are not rescanned after provider edits to invent a baseline.",
+          },
+          turnId: event.turnId,
+          createdAt: event.createdAt,
+        },
+        createdAt: event.createdAt,
+      });
     });
 
   const persistBaselineOutputs = Effect.fnUntraced(function* (input: {

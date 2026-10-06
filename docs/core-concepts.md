@@ -300,11 +300,18 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
-Pre-turn checkpoint and output baselines share a five-second capture budget. If checkpoint capture
-fails or the combined budget expires, Synara reports the skipped baseline and lets the provider
-start after cancellation cleanup finishes. It never reconstructs the initial state from files the
-provider may already have changed. Diff and undo operations that require an exact initial checkpoint
-remain unavailable when that baseline is missing.
+Pre-turn checkpoint and Studio output baselines share a five-second preparation budget, including
+queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;
+invalid values use the default and positive values are clamped to that range. When preparation fails
+or the combined budget expires, Synara reports unavailable baselines and preserves independently
+completed results. The provider starts after cancellation cleanup finishes, which can extend beyond
+the preparation budget; an absolute process-cleanup bound has not been verified.
+
+Synara never reconstructs the initial state from files the provider may already have changed.
+Native provider turns, including native child turns, may begin without Synara's pre-send preparation;
+their missing checkpoint or Studio baseline is reported without a replacement capture. Diff and file
+undo that require an exact initial checkpoint remain unavailable, and Studio output discovery is
+unavailable for turns without a prepared Studio baseline.
 
 ## Hubs
 

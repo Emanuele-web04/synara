@@ -181,7 +181,8 @@ import {
 } from "../providerIntentClassification.ts";
 import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
-import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache.ts";
+import { makeKeyedSingleFlightCache } from "@synara/shared/KeyedSingleFlightCache";
+import { resolveAcpTurnIdleTimeoutMs } from "../../provider/acp/AcpTurnIdleWatchdog.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
@@ -593,6 +594,22 @@ const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
 const PRE_TURN_BASELINE_TIMEOUT = Duration.seconds(5);
+const GATEWAY_OPERATION_COMPLETION_NEGATIVE_CACHE_TTL = Duration.seconds(30);
+
+/** Operator override stays finite; test/factory options take precedence. */
+export function resolvePreTurnBaselineTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  return Math.min(
+    30_000,
+    Math.max(
+      1_000,
+      resolveAcpTurnIdleTimeoutMs({
+        envVar: "SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS",
+        defaultMs: Duration.toMillis(PRE_TURN_BASELINE_TIMEOUT),
+        env,
+      }),
+    ),
+  );
+}
 const PROVIDER_CACHE_RESPONSE_TIMEOUT = Duration.minutes(15);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
@@ -847,6 +864,7 @@ export interface ProviderCommandReactorLiveOptions {
   readonly preTurnBaselineTimeout?: Duration.Duration;
   readonly cacheResponseTimeout?: Duration.Duration;
   readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
+  readonly gatewayOperationCompletionNegativeCacheTtl?: Duration.Duration;
 }
 
 interface ProviderCommandReactorConfigShape {
@@ -854,6 +872,7 @@ interface ProviderCommandReactorConfigShape {
   readonly preTurnBaselineTimeout: Duration.Duration;
   readonly cacheResponseTimeout: Duration.Duration;
   readonly gatewayOperationCompletionWaitTimeout: Duration.Duration;
+  readonly gatewayOperationCompletionNegativeCacheTtl: Duration.Duration;
 }
 
 class ProviderCommandReactorConfig extends ServiceMap.Service<
@@ -867,6 +886,7 @@ const make = Effect.gen(function* () {
     preTurnBaselineTimeout,
     cacheResponseTimeout,
     gatewayOperationCompletionWaitTimeout,
+    gatewayOperationCompletionNegativeCacheTtl,
   } = yield* ProviderCommandReactorConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const deliveryRepository = yield* OrchestrationEventDeliveryRepository;
@@ -896,11 +916,14 @@ const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsService;
 
   // All children share one poll and warning for their creating operation. A
-  // failed wait cannot authorize a rename later; retain that outcome in a
-  // bounded cache rather than restarting a two-minute wait on every turn.
+  // failed wait cannot authorize a rename; a short negative TTL deduplicates
+  // a burst while allowing a later durable completion to authorize new work.
   const gatewayCompletionWaits = yield* makeKeyedSingleFlightCache<boolean, never>({
     maxEntries: 256,
-    ttlMs: Number.POSITIVE_INFINITY,
+    ttlMs: (completed) =>
+      completed
+        ? Number.POSITIVE_INFINITY
+        : Duration.toMillis(gatewayOperationCompletionNegativeCacheTtl),
   });
   const readGatewayOperationCompletion = Effect.fnUntraced(function* (operationId: string) {
     const completed = yield* Effect.gen(function* () {
@@ -3446,18 +3469,23 @@ const make = Effect.gen(function* () {
       });
 
     let baselineFailure: string | undefined;
+    let checkpointPreparation: "captured" | "not-applicable" | "unavailable" = "unavailable";
+    let studioPreparationFinished = false;
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
+        checkpointPreparation = "not-applicable";
         return;
       }
 
       const currentThread = yield* resolveThread(input.threadId);
       if (!currentThread) {
+        checkpointPreparation = "not-applicable";
         return;
       }
 
       const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
       if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
+        checkpointPreparation = "not-applicable";
         return;
       }
 
@@ -3472,6 +3500,7 @@ const make = Effect.gen(function* () {
         ),
         skipIfExists: true,
       });
+      checkpointPreparation = "captured";
     }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
@@ -3489,17 +3518,30 @@ const make = Effect.gen(function* () {
     const capturePreTurnBaselines = Effect.all(
       [
         captureMessageStartCheckpoint,
-        studioOutputReactor.captureBaselineBeforeTurn(input.threadId),
+        studioOutputReactor.captureBaselineBeforeTurn(input.threadId).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              studioPreparationFinished = true;
+            }),
+          ),
+        ),
       ],
       { concurrency: 2, discard: true },
     ).pipe(
       Effect.timeoutOption(preTurnBaselineTimeout),
       Effect.flatMap((captured) => {
         if (Option.isSome(captured) && baselineFailure === undefined) return Effect.void;
-        const detail = Option.isNone(captured)
-          ? `The pre-turn baseline did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms. The turn continued without it; checkpoint diff and file undo may be unavailable.`
-          : `The pre-turn baseline could not be captured. The turn continued without it; checkpoint diff and file undo may be unavailable. ${baselineFailure}`;
-        return studioOutputReactor.cancelPendingTurnBaseline(input.threadId).pipe(
+        const checkpointUnavailable = checkpointPreparation === "unavailable";
+        const detail = !checkpointUnavailable
+          ? `Studio pre-turn preparation did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms. Studio output indexing may be unavailable. ${checkpointPreparation === "captured" ? "The independently prepared checkpoint is preserved." : "Checkpoint capture is not applicable to this workspace."}`
+          : Option.isNone(captured)
+            ? `The pre-turn baseline did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms. The turn continued without it; checkpoint diff and file undo may be unavailable.`
+            : `The pre-turn baseline could not be captured. The turn continued without it; checkpoint diff and file undo may be unavailable. ${baselineFailure}`;
+        return (
+          studioPreparationFinished
+            ? Effect.void
+            : studioOutputReactor.cancelPendingTurnBaseline(input.threadId)
+        ).pipe(
           Effect.andThen(
             orchestrationEngine.dispatch({
               type: "thread.activity.append",
@@ -3509,8 +3551,15 @@ const make = Effect.gen(function* () {
                 id: EventId.makeUnsafe(crypto.randomUUID()),
                 tone: "info",
                 kind: "checkpoint.baseline.skipped",
-                summary: "Turn continued without a checkpoint baseline",
-                payload: { detail, messageId: input.messageId },
+                summary: checkpointUnavailable
+                  ? "Turn continued without a checkpoint baseline"
+                  : "Turn continued without a Studio baseline",
+                payload: {
+                  detail,
+                  messageId: input.messageId,
+                  checkpointBaseline: checkpointPreparation,
+                  studioPreparation: studioPreparationFinished ? "completed" : "unavailable",
+                },
                 turnId: null,
                 createdAt: input.createdAt,
               },
@@ -8441,14 +8490,19 @@ const make = Effect.gen(function* () {
 });
 
 export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorLiveOptions) => {
-  const preTurnBaselineTimeout = options?.preTurnBaselineTimeout ?? PRE_TURN_BASELINE_TIMEOUT;
+  const preTurnBaselineTimeout =
+    options?.preTurnBaselineTimeout ?? Duration.millis(resolvePreTurnBaselineTimeoutMs());
   const cacheResponseTimeout = options?.cacheResponseTimeout ?? PROVIDER_CACHE_RESPONSE_TIMEOUT;
   const gatewayOperationCompletionWaitTimeout =
     options?.gatewayOperationCompletionWaitTimeout ?? GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT;
+  const gatewayOperationCompletionNegativeCacheTtl =
+    options?.gatewayOperationCompletionNegativeCacheTtl ??
+    GATEWAY_OPERATION_COMPLETION_NEGATIVE_CACHE_TTL;
   for (const [name, duration] of Object.entries({
     preTurnBaselineTimeout,
     cacheResponseTimeout,
     gatewayOperationCompletionWaitTimeout,
+    gatewayOperationCompletionNegativeCacheTtl,
   })) {
     const timeoutMs = Duration.toMillis(duration);
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -8462,6 +8516,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
         preTurnBaselineTimeout,
         cacheResponseTimeout,
         gatewayOperationCompletionWaitTimeout,
+        gatewayOperationCompletionNegativeCacheTtl,
       }),
     ),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),

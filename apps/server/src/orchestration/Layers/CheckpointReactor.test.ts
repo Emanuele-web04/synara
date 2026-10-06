@@ -534,6 +534,68 @@ describe("CheckpointReactor", () => {
     expect(gitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 0))).toBe(false);
   });
 
+  it("reports an unavailable native-child baseline without calling a successful capture failed", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("subagent:thread-1:native-baseline");
+    const turnId = asTurnId("native-child-turn");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("native-baseline-child-create"),
+        threadId,
+        projectId: asProjectId("project-1"),
+        title: "Native child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: harness.cwd,
+        createdAt,
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "native provider edited\n");
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("native-baseline-start"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+    });
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("native-baseline-complete"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+    await waitForEvent(
+      harness.engine,
+      (event) => event.type === "thread.turn-diff-completed" && event.payload.threadId === threadId,
+      1000,
+    );
+    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    expect(thread?.checkpoints[0]?.status).toBe("missing");
+    expect(gitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId))).toBe(
+      false,
+    );
+    expect(
+      gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 1), "README.md"),
+    ).toBe("native provider edited\n");
+    expect(thread?.activities).toContainEqual(
+      expect.objectContaining({ kind: "checkpoint.baseline.skipped", tone: "info" }),
+    );
+    expect(
+      thread?.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toBe(false);
+  });
+
   it("recovers a captured message baseline from a persisted running turn", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false, startReactor: false });
     const threadId = ThreadId.makeUnsafe("thread-1");
@@ -1419,7 +1481,7 @@ describe("CheckpointReactor", () => {
     ]);
   });
 
-  it("appends capture failure activity when turn diff summary cannot be derived", async () => {
+  it("reports an unavailable baseline when a completed turn has no initial checkpoint", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();
 
@@ -1457,12 +1519,12 @@ describe("CheckpointReactor", () => {
       harness.engine,
       (entry) =>
         entry.checkpoints.length === 1 &&
-        entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+        entry.activities.some((activity) => activity.kind === "checkpoint.baseline.skipped"),
     );
 
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
     expect(
-      thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+      thread.activities.some((activity) => activity.kind === "checkpoint.baseline.skipped"),
     ).toBe(true);
   });
 

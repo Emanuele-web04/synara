@@ -70,7 +70,7 @@ import {
   type ComputerServiceShape,
 } from "../../computer/Services/ComputerService.ts";
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
-import { TextGenerationError } from "../../git/Errors.ts";
+import { GitCommandError, TextGenerationError } from "../../git/Errors.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -118,6 +118,7 @@ import {
   hasBoundProviderSession,
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
+  resolvePreTurnBaselineTimeoutMs,
 } from "./ProviderCommandReactor.ts";
 import * as groupsBetaGate from "../../projectAgent/groupsBetaGate.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
@@ -276,6 +277,23 @@ async function waitFor(
 }
 
 describe("ProviderCommandReactor", () => {
+  it.each([
+    [undefined, 5000],
+    ["", 5000],
+    ["abc", 5000],
+    ["0", 5000],
+    ["-1", 5000],
+    ["Infinity", 5000],
+    ["1", 1000],
+    ["15000", 15000],
+    ["90000", 30000],
+  ] as const)("bounds the operator baseline budget %s to %s ms", (raw, expected) => {
+    expect(
+      resolvePreTurnBaselineTimeoutMs(
+        raw === undefined ? {} : { SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS: raw },
+      ),
+    ).toBe(expected);
+  });
   const runtimes = new Set<{ dispose: () => Promise<void> }>();
   const scopes = new Set<Scope.Closeable>();
   let scope: Scope.Closeable | null = null;
@@ -317,6 +335,7 @@ describe("ProviderCommandReactor", () => {
     readonly preTurnBaselineTimeout?: Duration.Duration;
     readonly cacheResponseTimeout?: Duration.Duration;
     readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
+    readonly gatewayOperationCompletionNegativeCacheTtl?: Duration.Duration;
     readonly logMessages?: string[];
     readonly gatewayOperationId?: string;
     readonly gitWritingModelSelection?: ModelSelection;
@@ -11433,11 +11452,64 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
+  it.each(["git-failed", "not-git", "prepared"] as const)(
+    "retains independently prepared Studio baseline when Git preparation is %s",
+    async (mode) => {
+      let studioPrepared = false;
+      const harness = await createHarness({
+        checkpointStore: {
+          isGitRepository: () => Effect.succeed(mode !== "not-git"),
+          captureCheckpoint: () =>
+            mode === "git-failed"
+              ? Effect.fail(
+                  new GitCommandError({
+                    operation: "test.capture",
+                    cwd: "/tmp/provider-project",
+                    command: "git add",
+                    detail: "Capture failed",
+                  }),
+                )
+              : Effect.void,
+        },
+        studioOutputReactor: {
+          captureBaselineBeforeTurn: () =>
+            Effect.sync(() => {
+              studioPrepared = true;
+            }),
+          cancelPendingTurnBaseline: () =>
+            Effect.sync(() => {
+              studioPrepared = false;
+            }),
+        },
+      });
+      let preparedAtSend = false;
+      const send = harness.sendTurn.getMockImplementation()!;
+      harness.sendTurn.mockImplementationOnce((input) => {
+        preparedAtSend = studioPrepared;
+        return send(input);
+      });
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `independent-baseline-${mode}`,
+        text: "Use independent preparation",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1, 500);
+      expect(preparedAtSend).toBe(true);
+      expect(studioPrepared).toBe(true);
+      const skipped = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "checkpoint.baseline.skipped",
+      );
+      expect(skipped).toHaveLength(mode === "git-failed" ? 1 : 0);
+    },
+  );
+
   it.each(["git", "studio"] as const)(
     "continues after a slow %s baseline deadline only after capture cleanup",
     async (kind) => {
       let cleanedUp = false;
       let captureStarted = false;
+      let studioCleared = false;
+      let checkpointPrepared = false;
       const release = Deferred.makeUnsafe<void>();
       const hungCapture = Effect.sync(() => {
         captureStarted = true;
@@ -11453,16 +11525,25 @@ describe("ProviderCommandReactor", () => {
           ),
         ),
       );
+      vi.stubEnv("SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS", "15000");
       const harness = await createHarness({
         preTurnBaselineTimeout: Duration.millis(30),
-        ...(kind === "git"
-          ? {
-              checkpointStore: {
-                isGitRepository: () => Effect.succeed(true),
-                captureCheckpoint: () => hungCapture,
-              },
-            }
-          : { studioOutputReactor: { captureBaselineBeforeTurn: () => hungCapture } }),
+        studioOutputReactor: {
+          captureBaselineBeforeTurn: () => (kind === "studio" ? hungCapture : Effect.void),
+          cancelPendingTurnBaseline: () =>
+            Effect.sync(() => {
+              studioCleared = true;
+            }),
+        },
+        checkpointStore: {
+          isGitRepository: () => Effect.succeed(true),
+          captureCheckpoint: () =>
+            kind === "git"
+              ? hungCapture
+              : Effect.sync(() => {
+                  checkpointPrepared = true;
+                }),
+        },
       });
       let cleanedUpAtSend = false;
       const send = harness.sendTurn.getMockImplementation()!;
@@ -11481,16 +11562,23 @@ describe("ProviderCommandReactor", () => {
         expect(harness.sendTurn).toHaveBeenCalledTimes(1);
         expect(cleanedUpAtSend).toBe(true);
         expect(cleanedUp).toBe(true);
-        expect(harness.cancelPendingStudioOutputBaseline).toHaveBeenCalled();
+        expect(studioCleared).toBe(kind === "studio");
+        expect(checkpointPrepared).toBe(kind === "studio");
         expect((await readHarnessThread(harness))?.activities).toContainEqual(
           expect.objectContaining({
             kind: "checkpoint.baseline.skipped",
             tone: "info",
-            payload: expect.objectContaining({ detail: expect.stringContaining("undo") }),
+            payload: expect.objectContaining({
+              detail: expect.stringContaining(
+                kind === "studio" ? "independently prepared checkpoint is preserved" : "undo",
+              ),
+              checkpointBaseline: kind === "studio" ? "captured" : "unavailable",
+            }),
           }),
         );
       } finally {
         await Effect.runPromise(Deferred.succeed(release, undefined));
+        vi.unstubAllEnvs();
       }
     },
   );
@@ -12474,6 +12562,96 @@ describe("ProviderCommandReactor", () => {
         ),
       ).toHaveLength(1);
       expect(harness.renameBranch).not.toHaveBeenCalled();
+    } finally {
+      await harness.completeGatewayOperation(operationId);
+    }
+  });
+
+  it("retries a completed gateway operation after its negative cache expires", async () => {
+    const operationId = "gateway-negative-cache-expiry";
+    const messages: string[] = [];
+    const harness = await createHarness({
+      gatewayOperationId: operationId,
+      gatewayOperationCompletionWaitTimeout: Duration.millis(30),
+      gatewayOperationCompletionNegativeCacheTtl: Duration.millis(30),
+      logMessages: messages,
+    });
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "retry-after-completion" }),
+    );
+    await harness.reserveGatewayOperation(operationId);
+    await harness.markGatewayOperationDispatching(operationId);
+    const createdAt = new Date().toISOString();
+    const startChild = async (threadId: ThreadId, index: number) => {
+      if (index > 0)
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe(`negative-cache-child-${index}`),
+            threadId,
+            projectId: asProjectId("project-1"),
+            title: "Gateway child",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            creationSource: "synara_mcp",
+            gatewayOperationId: operationId,
+            gatewayOperationIndex: index,
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          }),
+        );
+      const branch = index === 0 ? "synara/cb661f0d" : "synara/cb661f0e";
+      const cwd = `/tmp/provider-project/.worktrees/${branch.slice(7)}`;
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe(`negative-cache-meta-${index}`),
+          threadId,
+          envMode: "worktree",
+          branch,
+          worktreePath: cwd,
+          associatedWorktreePath: cwd,
+          associatedWorktreeBranch: branch,
+          associatedWorktreeRef: branch,
+        }),
+      );
+      await dispatchHarnessUserTurn(harness, {
+        threadId,
+        messageId: `negative-cache-message-${index}`,
+        text: "Rename gateway child",
+        createdAt,
+      });
+    };
+    try {
+      await startChild(ThreadId.makeUnsafe("thread-1"), 0);
+      await waitFor(
+        () =>
+          messages.some((message) =>
+            message.includes("timed out waiting for creating gateway operation"),
+          ),
+        500,
+      );
+      expect(harness.renameBranch).not.toHaveBeenCalled();
+      await harness.completeGatewayOperation(operationId);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await startChild(ThreadId.makeUnsafe("gateway-retry-child"), 1);
+      await waitFor(() => harness.renameBranch.mock.calls.length === 1, 500);
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness, ThreadId.makeUnsafe("gateway-retry-child")))?.branch ===
+          "synara/retry-after-completion",
+        500,
+      );
+      expect(
+        (await readHarnessThread(harness, ThreadId.makeUnsafe("gateway-retry-child")))?.branch,
+      ).toBe("synara/retry-after-completion");
+      expect(
+        messages.filter((message) =>
+          message.includes("timed out waiting for creating gateway operation"),
+        ),
+      ).toHaveLength(1);
     } finally {
       await harness.completeGatewayOperation(operationId);
     }

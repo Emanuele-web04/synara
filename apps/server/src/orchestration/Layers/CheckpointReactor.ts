@@ -278,21 +278,30 @@ const make = Effect.gen(function* () {
       );
   });
 
-  const appendCaptureFailureActivity = (input: {
+  const appendCheckpointIssueActivity = (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId | null;
     readonly detail: string;
     readonly createdAt: string;
+    readonly baselineUnavailable?: true;
   }) =>
     orchestrationEngine.dispatch({
       type: "thread.activity.append",
-      commandId: serverCommandId("checkpoint-capture-failure"),
+      commandId: serverCommandId(
+        input.baselineUnavailable
+          ? "checkpoint-baseline-unavailable"
+          : "checkpoint-capture-failure",
+      ),
       threadId: input.threadId,
       activity: {
         id: EventId.makeUnsafe(crypto.randomUUID()),
-        tone: "error",
-        kind: "checkpoint.capture.failed",
-        summary: "Checkpoint capture failed",
+        tone: input.baselineUnavailable ? "info" : "error",
+        kind: input.baselineUnavailable
+          ? "checkpoint.baseline.skipped"
+          : "checkpoint.capture.failed",
+        summary: input.baselineUnavailable
+          ? "Checkpoint baseline unavailable for this turn"
+          : "Checkpoint capture failed",
         payload: {
           detail: input.detail,
         },
@@ -478,7 +487,7 @@ const make = Effect.gen(function* () {
           .pipe(
             Effect.flatMap((diff) => parseCheckpointFilesFromUnifiedDiff(diff)),
             Effect.tapError((error) =>
-              appendCaptureFailureActivity({
+              appendCheckpointIssueActivity({
                 threadId: input.threadId,
                 turnId: input.turnId,
                 detail: `Checkpoint captured, but turn diff summary is unavailable: ${error.message}`,
@@ -496,10 +505,12 @@ const make = Effect.gen(function* () {
           )
       : input.workspaceInitializedDuringTurn
         ? []
-        : yield* appendCaptureFailureActivity({
+        : yield* appendCheckpointIssueActivity({
             threadId: input.threadId,
             turnId: input.turnId,
-            detail: "Checkpoint captured, but the turn start baseline is unavailable.",
+            baselineUnavailable: true,
+            detail:
+              "No pre-dispatch checkpoint baseline was prepared for this turn. Native provider turns can start without a Synara send; checkpoint diff and file undo are unavailable. The completed checkpoint was captured successfully.",
             createdAt: input.createdAt,
           }).pipe(Effect.as([]));
 
@@ -1536,7 +1547,7 @@ const make = Effect.gen(function* () {
       const turnId = toTurnId(event.turnId);
       yield* captureCheckpointFromTurnCompletion(event).pipe(
         Effect.catch((error) =>
-          appendCaptureFailureActivity({
+          appendCheckpointIssueActivity({
             threadId: event.threadId,
             turnId,
             detail: error.message,

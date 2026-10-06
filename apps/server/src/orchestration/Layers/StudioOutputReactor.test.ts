@@ -153,7 +153,16 @@ describe("StudioOutputReactor", () => {
       if (preparation !== "prepared") {
         await new Promise((resolve) => setTimeout(resolve, 25));
         await Effect.runPromise(reactor.drain);
-        expect(commands).toEqual([]);
+        expect(commands).toHaveLength(1);
+        expect(commands[0]).toMatchObject({
+          type: "thread.activity.append",
+          activity: {
+            kind: "checkpoint.baseline.skipped",
+            tone: "info",
+            turnId,
+            payload: { detail: expect.stringContaining("Studio") },
+          },
+        });
         return;
       }
       await waitFor(() => commands.length === 1);
