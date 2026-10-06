@@ -56,6 +56,11 @@ export const ProviderSessionStartInput = Schema.Struct({
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Extra folders of a multi-folder project the session may read and write besides `cwd`.
+   * Only providers that can grant them natively (Codex, Claude) receive this.
+   */
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   forkSourceResumeCursor: Schema.optional(Schema.Unknown),
@@ -103,6 +108,8 @@ export const ProviderForkThreadInput = Schema.Struct({
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   sourceCwd: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /** Extra folders of a multi-folder project; see `ProviderSessionStartInput`. */
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   /**

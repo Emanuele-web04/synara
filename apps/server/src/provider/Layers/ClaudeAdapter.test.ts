@@ -723,6 +723,29 @@ describe("Claude Synara harness policy", () => {
 });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("grants a multi-folder project's extra folders as additional directories", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        cwd: "/tmp/repos/web",
+        additionalDirectories: ["/tmp/repos/api", "/tmp/repos/shared"],
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.additionalDirectories, [
+        "/tmp/repos/web",
+        "/tmp/repos/api",
+        "/tmp/repos/shared",
+      ]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("passes provider instance environment to temporary command discovery", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

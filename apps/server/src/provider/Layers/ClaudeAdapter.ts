@@ -6216,7 +6216,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             processOwner,
             yield* providerProcessPriorityEnabled,
           ),
-          ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+          ...(input.cwd || input.additionalDirectories?.length
+            ? {
+                additionalDirectories: [
+                  ...(input.cwd ? [input.cwd] : []),
+                  ...(input.additionalDirectories ?? []),
+                ],
+              }
+            : {}),
           ...(agentGatewayCredentials
             ? {
                 mcpServers: buildClaudeMcpServers(gatewaySessionLease!.connection),

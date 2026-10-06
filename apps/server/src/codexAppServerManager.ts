@@ -191,6 +191,8 @@ type CodexApprovalsReviewer = "user" | "auto_review";
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexTurnSandboxPolicy = {
   readonly type: "readOnly" | "workspaceWrite" | "dangerFullAccess";
+  /** Extra writable folders of a multi-folder project, besides the session cwd. */
+  readonly writableRoots?: ReadonlyArray<string>;
 };
 type CodexSessionApprovalOverride = {
   readonly approvalPolicy: "never";
@@ -222,6 +224,8 @@ interface CodexSessionContext {
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   sessionApprovalOverride?: CodexSessionApprovalOverride;
+  /** Extra folders of a multi-folder project, granted as workspace-write roots. */
+  readonly additionalDirectories?: ReadonlyArray<string>;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
@@ -374,6 +378,7 @@ export interface CodexAppServerStartSessionInput {
   readonly expectedCodexContinuationGeneration?: string;
   readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+  readonly additionalDirectories?: ProviderSessionStartInput["additionalDirectories"];
   /**
    * Session-start facts the gateway lease derives its capabilities from.
    * Required on purpose: a lease that forgets it fails silently (the
@@ -835,10 +840,18 @@ function resolveCodexTurnOverrides(context: CodexSessionContext): {
   readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
-  return (
+  const overrides =
     context.sessionApprovalOverride ??
-    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode)
-  );
+    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode);
+  // Read-only sessions can already read every folder and full access needs no grant;
+  // only workspace-write has to name the extra folders it may edit.
+  if (overrides.sandboxPolicy.type !== "workspaceWrite" || !context.additionalDirectories?.length) {
+    return overrides;
+  }
+  return {
+    ...overrides,
+    sandboxPolicy: { ...overrides.sandboxPolicy, writableRoots: context.additionalDirectories },
+  };
 }
 
 export function resolveCodexModelForAccount(
@@ -1438,6 +1451,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sessionAttemptId: randomUUID(),
         authTracking: processLaunch.authTracking,
         authFingerprint: launchAuthFingerprint,
+        ...(input.additionalDirectories?.length
+          ? { additionalDirectories: [...input.additionalDirectories] }
+          : {}),
         ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
@@ -2460,6 +2476,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sessionAttemptId: randomUUID(),
         authTracking: processLaunch.authTracking,
         authFingerprint: launchAuthFingerprint,
+        ...(input.additionalDirectories?.length
+          ? { additionalDirectories: [...input.additionalDirectories] }
+          : {}),
         ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 

@@ -33,6 +33,7 @@ import {
   type ModelSelection,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationProject,
   type ProjectDevServerEvent,
   type ProviderStartOptions,
   type OrchestrationShellStreamEvent,
@@ -94,6 +95,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { PROJECT_FOLDERS_WORKTREE_ISSUE } from "@synara/shared/projectFolders";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
@@ -470,6 +472,24 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   );
 }
 
+/** Keeps the two worktree RPCs behind the same project eligibility check. */
+export function makeProjectWorktreeGuard<E1, R1, E2, R2>(dependencies: {
+  readonly canonicalizeWorkspaceRoot: (cwd: string) => Effect.Effect<string, E1, R1>;
+  readonly getActiveProjectByWorkspaceRoot: (
+    cwd: string,
+  ) => Effect.Effect<Option.Option<OrchestrationProject>, E2, R2>;
+}) {
+  return (cwd: string) =>
+    dependencies.canonicalizeWorkspaceRoot(cwd).pipe(
+      Effect.flatMap(dependencies.getActiveProjectByWorkspaceRoot),
+      Effect.flatMap((project) =>
+        Option.isSome(project) && (project.value.additionalFolders ?? []).length > 0
+          ? Effect.fail(new WsRpcError({ message: PROJECT_FOLDERS_WORKTREE_ISSUE }))
+          : Effect.void,
+      ),
+    );
+}
+
 const makeWsRpcHandlersLayer = () =>
   AdmittedWsFeatureRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -753,6 +773,11 @@ const makeWsRpcHandlersLayer = () =>
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         );
+      });
+      // Fail before Git runs; a refused turn must not leave an orphaned worktree.
+      const refuseMultiFolderProjectWorktree = makeProjectWorktreeGuard({
+        canonicalizeWorkspaceRoot: canonicalizeProjectWorkspaceRoot,
+        getActiveProjectByWorkspaceRoot: projectionReadModelQuery.getActiveProjectByWorkspaceRoot,
       });
       // One mkdir loop shared by every container kind; the relative directory set is the
       // only thing that varies (general chats scaffold work/outputs, Studio mirrors the
@@ -1952,9 +1977,13 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(git.listRecentCommits(input), "Failed to list recent commits"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
-              input.cwd,
-              git.withMutation(input.cwd, git.createWorktree(input)),
+            refuseMultiFolderProjectWorktree(input.cwd).pipe(
+              Effect.andThen(
+                refreshGitStatusAfter(
+                  input.cwd,
+                  git.withMutation(input.cwd, git.createWorktree(input)),
+                ),
+              ),
             ),
             "Failed to create worktree",
           ),
@@ -1962,28 +1991,34 @@ const makeWsRpcHandlersLayer = () =>
           bufferLiveUiStream(
             Stream.callback<GitWorktreeSetupProgressEvent, WsRpcError>((queue) => {
               const progressId = input.progressId ?? null;
-              return refreshGitStatusAfter(
-                input.cwd,
-                git.withMutation(
-                  input.cwd,
-                  git.createDetachedWorktree(input, {
-                    onPhase: (phase) =>
-                      Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
+              return refuseMultiFolderProjectWorktree(input.cwd)
+                .pipe(
+                  Effect.andThen(
+                    refreshGitStatusAfter(
+                      input.cwd,
+                      git.withMutation(
+                        input.cwd,
+                        git.createDetachedWorktree(input, {
+                          onPhase: (phase) =>
+                            Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
+                              Effect.asVoid,
+                            ),
+                        }),
+                      ),
+                    ),
+                  ),
+                )
+                .pipe(
+                  Effect.matchCauseEffect({
+                    onFailure: (cause) =>
+                      Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
+                    onSuccess: (result) =>
+                      Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
+                        Effect.andThen(Queue.end(queue)),
                         Effect.asVoid,
                       ),
                   }),
-                ),
-              ).pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) =>
-                    Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
-                  onSuccess: (result) =>
-                    Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
-                      Effect.andThen(Queue.end(queue)),
-                      Effect.asVoid,
-                    ),
-                }),
-              );
+                );
             }),
             { label: "git.create-detached-worktree" },
           ),

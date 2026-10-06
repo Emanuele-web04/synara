@@ -112,6 +112,22 @@ Git repositories unlock the complete delivery workflow:
 Non-Git folders can still be useful for simpler work, but they do not provide the same isolation and
 review guarantees.
 
+A project can also span several folders, such as a frontend, an API, and a shared package that
+change together. Add them under **Source folders** when you create the project. One folder is the
+primary folder: it is the project's working directory and keeps every single-folder behavior. The
+agent can read and edit the other folders too.
+
+Multi-folder projects have two limits for now:
+
+- Chats run in Local mode. Worktree mode would isolate only the primary folder while the others
+  are edited live, so Synara refuses it.
+- Only Codex and Claude can be granted the extra folders. Other providers refuse the chat instead
+  of silently working without them.
+
+The folder set is fixed when the project is created. Git actions, checkpoint diffs, and file undo
+cover only the primary folder. Edits in additional folders must be reviewed and
+recovered in those folders separately.
+
 ## Tasks and turns
 
 A task is the durable container for one objective.
