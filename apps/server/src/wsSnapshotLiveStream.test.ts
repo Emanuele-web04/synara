@@ -1,5 +1,5 @@
-import type { OrchestrationEvent } from "@synara/contracts";
-import { Duration, Effect, PubSub, Stream } from "effect";
+import { EventId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, PubSub, Queue, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,7 +10,274 @@ import {
 
 const event = (sequence: number) => ({ sequence }) as OrchestrationEvent;
 
+const activityEvent = (
+  sequence: number,
+  data: string,
+): Extract<OrchestrationEvent, { type: "thread.activity-appended" }> => ({
+  sequence,
+  eventId: EventId.makeUnsafe(`event-${sequence}`),
+  aggregateKind: "thread",
+  aggregateId: ThreadId.makeUnsafe("stream-thread"),
+  occurredAt: "2026-10-06T00:00:00.000Z",
+  commandId: null,
+  causationEventId: null,
+  correlationId: null,
+  metadata: {},
+  type: "thread.activity-appended",
+  payload: {
+    threadId: ThreadId.makeUnsafe("stream-thread"),
+    activity: {
+      id: EventId.makeUnsafe(`activity-${sequence}`),
+      tone: "info",
+      kind: "tool.progress",
+      summary: "Tool progress",
+      payload: data,
+      turnId: null,
+      createdAt: "2026-10-06T00:00:00.000Z",
+    },
+  },
+});
+
 describe("makeCursorSafeSnapshotLiveStream", () => {
+  it("falls back to a snapshot without scanning a 129-event resume gap", async () => {
+    let snapshotLoaded = false;
+    let replayCalls = 0;
+    const items = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.never),
+        resumeFromSequence: 0,
+        snapshot: Effect.sync(() => {
+          snapshotLoaded = true;
+          return { snapshotSequence: 129 };
+        }),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(129),
+        replay: (from) => {
+          if (from !== 0) return Stream.empty;
+          replayCalls += 1;
+          return Stream.fromIterable(Array.from({ length: 129 }, (_, index) => event(index + 1)));
+        },
+      }).pipe(Stream.take(1), Stream.runCollect),
+    );
+    expect(snapshotLoaded).toBe(true);
+    expect(replayCalls).toBe(0);
+    expect(Array.from(items)).toEqual([{ kind: "snapshot", snapshot: { snapshotSequence: 129 } }]);
+  });
+
+  it("stops an oversized resume scan and falls back to the snapshot", async () => {
+    let snapshotLoaded = false;
+    let sourceClosed = false;
+    let scannedAfterOverflow = false;
+    const oversized = activityEvent(1, "x".repeat(1024 * 1024));
+    const items = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.never),
+        resumeFromSequence: 0,
+        snapshot: Effect.sync(() => {
+          snapshotLoaded = true;
+          return { snapshotSequence: 1 };
+        }),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(1),
+        replay: (from) =>
+          from === 0
+            ? Stream.concat(
+                Stream.succeed(oversized),
+                Stream.fromEffect(
+                  Effect.sync(() => {
+                    scannedAfterOverflow = true;
+                    return event(2);
+                  }),
+                ),
+              ).pipe(
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    sourceClosed = true;
+                  }),
+                ),
+              )
+            : Stream.empty,
+      }).pipe(Stream.take(1), Stream.runCollect),
+    );
+    expect(snapshotLoaded).toBe(true);
+    expect(sourceClosed).toBe(true);
+    expect(scannedAfterOverflow).toBe(false);
+    expect(Array.from(items)).toEqual([{ kind: "snapshot", snapshot: { snapshotSequence: 1 } }]);
+  });
+
+  it("resumes 128 accepted events in order and emits a concurrent live duplicate exactly once", async () => {
+    let snapshotLoaded = false;
+    const items = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const live = yield* PubSub.unbounded<OrchestrationEvent>();
+          return yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: PubSub.subscribe(live).pipe(
+              Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+            ),
+            resumeFromSequence: 0,
+            snapshot: Effect.sync(() => {
+              snapshotLoaded = true;
+              return { snapshotSequence: 128 };
+            }),
+            snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+            getHighWaterSequence: Effect.succeed(128),
+            replay: () =>
+              Stream.fromIterable(Array.from({ length: 128 }, (_, index) => event(index + 1))).pipe(
+                Stream.tap((row) =>
+                  row.sequence === 128 ? PubSub.publishAll(live, [row, event(129)]) : Effect.void,
+                ),
+              ),
+          }).pipe(Stream.take(129), Stream.runCollect, Effect.timeout("1 second"));
+        }),
+      ),
+    );
+    expect(snapshotLoaded).toBe(false);
+    expect(
+      Array.from(items).map((item) => (item.kind === "event" ? item.event.sequence : "snapshot")),
+    ).toEqual(Array.from({ length: 129 }, (_, index) => index + 1));
+  });
+
+  it("accepts exactly one MiB of serialized resume events", async () => {
+    let snapshotLoaded = false;
+    const empty = activityEvent(1, "");
+    const sized = activityEvent(
+      1,
+      "x".repeat(1024 * 1024 - Buffer.byteLength(JSON.stringify({ kind: "event", event: empty }))),
+    );
+    const items = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.never),
+        resumeFromSequence: 0,
+        snapshot: Effect.sync(() => {
+          snapshotLoaded = true;
+          return { snapshotSequence: 1 };
+        }),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(1),
+        replay: () => Stream.succeed(sized),
+      }).pipe(Stream.take(1), Stream.runCollect),
+    );
+    expect(snapshotLoaded).toBe(false);
+    expect(Array.from(items)).toEqual([{ kind: "event", event: sized }]);
+  });
+
+  it("preserves real database failures during resume preflight", async () => {
+    let snapshotLoaded = false;
+    const failure = new Error("resume database unavailable");
+    const result = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.never),
+        resumeFromSequence: 0,
+        snapshot: Effect.sync(() => {
+          snapshotLoaded = true;
+          return { snapshotSequence: 1 };
+        }),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(1),
+        replay: () => Stream.fail(failure),
+      }).pipe(Stream.runCollect, Effect.exit),
+    );
+    expect(snapshotLoaded).toBe(false);
+    expect(Exit.isFailure(result)).toBe(true);
+    if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toBe(failure);
+  });
+
+  it("closes an overflowing live subscription while snapshot IO is blocked", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const input = yield* Queue.unbounded<OrchestrationEvent>();
+          const attached = yield* Deferred.make<void>();
+          const subscriptionClosed = yield* Deferred.make<void>();
+          const snapshotStarted = yield* Deferred.make<void>();
+          const snapshotClosed = yield* Deferred.make<void>();
+          const reader = yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.acquireRelease(
+              Deferred.succeed(attached, undefined).pipe(Effect.as(Stream.fromQueue(input))),
+              () => Deferred.succeed(subscriptionClosed, undefined),
+            ),
+            snapshot: Deferred.succeed(snapshotStarted, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(snapshotClosed, undefined)),
+            ),
+            snapshotSequence: () => 0,
+            getHighWaterSequence: Effect.succeed(0),
+            replay: () => Stream.empty,
+            liveBufferOptions: { capacity: 1 },
+          }).pipe(Stream.runCollect, Effect.exit, Effect.forkScoped);
+          yield* Deferred.await(attached);
+          yield* Deferred.await(snapshotStarted);
+          yield* Queue.offerAll(input, [event(1), event(2), event(3), event(4)]);
+          yield* Deferred.await(subscriptionClosed).pipe(Effect.timeout("500 millis"));
+          yield* Deferred.await(snapshotClosed).pipe(Effect.timeout("500 millis"));
+          const result = yield* Fiber.join(reader);
+          expect(Exit.isFailure(result)).toBe(true);
+          if (Exit.isFailure(result)) {
+            expect(Cause.squash(result.cause)).toMatchObject({
+              code: "ORCHESTRATION_STREAM_OVERFLOW",
+              retryable: true,
+            });
+          }
+        }),
+      ),
+    );
+  });
+
+  it.each(["count", "bytes"] as const)(
+    "shares the %s budget across replay delivery and the waiting live tail",
+    async (limit) => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const input = yield* Queue.unbounded<OrchestrationEvent>();
+            const replayBlocked = yield* Deferred.make<void>();
+            const subscriptionClosed = yield* Deferred.make<void>();
+            const replayEvent = event(1);
+            const liveEvent = event(2);
+            const eventBytes = Buffer.byteLength(
+              JSON.stringify({ kind: "event", event: replayEvent }),
+            );
+            const stream = makeCursorSafeSnapshotLiveStream({
+              subscribeLive: Effect.acquireRelease(Effect.succeed(Stream.fromQueue(input)), () =>
+                Deferred.succeed(subscriptionClosed, undefined),
+              ),
+              snapshot: Effect.succeed({ snapshotSequence: 0 }),
+              snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+              getHighWaterSequence: Effect.succeed(1),
+              replay: () =>
+                Stream.concat(
+                  Stream.succeed(replayEvent),
+                  Stream.fromEffect(
+                    Deferred.succeed(replayBlocked, undefined).pipe(Effect.andThen(Effect.never)),
+                  ).pipe(Stream.drain),
+                ),
+              liveBufferOptions:
+                limit === "count"
+                  ? { capacity: 2 }
+                  : { capacity: 10, maxSerializedBytes: eventBytes * 2 - 1 },
+            });
+            const pull = yield* Stream.toPull(stream);
+            yield* pull;
+            yield* Deferred.await(replayBlocked).pipe(Effect.timeout("500 millis"));
+            // Snapshot and replay remain unacknowledged. The tail fits either
+            // stage alone, but cannot fit the logical subscription's shared limit.
+            yield* Queue.offer(input, liveEvent);
+            yield* Deferred.await(subscriptionClosed).pipe(Effect.timeout("500 millis"));
+            const result = yield* Effect.exit(pull);
+            expect(Exit.isFailure(result)).toBe(true);
+            if (Exit.isFailure(result)) {
+              expect(Cause.squash(result.cause)).toMatchObject({
+                code: "ORCHESTRATION_STREAM_OVERFLOW",
+                retryable: true,
+              });
+            }
+          }),
+        ),
+      );
+    },
+  );
+
   it("attaches before snapshot IO and deduplicates events covered by durable replay", async () => {
     const steps: string[] = [];
     const items = await Effect.runPromise(

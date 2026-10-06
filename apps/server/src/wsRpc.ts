@@ -1438,13 +1438,12 @@ const makeWsRpcHandlersLayer = () =>
                 tracker: resnapshotEscalationTracker,
               },
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
-                Effect.map((stream) =>
-                  bufferLiveUiStream(stream.pipe(Stream.filter(isShellRelevantEvent)), {
-                    label: "orchestration.shell",
-                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
-                  }),
-                ),
+                Effect.map((stream) => stream.pipe(Stream.filter(isShellRelevantEvent))),
               ),
+              liveBufferOptions: {
+                label: "orchestration.shell",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              },
               snapshot: projectionReadModelQuery
                 .getShellSnapshot()
                 .pipe(
@@ -1513,18 +1512,16 @@ const makeWsRpcHandlersLayer = () =>
                 recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
-                  bufferLiveUiStream(
-                    stream.pipe(
-                      Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
-                      Stream.map(sanitizeOrchestrationEventProviderOptions),
-                    ),
-                    {
-                      label: "orchestration.thread-detail",
-                      onDroppedEvents: (report) => recordThreadStreamDrop(input.threadId, report),
-                    },
+                  stream.pipe(
+                    Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                    Stream.map(sanitizeOrchestrationEventProviderOptions),
                   ),
                 ),
               ),
+              liveBufferOptions: {
+                label: "orchestration.thread-detail",
+                onDroppedEvents: (report) => recordThreadStreamDrop(input.threadId, report),
+              },
               snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
                 Effect.flatMap(
                   Option.match({
