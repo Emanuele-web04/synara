@@ -157,7 +157,10 @@ network URL (`https://github.com/org/repo` becomes `https://github.com/…`),
 GitHub/Slack/AWS/Google tokens, JWTs), sensitive `key=value`/`key: value`
 fields, IP addresses, and any remaining long opaque token (hex, base64url, or
 standard base64). Paths are reduced to the last segment: `/Users/you/code/my-repo/app.ts` becomes `~/…/app.ts`, so
-folder and repository names are not sent. Redaction is best-effort — error
+folder and repository names, including directory names containing spaces on
+Windows and POSIX, are not sent. Network error codes (`net::ERR_*`) and Node
+stack locations remain readable instead of being mistaken for IPv6 addresses.
+Redaction is best-effort — error
 text can still include fragments of whatever was on screen. The worker runs
 the same redaction again before storing.
 

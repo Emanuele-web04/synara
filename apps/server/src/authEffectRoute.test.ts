@@ -386,6 +386,64 @@ describe("authEffectRouteLayer", () => {
 });
 
 describe("binaryUploadEffectRouteLayer", () => {
+  it.each([
+    { origin: "synara-beta://app", authorized: true, status: 500 },
+    { origin: "synara-beta://app", authorized: false, status: 401 },
+    { origin: "https://untrusted.example.test", authorized: true, status: 403 },
+  ])(
+    "preserves trusted CORS on failed uploads: $origin / $status",
+    async ({ origin, authorized, status }) => {
+      const transcribeVoice = vi.fn(() => Effect.fail(new Error("Transcription unavailable.")));
+      await withAuthEffectServer(
+        {
+          host: "0.0.0.0",
+          publicUrl: new URL("https://synara.example.test/"),
+        } as ServerConfigShape,
+        makeServerAuth({ count: 0 }),
+        async (serverOrigin) => {
+          const params = new URLSearchParams({
+            provider: "codex",
+            cwd: "/tmp/project",
+            mimeType: "audio/wav",
+            sampleRateHz: "16000",
+            durationMs: "250",
+          });
+          const response = await fetch(
+            `${serverOrigin}${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params}`,
+            {
+              method: "POST",
+              headers: {
+                Origin: origin,
+                ...(authorized ? { Authorization: "Bearer bearer-token" } : {}),
+              },
+              body: Uint8Array.from([1]),
+            },
+          );
+          expect(response.status).toBe(status);
+          expect(response.headers.get("access-control-allow-origin")).toBe(
+            status === 403 ? null : origin,
+          );
+          expect(response.headers.get("access-control-allow-credentials")).toBe(
+            status === 403 ? null : "true",
+          );
+          if (status === 500) {
+            await expect(response.json()).resolves.toEqual({ error: "Transcription unavailable." });
+            expect(transcribeVoice).toHaveBeenCalledOnce();
+          } else {
+            expect(transcribeVoice).not.toHaveBeenCalled();
+          }
+        },
+        binaryUploadEffectRouteLayer,
+        {
+          providerAdapterRegistry: {
+            getByProvider: () => Effect.succeed({ provider: "codex", transcribeVoice } as never),
+            listProviders: () => Effect.succeed(["codex"]),
+          },
+        },
+      );
+    },
+  );
+
   it("routes voice uploads through the requested provider instance", async () => {
     const transcribeVoice = vi.fn(() => Effect.succeed({ text: "hello from work" }));
     await withAuthEffectServer(

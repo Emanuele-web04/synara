@@ -1332,24 +1332,32 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
 }).pipe(
   Effect.catch((error) =>
-    Effect.succeed(
-      error instanceof AuthError
-        ? authErrorResponse(error)
-        : HttpServerResponse.jsonUnsafe(
-            {
-              error:
-                error instanceof Error
-                  ? error.message
-                  : String((error as { readonly message?: unknown }).message ?? error),
-            },
-            {
-              status:
-                typeof (error as { readonly status?: unknown }).status === "number"
-                  ? (error as { readonly status: number }).status
-                  : 500,
-            },
-          ),
-    ),
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const url = HttpServerRequest.toURL(request);
+      const headers = url ? trustedMutationCorsHeaders({ request, url, config }) : null;
+      const response =
+        error instanceof AuthError
+          ? authErrorResponse(error)
+          : HttpServerResponse.jsonUnsafe(
+              {
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : String((error as { readonly message?: unknown }).message ?? error),
+              },
+              {
+                status:
+                  typeof (error as { readonly status?: unknown }).status === "number"
+                    ? (error as { readonly status: number }).status
+                    : 500,
+              },
+            );
+      // Browser clients need the original error body, including authentication
+      // and provider failures. Never reflect an untrusted origin here.
+      return HttpServerResponse.setHeaders(response, headers ?? {});
+    }),
   ),
 );
 
