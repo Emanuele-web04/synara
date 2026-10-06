@@ -109,6 +109,8 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
+import { StudioOutputReactorLive } from "./StudioOutputReactor.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -665,7 +667,10 @@ describe("ProviderCommandReactor", () => {
     );
     const captureStudioOutputBaseline = vi.fn<
       StudioOutputReactorShape["captureBaselineBeforeTurn"]
-    >(input?.studioOutputReactor?.captureBaselineBeforeTurn ?? (() => Effect.void));
+    >(
+      input?.studioOutputReactor?.captureBaselineBeforeTurn ??
+        (() => Effect.succeed({ status: "completed" as const })),
+    );
     const cancelPendingStudioOutputBaseline = vi.fn<
       StudioOutputReactorShape["cancelPendingTurnBaseline"]
     >(input?.studioOutputReactor?.cancelPendingTurnBaseline ?? (() => Effect.void));
@@ -1746,7 +1751,9 @@ describe("ProviderCommandReactor", () => {
         lastResponseAt: new Date().toISOString(),
       };
       const getObservation = vi.fn(() => Effect.succeed(observation));
-      const captureBaselineBeforeTurn = vi.fn(() => Effect.promise(() => preparation));
+      const captureBaselineBeforeTurn = vi.fn(() =>
+        Effect.promise(() => preparation).pipe(Effect.as({ status: "completed" as const })),
+      );
       let releaseSubscriber!: () => void;
       let subscriberEntered = false;
       const subscriberGate = new Promise<void>((resolve) => {
@@ -11452,6 +11459,81 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
+  it.each(["git-and-studio-failed", "studio-failed", "not-applicable"] as const)(
+    "reports real Studio preparation state when %s",
+    async (mode) => {
+      const studioRuntime = ManagedRuntime.make(
+        StudioOutputReactorLive.pipe(
+          Layer.provide(
+            Layer.succeed(ProviderService, {
+              streamEvents: Stream.empty,
+            } as unknown as ProviderServiceShape),
+          ),
+          Layer.provide(Layer.succeed(OrchestrationEngineService, {} as OrchestrationEngineShape)),
+          Layer.provide(
+            Layer.succeed(ProjectionSnapshotQuery, {
+              getThreadShellById: () =>
+                mode === "not-applicable"
+                  ? Effect.succeed(Option.none())
+                  : Effect.die(new Error("Studio workspace lookup failed")),
+            } as never),
+          ),
+          Layer.provide(NodeServices.layer),
+          Layer.provide(SqlitePersistenceMemory),
+        ),
+      );
+      try {
+        const studio = await studioRuntime.runPromise(Effect.service(StudioOutputReactor));
+        const harness = await createHarness({
+          checkpointStore: {
+            isGitRepository: () => Effect.succeed(true),
+            captureCheckpoint: () =>
+              mode === "studio-failed"
+                ? Effect.void
+                : Effect.fail(
+                    new GitCommandError({
+                      operation: "test.capture",
+                      cwd: "/tmp/provider-project",
+                      command: "git add",
+                      detail: "Git capture failed",
+                    }),
+                  ),
+            hasCheckpointRef: () => Effect.succeed(false),
+          },
+          studioOutputReactor: {
+            captureBaselineBeforeTurn: (threadId) =>
+              Effect.promise(() =>
+                studioRuntime.runPromise(studio.captureBaselineBeforeTurn(threadId)),
+              ),
+            cancelPendingTurnBaseline: studio.cancelPendingTurnBaseline,
+          },
+        });
+        await dispatchHarnessUserTurn(harness, {
+          messageId: "both-baselines-failed",
+          text: "Continue with truthful baseline feedback",
+          createdAt: new Date().toISOString(),
+        });
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1, 500);
+        const notices = (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "checkpoint.baseline.skipped",
+        );
+        expect(notices).toHaveLength(1);
+        expect(notices?.[0]?.payload).toMatchObject({
+          checkpointBaseline: mode === "studio-failed" ? "captured" : "unavailable",
+          studioPreparation: mode === "not-applicable" ? "not-applicable" : "unavailable",
+          detail: expect.stringContaining(
+            mode === "not-applicable" ? "not applicable" : "Studio workspace lookup failed",
+          ),
+        });
+        expect(JSON.stringify(notices?.[0]?.payload)).not.toContain(
+          "Completed Studio preparation is preserved",
+        );
+      } finally {
+        await studioRuntime.dispose();
+      }
+    },
+  );
+
   it.each(["git-failed", "not-git", "prepared"] as const)(
     "retains independently prepared Studio baseline when Git preparation is %s",
     async (mode) => {
@@ -11475,6 +11557,7 @@ describe("ProviderCommandReactor", () => {
           captureBaselineBeforeTurn: () =>
             Effect.sync(() => {
               studioPrepared = true;
+              return { status: "completed" as const };
             }),
           cancelPendingTurnBaseline: () =>
             Effect.sync(() => {
@@ -11529,7 +11612,10 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness({
         preTurnBaselineTimeout: Duration.millis(30),
         studioOutputReactor: {
-          captureBaselineBeforeTurn: () => (kind === "studio" ? hungCapture : Effect.void),
+          captureBaselineBeforeTurn: () =>
+            (kind === "studio" ? hungCapture : Effect.void).pipe(
+              Effect.as({ status: "completed" as const }),
+            ),
           cancelPendingTurnBaseline: () =>
             Effect.sync(() => {
               studioCleared = true;
@@ -11604,7 +11690,7 @@ describe("ProviderCommandReactor", () => {
         hasCheckpointRef: () => Effect.sync(() => published),
       },
       studioOutputReactor: {
-        captureBaselineBeforeTurn: () => Effect.void,
+        captureBaselineBeforeTurn: () => Effect.succeed({ status: "completed" as const }),
         cancelPendingTurnBaseline: () =>
           Effect.sync(() => {
             studioCleared = true;
@@ -11640,7 +11726,10 @@ describe("ProviderCommandReactor", () => {
         captureCheckpoint: () => Deferred.await(release),
         hasCheckpointRef: () => Effect.succeed(false),
       },
-      studioOutputReactor: { captureBaselineBeforeTurn: () => Deferred.await(release) },
+      studioOutputReactor: {
+        captureBaselineBeforeTurn: () =>
+          Deferred.await(release).pipe(Effect.as({ status: "completed" as const })),
+      },
     });
     try {
       await dispatchHarnessUserTurn(harness, {
@@ -11668,7 +11757,7 @@ describe("ProviderCommandReactor", () => {
       releaseCapture = resolve;
     });
     const captureBaselineBeforeTurn = vi.fn<StudioOutputReactorShape["captureBaselineBeforeTurn"]>(
-      () => Effect.promise(() => captureGate),
+      () => Effect.promise(() => captureGate).pipe(Effect.as({ status: "completed" as const })),
     );
     const harness = await createHarness({
       studioOutputReactor: { captureBaselineBeforeTurn },

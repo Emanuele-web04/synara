@@ -141,11 +141,12 @@ const make = Effect.gen(function* () {
     pendingBaselineByThread.delete(threadId);
     const workspaceRoot = yield* resolveStudioScanRoot(threadId);
     if (!workspaceRoot) {
-      return;
+      return { status: "not-applicable" as const };
     }
     const files = yield* scanWorkspaceFiles(workspaceRoot);
     makeRoomForBaseline();
     pendingBaselineByThread.set(threadId, { threadId, workspaceRoot, files });
+    return { status: "completed" as const };
   });
 
   const captureBaselineBeforeTurn: StudioOutputReactorShape["captureBaselineBeforeTurn"] = (
@@ -159,7 +160,7 @@ const make = Effect.gen(function* () {
         return Effect.logWarning("studio output reactor failed to capture pre-turn baseline", {
           threadId,
           cause: Cause.pretty(cause),
-        });
+        }).pipe(Effect.as({ status: "failed" as const, detail: Cause.pretty(cause) }));
       }),
     );
 
