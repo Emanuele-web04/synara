@@ -44,6 +44,8 @@ thread context; retry closes the notice, and an applied event from the recovered
 subscription clears the failed state. A catch-up poll can recover missing events
 without reviving an exhausted stream, so replay alone keeps the failed state and
 retry notice visible. Retry rejections use separate stable notice identities.
+Delivery from a recovered shell subscription also dismisses its paused notice; a
+query fallback alone does not prove the stream recovered.
 Exhaustion does not clear thread cursors or reconnect the whole transport. The
 server owns its bounded event buffers and resume/snapshot policy; this client
 change does not edit server handlers or their buffering hooks.

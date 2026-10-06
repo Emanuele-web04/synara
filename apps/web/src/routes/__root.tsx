@@ -2167,6 +2167,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
+        toastManager.close("stream-overflow:shell");
         shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
         const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
         shellSnapshotSequence = item.snapshot.snapshotSequence;
@@ -2186,6 +2187,7 @@ function EventRouter() {
         return;
       }
       shellSnapshotSequence = item.sequence;
+      toastManager.close("stream-overflow:shell");
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);

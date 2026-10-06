@@ -693,6 +693,28 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
+  it("dismisses workspace overflow after a reconnected shell snapshot", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousShell = subscribeShellRequestCount;
+      for (const listener of shellStreamFailureListeners)
+        listener({
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("Stream overflow retry budget exhausted"),
+        });
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .toBeVisible();
+      sendServerWelcomePush();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("resumes exhausted thread overflow without a detail snapshot", async () => {
     const mounted = await mountApp();
     try {
