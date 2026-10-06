@@ -120,6 +120,11 @@ Synara reports that delivery is still unknown; reconnect to an updated server an
 before sending again. Socket recovery restores active subscriptions
 and reports the connection as open only after the feature socket answers.
 
+Thread runtime errors appear above the transcript. Use **Show details** to read the full error
+or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
+quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
+not offer a generic Retry because an error message alone cannot prove that resending is safe.
+
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
 
