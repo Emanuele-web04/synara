@@ -691,12 +691,15 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest.pipe(
-      Effect.catchTag("AuthError", (error) => Effect.fail(error)),
-    );
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    // Desktop image requests carry the local startup token in the URL, just
+    // like site favicons and attachment previews; remote servers require a session.
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
     const projectCwd = url.searchParams.get("cwd");
     if (!projectCwd) return HttpServerResponse.text("Missing cwd parameter", { status: 400 });
     const resolver = yield* ProjectFaviconResolver;
@@ -713,19 +716,26 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
         },
       });
     }
-    return yield* HttpServerResponse.file(faviconPath, {
-      status: 200,
+    const fileSystem = yield* FileSystem.FileSystem;
+    const fileInfo = yield* fileSystem
+      .stat(faviconPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!fileInfo || fileInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    // Reuse local-image/attachment streaming: the desktop route stack does not
+    // supply the extra HttpPlatform service used by HttpServerResponse.file.
+    return streamedFileResponse({
+      fileSystem,
+      path: faviconPath,
+      sizeBytes: Number(fileInfo.size),
       headers: {
         "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
         ...(nodePath.extname(faviconPath).toLowerCase() === ".svg"
           ? SVG_DOCUMENT_SECURITY_HEADERS
           : {}),
       },
-    }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
-      ),
-    );
+    });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 

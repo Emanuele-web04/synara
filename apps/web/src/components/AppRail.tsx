@@ -66,7 +66,7 @@ export function railCentralGlyphs(name: string): AppRailGlyphs {
   return glyphs;
 }
 
-/** Rail glyphs for a project shortcut: the same glyph its sidebar row shows. */
+/** Rail glyphs for a project shortcut: its chosen appearance or full favicon, with a folder fallback. */
 export function railProjectGlyphs(
   cwd: string,
   appearance: ProjectAppearance | null,
@@ -80,6 +80,7 @@ export function railProjectGlyphs(
         cwd={cwd}
         expanded={false}
         appearance={appearance}
+        presentation="favicon"
         {...(className ? { glyphClassName: className } : {})}
       />
     );

@@ -92,6 +92,10 @@ will stop and offers to resume it automatically on the next launch.
 
 A project is the folder Synara works with.
 
+Project rows in the sidebar and pinned project shortcuts in the left rail use the project's local
+favicon when one is available, with a folder as the fallback. An emoji, icon, or folder color chosen
+in Edit project takes priority over the detected favicon.
+
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
 that folder visible with its path.
