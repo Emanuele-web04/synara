@@ -178,7 +178,7 @@ import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
-import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
+import { HubOutputReactor } from "../Services/HubOutputReactor.ts";
 import {
   isClaimedProviderIntent,
   isProviderIntentEvent,
@@ -908,7 +908,7 @@ const make = Effect.gen(function* () {
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
   const checkpointStore = yield* CheckpointStore;
-  const studioOutputReactor = yield* StudioOutputReactor;
+  const hubOutputReactor = yield* HubOutputReactor;
   const git = yield* GitCore;
   const gatewayOperations = yield* AgentGatewayOperationRepository;
   // Captured at build like the rest of the reactor's services: the command
@@ -3596,7 +3596,7 @@ const make = Effect.gen(function* () {
 
     let baselineFailure: string | undefined;
     let checkpointPreparation: "captured" | "not-applicable" | "unavailable" = "unavailable";
-    let studioPreparation: "completed" | "not-applicable" | "unavailable" = "unavailable";
+    let hubPreparation: "completed" | "not-applicable" | "unavailable" = "unavailable";
     let checkpointCaptureCwd: string | undefined;
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
@@ -3650,13 +3650,13 @@ const make = Effect.gen(function* () {
     const capturePreTurnBaselines = Effect.all(
       [
         captureMessageStartCheckpoint,
-        studioOutputReactor.captureBaselineBeforeTurn(input.threadId).pipe(
+        hubOutputReactor.captureBaselineBeforeTurn(input.threadId).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               if (result.status === "failed") {
                 baselineFailure = [baselineFailure, result.detail].filter(Boolean).join("\n");
               } else {
-                studioPreparation = result.status;
+                hubPreparation = result.status;
               }
             }),
           ),
@@ -3686,26 +3686,26 @@ const make = Effect.gen(function* () {
             if (Option.isSome(existing) && existing.value) checkpointPreparation = "captured";
           }
           const checkpointUnavailable = checkpointPreparation === "unavailable";
-          const studioUnavailable = studioPreparation === "unavailable";
-          if (!checkpointUnavailable && !studioUnavailable) return;
+          const hubUnavailable = hubPreparation === "unavailable";
+          if (!checkpointUnavailable && !hubUnavailable) return;
           if (Option.isSome(captured) && baselineFailure === undefined) return;
           const unavailable =
-            checkpointUnavailable && studioUnavailable
-              ? "checkpoint and Studio baselines"
+            checkpointUnavailable && hubUnavailable
+              ? "checkpoint and Hub baselines"
               : checkpointUnavailable
                 ? "checkpoint baseline"
-                : "Studio baseline";
+                : "Hub baseline";
           const consequence =
-            checkpointUnavailable && studioUnavailable
-              ? "Checkpoint diff, file undo and Studio output indexing may be unavailable."
+            checkpointUnavailable && hubUnavailable
+              ? "Checkpoint diff, file undo and Hub output indexing may be unavailable."
               : checkpointUnavailable
-                ? `Checkpoint diff and file undo may be unavailable. ${studioPreparation === "completed" ? "Completed Studio preparation is preserved." : "Studio preparation is not applicable to this workspace."}`
-                : `Studio output indexing may be unavailable. ${checkpointPreparation === "captured" ? "The independently prepared checkpoint is preserved." : "Checkpoint capture is not applicable to this workspace."}`;
+                ? `Checkpoint diff and file undo may be unavailable. ${hubPreparation === "completed" ? "Completed Hub preparation is preserved." : "Hub preparation is not applicable to this workspace."}`
+                : `Hub output indexing may be unavailable. ${checkpointPreparation === "captured" ? "The independently prepared checkpoint is preserved." : "Checkpoint capture is not applicable to this workspace."}`;
           const detail = `${Option.isNone(captured) ? `The pre-turn ${unavailable} did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms.` : `The pre-turn ${unavailable} could not be prepared.`} The turn continued. ${consequence}${baselineFailure === undefined ? "" : ` ${baselineFailure}`}`;
           return yield* (
-            studioPreparation !== "unavailable"
+            hubPreparation !== "unavailable"
               ? Effect.void
-              : studioOutputReactor.cancelPendingTurnBaseline(input.threadId)
+              : hubOutputReactor.cancelPendingTurnBaseline(input.threadId)
           ).pipe(
             Effect.andThen(
               orchestrationEngine.dispatch({
@@ -3723,7 +3723,8 @@ const make = Effect.gen(function* () {
                     detail,
                     messageId: input.messageId,
                     checkpointBaseline: checkpointPreparation,
-                    studioPreparation,
+                    // Keep the legacy key compatible with persisted activities.
+                    studioPreparation: hubPreparation,
                   },
                   turnId: null,
                   createdAt: input.createdAt,
@@ -3739,9 +3740,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    const cancelPendingStudioBaseline = studioOutputReactor.cancelPendingTurnBaseline(
-      input.threadId,
-    );
+    const cancelPendingHubBaseline = hubOutputReactor.cancelPendingTurnBaseline(input.threadId);
     const priorTranscriptBootstrapRetiresOnAcceptedTurn =
       shouldBootstrapPriorTranscriptContext &&
       (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent);
@@ -3757,7 +3756,7 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           target: input.reviewTarget,
         })
-        .pipe(Effect.onError(() => cancelPendingStudioBaseline));
+        .pipe(Effect.onError(() => cancelPendingHubBaseline));
     } else if (input.dispatchMode === "steer") {
       if (input.claudeCompactionCancellation) {
         yield* cancelClaudeCompactionFromJournal(
@@ -3780,7 +3779,7 @@ const make = Effect.gen(function* () {
       yield* awaitClaudeCompactionPreparation(
         capturePreTurnBaselines,
         input.claudeCompactionCancellation,
-      ).pipe(Effect.onError(() => cancelPendingStudioBaseline));
+      ).pipe(Effect.onError(() => cancelPendingHubBaseline));
       const tracksDroidContextAcceptance =
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
@@ -3934,7 +3933,7 @@ const make = Effect.gen(function* () {
                 pendingContextBootstrapAttempts.delete(input.threadId);
               }
             });
-            yield* cancelPendingStudioBaseline;
+            yield* cancelPendingHubBaseline;
           }),
         ),
       );
