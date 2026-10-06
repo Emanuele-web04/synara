@@ -4287,6 +4287,9 @@ describe("ProviderRuntimeIngestion", () => {
                 payload: { itemType: "assistant_message", status: "completed" },
               },
         );
+        // The message commit precedes terminal policy settlement. Drain the
+        // owner before advancing Date again so its grace starts at completion.
+        await harness.drain();
         const thread = await waitForThread(harness.engine, (entry) =>
           entry.messages.some(
             (message: ProviderRuntimeTestMessage) =>
