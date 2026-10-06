@@ -10,7 +10,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
-import { newCommandId } from "~/lib/utils";
+import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
   commandForProjectScript,
@@ -19,7 +19,7 @@ import {
   type ProjectScriptRunResult,
 } from "~/projectScripts";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
-import { useRightDockStore } from "~/rightDockStore";
+import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { isElectron } from "../../env";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import type { Project, Thread } from "../../types";
@@ -52,7 +52,7 @@ export function useChatProjectScripts({
 }: ChatProjectScriptsInput) {
   const queryClient = useQueryClient();
   const pendingScriptThreads = useRef(new Set<ThreadId>());
-  const storeNewTerminal = useTerminalStateStore((state) => state.newTerminal);
+  const storeEnsureDockTerminal = useTerminalStateStore((state) => state.ensureDockTerminal);
   const storeSetTerminalMetadata = useTerminalStateStore((state) => state.setTerminalMetadata);
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -77,7 +77,20 @@ export function useChatProjectScripts({
       const terminalThreadId = dockTerminalThreadId(activeThreadId);
       const terminalState =
         useTerminalStateStore.getState().terminalStateByThreadId[terminalThreadId];
-      const baseTerminalId = terminalState?.activeTerminalId ?? DEFAULT_THREAD_TERMINAL_ID;
+      const dock = selectRightDockState(activeThreadId)(useRightDockStore.getState());
+      const terminalPane =
+        dock.panes.find((pane) => pane.id === dock.activePaneId && pane.kind === "terminal") ??
+        dock.panes.find(
+          (pane) =>
+            pane.kind === "terminal" &&
+            terminalState?.dockTerminalIdsByPaneId?.[pane.id] === terminalState?.activeTerminalId,
+        ) ??
+        dock.panes.find((pane) => pane.kind === "terminal");
+      const targetPaneId = terminalPane?.id ?? randomUUID();
+      const baseTerminalId =
+        terminalState?.dockTerminalIdsByPaneId?.[targetPaneId] ??
+        terminalState?.activeTerminalId ??
+        DEFAULT_THREAD_TERMINAL_ID;
       if (
         pendingScriptThreads.current.has(activeThreadId) ||
         terminalState?.runningTerminalIds.includes(baseTerminalId)
@@ -108,8 +121,18 @@ export function useChatProjectScripts({
           onOpened: () => {
             // Attach only after the requested cwd/env are set, but before writing
             // so the session stays accessible if command delivery fails.
-            storeNewTerminal(terminalThreadId, targetTerminalId);
-            useRightDockStore.getState().openPane(activeThreadId, { kind: "terminal" });
+            storeEnsureDockTerminal(terminalThreadId, targetPaneId, targetTerminalId);
+            const dockStore = useRightDockStore.getState();
+            if (
+              selectRightDockState(activeThreadId)(dockStore).panes.some(
+                (pane) => pane.id === targetPaneId,
+              )
+            ) {
+              dockStore.setActivePane(activeThreadId, targetPaneId);
+              dockStore.setDockOpen(activeThreadId, true);
+            } else {
+              dockStore.openPane(activeThreadId, { kind: "terminal", paneId: targetPaneId });
+            }
           },
         });
         if (metadata) {
@@ -156,7 +179,7 @@ export function useChatProjectScripts({
       gitCwd,
       isGroupContainer,
       setThreadError,
-      storeNewTerminal,
+      storeEnsureDockTerminal,
       storeSetTerminalMetadata,
       setLastInvokedScriptByProjectId,
     ],

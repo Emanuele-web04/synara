@@ -79,6 +79,7 @@ import { getRouter } from "../router";
 import { showContextMenuFallback } from "../contextMenuFallback";
 import { useRightDockStore } from "../rightDockStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
+import { collectLeaves } from "../splitView.logic";
 import { GITHUB_INBOX_DOCK_HOST_ID } from "../rightDockStore.logic";
 import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { resolveSplitViewPaneIdForThread, useSplitViewStore } from "../splitViewStore";
@@ -7263,6 +7264,11 @@ describe("ChatView transcript geometry (full app)", () => {
             direction: "horizontal",
             side: "second",
           });
+          const splitView = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+          const actionPaneId = resolveSplitViewPaneIdForThread(splitView, THREAD_ID)!;
+          useSplitViewStore
+            .getState()
+            .setPanePanelState(splitViewId, actionPaneId, { panel: "diff" });
           await mounted.router.navigate({
             to: "/$threadId",
             params: { threadId: THREAD_ID },
@@ -7326,6 +7332,34 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2);
         }
         expect((await waitForComposerEditor()).getBoundingClientRect().width).toBeGreaterThan(0);
+        if (entryPoint === "split button") {
+          const openedSessionIds = new Set(
+            wsRequests
+              .filter((request) => request._tag === WS_METHODS.terminalOpen)
+              .map((request) => request.terminalId),
+          );
+          await page.getByRole("button", { name: "Hide terminal", exact: true }).click();
+          await expect
+            .element(page.getByRole("complementary", { name: "Terminal" }))
+            .not.toBeInTheDocument();
+          await page
+            .getByRole("button", { name: "Toggle right sidebar", exact: true })
+            .first()
+            .click();
+          await expect.element(page.getByRole("complementary", { name: "Terminal" })).toBeVisible();
+          expect(
+            new Set(
+              wsRequests
+                .filter((request) => request._tag === WS_METHODS.terminalOpen)
+                .map((request) => request.terminalId),
+            ),
+          ).toEqual(openedSessionIds);
+          const splitViewId = mounted.router.state.location.search.splitViewId!;
+          const splitView = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+          expect(
+            collectLeaves(splitView.root).find((leaf) => leaf.threadId === THREAD_ID)?.panel.panel,
+          ).toBe("diff");
+        }
       } finally {
         await mounted.cleanup();
       }

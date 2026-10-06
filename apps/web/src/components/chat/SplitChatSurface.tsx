@@ -212,6 +212,7 @@ function SplitPaneEmbeddedPanel(props: {
           <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
             <DockTerminalPane
               hostThreadId={props.threadId}
+              paneId={terminalPane.id}
               projectId={props.projectId}
               paneScopeId={props.paneScopeId}
               onClosePanel={props.onClosePanel}
@@ -341,6 +342,11 @@ function SplitPaneSurface(props: {
   }) => void;
 }) {
   const paneScopeId = splitViewPaneScopeId(props.splitView.id, props.paneId);
+  const dockState = useRightDockStore(selectRightDockState(props.threadId));
+  const terminalPane =
+    dockState.panes.find(
+      (pane) => pane.id === dockState.activePaneId && pane.kind === "terminal",
+    ) ?? dockState.panes.find((pane) => pane.kind === "terminal");
   const panelOpen = props.panelState.panel !== null;
   const shouldRenderPanelContent = panelOpen || props.panelState.hasOpenedPanel;
 
@@ -394,6 +400,19 @@ function SplitPaneSurface(props: {
               isFocusedPane={props.isFocused}
               panelState={props.panelState}
               onToggleDiff={props.onToggleDiff}
+              {...(terminalPane && props.threadId
+                ? {
+                    onToggleRightDock: () => {
+                      const store = useRightDockStore.getState();
+                      const hostId = props.threadId!;
+                      const current = selectRightDockState(hostId)(store);
+                      const terminalVisible =
+                        current.open && current.activePaneId === terminalPane.id;
+                      store.setActivePane(hostId, terminalPane.id);
+                      store.setDockOpen(hostId, !terminalVisible);
+                    },
+                  }
+                : {})}
               onToggleBrowser={props.onToggleBrowser}
               onOpenBrowserUrl={props.onOpenBrowserUrl}
               onOpenTurnDiff={props.onOpenTurnDiff}
@@ -634,6 +653,19 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   };
 
   const closePanePanel = (paneId: PaneId) => {
+    if (!activeSplitView) return;
+    const leaf = findLeafPaneById(activeSplitView.root, paneId);
+    if (leaf?.threadId) {
+      const store = useRightDockStore.getState();
+      const dock = selectRightDockState(leaf.threadId)(store);
+      if (
+        dock.open &&
+        dock.panes.some((pane) => pane.id === dock.activePaneId && pane.kind === "terminal")
+      ) {
+        store.setDockOpen(leaf.threadId, false);
+        return;
+      }
+    }
     updatePanePanelState(paneId, { panel: null });
   };
 

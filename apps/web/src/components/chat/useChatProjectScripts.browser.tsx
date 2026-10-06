@@ -38,14 +38,24 @@ it.each([false, true])(
       agentState: null,
     });
     store.newTerminal(scopeId, "restored-shell");
+    store.ensureDockTerminal(scopeId, "action-pane");
+    store.ensureDockTerminal(scopeId, "sibling-pane");
+    const siblingId =
+      useTerminalStateStore.getState().terminalStateByThreadId[scopeId]!.dockTerminalIdsByPaneId![
+        "sibling-pane"
+      ]!;
+    store.setTerminalActivity(scopeId, siblingId, { hasRunningSubprocess: true, agentState: null });
+    store.setActiveTerminal(scopeId, "restored-shell");
     store.setTerminalOpen(scopeId, false);
+    useRightDockStore.getState().openPane(thread.id, { kind: "terminal", paneId: "sibling-pane" });
+    useRightDockStore.getState().openPane(thread.id, { kind: "terminal", paneId: "action-pane" });
     const centerState = useTerminalStateStore.getState().terminalStateByThreadId[thread.id];
     useRightDockStore.getState().openPane(thread.id, { kind: "git" });
     useRightDockStore.getState().setDockOpen(thread.id, false);
     // Hydration does not restore activity; the renderer cannot authorize a close.
     expect(
       useTerminalStateStore.getState().terminalStateByThreadId[scopeId]?.runningTerminalIds,
-    ).toEqual([]);
+    ).toEqual([siblingId]);
     const setThreadError = vi.fn();
     const queryClient = new QueryClient();
     function ScriptAction() {
@@ -106,15 +116,21 @@ it.each([false, true])(
     expect(launched.threadId).toBe(scopeId);
     expect(launched.cwd).toBe(project.cwd);
     expect(launched.terminalId).not.toBe("restored-shell");
-    expect(useTerminalStateStore.getState().terminalStateByThreadId[scopeId]?.terminalIds).toEqual([
-      launched.terminalId,
-    ]);
+    const launchedState = useTerminalStateStore.getState().terminalStateByThreadId[scopeId]!;
+    expect(launchedState.terminalIds).toEqual(
+      expect.arrayContaining([siblingId, launched.terminalId]),
+    );
+    expect(launchedState.dockTerminalIdsByPaneId).toEqual({
+      "sibling-pane": siblingId,
+      "action-pane": launched.terminalId,
+    });
     expect(useTerminalStateStore.getState().terminalStateByThreadId[thread.id]).toEqual(
       centerState,
     );
     const dock = selectRightDockState(thread.id)(useRightDockStore.getState());
     expect(dock.open).toBe(true);
-    expect(dock.panes.find((pane) => pane.id === dock.activePaneId)?.kind).toBe("terminal");
+    expect(dock.activePaneId).toBe("action-pane");
+    expect(dock.panes.filter((pane) => pane.kind === "terminal")).toHaveLength(2);
     expect(dock.panes.some((pane) => pane.kind === "git")).toBe(true);
     if (writeFails) {
       await expect.poll(() => setThreadError.mock.lastCall?.[1]).toBe("Command delivery failed");
