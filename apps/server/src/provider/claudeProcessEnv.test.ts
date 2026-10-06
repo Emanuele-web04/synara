@@ -19,6 +19,62 @@ import {
 import { buildClaudeInstanceProcessEnv, claudeIsolatedHomePath } from "./claudeEnvironment.ts";
 
 describe("claudeProcessEnv", () => {
+  it("isolates macOS accounts by config directory while retaining the system home and identity", () => {
+    const options = {
+      homeDir: "/home/server",
+      isolationRootDir: "/synara/state",
+      platform: "darwin" as const,
+      baseEnvironment: {
+        HOME: "/home/server",
+        USER: "tester",
+        LOGNAME: "tester",
+        CLAUDE_CONFIG_DIR: "/ambient/config",
+        CLAUDE_SECURESTORAGE_CONFIG_DIR: "/ambient/credentials",
+        ANTHROPIC_API_KEY: "ambient-key",
+      },
+    };
+    const work = buildClaudeInstanceProcessEnv(undefined, undefined, {
+      ...options,
+      providerInstanceId: "claude_work",
+    });
+    const other = buildClaudeInstanceProcessEnv(
+      undefined,
+      {},
+      {
+        ...options,
+        providerInstanceId: "claude_other",
+      },
+    );
+    assert.equal(work.HOME, "/home/server");
+    assert.equal(work.USER, "tester");
+    assert.equal(work.LOGNAME, "tester");
+    assert.equal(work.ANTHROPIC_API_KEY, undefined);
+    assert.equal(
+      work.CLAUDE_CONFIG_DIR,
+      path.join(
+        claudeIsolatedHomePath({
+          ...options,
+          providerInstanceId: "claude_work",
+        }),
+        ".claude",
+      ),
+    );
+    assert.equal(work.CLAUDE_SECURESTORAGE_CONFIG_DIR, work.CLAUDE_CONFIG_DIR);
+    assert.notEqual(other.CLAUDE_CONFIG_DIR, work.CLAUDE_CONFIG_DIR);
+
+    const custom = buildClaudeInstanceProcessEnv(
+      undefined,
+      {
+        CLAUDE_CONFIG_DIR: "/selected/config",
+        CLAUDE_SECURESTORAGE_CONFIG_DIR: "/selected/credentials",
+      },
+      { ...options, providerInstanceId: "claudeAgent" },
+    );
+    assert.equal(custom.HOME, "/home/server");
+    assert.equal(custom.CLAUDE_CONFIG_DIR, "/selected/config");
+    assert.equal(custom.CLAUDE_SECURESTORAGE_CONFIG_DIR, "/selected/credentials");
+  });
+
   const dynamicAccountEnvironment = {
     AWS_ENDPOINT_URL_FUTURE_SERVICE: "https://account.example.test/aws",
     VERTEX_REGION_CLAUDE_FUTURE_MODEL: "account-region",
@@ -141,7 +197,11 @@ describe("claudeProcessEnv", () => {
         buildClaudeInstanceProcessEnv(
           undefined,
           { ANTHROPIC_AUTH_TOKEN: "instance-token" },
-          { isolationRootDir: "/synara/state", providerInstanceId: "claude_work" },
+          {
+            isolationRootDir: "/synara/state",
+            providerInstanceId: "claude_work",
+            platform: "linux",
+          },
         ),
     );
 
@@ -197,11 +257,13 @@ describe("claudeProcessEnv", () => {
   it("keeps empty and redacted custom instances on distinct isolated homes", () => {
     const isolationRootDir = "/synara/state";
     const redactedA = buildClaudeInstanceProcessEnv(undefined, undefined, {
+      platform: "linux",
       homeDir: "/home/server",
       isolationRootDir,
       providerInstanceId: "claude_redacted_a",
     });
     const redactedB = buildClaudeInstanceProcessEnv(undefined, undefined, {
+      platform: "linux",
       homeDir: "/home/server",
       isolationRootDir,
       providerInstanceId: "claude_redacted_b",
@@ -210,6 +272,7 @@ describe("claudeProcessEnv", () => {
       undefined,
       {},
       {
+        platform: "linux",
         homeDir: "/home/server",
         isolationRootDir,
         providerInstanceId: "claude_empty",
@@ -249,6 +312,7 @@ describe("claudeProcessEnv", () => {
 
   it("preserves the default instance home unless it configures an environment", () => {
     const defaultResult = buildClaudeInstanceProcessEnv(undefined, undefined, {
+      platform: "linux",
       homeDir: "/home/server",
       isolationRootDir: "/synara/state",
       providerInstanceId: "claudeAgent",
@@ -257,6 +321,7 @@ describe("claudeProcessEnv", () => {
       undefined,
       { ANTHROPIC_AUTH_TOKEN: "default-instance-token" },
       {
+        platform: "linux",
         homeDir: "/home/server",
         isolationRootDir: "/synara/state",
         providerInstanceId: "claudeAgent",

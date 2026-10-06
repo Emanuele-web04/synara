@@ -6,7 +6,8 @@
 
 import { ArrowRightIcon, TriangleAlertIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
+import { ComposerStackedPanel } from "./ComposerStackedPanel";
+import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
 
 export function ComposerBranchMismatchBanner({
   threadBranch,
@@ -16,11 +17,9 @@ export function ComposerBranchMismatchBanner({
   currentBranch: string;
 }) {
   return (
-    <div
-      className={cn(
-        COMPOSER_INPUT_SURFACE_CLASS_NAME,
-        "flex w-full min-w-0 items-center gap-3 px-4 py-3.5",
-      )}
+    <ComposerStackedPanel
+      detached
+      className={cn(COMPOSER_NOTICE_CONTENT_CLASS_NAME, "flex items-center gap-3")}
       data-testid="composer-branch-mismatch-warning"
       role="status"
     >
@@ -29,7 +28,7 @@ export function ComposerBranchMismatchBanner({
         className="size-4.5 shrink-0 text-[var(--color-text-foreground-secondary)]"
       />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-ui leading-5 font-medium text-foreground/95">
+        <p className="truncate text-ui-sm leading-5 font-medium text-foreground/95">
           Sending a message will move this thread to the current branch
         </p>
         <div className="mt-0.5 flex min-w-0 items-center gap-2 text-ui-sm leading-5">
@@ -48,6 +47,6 @@ export function ComposerBranchMismatchBanner({
           </code>
         </div>
       </div>
-    </div>
+    </ComposerStackedPanel>
   );
 }

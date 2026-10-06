@@ -768,12 +768,12 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 const runProviderCommand = (
   executable: string,
   args: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv,
+  options: { readonly env: NodeJS.ProcessEnv; readonly cwd?: string | undefined },
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = makeEffectProcessCommand(executable, args, {
-      env,
+      ...options,
       // Health probes are non-interactive. Leaving stdin as a pipe can keep CLIs
       // such as Antigravity waiting even after a read-only subcommand has finished.
       stdin: "ignore",
@@ -798,7 +798,8 @@ const runCodexCommand = (
   executable = "codex",
   env: NodeJS.ProcessEnv = providerCommandEnv(CODEX_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  // Account health must not merge project config from the desktop's working directory.
+  runProviderCommand(executable, args, { env, cwd: env.CODEX_HOME }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -811,7 +812,7 @@ const runClaudeCommand = (
   executable = "claude",
   env: NodeJS.ProcessEnv = buildClaudeProcessEnv(),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -911,7 +912,7 @@ const runGrokCommand = (
   executable = "grok",
   env: NodeJS.ProcessEnv = providerCommandEnv(GROK_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -924,7 +925,7 @@ const runOpenCodeCommand = (
   executable = "opencode",
   env: NodeJS.ProcessEnv = providerCommandEnv(OPENCODE_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -938,7 +939,7 @@ const runCursorCommand = (
   env: NodeJS.ProcessEnv = buildCursorAgentHeadlessEnv(),
 ) => {
   const command = buildCursorAgentCommand(executable, args);
-  return runProviderCommand(command.command, command.args, env).pipe(
+  return runProviderCommand(command.command, command.args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${command.command} ENOENT`))
@@ -1024,7 +1025,7 @@ const runPiCommand = (
   executable = "pi",
   env: NodeJS.ProcessEnv = providerCommandEnv(PI_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1033,7 +1034,7 @@ const runPiCommand = (
   );
 
 const runOmpCommand = (args: ReadonlyArray<string>, executable = "omp") =>
-  runProviderCommand(executable, args, providerCommandEnv(OMP_PROVIDER)).pipe(
+  runProviderCommand(executable, args, { env: providerCommandEnv(OMP_PROVIDER) }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1046,7 +1047,7 @@ const runAntigravityCommand = (
   executable = "agy",
   env: NodeJS.ProcessEnv = providerCommandEnv(ANTIGRAVITY_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1664,7 +1665,7 @@ const runDroidCommand = (
   args: ReadonlyArray<string>,
   executable = "droid",
   env: NodeJS.ProcessEnv = providerCommandEnv(DROID_PROVIDER),
-) => runProviderCommand(executable, args, env);
+) => runProviderCommand(executable, args, { env });
 
 export const makeCheckDroidProviderStatus = (
   binaryPath?: string,
@@ -2418,7 +2419,7 @@ export const makeCheckDevinProviderStatus = (
     const env = makeProviderProbeEnv(DEVIN_PROVIDER, environment);
 
     const versionProbe = yield* probeProviderCliVersion(
-      runProviderCommand(executable, ["--version"], env),
+      runProviderCommand(executable, ["--version"], { env }),
       DEFAULT_TIMEOUT_MS,
     );
 

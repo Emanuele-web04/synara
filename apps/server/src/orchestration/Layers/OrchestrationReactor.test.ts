@@ -80,7 +80,7 @@ describe("OrchestrationReactor", () => {
         ),
         Layer.provideMerge(
           Layer.succeed(StudioOutputReactor, {
-            captureBaselineBeforeTurn: () => Effect.void,
+            captureBaselineBeforeTurn: () => Effect.succeed({ status: "not-applicable" as const }),
             cancelPendingTurnBaseline: () => Effect.void,
             start: Effect.acquireRelease(
               Effect.sync(() => {
