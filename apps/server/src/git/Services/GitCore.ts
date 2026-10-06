@@ -218,8 +218,11 @@ export interface GitCoreShape {
   ) => Effect.Effect<A, E | GitCommandError, R>;
   /**
    * Execute a raw Git command.
-   * Live GitCore instances share eight execution slots, including long and unlimited commands.
-   * Queue time precedes the command deadline; each command keeps its existing timeout policy.
+   * Live instances share six read/checkpoint slots and two long/network slots (eight total).
+   * Long/network includes unlimited commands and commit, push, pull, fetch or clone.
+   * Each FIFO class admits at most 128 queued callers; overload fails with GitCommandError.
+   * Queue time precedes the command deadline, but counts toward enclosing caller deadlines.
+   * Slots stay owned through process cleanup; push disables Git terminal prompting.
    */
   readonly execute: (input: ExecuteGitInput) => Effect.Effect<ExecuteGitResult, GitCommandError>;
 

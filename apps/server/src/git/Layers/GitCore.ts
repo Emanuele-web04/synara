@@ -56,10 +56,10 @@ import {
   type GitWorkingTreePatch,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
+import { gitSubcommand, withGitCommandAdmission } from "./GitCommandAdmission.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
-const gitProcesses = Semaphore.makeUnsafe(8);
 // Writes can scale with repository size and network speed. Bound captured logs,
 // not the operation; caller interruption still closes the owned process scope.
 const GIT_MUTATION_OPTIONS = { timeoutMs: null, outputMode: "truncate" } as const;
@@ -912,10 +912,20 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     }
 
     const executeWithoutAdmission = execute;
-    // Bound all GitCore commands across instances, including checkpoint writes
-    // and unlimited mutations. Admission precedes each command's own deadline
-    // and owns the complete scoped execution through cancellation cleanup.
-    execute = (input) => gitProcesses.withPermit(executeWithoutAdmission(input));
+    execute = (input) =>
+      Effect.suspend(() => {
+        const commandInput = {
+          ...input,
+          args: [...input.args],
+          ...(gitSubcommand(input.args) === "push"
+            ? { env: { ...input.env, GIT_TERMINAL_PROMPT: "0" } }
+            : {}),
+        };
+        return withGitCommandAdmission(
+          commandInput,
+          Effect.suspend(() => executeWithoutAdmission(commandInput)),
+        );
+      });
 
     const executeGit = (
       operation: string,
