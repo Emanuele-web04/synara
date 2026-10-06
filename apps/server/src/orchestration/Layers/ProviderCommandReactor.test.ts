@@ -820,7 +820,6 @@ describe("ProviderCommandReactor", () => {
       Effect.runPromise(PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid));
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
-    const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     // Fault injection for command admission. The reactor resolves
     // `dispatch` off the shared engine service on every call, so swapping the
     // property here is observed by the reactor without rebuilding the layer.
@@ -836,6 +835,9 @@ describe("ProviderCommandReactor", () => {
       engineDispatchTarget.dispatch = (command, context) =>
         interceptor(command) ?? passthroughDispatch(command, context);
     };
+    const projectionSnapshotQuery = await runtime.runPromise(
+      Effect.service(ProjectionSnapshotQuery),
+    );
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     const checkpointCoordinator = await runtime.runPromise(
       Effect.service(TurnCheckpointCoordinator),
@@ -929,7 +931,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
-      snapshotQuery,
+      projectionSnapshotQuery,
       seedCompletion: () =>
         runtime!.runPromise(sql`
         INSERT INTO agent_gateway_completions
@@ -1264,7 +1266,7 @@ describe("ProviderCommandReactor", () => {
     it("does not start a provider without folder grants when the owning project lookup fails", async () => {
       const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
       const lookup = vi
-        .spyOn(harness.snapshotQuery, "getProjectShellById")
+        .spyOn(harness.projectionSnapshotQuery, "getProjectShellById")
         .mockImplementation(() =>
           Effect.fail(
             new PersistenceSqlError({ operation: "project shell", detail: "lookup unavailable" }),
