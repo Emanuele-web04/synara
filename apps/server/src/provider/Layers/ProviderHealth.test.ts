@@ -107,6 +107,7 @@ function mockSpawnerLayer(
     options:
       | {
           readonly env?: NodeJS.ProcessEnv;
+          readonly cwd?: string;
           readonly windowsVerbatimArguments?: boolean;
           readonly stdin?: "pipe" | "ignore" | "inherit";
         }
@@ -125,6 +126,7 @@ function mockSpawnerLayer(
         args: ReadonlyArray<string>;
         options?: {
           env?: NodeJS.ProcessEnv;
+          cwd?: string;
           windowsVerbatimArguments?: boolean;
           stdin?: "pipe" | "ignore" | "inherit";
         };
@@ -1604,8 +1606,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.notStrictEqual(configuredHome, tmpDir);
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args, _command, env) => {
+          mockSpawnerLayer((args, _command, env, options) => {
             assert.strictEqual(env?.CODEX_HOME, expectedCodexHome);
+            assert.strictEqual(options?.cwd, expectedCodexHome);
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             if (joined === "-c mcp_servers={} login status") {
@@ -2160,10 +2163,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.tap((status) => Effect.sync(() => assert.strictEqual(status.status, "ready"))),
         Effect.provide(
           mockSpawnerLayer((args, _command, env) => {
-            assert.strictEqual(
-              env?.HOME,
-              claudeIsolatedHomePath({ isolationRootDir, providerInstanceId }),
-            );
+            const accountHome = claudeIsolatedHomePath({ isolationRootDir, providerInstanceId });
+            if (process.platform === "darwin") {
+              assert.strictEqual(env?.HOME, "/tmp/server-home");
+              assert.strictEqual(env?.CLAUDE_CONFIG_DIR, join(accountHome, ".claude"));
+              assert.strictEqual(env?.CLAUDE_SECURESTORAGE_CONFIG_DIR, env?.CLAUDE_CONFIG_DIR);
+            } else {
+              assert.strictEqual(env?.HOME, accountHome);
+            }
             assert.strictEqual(env?.ANTHROPIC_AUTH_TOKEN, "work-token");
             const joined = args.join(" ");
             if (joined === "--version") {

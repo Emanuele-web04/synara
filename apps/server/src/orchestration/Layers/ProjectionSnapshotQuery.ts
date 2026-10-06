@@ -1270,15 +1270,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     ))
   `);
   const durableTurnFailureActivityScope = sql.literal(`
-    kind = 'runtime.error'
-    OR (kind = 'turn.completed' AND (
-      tone = 'error' OR json_extract(payload_json, '$.state') = 'failed'
-    ))
-    OR (kind IN ('turn.completed', 'turn.aborted') AND (
-      ranked.thread_id, ranked.turn_id
-    ) IN (
+    kind IN ('runtime.error', 'turn.completed', 'turn.aborted')
+    AND (ranked.thread_id, ranked.turn_id) IN (
       SELECT thread_id, turn_id FROM failure_turns
-    ))
+    )
   `);
 
   const listThreadActivityRows = SqlSchema.findAll({

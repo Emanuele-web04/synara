@@ -53,7 +53,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           yield* sql`INSERT INTO projection_thread_activities
           (thread_id, activity_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
           VALUES (${threadId}, ${`${state}-error`}, 'old-turn', 'error', 'runtime.error', 'Provider error', '{"message":"Selected model is at capacity."}', 1, ${now}),
-          (${threadId}, ${`${state}-terminal`}, 'old-turn', ${state === "failed" ? "error" : "info"}, 'turn.completed', 'Turn settled', ${JSON.stringify({ state })}, 2, ${now})`;
+          (${threadId}, ${`${state}-terminal`}, 'old-turn', ${state === "failed" ? "error" : "info"}, 'turn.completed', 'Turn settled', ${JSON.stringify({ state })}, 2, ${now}),
+          (${threadId}, ${`${state}-session-error`}, NULL, 'error', 'runtime.error', 'Session error', '{"message":"Session startup failed."}', 3, ${now}),
+          (${threadId}, ${`${state}-ambiguous-terminal`}, NULL, 'error', 'turn.completed', 'Unscoped failure', '{"state":"failed"}', 4, ${now})`;
           yield* sql`INSERT INTO projection_thread_activities
           (thread_id, activity_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
           WITH RECURSIVE entries(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM entries WHERE n < 2100)
@@ -63,6 +65,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             (thread) => thread.id === threadId,
           )!;
           for (const thread of [detail, snapshot]) {
+            assert.isFalse(thread.activities.some((activity) => activity.turnId === null));
             assert.deepEqual(
               thread.activities
                 .filter((activity) => activity.turnId === "old-turn")

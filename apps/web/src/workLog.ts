@@ -594,11 +594,12 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
-  // Revert failures are the only feedback a failed Undo produces. They can be
-  // emitted before any checkpoint exists to anchor them to a turn (or against a
-  // turn that the revert itself just rolled out of view), so never let the
-  // turn-visibility filter drop them.
-  if (activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND) {
+  // Failed Undo and skipped baseline feedback can precede a provider turn id,
+  // or refer to a turn that Undo rolled out of view. Keep this feedback visible.
+  if (
+    activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND ||
+    activity.kind === "checkpoint.baseline.skipped"
+  ) {
     return true;
   }
 

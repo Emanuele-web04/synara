@@ -5,6 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   startTransition,
+  lazy,
   Suspense,
   useEffect,
   useMemo,
@@ -40,7 +41,8 @@ import {
   removePanelResizeOverlay,
 } from "../../lib/panelResize";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
-import { useRightDockStore } from "../../rightDockStore";
+import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
+import { DockPaneHeader } from "./DockPaneHeader";
 import { resolveActiveSplitView } from "../../splitViewRoute";
 import { canSubdividePane, collectLeaves, findLeafPaneById } from "../../splitView.logic";
 import {
@@ -81,8 +83,9 @@ const SPLIT_PANE_CHAT_MIN_WIDTH = 20 * 16;
 const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
 const BROWSER_PANEL_MIN_WIDTH = 21 * 16;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
+const DockTerminalPane = lazy(() => import("./DockTerminalPane"));
 // Split panes cannot reuse the desktop Sidebar primitive because it positions the panel
-// against the viewport. This embedded shell keeps browser/diff content anchored to the pane.
+// against the viewport. This embedded shell keeps side-panel content anchored to the pane.
 function SplitPaneEmbeddedPanel(props: {
   splitViewId: SplitViewId;
   paneId: PaneId;
@@ -90,6 +93,7 @@ function SplitPaneEmbeddedPanel(props: {
   panelOpen: boolean;
   panel: ChatRightPanel | null | undefined;
   threadId: ThreadId | null;
+  projectId: ProjectId | null;
   onClosePanel: () => void;
   panelState: Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">;
   isFocused: boolean;
@@ -97,16 +101,20 @@ function SplitPaneEmbeddedPanel(props: {
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
 }) {
+  const dockState = useRightDockStore(selectRightDockState(props.threadId));
+  const terminalPane = dockState.open
+    ? dockState.panes.find((pane) => pane.id === dockState.activePaneId && pane.kind === "terminal")
+    : undefined;
+  const panel = terminalPane ? null : props.panel;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const panelWidthStorageKey =
-    props.panel === "browser" ? "browser" : props.panel === "diff" ? "diff" : "panel";
+    panel === "browser" ? "browser" : panel === "diff" ? "diff" : "panel";
   const storageKey = `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:${props.splitViewId}:${props.paneId}:${panelWidthStorageKey}`;
   const defaultPanelWidth =
-    props.panel === "browser"
+    panel === "browser"
       ? BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX
       : SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX;
-  const minPanelWidth =
-    props.panel === "browser" ? BROWSER_PANEL_MIN_WIDTH : SINGLE_PANEL_MIN_WIDTH;
+  const minPanelWidth = panel === "browser" ? BROWSER_PANEL_MIN_WIDTH : SINGLE_PANEL_MIN_WIDTH;
   // Keyed by storageKey so switching panel/pane re-reads the persisted width by
   // deriving during render instead of resetting from an effect. Resizes stamp the
   // current key; a stale key re-reads localStorage for the new panel's value.
@@ -173,14 +181,14 @@ function SplitPaneEmbeddedPanel(props: {
     });
   };
 
-  if (!props.panelOpen || !props.threadId) {
+  if ((!props.panelOpen && !terminalPane) || !props.threadId) {
     return null;
   }
 
   return (
     <div
       ref={wrapperRef}
-      data-native-browser-surface={props.panel === "browser" ? "true" : undefined}
+      data-native-browser-surface={panel === "browser" ? "true" : undefined}
       className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-[var(--app-surface-divider)] bg-card text-foreground"
       style={
         {
@@ -194,7 +202,24 @@ function SplitPaneEmbeddedPanel(props: {
         className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-[var(--app-surface-divider)]"
         onPointerDown={startResize}
       />
-      {props.panel === "browser" ? (
+      {terminalPane ? (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <DockPaneHeader
+            title="Terminal"
+            closeLabel="Hide terminal"
+            onClose={props.onClosePanel}
+          />
+          <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+            <DockTerminalPane
+              hostThreadId={props.threadId}
+              paneId={terminalPane.id}
+              projectId={props.projectId}
+              paneScopeId={props.paneScopeId}
+              onClosePanel={props.onClosePanel}
+            />
+          </Suspense>
+        </div>
+      ) : panel === "browser" ? (
         <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
           <LazyBrowserPanel
             mode="sidebar"
@@ -317,6 +342,11 @@ function SplitPaneSurface(props: {
   }) => void;
 }) {
   const paneScopeId = splitViewPaneScopeId(props.splitView.id, props.paneId);
+  const dockState = useRightDockStore(selectRightDockState(props.threadId));
+  const terminalPane =
+    dockState.panes.find(
+      (pane) => pane.id === dockState.activePaneId && pane.kind === "terminal",
+    ) ?? dockState.panes.find((pane) => pane.kind === "terminal");
   const panelOpen = props.panelState.panel !== null;
   const shouldRenderPanelContent = panelOpen || props.panelState.hasOpenedPanel;
 
@@ -370,6 +400,19 @@ function SplitPaneSurface(props: {
               isFocusedPane={props.isFocused}
               panelState={props.panelState}
               onToggleDiff={props.onToggleDiff}
+              {...(terminalPane && props.threadId
+                ? {
+                    onToggleRightDock: () => {
+                      const store = useRightDockStore.getState();
+                      const hostId = props.threadId!;
+                      const current = selectRightDockState(hostId)(store);
+                      const terminalVisible =
+                        current.open && current.activePaneId === terminalPane.id;
+                      store.setActivePane(hostId, terminalPane.id);
+                      store.setDockOpen(hostId, !terminalVisible);
+                    },
+                  }
+                : {})}
               onToggleBrowser={props.onToggleBrowser}
               onOpenBrowserUrl={props.onOpenBrowserUrl}
               onOpenTurnDiff={props.onOpenTurnDiff}
@@ -402,6 +445,10 @@ function SplitPaneSurface(props: {
         panelOpen={panelOpen && shouldRenderPanelContent}
         panel={props.panelState.panel}
         threadId={props.threadId}
+        projectId={
+          props.threads.find((thread) => thread.id === props.threadId)?.projectId ??
+          props.splitView.ownerProjectId
+        }
         onClosePanel={props.onClosePanel}
         panelState={props.panelState}
         isFocused={props.isFocused}
@@ -538,6 +585,9 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     if (!activeSplitView) return;
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     if (!leaf) return;
+    if (patch.panel !== undefined && leaf.threadId) {
+      useRightDockStore.getState().setDockOpen(leaf.threadId, false);
+    }
     const nextPanel = patch.panel ?? leaf.panel.panel;
     setPanePanelState(activeSplitView.id, paneId, {
       ...patch,
@@ -555,7 +605,17 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     if (!leaf?.threadId) {
       return;
     }
-    updatePanePanelState(paneId, resolveToggledChatPanelPatch(leaf.panel, panel));
+    const dock = selectRightDockState(leaf.threadId)(useRightDockStore.getState());
+    const terminalOpen =
+      dock.open &&
+      dock.panes.some((pane) => pane.id === dock.activePaneId && pane.kind === "terminal");
+    updatePanePanelState(
+      paneId,
+      resolveToggledChatPanelPatch(
+        terminalOpen ? { ...leaf.panel, panel: null } : leaf.panel,
+        panel,
+      ),
+    );
   };
 
   useBrowserPanelDesktopBridge({
@@ -593,6 +653,19 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   };
 
   const closePanePanel = (paneId: PaneId) => {
+    if (!activeSplitView) return;
+    const leaf = findLeafPaneById(activeSplitView.root, paneId);
+    if (leaf?.threadId) {
+      const store = useRightDockStore.getState();
+      const dock = selectRightDockState(leaf.threadId)(store);
+      if (
+        dock.open &&
+        dock.panes.some((pane) => pane.id === dock.activePaneId && pane.kind === "terminal")
+      ) {
+        store.setDockOpen(leaf.threadId, false);
+        return;
+      }
+    }
     updatePanePanelState(paneId, { panel: null });
   };
 
