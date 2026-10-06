@@ -11,6 +11,11 @@ import {
 } from "./AppRailUsage.logic";
 
 describe("resolveRailUsageProviders", () => {
+  it("ignores disabled selections before applying the visible provider cap", () => {
+    expect(
+      resolveRailUsageProviders(["codex", "claudeAgent", "opencode"], ["codex", "claudeAgent"]),
+    ).toEqual(["opencode"]);
+  });
   it("drops duplicates and caps the selection", () => {
     const resolved = resolveRailUsageProviders(["codex", "codex", "claudeAgent", "cursor"]);
     expect(resolved).toEqual(["codex", "claudeAgent"]);
@@ -19,6 +24,13 @@ describe("resolveRailUsageProviders", () => {
 });
 
 describe("toggleRailUsageProvider", () => {
+  it("preserves disabled selections while adding and removing visible providers", () => {
+    const saved = ["codex", "claudeAgent"] as const;
+    const added = toggleRailUsageProvider(saved, "opencode", true, saved);
+    expect(added).toEqual(["codex", "claudeAgent", "opencode"]);
+    expect(toggleRailUsageProvider(added, "opencode", false, saved)).toEqual(saved);
+    expect(resolveRailUsageProviders(added)).toEqual(saved);
+  });
   it("adds a provider while there is room and removes it again", () => {
     expect(toggleRailUsageProvider(["codex"], "claudeAgent", true)).toEqual([
       "codex",

@@ -13,9 +13,13 @@ export const MAX_RAIL_USAGE_PROVIDERS = 2;
 /** Stored selection → the providers actually drawn: usage-capable, unique, capped. */
 export function resolveRailUsageProviders(
   selected: ReadonlyArray<ProviderKind>,
+  disabledProviders: ReadonlyArray<ProviderKind> = [],
 ): ReadonlyArray<ProviderKind> {
   return [...new Set(selected)]
-    .filter((provider) => PROVIDER_USAGE_PROVIDERS.includes(provider))
+    .filter(
+      (provider) =>
+        PROVIDER_USAGE_PROVIDERS.includes(provider) && !disabledProviders.includes(provider),
+    )
     .slice(0, MAX_RAIL_USAGE_PROVIDERS);
 }
 
@@ -24,15 +28,19 @@ export function toggleRailUsageProvider(
   selected: ReadonlyArray<ProviderKind>,
   provider: ProviderKind,
   enabled: boolean,
+  disabledProviders: ReadonlyArray<ProviderKind> = [],
 ): ReadonlyArray<ProviderKind> {
-  const current = resolveRailUsageProviders(selected);
+  const current = resolveRailUsageProviders(selected, disabledProviders);
+  const savedDisabled = [...new Set(selected)].filter(
+    (entry) => PROVIDER_USAGE_PROVIDERS.includes(entry) && disabledProviders.includes(entry),
+  );
   if (!enabled) {
-    return current.filter((entry) => entry !== provider);
+    return [...savedDisabled, ...current.filter((entry) => entry !== provider)];
   }
   if (current.includes(provider) || current.length >= MAX_RAIL_USAGE_PROVIDERS) {
-    return current;
+    return [...savedDisabled, ...current];
   }
-  return [...current, provider];
+  return [...savedDisabled, ...current, provider];
 }
 
 /**
