@@ -40,6 +40,29 @@ const runWithSettings = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
+  it("defaults provider priority on and persists an opt-out across restart", async () => {
+    expect(Schema.decodeSync(ServerSettingsSchema)({}).lowerProviderProcessPriority).toBe(true);
+    const settings = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        yield* service.start;
+        yield* service.updateSettings({ lowerProviderProcessPriority: false });
+        return yield* Effect.gen(function* () {
+          const restarted = yield* ServerSettingsService;
+          yield* restarted.start;
+          return yield* restarted.getSettingsView;
+        }).pipe(
+          Effect.provide(
+            ServerSettingsLive.pipe(
+              Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+            ),
+          ),
+        );
+      }),
+    );
+    expect(settings.lowerProviderProcessPriority).toBe(false);
+  });
   it("defaults legacy writing settings and validates style and instruction length", () => {
     expect(Schema.decodeSync(ServerSettingsSchema)({})).toMatchObject({
       sourceControlWritingStyle: "repository",

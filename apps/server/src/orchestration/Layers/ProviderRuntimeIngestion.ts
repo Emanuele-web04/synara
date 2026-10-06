@@ -3233,6 +3233,14 @@ const make = Effect.gen(function* () {
             : event.type === "item.updated" && toolOutputKey
               ? withBufferedToolOutputData(event, yield* getBufferedToolOutput(toolOutputKey))
               : event;
+      // Bind durable runtime feedback before session recovery clears the turn.
+      const activityTurnId = isTerminalTurnEvent ? eventTurnId : (eventTurnId ?? activeTurnId);
+      const scopedActivityEvent =
+        activityEvent.turnId === undefined &&
+        activityTurnId &&
+        (event.type === "runtime.error" || event.type === "runtime.warning" || isTerminalTurnEvent)
+          ? { ...activityEvent, turnId: activityTurnId }
+          : activityEvent;
       if (isTerminalTurnEvent) {
         yield* settleBufferedReasoningSummaries(thread.id, event, toTurnId(event.turnId));
       } else if (event.type === "session.exited") {
@@ -3247,7 +3255,7 @@ const make = Effect.gen(function* () {
 
       const snapshotKey = providerRuntimeProgressKey(event);
       const activities = projectProviderRuntimeActivities(
-        activityEvent,
+        scopedActivityEvent,
         event.provider === "claudeAgent"
           ? (completedReasoning?.sequence ?? runtimeSequence)
           : runtimeSequence,
