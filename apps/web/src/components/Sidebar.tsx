@@ -5806,7 +5806,6 @@ export default function Sidebar({
                   cwd={project.cwd}
                   expanded={project.expanded}
                   appearance={project.appearance}
-                  presentation="favicon"
                 />
               </SidebarLeadingIcon>
               <div
@@ -5919,7 +5918,6 @@ export default function Sidebar({
               cwd={project.cwd}
               expanded={false}
               appearance={project.appearance}
-              presentation="favicon"
             />
           </SidebarLeadingIcon>
           <span className={SIDEBAR_PROJECT_NAME_CLASS_NAME}>

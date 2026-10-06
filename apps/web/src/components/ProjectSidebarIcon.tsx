@@ -1,6 +1,6 @@
 // FILE: ProjectSidebarIcon.tsx
 // Purpose: Render a project's glyph: its chosen emoji or icon, or the standard folder with an
-//          optional favicon badge overlay or a primary favicon.
+//          optional favicon badge overlay or a primary favicon in compact rows.
 // Layer: Sidebar UI component
 // Exports: ProjectSidebarIcon, ProjectEmojiGlyph
 
