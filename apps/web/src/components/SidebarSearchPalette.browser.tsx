@@ -1,9 +1,9 @@
 import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { describe, expect, it, vi } from "vitest";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 import { render } from "vitest-browser-react";
 
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
@@ -22,15 +22,20 @@ const thread: SidebarSearchThread = {
   messages: [{ text: "Check the expired session token" }],
 };
 
-async function renderPalette(searchThread: SidebarSearchThread = thread) {
+async function renderPalette(
+  searchThread: SidebarSearchThread = thread,
+  overrides: Partial<ComponentProps<typeof SidebarSearchPalette>> = {},
+) {
   const onOpenThread = vi.fn();
+  const onOpenSettings = vi.fn();
+  const onOpenChange = vi.fn();
   await render(
     <QueryClientProvider client={new QueryClient()}>
       <SidebarSearchPalette
         open
         mode="search"
         onModeChange={vi.fn()}
-        onOpenChange={vi.fn()}
+        onOpenChange={onOpenChange}
         actions={[]}
         projects={[]}
         threads={[searchThread]}
@@ -38,7 +43,7 @@ async function renderPalette(searchThread: SidebarSearchThread = thread) {
         onCreateThread={vi.fn()}
         onAddProjectPath={vi.fn().mockResolvedValue(undefined)}
         homeDir={null}
-        onOpenSettings={vi.fn()}
+        onOpenSettings={onOpenSettings}
         onOpenFeedback={vi.fn()}
         onOpenUsageSettings={vi.fn()}
         onOpenProject={vi.fn()}
@@ -46,11 +51,56 @@ async function renderPalette(searchThread: SidebarSearchThread = thread) {
         importTargets={[]}
         onImportThread={vi.fn().mockResolvedValue(undefined)}
         onImportProjects={vi.fn()}
+        {...overrides}
       />
     </QueryClientProvider>,
   );
-  return { onOpenThread };
+  return { onOpenThread, onOpenSettings, onOpenChange };
 }
+
+it("searches settings and opens the matching section and row", async () => {
+  const { onOpenSettings, onOpenChange } = await renderPalette();
+  await page.getByPlaceholder("Search chats or run a command").fill("base font size");
+  const result = page.getByRole("option", { name: /Base font size/ });
+  await expect.element(result).toHaveTextContent("Appearance");
+  await userEvent.keyboard("{Enter}");
+  expect(onOpenSettings).toHaveBeenCalledWith("appearance", { target: "setting-base-font-size" });
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+
+it("opens panel-only settings without inventing an anchor", async () => {
+  const { onOpenSettings } = await renderPalette();
+  await page.getByPlaceholder("Search chats or run a command").fill("keybindings");
+  await page.getByRole("option", { name: "Keybindings Keybindings", exact: true }).click();
+  expect(onOpenSettings).toHaveBeenCalledWith("shortcuts", undefined);
+});
+
+it("announces no results when nothing matches", async () => {
+  await renderPalette();
+  await page.getByPlaceholder("Search chats or run a command").fill("zzzzunmatchedzzzz");
+  await expect.element(page.getByRole("status")).toHaveTextContent("No results");
+  expect(page.getByRole("option").length).toBe(0);
+});
+
+it("runs a space command and closes the palette", async () => {
+  const run = vi.fn();
+  const { onOpenChange } = await renderPalette(thread, {
+    actions: [
+      {
+        id: "switch-space-work",
+        label: "Switch to Work",
+        description: "Switch space",
+        requiresQuery: true,
+        run,
+      },
+    ],
+  });
+  expect(page.getByRole("option", { name: "Switch to Work" }).length).toBe(0);
+  await page.getByPlaceholder("Search chats or run a command").fill("work");
+  await page.getByRole("option", { name: "Switch to Work" }).click();
+  expect(run).toHaveBeenCalledOnce();
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
 
 it.each(["control-panel", "Client work"])(
   "explains a thread found by project or space metadata: %s",
