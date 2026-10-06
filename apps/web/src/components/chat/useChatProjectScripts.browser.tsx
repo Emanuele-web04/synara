@@ -25,9 +25,14 @@ afterEach(() => {
   api.terminal.close.mockReset();
 });
 
-it.each([false, true])(
-  "runs actions in the right dock without replacing busy sessions (write fails: %s)",
-  async (writeFails) => {
+it.each([
+  { writeFails: false, missingTarget: false, siblingBusy: true },
+  { writeFails: true, missingTarget: false, siblingBusy: true },
+  { writeFails: false, missingTarget: true, siblingBusy: false },
+  { writeFails: false, missingTarget: true, siblingBusy: true },
+])(
+  "runs actions in the right dock without replacing siblings (write fails: $writeFails, missing target: $missingTarget, sibling busy: $siblingBusy)",
+  async ({ writeFails, missingTarget, siblingBusy }) => {
     const project = makeProject();
     const thread = makeThread({ projectId: project.id });
     const store = useTerminalStateStore.getState();
@@ -44,18 +49,22 @@ it.each([false, true])(
       useTerminalStateStore.getState().terminalStateByThreadId[scopeId]!.dockTerminalIdsByPaneId![
         "sibling-pane"
       ]!;
-    store.setTerminalActivity(scopeId, siblingId, { hasRunningSubprocess: true, agentState: null });
-    store.setActiveTerminal(scopeId, "restored-shell");
+    store.setTerminalActivity(scopeId, siblingId, {
+      hasRunningSubprocess: siblingBusy,
+      agentState: null,
+    });
+    if (missingTarget) store.closeTerminal(scopeId, "restored-shell");
+    else store.setActiveTerminal(scopeId, "restored-shell");
     store.setTerminalOpen(scopeId, false);
     useRightDockStore.getState().openPane(thread.id, { kind: "terminal", paneId: "sibling-pane" });
     useRightDockStore.getState().openPane(thread.id, { kind: "terminal", paneId: "action-pane" });
     const centerState = useTerminalStateStore.getState().terminalStateByThreadId[thread.id];
-    useRightDockStore.getState().openPane(thread.id, { kind: "git" });
+    if (!missingTarget) useRightDockStore.getState().openPane(thread.id, { kind: "git" });
     useRightDockStore.getState().setDockOpen(thread.id, false);
     // Hydration does not restore activity; the renderer cannot authorize a close.
     expect(
       useTerminalStateStore.getState().terminalStateByThreadId[scopeId]?.runningTerminalIds,
-    ).toEqual([siblingId]);
+    ).toEqual(siblingBusy ? [siblingId] : []);
     const setThreadError = vi.fn();
     const queryClient = new QueryClient();
     function ScriptAction() {
@@ -86,31 +95,36 @@ it.each([false, true])(
         </button>
       );
     }
-    api.terminal.close.mockImplementationOnce(async (input) => {
-      if (input.onlyIfIdle) throw new Error("The terminal is busy.");
-    });
+    if (!missingTarget)
+      api.terminal.close.mockImplementationOnce(async (input) => {
+        if (input.onlyIfIdle) throw new Error("The terminal is busy.");
+      });
     const view = await render(
       <QueryClientProvider client={queryClient}>
         <ScriptAction />
       </QueryClientProvider>,
     );
-    await page.getByRole("button", { name: "Run build" }).click();
-    await expect.poll(() => setThreadError.mock.calls.length).toBe(1);
-    expect(api.terminal.open).not.toHaveBeenCalled();
-    expect(api.terminal.write).not.toHaveBeenCalled();
-    expect(
-      useTerminalStateStore.getState().terminalStateByThreadId[scopeId]?.activeTerminalId,
-    ).toBe("restored-shell");
+    if (!missingTarget) {
+      await page.getByRole("button", { name: "Run build" }).click();
+      await expect.poll(() => setThreadError.mock.calls.length).toBe(1);
+      expect(api.terminal.open).not.toHaveBeenCalled();
+      expect(api.terminal.write).not.toHaveBeenCalled();
+      expect(
+        useTerminalStateStore.getState().terminalStateByThreadId[scopeId]?.activeTerminalId,
+      ).toBe("restored-shell");
+    }
 
     if (writeFails) api.terminal.write.mockRejectedValueOnce(new Error("Command delivery failed"));
     await page.getByRole("button", { name: "Run build" }).click();
     await expect.poll(() => api.terminal.write.mock.calls.length).toBe(1);
-    expect(api.terminal.close).toHaveBeenLastCalledWith({
-      threadId: scopeId,
-      terminalId: "restored-shell",
-      deleteHistory: false,
-      onlyIfIdle: true,
-    });
+    if (missingTarget) expect(api.terminal.close).not.toHaveBeenCalled();
+    else
+      expect(api.terminal.close).toHaveBeenLastCalledWith({
+        threadId: scopeId,
+        terminalId: "restored-shell",
+        deleteHistory: false,
+        onlyIfIdle: true,
+      });
     expect(api.terminal.open).toHaveBeenCalledTimes(1);
     const launched = api.terminal.open.mock.calls[0]![0];
     expect(launched.threadId).toBe(scopeId);
@@ -131,7 +145,7 @@ it.each([false, true])(
     expect(dock.open).toBe(true);
     expect(dock.activePaneId).toBe("action-pane");
     expect(dock.panes.filter((pane) => pane.kind === "terminal")).toHaveLength(2);
-    expect(dock.panes.some((pane) => pane.kind === "git")).toBe(true);
+    expect(dock.panes.some((pane) => pane.kind === "git")).toBe(!missingTarget);
     if (writeFails) {
       await expect.poll(() => setThreadError.mock.lastCall?.[1]).toBe("Command delivery failed");
     }

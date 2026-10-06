@@ -23,7 +23,6 @@ import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { isElectron } from "../../env";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import type { Project, Thread } from "../../types";
-import { DEFAULT_THREAD_TERMINAL_ID } from "../../types";
 import {
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -87,13 +86,10 @@ export function useChatProjectScripts({
         ) ??
         dock.panes.find((pane) => pane.kind === "terminal");
       const targetPaneId = terminalPane?.id ?? randomUUID();
-      const baseTerminalId =
-        terminalState?.dockTerminalIdsByPaneId?.[targetPaneId] ??
-        terminalState?.activeTerminalId ??
-        DEFAULT_THREAD_TERMINAL_ID;
+      const baseTerminalId = terminalState?.dockTerminalIdsByPaneId?.[targetPaneId];
       if (
         pendingScriptThreads.current.has(activeThreadId) ||
-        terminalState?.runningTerminalIds.includes(baseTerminalId)
+        (baseTerminalId !== undefined && terminalState?.runningTerminalIds.includes(baseTerminalId))
       ) {
         const error = new Error(
           "The right-side terminal is busy. Stop its command before running another action.",
@@ -145,16 +141,18 @@ export function useChatProjectScripts({
 
       pendingScriptThreads.current.add(activeThreadId);
       try {
-        // Persisted client activity is intentionally empty after reload. Always
-        // ask the server, even for a legacy default session hidden in the UI.
-        await disposeAndCloseTerminalSession({
-          api,
-          threadId: terminalThreadId,
-          terminalId: baseTerminalId,
-          onlyIfIdle: true,
-          deleteHistory: false,
-        });
-        useTerminalStateStore.getState().closeTerminal(terminalThreadId, baseTerminalId);
+        // Hydration omits client activity, so the server must verify an owned
+        // session is idle. An unmapped pane must never borrow a sibling's ID.
+        if (baseTerminalId !== undefined) {
+          await disposeAndCloseTerminalSession({
+            api,
+            threadId: terminalThreadId,
+            terminalId: baseTerminalId,
+            onlyIfIdle: true,
+            deleteHistory: false,
+          });
+          useTerminalStateStore.getState().closeTerminal(terminalThreadId, baseTerminalId);
+        }
         await runScriptInTargetTerminal();
         pendingScriptThreads.current.delete(activeThreadId);
         return { threadId: terminalThreadId, terminalId: targetTerminalId };
