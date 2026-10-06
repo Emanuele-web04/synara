@@ -285,30 +285,69 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
     readonly baselineUnavailable?: true;
   }) =>
-    orchestrationEngine.dispatch({
-      type: "thread.activity.append",
-      commandId: serverCommandId(
-        input.baselineUnavailable
-          ? "checkpoint-baseline-unavailable"
-          : "checkpoint-capture-failure",
-      ),
-      threadId: input.threadId,
-      activity: {
-        id: EventId.makeUnsafe(crypto.randomUUID()),
-        tone: input.baselineUnavailable ? "info" : "error",
-        kind: input.baselineUnavailable
-          ? "checkpoint.baseline.skipped"
-          : "checkpoint.capture.failed",
-        summary: input.baselineUnavailable
-          ? "Checkpoint baseline unavailable for this turn"
-          : "Checkpoint capture failed",
-        payload: {
-          detail: input.detail,
+    Effect.gen(function* () {
+      let messageId: MessageId | undefined;
+      let activityId = EventId.makeUnsafe(crypto.randomUUID());
+      if (input.baselineUnavailable && input.turnId !== null) {
+        const thread = yield* getThreadDetail(input.threadId);
+        const turn = yield* projectionTurnRepository
+          .getByTurnId({ threadId: input.threadId, turnId: input.turnId })
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        messageId =
+          Option.getOrNull(turn)?.pendingMessageId ??
+          thread?.messages.find(
+            (message) => message.role === "user" && message.turnId === input.turnId,
+          )?.id;
+        // Native children inherit their parent's workspace, without an independent
+        // pre-send owner. Keep actual capture failures and owned skips actionable.
+        if (thread?.parentThreadId && messageId === undefined) return;
+        if (
+          thread?.activities.some(
+            (activity) =>
+              activity.kind === "checkpoint.baseline.skipped" &&
+              (activity.turnId === input.turnId ||
+                (messageId !== undefined &&
+                  typeof activity.payload === "object" &&
+                  activity.payload !== null &&
+                  "messageId" in activity.payload &&
+                  activity.payload.messageId === messageId)),
+          )
+        )
+          return;
+        activityId = EventId.makeUnsafe(
+          `checkpoint-baseline-skipped:${
+            messageId === undefined
+              ? checkpointRefForThreadTurnStart(input.threadId, input.turnId)
+              : checkpointRefForThreadMessageStart(input.threadId, messageId)
+          }`,
+        );
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: serverCommandId(
+          input.baselineUnavailable
+            ? "checkpoint-baseline-unavailable"
+            : "checkpoint-capture-failure",
+        ),
+        threadId: input.threadId,
+        activity: {
+          id: activityId,
+          tone: input.baselineUnavailable ? "info" : "error",
+          kind: input.baselineUnavailable
+            ? "checkpoint.baseline.skipped"
+            : "checkpoint.capture.failed",
+          summary: input.baselineUnavailable
+            ? "Checkpoint baseline unavailable for this turn"
+            : "Checkpoint capture failed",
+          payload: {
+            detail: input.detail,
+            ...(messageId === undefined ? {} : { messageId }),
+          },
+          turnId: input.turnId,
+          createdAt: input.createdAt,
         },
-        turnId: input.turnId,
         createdAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
+      });
     });
 
   const resolveSessionRuntimeForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -510,7 +549,7 @@ const make = Effect.gen(function* () {
             turnId: input.turnId,
             baselineUnavailable: true,
             detail:
-              "No pre-dispatch checkpoint baseline was prepared for this turn. Native provider turns can start without a Synara send; checkpoint diff and file undo are unavailable. The completed checkpoint was captured successfully.",
+              "The initial workspace state is unavailable for this turn, so checkpoint diff and file undo are unavailable. The completed checkpoint was captured successfully.",
             createdAt: input.createdAt,
           }).pipe(Effect.as([]));
 
@@ -1098,6 +1137,25 @@ const make = Effect.gen(function* () {
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
           detail: "Undo newer file changes before undoing this turn.",
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      // A later managed completion with no exact baseline can include unknown
+      // overlapping edits. Refuse before reverse-patching or rewriting its refs.
+      if (
+        thread.checkpoints.some(
+          (checkpoint) =>
+            checkpoint.checkpointTurnCount > targetCheckpoint.checkpointTurnCount &&
+            checkpoint.status === "missing" &&
+            isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.payload.threadId),
+        )
+      ) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: "File Undo is unavailable because a later turn has no exact initial checkpoint.",
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
         return;

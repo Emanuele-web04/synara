@@ -5,6 +5,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EventId,
+  MessageId,
   ProjectId,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   ThreadId,
@@ -29,6 +30,9 @@ import {
 } from "../Services/ProjectionSnapshotQuery.ts";
 import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
 import { StudioOutputReactorLive } from "./StudioOutputReactor.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -59,7 +63,14 @@ describe("StudioOutputReactor", () => {
     );
   });
 
-  it.each(["prepared", "cancelled", "missing"] as const)(
+  it.each([
+    "prepared",
+    "cancelled",
+    "missing",
+    "native-child",
+    "already-skipped",
+    "child-own-failure",
+  ] as const)(
     "uses only a pre-dispatch Studio baseline when preparation is %s",
     async (preparation) => {
       const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "synara-studio-reactor-"));
@@ -69,6 +80,21 @@ describe("StudioOutputReactor", () => {
       const turnId = TurnId.makeUnsafe("studio-turn");
       const runtimeEvents = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
       const commands: OrchestrationCommand[] = [];
+      const messageId = MessageId.makeUnsafe("studio-message");
+      const isChild = preparation === "native-child" || preparation === "child-own-failure";
+      const initialNotice = {
+        id: EventId.makeUnsafe("initial-studio-skip"),
+        kind: "checkpoint.baseline.skipped",
+        tone: "info",
+        summary: "Turn continued without baselines",
+        payload: {
+          messageId,
+          detail: "Checkpoint and Studio preparation both exceeded the deadline.",
+        },
+        turnId: null,
+        createdAt: "2026-07-08T09:59:59.000Z",
+      };
+      const initialActivities = preparation === "already-skipped" ? [initialNotice] : [];
 
       const providerService = {
         streamEvents: Stream.fromPubSub(runtimeEvents),
@@ -87,8 +113,19 @@ describe("StudioOutputReactor", () => {
             Option.some({
               id: threadId,
               projectId,
+              parentThreadId: isChild ? ThreadId.makeUnsafe("parent-thread") : null,
               envMode: "local",
               worktreePath: null,
+            } as never),
+          ),
+        getThreadDetailById: () =>
+          Effect.succeed(
+            Option.some({
+              id: threadId,
+              projectId,
+              parentThreadId: isChild ? ThreadId.makeUnsafe("parent-thread") : null,
+              activities: initialActivities,
+              messages: [],
             } as never),
           ),
         getProjectShellById: () =>
@@ -106,19 +143,53 @@ describe("StudioOutputReactor", () => {
         Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
         Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
         Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
+        Layer.provideMerge(ProjectionTurnRepositoryLive),
         Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(SqlitePersistenceMemory),
       );
-      runtime = ManagedRuntime.make(layer);
+      const testRuntime = ManagedRuntime.make(layer);
+      runtime = testRuntime;
       const reactor = await runtime.runPromise(Effect.service(StudioOutputReactor));
+      if (
+        preparation === "already-skipped" ||
+        preparation === "child-own-failure" ||
+        preparation === "cancelled"
+      ) {
+        await testRuntime.runPromise(
+          Effect.gen(function* () {
+            const turns = yield* ProjectionTurnRepository;
+            yield* turns.upsertByTurnId({
+              threadId,
+              turnId,
+              pendingMessageId: messageId,
+              sourceProposedPlanThreadId: null,
+              sourceProposedPlanId: null,
+              assistantMessageId: null,
+              state: "running",
+              requestedAt: "2026-07-08T09:59:59.000Z",
+              startedAt: "2026-07-08T10:00:00.000Z",
+              completedAt: null,
+              checkpointTurnCount: null,
+              checkpointRef: null,
+              checkpointStatus: null,
+              checkpointFiles: [],
+            });
+          }),
+        );
+      }
       scope = await Effect.runPromise(Scope.make("sequential"));
       await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
 
       // This file appears after the command reactor's awaited preparation but before
       // the provider acknowledges turn.started. A turn.started-time scan would miss it.
-      if (preparation !== "missing") {
+      if (
+        preparation === "prepared" ||
+        preparation === "cancelled" ||
+        preparation === "child-own-failure"
+      ) {
         await runtime.runPromise(reactor.captureBaselineBeforeTurn(threadId));
       }
-      if (preparation === "cancelled") {
+      if (preparation === "cancelled" || preparation === "child-own-failure") {
         await runtime.runPromise(reactor.cancelPendingTurnBaseline(threadId));
       }
       await writeFile(path.join(workspaceRoot, "report.md"), "finished report");
@@ -153,6 +224,12 @@ describe("StudioOutputReactor", () => {
       if (preparation !== "prepared") {
         await new Promise((resolve) => setTimeout(resolve, 25));
         await Effect.runPromise(reactor.drain);
+        if (preparation === "native-child" || preparation === "already-skipped") {
+          expect(commands).toEqual([]);
+          if (preparation === "already-skipped")
+            expect(initialActivities[0]?.payload.detail).toContain("both exceeded");
+          return;
+        }
         expect(commands).toHaveLength(1);
         expect(commands[0]).toMatchObject({
           type: "thread.activity.append",

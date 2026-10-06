@@ -305,13 +305,18 @@ queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 
 invalid values use the default and positive values are clamped to that range. When preparation fails
 or the combined budget expires, Synara reports unavailable baselines and preserves independently
 completed results. The provider starts after cancellation cleanup finishes, which can extend beyond
-the preparation budget; an absolute process-cleanup bound has not been verified.
+the preparation budget; an absolute process-cleanup bound has not been verified. A bounded exact-ref
+check after cleanup recognizes a checkpoint published just before cancellation. Initial and later
+baseline notices share one message or turn identity and preserve the initial preparation reason.
 
 Synara never reconstructs the initial state from files the provider may already have changed.
 Native provider turns, including native child turns, may begin without Synara's pre-send preparation;
-their missing checkpoint or Studio baseline is reported without a replacement capture. Diff and file
-undo that require an exact initial checkpoint remain unavailable, and Studio output discovery is
-unavailable for turns without a prepared Studio baseline.
+Synara never takes a replacement capture. Expected missing-baseline notices for native children are
+suppressed when they have no independent send, while failures of their own sends and actual capture
+errors remain visible. Diff and file undo that require an exact initial checkpoint remain unavailable,
+and Studio output discovery is unavailable for turns without a prepared Studio baseline. File Undo
+also refuses an earlier turn when a later managed checkpoint has no initial baseline, before changing
+files or checkpoint refs.
 
 ## Hubs
 

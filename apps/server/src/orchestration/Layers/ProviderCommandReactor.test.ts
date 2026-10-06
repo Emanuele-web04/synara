@@ -11583,6 +11583,85 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it("does not report a missing baseline when capture publishes during timeout cleanup", async () => {
+    const release = Deferred.makeUnsafe<void>();
+    let published = false;
+    let cleanupFinished = false;
+    let studioCleared = false;
+    const harness = await createHarness({
+      preTurnBaselineTimeout: Duration.millis(30),
+      checkpointStore: {
+        isGitRepository: () => Effect.succeed(true),
+        captureCheckpoint: () =>
+          Deferred.await(release).pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                published = true;
+                cleanupFinished = true;
+              }),
+            ),
+          ),
+        hasCheckpointRef: () => Effect.sync(() => published),
+      },
+      studioOutputReactor: {
+        captureBaselineBeforeTurn: () => Effect.void,
+        cancelPendingTurnBaseline: () =>
+          Effect.sync(() => {
+            studioCleared = true;
+          }),
+      },
+    });
+    try {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "published-on-cleanup",
+        text: "Continue safely",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1, 500);
+      expect(cleanupFinished).toBe(true);
+      expect(published).toBe(true);
+      expect(studioCleared).toBe(false);
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "checkpoint.baseline.skipped",
+        ),
+      ).toEqual([]);
+    } finally {
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+    }
+  });
+
+  it("keeps one combined skipped notice when both baseline owners time out", async () => {
+    const release = Deferred.makeUnsafe<void>();
+    const harness = await createHarness({
+      preTurnBaselineTimeout: Duration.millis(30),
+      checkpointStore: {
+        isGitRepository: () => Effect.succeed(true),
+        captureCheckpoint: () => Deferred.await(release),
+        hasCheckpointRef: () => Effect.succeed(false),
+      },
+      studioOutputReactor: { captureBaselineBeforeTurn: () => Deferred.await(release) },
+    });
+    try {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "both-owner-timeout",
+        text: "Continue without snapshots",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1, 500);
+      const notices = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "checkpoint.baseline.skipped",
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices?.[0]?.payload).toMatchObject({ detail: expect.stringContaining("Studio") });
+      expect(notices?.[0]?.payload).toMatchObject({
+        detail: expect.stringContaining("checkpoint"),
+      });
+    } finally {
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+    }
+  });
+
   it("waits for the Studio output baseline before sending the provider turn", async () => {
     let releaseCapture: (() => void) | undefined;
     const captureGate = new Promise<void>((resolve) => {

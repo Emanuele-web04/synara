@@ -534,7 +534,7 @@ describe("CheckpointReactor", () => {
     expect(gitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 0))).toBe(false);
   });
 
-  it("reports an unavailable native-child baseline without calling a successful capture failed", async () => {
+  it("suppresses a generic skipped baseline notice for an unprepared native child", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("subagent:thread-1:native-baseline");
@@ -588,12 +588,194 @@ describe("CheckpointReactor", () => {
     expect(
       gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 1), "README.md"),
     ).toBe("native provider edited\n");
-    expect(thread?.activities).toContainEqual(
-      expect.objectContaining({ kind: "checkpoint.baseline.skipped", tone: "info" }),
-    );
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "checkpoint.baseline.skipped"),
+    ).toEqual([]);
     expect(
       thread?.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
     ).toBe(false);
+  });
+
+  it.each(["root", "child"] as const)(
+    "retains the initial skipped reason through completion for a %s turn",
+    async (kind) => {
+      const harness = await createHarness({
+        seedFilesystemCheckpoints: false,
+        simulateProviderBaseline: false,
+      });
+      const createdAt = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe(
+        kind === "root" ? "thread-1" : "subagent:thread-1:own-skip",
+      );
+      const messageId = MessageId.makeUnsafe(`dedup-message-${kind}`);
+      const turnId = asTurnId(`dedup-turn-${kind}`);
+      if (kind === "child")
+        await Effect.runPromise(
+          harness.sourceEngine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("own-skip-child-create"),
+            threadId,
+            projectId: asProjectId("project-1"),
+            title: "Child",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            parentThreadId: ThreadId.makeUnsafe("thread-1"),
+            branch: null,
+            worktreePath: harness.cwd,
+            createdAt,
+          }),
+        );
+      await Effect.runPromise(
+        harness.sourceEngine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`dedup-request-${kind}`),
+          threadId,
+          message: { messageId, role: "user", text: "Start", attachments: [] },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.sourceEngine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`dedup-session-${kind}`),
+          threadId,
+          session: {
+            threadId,
+            providerName: "codex",
+            status: "running",
+            activeTurnId: turnId,
+            runtimeMode: "approval-required",
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      const initialReason = "Checkpoint and Studio preparation both exceeded the deadline.";
+      await Effect.runPromise(
+        harness.sourceEngine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`dedup-notice-${kind}`),
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe(`initial-skip-${kind}`),
+            kind: "checkpoint.baseline.skipped",
+            tone: "info",
+            summary: "Turn continued without baselines",
+            payload: { messageId, detail: initialReason },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        }),
+      );
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe(`dedup-complete-${kind}`),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt,
+        payload: { state: "completed" },
+      });
+      await waitForEvent(
+        harness.engine,
+        (event) =>
+          event.type === "thread.turn-diff-completed" && event.payload.threadId === threadId,
+        1_500,
+      );
+      const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      const notices = thread?.activities.filter(
+        (activity) => activity.kind === "checkpoint.baseline.skipped",
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices?.[0]?.payload).toMatchObject({ detail: initialReason });
+      expect(thread?.checkpoints[0]?.status).toBe("missing");
+    },
+  );
+
+  it("refuses file Undo before reverse mutation when a later managed baseline is missing", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 0),
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "one.txt"), "earlier change\n");
+    await Effect.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "later provider edits\n");
+    await Effect.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+      }),
+    );
+    for (const [count, status, files] of [
+      [1, "ready", [{ path: "one.txt", kind: "added", additions: 1, deletions: 0 }]],
+      [2, "missing", []],
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe(`missing-later-diff-${count}`),
+          threadId,
+          turnId: asTurnId(`missing-later-turn-${count}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, count),
+          status,
+          files: [...files],
+          checkpointTurnCount: count,
+          createdAt,
+        }),
+      );
+    }
+    const reverse = vi.spyOn(harness.checkpointStore, "reverseCheckpointDiff");
+    const originalRefs = [1, 2].map((count) =>
+      runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, count)]),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("missing-later-undo"),
+        threadId,
+        turnCount: 1,
+        scope: "files",
+        createdAt,
+      }),
+    );
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.activities.some(
+          (activity) =>
+            activity.kind === "checkpoint.revert.failed" ||
+            activity.kind === "checkpoint.revert.succeeded",
+        ),
+      1_500,
+    );
+    expect(reverse).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(harness.cwd, "one.txt"), "utf8")).toBe("earlier change\n");
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+      "later provider edits\n",
+    );
+    expect(
+      [1, 2].map((count) =>
+        runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, count)]),
+      ),
+    ).toEqual(originalRefs);
   });
 
   it("recovers a captured message baseline from a persisted running turn", async () => {
@@ -1526,6 +1708,12 @@ describe("CheckpointReactor", () => {
     expect(
       thread.activities.some((activity) => activity.kind === "checkpoint.baseline.skipped"),
     ).toBe(true);
+    expect(
+      thread.activities.find((activity) => activity.kind === "checkpoint.baseline.skipped")
+        ?.payload,
+    ).toMatchObject({
+      detail: expect.not.stringMatching(/Native provider|Synara send|pre-dispatch/),
+    });
   });
 
   it("captures pre-turn baseline from project workspace root when thread worktree is unset", async () => {

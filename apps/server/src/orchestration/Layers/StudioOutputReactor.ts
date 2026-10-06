@@ -29,7 +29,11 @@ import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import {
+  checkpointRefForThreadMessageStart,
+  checkpointRefForThreadTurnStart,
+  resolveThreadWorkspaceCwd,
+} from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import {
   scanStudioWorkspaceFiles,
@@ -40,6 +44,8 @@ import { diffStudioWorkspaceScans } from "../../studioOutputs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import {
   StudioOutputReactor,
   type StudioOutputReactorShape,
@@ -71,6 +77,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const scanWorkspaceFiles = (workspaceRoot: string) =>
@@ -183,18 +190,52 @@ const make = Effect.gen(function* () {
       // Only Studio workspaces need this feedback. Resolve their identity, but
       // never scan files to reconstruct a provider-native turn's initial state.
       if (!(yield* resolveStudioScanRoot(event.threadId))) return;
+      const threadOption = yield* projectionSnapshotQuery
+        .getThreadDetailById(event.threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+      const thread = Option.getOrUndefined(threadOption);
+      const turn = yield* projectionTurnRepository
+        .getByTurnId({ threadId: event.threadId, turnId: event.turnId })
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+      const messageId =
+        Option.getOrNull(turn)?.pendingMessageId ??
+        thread?.messages.find(
+          (message) => message.role === "user" && message.turnId === event.turnId,
+        )?.id;
+      if (thread?.parentThreadId && messageId === undefined) return;
+      if (
+        thread?.activities.some(
+          (activity) =>
+            activity.kind === "checkpoint.baseline.skipped" &&
+            (activity.turnId === event.turnId ||
+              (messageId !== undefined &&
+                typeof activity.payload === "object" &&
+                activity.payload !== null &&
+                "messageId" in activity.payload &&
+                activity.payload.messageId === messageId)),
+        )
+      )
+        return;
+      const activityId = EventId.makeUnsafe(
+        `checkpoint-baseline-skipped:${
+          messageId === undefined
+            ? checkpointRefForThreadTurnStart(event.threadId, event.turnId)
+            : checkpointRefForThreadMessageStart(event.threadId, messageId)
+        }`,
+      );
       yield* orchestrationEngine.dispatch({
         type: "thread.activity.append",
         commandId: serverCommandId("studio-baseline-unavailable"),
         threadId: event.threadId,
         activity: {
-          id: EventId.makeUnsafe(crypto.randomUUID()),
+          id: activityId,
           tone: "info",
           kind: "checkpoint.baseline.skipped",
           summary: "Studio output baseline unavailable for this turn",
           payload: {
             detail:
-              "No pre-dispatch Studio baseline was prepared. Native provider turns may start without a Synara send; Studio output indexing is unavailable for this turn. Files are not rescanned after provider edits to invent a baseline.",
+              "The initial Studio workspace state is unavailable for this turn, so its output changes cannot be indexed. Files are not rescanned after edits to invent a baseline.",
+            ...(messageId === undefined ? {} : { messageId }),
           },
           turnId: event.turnId,
           createdAt: event.createdAt,
@@ -341,4 +382,6 @@ const make = Effect.gen(function* () {
   } satisfies StudioOutputReactorShape;
 });
 
-export const StudioOutputReactorLive = Layer.effect(StudioOutputReactor, make);
+export const StudioOutputReactorLive = Layer.effect(StudioOutputReactor, make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

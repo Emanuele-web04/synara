@@ -182,7 +182,6 @@ import {
 import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { makeKeyedSingleFlightCache } from "@synara/shared/KeyedSingleFlightCache";
-import { resolveAcpTurnIdleTimeoutMs } from "../../provider/acp/AcpTurnIdleWatchdog.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
@@ -598,18 +597,12 @@ const GATEWAY_OPERATION_COMPLETION_NEGATIVE_CACHE_TTL = Duration.seconds(30);
 
 /** Operator override stays finite; test/factory options take precedence. */
 export function resolvePreTurnBaselineTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  return Math.min(
-    30_000,
-    Math.max(
-      1_000,
-      resolveAcpTurnIdleTimeoutMs({
-        envVar: "SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS",
-        defaultMs: Duration.toMillis(PRE_TURN_BASELINE_TIMEOUT),
-        env,
-      }),
-    ),
-  );
+  const parsed = Number(env.SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS?.trim());
+  const timeoutMs =
+    Number.isFinite(parsed) && parsed > 0 ? parsed : Duration.toMillis(PRE_TURN_BASELINE_TIMEOUT);
+  return Math.min(30_000, Math.max(1_000, timeoutMs));
 }
+const PRE_TURN_BASELINE_REF_PROBE_TIMEOUT = Duration.seconds(1);
 const PROVIDER_CACHE_RESPONSE_TIMEOUT = Duration.minutes(15);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
@@ -3471,6 +3464,7 @@ const make = Effect.gen(function* () {
     let baselineFailure: string | undefined;
     let checkpointPreparation: "captured" | "not-applicable" | "unavailable" = "unavailable";
     let studioPreparationFinished = false;
+    let checkpointCaptureCwd: string | undefined;
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
         checkpointPreparation = "not-applicable";
@@ -3489,6 +3483,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      checkpointCaptureCwd = cwd;
       // Capture before provider dispatch so the later turn diff is bounded by
       // the user's submit moment, not early provider edits. This hook is the
       // sole source capturer; reactors may only alias refs already captured.
@@ -3529,49 +3524,79 @@ const make = Effect.gen(function* () {
       { concurrency: 2, discard: true },
     ).pipe(
       Effect.timeoutOption(preTurnBaselineTimeout),
-      Effect.flatMap((captured) => {
-        if (Option.isSome(captured) && baselineFailure === undefined) return Effect.void;
-        const checkpointUnavailable = checkpointPreparation === "unavailable";
-        const detail = !checkpointUnavailable
-          ? `Studio pre-turn preparation did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms. Studio output indexing may be unavailable. ${checkpointPreparation === "captured" ? "The independently prepared checkpoint is preserved." : "Checkpoint capture is not applicable to this workspace."}`
-          : Option.isNone(captured)
-            ? `The pre-turn baseline did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms. The turn continued without it; checkpoint diff and file undo may be unavailable.`
-            : `The pre-turn baseline could not be captured. The turn continued without it; checkpoint diff and file undo may be unavailable. ${baselineFailure}`;
-        return (
-          studioPreparationFinished
-            ? Effect.void
-            : studioOutputReactor.cancelPendingTurnBaseline(input.threadId)
-        ).pipe(
-          Effect.andThen(
-            orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId: serverCommandId("checkpoint-baseline-skipped"),
-              threadId: input.threadId,
-              activity: {
-                id: EventId.makeUnsafe(crypto.randomUUID()),
-                tone: "info",
-                kind: "checkpoint.baseline.skipped",
-                summary: checkpointUnavailable
-                  ? "Turn continued without a checkpoint baseline"
-                  : "Turn continued without a Studio baseline",
-                payload: {
-                  detail,
-                  messageId: input.messageId,
-                  checkpointBaseline: checkpointPreparation,
-                  studioPreparation: studioPreparationFinished ? "completed" : "unavailable",
+      Effect.flatMap((captured) =>
+        Effect.gen(function* () {
+          // Publication may finish before interruption prevents the assignment above.
+          // Probe only this message's exact ref after capture cleanup; never recapture.
+          // Bound the new read independently so a queued probe cannot reopen the wait.
+          if (checkpointPreparation === "unavailable" && checkpointCaptureCwd !== undefined) {
+            const existing = yield* checkpointStore
+              .hasCheckpointRef({
+                cwd: checkpointCaptureCwd,
+                checkpointRef: checkpointRefForThreadMessageStart(
+                  input.threadId,
+                  MessageId.makeUnsafe(input.messageId),
+                ),
+              })
+              .pipe(
+                Effect.timeoutOption(PRE_TURN_BASELINE_REF_PROBE_TIMEOUT),
+                Effect.catch(() => Effect.succeed(Option.none())),
+              );
+            if (Option.isSome(existing) && existing.value) checkpointPreparation = "captured";
+          }
+          const checkpointUnavailable = checkpointPreparation === "unavailable";
+          const studioUnavailable = !studioPreparationFinished;
+          if (!checkpointUnavailable && !studioUnavailable) return;
+          if (Option.isSome(captured) && baselineFailure === undefined) return;
+          const unavailable =
+            checkpointUnavailable && studioUnavailable
+              ? "checkpoint and Studio baselines"
+              : checkpointUnavailable
+                ? "checkpoint baseline"
+                : "Studio baseline";
+          const consequence =
+            checkpointUnavailable && studioUnavailable
+              ? "Checkpoint diff, file undo and Studio output indexing may be unavailable."
+              : checkpointUnavailable
+                ? "Checkpoint diff and file undo may be unavailable. Completed Studio preparation is preserved."
+                : `Studio output indexing may be unavailable. ${checkpointPreparation === "captured" ? "The independently prepared checkpoint is preserved." : "Checkpoint capture is not applicable to this workspace."}`;
+          const detail = `${Option.isNone(captured) ? `The pre-turn ${unavailable} did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms.` : `The pre-turn ${unavailable} could not be prepared.`} The turn continued. ${consequence}${baselineFailure === undefined ? "" : ` ${baselineFailure}`}`;
+          return yield* (
+            studioPreparationFinished
+              ? Effect.void
+              : studioOutputReactor.cancelPendingTurnBaseline(input.threadId)
+          ).pipe(
+            Effect.andThen(
+              orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId: serverCommandId("checkpoint-baseline-skipped"),
+                threadId: input.threadId,
+                activity: {
+                  id: EventId.makeUnsafe(
+                    `checkpoint-baseline-skipped:${checkpointRefForThreadMessageStart(input.threadId, MessageId.makeUnsafe(input.messageId))}`,
+                  ),
+                  tone: "info",
+                  kind: "checkpoint.baseline.skipped",
+                  summary: `Turn continued without ${unavailable}`,
+                  payload: {
+                    detail,
+                    messageId: input.messageId,
+                    checkpointBaseline: checkpointPreparation,
+                    studioPreparation: studioPreparationFinished ? "completed" : "unavailable",
+                  },
+                  turnId: null,
+                  createdAt: input.createdAt,
                 },
-                turnId: null,
                 createdAt: input.createdAt,
-              },
-              createdAt: input.createdAt,
-            }),
-          ),
-          Effect.catch((error) =>
-            Effect.logWarning("failed to surface skipped pre-turn baseline", { error }),
-          ),
-          Effect.asVoid,
-        );
-      }),
+              }),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("failed to surface skipped pre-turn baseline", { error }),
+            ),
+            Effect.asVoid,
+          );
+        }),
+      ),
     );
     const cancelPendingStudioBaseline = studioOutputReactor.cancelPendingTurnBaseline(
       input.threadId,
