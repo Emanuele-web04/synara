@@ -12,6 +12,7 @@ import type { QueuedComposerTurn } from "../../composerDraftStore";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 
 type QueuedComposerActionsProps = {
@@ -29,10 +30,18 @@ function QueuedComposerActions({
 }: QueuedComposerActionsProps) {
   return (
     <div className="flex shrink-0 items-center gap-0">
-      <Button variant="ghost" size="chip" onClick={() => void onSteer(queuedTurn)}>
-        <SteerIcon />
-        <span>Steer</span>
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={<Button variant="ghost" size="chip" onClick={() => void onSteer(queuedTurn)} />}
+        >
+          <SteerIcon />
+          <span>Steer</span>
+        </TooltipTrigger>
+        <TooltipPopup className="max-w-80 leading-tight">
+          Send this follow-up now to redirect the current work. If native steering is unavailable,
+          stop the current turn and start a new one.
+        </TooltipPopup>
+      </Tooltip>
       <IconButton
         variant="ghost"
         size="icon-chip"
@@ -55,8 +64,7 @@ function QueuedComposerActions({
           <EllipsisIcon />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="end" side="top" sideOffset={6}>
-          <MenuItem onClick={() => onEdit(queuedTurn)}>Edit queued prompt</MenuItem>
-          <MenuItem onClick={() => onRemove(queuedTurn.id)}>Delete queued prompt</MenuItem>
+          <MenuItem onClick={() => onEdit(queuedTurn)}>Edit queued follow-up</MenuItem>
         </ComposerPickerMenuPopup>
       </Menu>
     </div>
