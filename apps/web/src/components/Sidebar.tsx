@@ -6659,7 +6659,7 @@ export default function Sidebar() {
     !isOnInbox;
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
-    onOpenFeedback: openFeedbackDialog,
+    onOpenFeedback: () => openFeedbackDialog(),
     // The rail customizes from its "…" menu.
     onCustomizeSidebar: null,
   };
@@ -7991,7 +7991,7 @@ export default function Sidebar() {
           onOpenSettings={() => {
             void navigate({ to: "/settings" });
           }}
-          onOpenFeedback={openFeedbackDialog}
+          onOpenFeedback={() => openFeedbackDialog()}
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",
