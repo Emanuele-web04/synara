@@ -42,7 +42,7 @@ afterEach(() => {
 function Harness() {
   return (
     <>
-      <SafariAccessOnboarding>
+      <SafariAccessOnboarding startup>
         <p>Next welcome</p>
       </SafariAccessOnboarding>
       <SafariAccessSetupButton />
@@ -51,6 +51,29 @@ function Harness() {
 }
 
 describe("Safari access onboarding", () => {
+  it("opens manual setup despite a pending startup gate and an occupied slot", async () => {
+    localStorage.setItem(SAFARI_ACCESS_STORAGE_KEY, JSON.stringify("later"));
+    useOnboardingDialogStore.setState({ startupGateSettled: false });
+    useAnnouncementSheetSlotStore.setState({ owner: "startup-surface", handedOff: false });
+    const screen = await render(<Harness />);
+    try {
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      await page.getByRole("button", { name: "Safari import setup" }).click();
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+      // Reopening setup must preserve the caller and leave startup ownership alone.
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBe("startup-surface");
+      expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+      await page.getByRole("button", { name: "Open System Settings" }).click();
+      await expect.element(page.getByRole("status")).toHaveTextContent("quit and reopen");
+      await page.getByRole("button", { name: "Not now", exact: true }).click();
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBe("startup-surface");
+    } finally {
+      await screen.unmount();
+    }
+  });
   it("keeps follow-on surfaces mounted after handoff and allows a manual Safari revisit", async () => {
     useAnnouncementSheetSlotStore.setState({ handedOff: true });
     const screen = await render(<Harness />);

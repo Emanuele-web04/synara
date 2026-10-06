@@ -58,7 +58,14 @@ export function SafariAccessSetupButton() {
 }
 
 /** Intro decisions are persisted, never permission claims. No protected files are probed here. */
-export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
+export function SafariAccessOnboarding({
+  children,
+  startup = false,
+}: {
+  children?: ReactNode;
+  /** The root opts automatic first-launch guidance into startup arbitration. */
+  startup?: boolean;
+}) {
   const info = useSafariAccessInfo();
   const [decision, setDecision] = useLocalStorage(SAFARI_ACCESS_STORAGE_KEY, "unseen", Decision);
   const [revisit, setRevisit] = useState(false);
@@ -67,7 +74,10 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
   const wantsOpen = info?.supported === true && (decision === "unseen" || revisit);
-  const { open } = useAnnouncementSheetSlot(wantsOpen, revisit);
+  const { open: startupOpen } = useAnnouncementSheetSlot(startup && wantsOpen && !revisit);
+  // Local setup and deliberate Settings revisits must not depend on the root's
+  // first-run gate or wait behind an automatic announcement.
+  const open = wantsOpen && (!startup || revisit || startupOpen);
   const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
 
   useEffect(() => {
@@ -112,7 +122,7 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
 
   return (
     <>
-      {info && (!wantsOpen || handedOff) ? children : null}
+      {info && (!wantsOpen || revisit || handedOff) ? children : null}
       <Dialog
         open={open}
         onOpenChange={(value) => {
