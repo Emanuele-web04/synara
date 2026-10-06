@@ -35,6 +35,7 @@ is cancelled, the task and its prompt remain available for retry.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
   across projects, ordered by its last human message (or creation time). If none remains, New
   thread reopens an unsent draft. Actions on other threads keep the current chat open.
+  Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without

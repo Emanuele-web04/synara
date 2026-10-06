@@ -617,6 +617,82 @@ describe("useSidebarThreadActions", () => {
     );
   });
 
+  it.each([true, false])("offers Done undo (focused chat: %s)", async (focused) => {
+    deferWindowTimers();
+    const routeThreadId = focused ? THREAD_ID : FALLBACK_ID;
+    const controller = render({ routeThreadId });
+
+    controller.setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0];
+    expect(undoToast).toEqual(
+      expect.objectContaining({
+        timeout: 0,
+        data: expect.objectContaining({
+          allowCrossThreadVisibility: true,
+          dismissAfterVisibleMs: expect.any(Number),
+          archiveUndo: expect.objectContaining({ onUndo: expect.any(Function) }),
+        }),
+      }),
+    );
+    harness.navigate.mockClear();
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.dispatchCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: THREAD_ID, isSettled: false }),
+    );
+    expect(render({ routeThreadId }).settledOverrideByThreadId.get(THREAD_ID)).toBe(false);
+    if (focused) {
+      expect(harness.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ params: { threadId: THREAD_ID }, replace: true }),
+      );
+    } else {
+      expect(harness.navigate).not.toHaveBeenCalled();
+    }
+  });
+
+  it("waits for Done confirmation before offering undo", async () => {
+    deferWindowTimers();
+    let acceptDone!: (response: { sequence: number }) => void;
+    harness.dispatchCommand.mockImplementationOnce(
+      () => new Promise((resolve) => (acceptDone = resolve)),
+    );
+
+    render().setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+    expect(harness.toast).not.toHaveBeenCalled();
+
+    acceptDone({ sequence: 1 });
+    await flushActionResponses();
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ archiveUndo: expect.any(Object) }),
+      }),
+    );
+  });
+
+  it("keeps Done undo available for retry when reopening fails", async () => {
+    deferWindowTimers();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    render({ routeThreadId: THREAD_ID }).setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0];
+    harness.navigate.mockClear();
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("undo rejected"));
+
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(false);
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.toast).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Unable to undo done" }),
+    );
+
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: THREAD_ID }, replace: true }),
+    );
+    errorLog.mockRestore();
+  });
+
   it("keeps the focused chat when marking it done fails", async () => {
     deferWindowTimers();
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -630,6 +706,7 @@ describe("useSidebarThreadActions", () => {
     expect(harness.toast).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Unable to mark thread as done" }),
     );
+    expect(harness.toast).toHaveBeenCalledOnce();
     errorLog.mockRestore();
   });
 
@@ -645,6 +722,7 @@ describe("useSidebarThreadActions", () => {
 
     expect(harness.navigate).not.toHaveBeenCalled();
     expect(harness.handleNewChat).not.toHaveBeenCalled();
+    expect(harness.toast).not.toHaveBeenCalled();
   });
 
   it("does not navigate for an accepted Done request superseded by Undo", async () => {
@@ -663,6 +741,7 @@ describe("useSidebarThreadActions", () => {
 
     expect(harness.navigate).not.toHaveBeenCalled();
     expect(harness.handleNewChat).not.toHaveBeenCalled();
+    expect(harness.toast).not.toHaveBeenCalled();
   });
 
   it("uses human recency across projects instead of the sidebar working priority", async () => {
