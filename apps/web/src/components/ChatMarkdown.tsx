@@ -1415,7 +1415,7 @@ function ChatMarkdown({
   // values in parameter destructuring make React Compiler 1.0.0 bail on the
   // whole component (BuildHIR AssignmentPattern), losing its auto-memoization.
   const isStreaming = isStreamingProp ?? false;
-  const className = classNameProp ?? "text-sm leading-relaxed";
+  const className = classNameProp ?? "text-chat leading-relaxed";
   const variant = variantProp ?? "assistant";
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;

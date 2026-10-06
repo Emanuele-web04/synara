@@ -330,7 +330,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
           data-floating-browser-controls="true"
           className="pointer-events-none absolute right-2 top-2 z-[70]"
         >
-          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border bg-popover/95 p-0.5 text-xs text-muted-foreground shadow-sm backdrop-blur-xl">
+          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border bg-popover/95 p-0.5 text-muted-foreground shadow-sm backdrop-blur-xl">
             <IconButton
               type="button"
               variant="ghost"
