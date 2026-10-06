@@ -80,6 +80,10 @@ import {
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
+import {
+  buildProjectFoldersPreamble,
+  projectFoldersSessionIssue,
+} from "@synara/shared/projectFolders";
 
 import {
   checkpointRefForThreadMessageStart,
@@ -2110,6 +2114,23 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
     }
+    // Multi-folder projects grant their extra folders natively; refuse the chats that
+    // could not honor them rather than silently dropping folders.
+    const additionalDirectories =
+      (yield* resolveThreadWorkspaceProject(thread))?.additionalFolders ?? [];
+    if (additionalDirectories.length > 0) {
+      const folderIssue = projectFoldersSessionIssue({
+        provider: preferredProvider,
+        worktree: workspaceState !== "local",
+      });
+      if (folderIssue !== null) {
+        return yield* new ProviderAdapterValidationError({
+          provider: preferredProvider,
+          operation: "thread.turn.start",
+          issue: folderIssue,
+        });
+      }
+    }
     // A group coordinator must not stall its turn on interactive approval for
     // the Synara group tools — the gateway authorizes every call server-side
     // anyway. File edits, shell, and every non-Synara tool still ask.
@@ -2135,6 +2156,7 @@ const make = Effect.gen(function* () {
       threadId,
       providerInstanceId: desiredProviderInstanceId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
       modelSelection: desiredRoutedModelSelection,
       providerOptions: resolvedProviderOptions,
       ...(options?.enableComputerControl !== undefined
@@ -2786,11 +2808,23 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const projectContext = yield* (
+    const projectContextPacket = yield* (
       Option.isSome(projectAgentService)
         ? projectAgentService.value.formatContextPacketForTurn(input.threadId)
         : Effect.succeed("")
     ).pipe(Effect.catch(() => Effect.succeed("")));
+    // A multi-folder project lists its folders as ambient context too, so every input
+    // budget below already reserves room for it.
+    const threadProject = yield* resolveThreadWorkspaceProject(thread);
+    const projectFoldersPreamble = threadProject
+      ? buildProjectFoldersPreamble({
+          primaryFolder: threadProject.workspaceRoot,
+          additionalFolders: threadProject.additionalFolders ?? [],
+        })
+      : null;
+    const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]
+      .filter((block) => block.trim().length > 0)
+      .join("\n\n");
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;

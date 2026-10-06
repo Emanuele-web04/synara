@@ -35,6 +35,28 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("returns a multi-folder project's extra folders from every project read", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-06T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, additional_folders_json, created_at, updated_at)
+        VALUES ('multi-folder-project', 'Product', '/tmp/multi-web', '[]', '["/tmp/multi-api"]', ${now}, ${now})`;
+
+      const byRoot = yield* query.getActiveProjectByWorkspaceRoot("/tmp/multi-web");
+      const shell = yield* query.getProjectShellById(asProjectId("multi-folder-project"));
+      const snapshot = yield* query.getShellSnapshot();
+      assert.deepEqual(Option.getOrUndefined(byRoot)?.additionalFolders, ["/tmp/multi-api"]);
+      assert.deepEqual(Option.getOrUndefined(shell)?.additionalFolders, ["/tmp/multi-api"]);
+      assert.deepEqual(
+        snapshot.projects.find((project) => project.id === "multi-folder-project")
+          ?.additionalFolders,
+        ["/tmp/multi-api"],
+      );
+    }),
+  );
+
   it.effect("identifies project imports from durable provenance in full and shell snapshots", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
@@ -581,6 +603,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          additionalFolders: [],
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,

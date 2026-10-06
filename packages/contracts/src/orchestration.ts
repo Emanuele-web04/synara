@@ -721,6 +721,22 @@ export const OrchestrationSpaceShell = Schema.Struct({
 });
 export type OrchestrationSpaceShell = typeof OrchestrationSpaceShell.Type;
 
+/** Upper bound on extra source folders a project may list next to its primary `workspaceRoot`. */
+export const PROJECT_ADDITIONAL_FOLDERS_MAX_COUNT = 16;
+
+/**
+ * Extra source folders a project spans besides its primary `workspaceRoot`, in display
+ * order. Absolute, canonical paths. Empty for an ordinary single-folder project.
+ */
+export const ProjectAdditionalFolders = Schema.Array(TrimmedNonEmptyString).check(
+  Schema.isMaxLength(PROJECT_ADDITIONAL_FOLDERS_MAX_COUNT),
+);
+export type ProjectAdditionalFolders = typeof ProjectAdditionalFolders.Type;
+
+const ProjectAdditionalFoldersField = Schema.optional(ProjectAdditionalFolders).pipe(
+  Schema.withDecodingDefault(() => []),
+);
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
@@ -730,6 +746,7 @@ export const OrchestrationProject = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -745,6 +762,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1362,6 +1380,11 @@ export const ProjectCreateCommand = Schema.Struct({
    * than failing creation.
    */
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
+  /**
+   * Extra source folders for a multi-folder project; `workspaceRoot` stays the primary
+   * folder. Only ordinary projects accept them, and each one must already exist.
+   */
+  additionalFolders: Schema.optional(ProjectAdditionalFolders),
   createdAt: IsoDateTime,
 });
 
@@ -2147,6 +2170,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

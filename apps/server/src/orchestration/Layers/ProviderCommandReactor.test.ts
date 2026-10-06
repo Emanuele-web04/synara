@@ -334,6 +334,7 @@ describe("ProviderCommandReactor", () => {
         }
       | undefined;
     readonly formatContextPacket?: string;
+    readonly projectAdditionalFolders?: readonly string[];
     readonly getPersistedSessionProfile?: ProviderServiceShape["getPersistedSessionProfile"];
     readonly ingestRuntimeEvents?: boolean;
     readonly cancelClaudeCompactionDiscovery?: NonNullable<
@@ -858,6 +859,9 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         title: "Provider Project",
         workspaceRoot: "/tmp/provider-project",
+        ...(input?.projectAdditionalFolders
+          ? { additionalFolders: input.projectAdditionalFolders }
+          : {}),
         defaultModelSelection: modelSelection,
         createdAt: now,
       }),
@@ -1169,6 +1173,102 @@ describe("ProviderCommandReactor", () => {
     expect(sentInput.input?.indexOf("MARKER-PACKET-42") ?? -1).toBeLessThan(
       sentInput.input?.indexOf("What happened?") ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  describe("multi-folder projects", () => {
+    const dispatchTurn = (harness: Awaited<ReturnType<typeof createHarness>>, id: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          commandId: CommandId.makeUnsafe(`multi-folder-${id}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: MessageId.makeUnsafe(`multi-folder-${id}`),
+            role: "user",
+            text: "Rename the shared field",
+            attachments: [],
+          },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+    it("grants the extra folders natively and lists every folder before the message", async () => {
+      const harness = await createHarness({
+        formatContextPacket: "Project context packet MARKER-PACKET-42",
+        projectAdditionalFolders: ["/tmp/provider-api", "/tmp/provider-shared"],
+      });
+      await dispatchTurn(harness, "grant");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+        cwd: "/tmp/provider-project",
+        additionalDirectories: ["/tmp/provider-api", "/tmp/provider-shared"],
+      });
+      const sentInput = (harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string }).input;
+      expect(sentInput).toContain("MARKER-PACKET-42");
+      expect(sentInput).toContain(
+        [
+          "<project_folders>",
+          "This project spans several folders. You can read and edit all of them:",
+          "- provider-project: /tmp/provider-project (primary)",
+          "- provider-api: /tmp/provider-api",
+          "- provider-shared: /tmp/provider-shared",
+        ].join("\n"),
+      );
+      expect(sentInput?.indexOf("<project_folders>") ?? -1).toBeLessThan(
+        sentInput?.indexOf("Rename the shared field") ?? Number.POSITIVE_INFINITY,
+      );
+    });
+
+    it("keeps single-folder projects unchanged", async () => {
+      const harness = await createHarness();
+      await dispatchTurn(harness, "single");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("additionalDirectories");
+      expect(
+        (harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string }).input,
+      ).not.toContain("<project_folders>");
+    });
+
+    it("refuses a worktree chat instead of isolating only the primary folder", async () => {
+      const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("multi-folder-worktree-mode"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          envMode: "worktree",
+          branch: "synara/multi-folder",
+          worktreePath: "/tmp/provider-project/.worktrees/multi-folder",
+        }),
+      );
+      await dispatchTurn(harness, "worktree");
+
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.session?.lastError).toContain(
+        "Worktree mode supports only single-folder projects.",
+      );
+    });
+
+    it("refuses a provider that cannot be granted the extra folders", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "opencode", model: "openai/gpt-5" },
+        projectAdditionalFolders: ["/tmp/provider-api"],
+      });
+      await dispatchTurn(harness, "provider");
+
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.session?.lastError).toContain(
+        "cannot access a project's additional folders.",
+      );
+    });
   });
 
   it.each(["agent", "automation"] as const)(

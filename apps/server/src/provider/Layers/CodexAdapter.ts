@@ -2142,6 +2142,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
           : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.additionalDirectories !== undefined
+          ? { additionalDirectories: input.additionalDirectories }
+          : {}),
         agentGatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
         ...(input.autoApproveSynaraTools !== undefined
           ? { autoApproveSynaraTools: input.autoApproveSynaraTools }

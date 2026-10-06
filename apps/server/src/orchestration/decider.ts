@@ -29,6 +29,7 @@ import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   collectTailTurnIds,
@@ -801,6 +802,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
+      const additionalFolders = command.additionalFolders ?? [];
+      if (additionalFolders.length > 0) {
+        if (nextProjectKind !== "project") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Only ordinary projects can have additional folders.",
+          });
+        }
+        const folderProblem = findProjectFolderProblem(
+          [command.workspaceRoot, ...additionalFolders],
+          { platform: process.platform },
+        );
+        if (folderProblem !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: folderProblem,
+          });
+        }
+      }
       if (nextProjectKind === "project") {
         // The app-managed Studio container owns its root exclusively and is never retired here:
         // silently deleting it would orphan Studio threads, so adding its folder as a project
@@ -909,6 +929,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           scripts: [],
           isPinned: command.isPinned,
           spaceId: creationSpaceId,
+          additionalFolders,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -968,6 +989,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandType: command.type,
           detail: "The legacy Chats container workspace root cannot be changed.",
         });
+      }
+      // Relocating the primary folder must keep the folder set distinct and un-nested.
+      if (
+        command.workspaceRoot !== undefined &&
+        (existingProject.additionalFolders ?? []).length > 0
+      ) {
+        const folderProblem = findProjectFolderProblem(
+          [command.workspaceRoot, ...(existingProject.additionalFolders ?? [])],
+          { platform: process.platform },
+        );
+        if (folderProblem !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: folderProblem,
+          });
+        }
       }
       if (effectiveSpaceId !== null) {
         // Assignability is an invariant of the resulting row, not only of commands that

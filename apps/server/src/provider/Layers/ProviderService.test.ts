@@ -2008,6 +2008,41 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("carries a multi-folder project's extra folders through session recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-additional-directories-recovery");
+      const additionalDirectories = ["/tmp/repos/api", "/tmp/repos/shared"];
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+        additionalDirectories,
+      });
+      const persisted = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.deepStrictEqual(
+        asRuntimePayloadRecord(persisted?.runtimePayload).additionalDirectories,
+        additionalDirectories,
+      );
+
+      // A recovered runtime must keep the same folder grant it was spawned with.
+      yield* routing.codex.stopSession(threadId);
+      yield* provider.sendTurn({
+        threadId,
+        input: "keep going",
+        attachments: [],
+      });
+
+      const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.strictEqual(recoveredStart?.threadId, threadId);
+      assert.deepStrictEqual(recoveredStart?.additionalDirectories, additionalDirectories);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("imports a native copy once and preserves it across runtime stop and retries", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

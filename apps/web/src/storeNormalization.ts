@@ -56,7 +56,7 @@ export type ProjectNormalizationInput = Pick<
   | "spaceId"
   | "createdAt"
   | "updatedAt"
->;
+> & { readonly additionalFolders?: ReadonlyArray<string> | undefined };
 
 export const MAX_THREAD_MESSAGES = 2_000;
 // Matches the server-side activity retention budget: a smaller client cap would
@@ -391,6 +391,13 @@ export function normalizeProject(
       ? null
       : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
+  // Keep the previous array when nothing changed so a resync stays a no-op.
+  const incomingAdditionalFolders = incoming.additionalFolders ?? [];
+  const additionalFolders =
+    previous?.additionalFolders &&
+    deepEqualJson(previous.additionalFolders, incomingAdditionalFolders)
+      ? previous.additionalFolders
+      : incomingAdditionalFolders;
   const persistedProjectOrderIndex = rememberedUiState.projectOrderIndexForCwd(workspaceRootKey);
   const hasKnownLegacyExpansion =
     rememberedUiState.projectOrderCount === 0 &&
@@ -429,7 +436,8 @@ export function normalizeProject(
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
+    previous.scripts === scripts &&
+    previous.additionalFolders === additionalFolders
   ) {
     return previous;
   }
@@ -450,6 +458,7 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
+    additionalFolders,
   };
 }
 
