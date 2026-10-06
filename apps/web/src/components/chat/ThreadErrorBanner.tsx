@@ -1,17 +1,16 @@
 // FILE: ThreadErrorBanner.tsx
-// Purpose: Shows dismissible thread-level runtime errors above the transcript.
+// Purpose: Presents runtime errors and persistent turn failures with recovery actions.
 // Layer: Chat status presentation
 // Exports: ThreadErrorBanner
 //
-// The banner renders in flow at the top of the transcript pane so it can never
-// cover message content; the transcript shrinks to make room for it. This row
-// is the home for the visible thread's live error; threads off screen still
-// toast via useThreadErrorToast.
+// Live session errors sit above the transcript; durable turn failures reuse
+// the same banner inside the timeline. Threads off screen still toast live
+// session errors via useThreadErrorToast.
 
 import { isProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 
-import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CopyTextButton } from "../ui/copyTextButton";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
@@ -21,6 +20,10 @@ import { cn } from "~/lib/utils";
 
 type ThreadErrorBannerProps = {
   error: string | null;
+  title?: string;
+  onContinue?: () => void;
+  onChangeModel?: () => void;
+  recoveryDisabled?: boolean;
   onDismiss?: () => void;
   /** Recovery action offered only when the error is a provider-delivery quarantine. */
   onUnblock?: () => void;
@@ -36,6 +39,10 @@ export function ThreadErrorBanner(props: ThreadErrorBannerProps) {
 
 function ThreadErrorBannerContent({
   error,
+  title,
+  onContinue,
+  onChangeModel,
+  recoveryDisabled,
   onDismiss,
   onUnblock,
   unblocking,
@@ -59,6 +66,7 @@ function ThreadErrorBannerContent({
   return (
     <Alert variant="error" className={cn("w-full max-w-[36rem] shadow-sm", className)}>
       <CircleAlertIcon />
+      {title ? <AlertTitle>{title}</AlertTitle> : null}
       <AlertDescription className="min-w-0">
         <p
           ref={textRef}
@@ -85,6 +93,21 @@ function ThreadErrorBannerContent({
             </Button>
           ) : null}
           <CopyTextButton text={error} label="error" />
+          {onContinue ? (
+            <Button
+              size="xs"
+              variant="destructive-outline"
+              disabled={recoveryDisabled}
+              onClick={onContinue}
+            >
+              Continue task
+            </Button>
+          ) : null}
+          {onContinue && onChangeModel ? (
+            <Button size="xs" variant="outline" disabled={recoveryDisabled} onClick={onChangeModel}>
+              Change model
+            </Button>
+          ) : null}
           {canUnblock ? (
             <Button
               size="xs"

@@ -123,6 +123,10 @@ interface ChatTranscriptPaneProps {
   conversationOnly?: boolean;
   /** Stored thread-level error, rendered in flow above the transcript. */
   threadError?: string | null;
+  recoverableTurnId?: ComponentProps<typeof MessagesTimeline>["recoverableTurnId"];
+  turnRecoveryDisabled?: boolean;
+  onContinueFailedTurn?: ComponentProps<typeof MessagesTimeline>["onContinueFailedTurn"];
+  onChangeRecoveryModel?: () => void;
   unblockingThread?: boolean;
   onDismissThreadError?: () => void;
   onUnblockThread?: () => void;
@@ -214,6 +218,10 @@ export function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   conversationOnly,
   threadError,
+  recoverableTurnId,
+  turnRecoveryDisabled,
+  onContinueFailedTurn,
+  onChangeRecoveryModel,
   unblockingThread,
   onDismissThreadError,
   onUnblockThread,
@@ -308,7 +316,11 @@ export function ChatTranscriptPane({
     >
       {/* The thread error renders in flow above the transcript rather than as
           a floating overlay, so it can never cover message content. */}
-      {!agentActivityDetail && threadError ? (
+      {!agentActivityDetail &&
+      threadError &&
+      !visibleTimelineEntries.some(
+        (entry) => entry.kind === "work" && entry.entry.turnFailure?.cause === threadError,
+      ) ? (
         <div className="flex shrink-0 justify-center px-3 pt-2">
           <ThreadErrorBanner
             error={threadError}
@@ -360,6 +372,10 @@ export function ChatTranscriptPane({
             {...(forkSource ? { forkSource } : {})}
             isTemporaryThread={isTemporaryThread ?? false}
             timelineEntries={visibleTimelineEntries}
+            {...(recoverableTurnId !== undefined ? { recoverableTurnId } : {})}
+            {...(turnRecoveryDisabled !== undefined ? { turnRecoveryDisabled } : {})}
+            {...(onContinueFailedTurn ? { onContinueFailedTurn } : {})}
+            {...(onChangeRecoveryModel ? { onChangeRecoveryModel } : {})}
             hubWorkItemsByMessageId={hubWorkItemsByMessageId}
             messageChangeSignal={messageChangeSignal ?? timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}

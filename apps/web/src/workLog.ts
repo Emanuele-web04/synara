@@ -152,6 +152,8 @@ export interface WorkLogEntry {
   computerSetupRequired?: WorkLogComputerSetupRequired;
   providerContextLifecycle?: ProviderContextLifecycleInfo;
   providerHandoff?: ProviderHandoffInfo;
+  /** Durable terminal feedback; session readiness never clears a failed turn. */
+  turnFailure?: { cause: string; message: string; errorCode?: string };
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -384,6 +386,7 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter(
       (activity) =>
@@ -429,7 +432,73 @@ export function deriveWorkLogEntries(
       }) => entry,
     );
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
-  return completions.length > 0 ? [...derived, ...completions] : derived;
+  return [...derived, ...completions, ...deriveTurnFailureEntries(ordered)];
+}
+
+function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
+  return (
+    activity.turnId !== null &&
+    (activity.kind === "runtime.error" ||
+      (activity.kind === "turn.completed" &&
+        (asRecord(activity.payload)?.state === "failed" || activity.tone === "error")))
+  );
+}
+
+function deriveTurnFailureEntries(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): WorkLogEntry[] {
+  const terminalStates = new Map<string, unknown>();
+  for (const activity of activities) {
+    if (
+      activity.turnId &&
+      (activity.kind === "turn.completed" || activity.kind === "turn.aborted")
+    ) {
+      terminalStates.set(
+        activity.turnId,
+        activity.kind === "turn.aborted" ? "interrupted" : asRecord(activity.payload)?.state,
+      );
+    }
+  }
+  const failures = new Map<string, WorkLogEntry>();
+  for (const activity of activities) {
+    if (!isTurnFailureActivity(activity)) continue;
+    const payload = asRecord(activity.payload);
+    const terminalState = activity.turnId ? terminalStates.get(activity.turnId) : undefined;
+    if (
+      terminalState === "completed" ||
+      terminalState === "cancelled" ||
+      terminalState === "interrupted"
+    )
+      continue;
+    const id = activity.turnId ? `turn-failure:${activity.turnId}` : activity.id;
+    const previous = failures.get(id);
+    const cause =
+      asTrimmedString(payload?.errorMessage) ??
+      asTrimmedString(payload?.message) ??
+      previous?.turnFailure?.cause ??
+      "The provider reported an error.";
+    const errorCode = asTrimmedString(payload?.errorCode) ?? previous?.turnFailure?.errorCode;
+    const overloaded =
+      errorCode === "server_overloaded" || /selected model is at capacity/i.test(cause);
+    const message = overloaded
+      ? "The task was interrupted because the model is at capacity. Work remains incomplete."
+      : `The task was interrupted by a provider error. Work remains incomplete. ${cause}`;
+    failures.set(id, {
+      id,
+      createdAt: previous?.createdAt ?? activity.createdAt,
+      ...(previous?.sequence !== undefined
+        ? { sequence: previous.sequence }
+        : activity.sequence !== undefined
+          ? { sequence: activity.sequence }
+          : {}),
+      ...(activity.turnId ? { turnId: activity.turnId } : {}),
+      tone: "error",
+      label: "Task interrupted",
+      activityKind: activity.kind,
+      turnFailure: { cause, message, ...(errorCode ? { errorCode } : {}) },
+    });
+  }
+  return [...failures.values()];
 }
 
 // Completions of tasks a visible "Moved to background" notice announced. They
@@ -951,6 +1020,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (runtimeWarningMessage) {
     entry.detail = runtimeWarningMessage;
     entry.runtimeWarningMessage = runtimeWarningMessage;
+    if (payload?.willRetry === true || asRecord(payload?.data)?.willRetry === true) {
+      entry.label = "Provider retrying";
+    }
   }
   if (activity.kind === "auth.status") {
     entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;

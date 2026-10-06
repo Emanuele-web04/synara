@@ -1,4 +1,4 @@
-import { MessageId, ThreadId, type ProviderKind } from "@synara/contracts";
+import { MessageId, ThreadId, type ProviderKind, type TurnId } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
@@ -20,6 +20,7 @@ import {
 import type { LatestProposedPlanState } from "../../session-logic";
 import { buildSourceProposedPlanReference } from "../../session-logic";
 import { useStore } from "../../store";
+import { getThreadFromState } from "../../threadDerivation";
 import { truncateTitle } from "../../truncateTitle";
 import type { Project } from "../../types";
 import { type Thread } from "../../types";
@@ -408,6 +409,56 @@ export function useChatTurnFollowUps({
   // calls replay from cache, so a paused run picks up where it stopped. Sent as
   // a pre-built chat turn so it takes the exact send path a queued turn does.
 
+  const onContinueFailedTurn = useCallback(
+    async (turnId: TurnId): Promise<boolean> => {
+      const current = getThreadFromState(useStore.getState(), threadId);
+      const handlers = lateComposerSendHandlersRef.current;
+      if (
+        !handlers ||
+        !isServerThread ||
+        !current ||
+        current.latestTurn?.turnId !== turnId ||
+        current.latestTurn.state !== "error" ||
+        current.session?.status === "running" ||
+        current.hasPendingApprovals ||
+        current.hasPendingUserInput
+      )
+        return false;
+      const prompt =
+        "Continue the interrupted task from the existing conversation and working state. First verify which operations have already completed; avoid repeating them and resume the remaining work.";
+      return handlers.send(undefined, "queue", {
+        id: randomUUID(),
+        kind: "chat",
+        createdAt: new Date().toISOString(),
+        previewText: prompt,
+        prompt,
+        images: [],
+        files: [],
+        assistantSelections: [],
+        browserAnnotations: [],
+        terminalContexts: [],
+        fileComments: [],
+        pastedTexts: [],
+        pullRequestContexts: [],
+        skills: [],
+        mentions: [],
+        selectedProvider,
+        selectedModel,
+        selectedPromptEffort,
+        ...queuedChatTurnDispatchFields(turnDispatchSettings, undefined),
+      });
+    },
+    [
+      threadId,
+      isServerThread,
+      lateComposerSendHandlersRef,
+      selectedProvider,
+      selectedModel,
+      selectedPromptEffort,
+      turnDispatchSettings,
+    ],
+  );
+
   const onResumeWorkflowRun = useCallback(async () => {
     if (!workflowRunState?.scriptPath || !workflowRunState.runId) return;
     const lateSendHandlers = lateComposerSendHandlersRef.current;
@@ -607,6 +658,7 @@ export function useChatTurnFollowUps({
   ]);
   return {
     onSubmitPlanFollowUp,
+    onContinueFailedTurn,
     onEditUserMessage,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
