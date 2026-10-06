@@ -38,7 +38,13 @@ windows with a qualifying stall, not individual operations: several stalls can
 share a window. The first sample is discarded to exclude startup work. Samples
 whose delay exceeds ELU active time (allowing 20 ms or 0.2% for histogram quantization) are
 excluded as possible system sleep and restart the summary window. This is a
-best-effort distinction, not proof that every unreported delay was sleep.
+best-effort distinction, not proof that every excluded delay was sleep: CPU
+starvation while the loop is idle can look the same to ELU. Gaps of at least 2
+seconds are retained in cumulative `discardedIdleGapCount` / `discardedIdleGapMs`
+status and summary fields and a rate-limited local idle-gap log with ELU, CPU and
+load context. They are separate from active stalls and excluded from percentiles.
+Wall/monotonic clocks and load alone do not reliably prove suspend across the
+supported platforms, so the monitor does not infer a cause from those signals.
 
 Two 20 ms native timers (at most 100 native callbacks/s) and one JavaScript
 read/s make stalls close to 2 seconds measurable and notify operators promptly
@@ -57,13 +63,28 @@ a server-side stall has been proven. Once the server replies, a stall reported
 within the last 30 seconds produces a recovery notice, using server-relative age
 rather than comparing machine clocks.
 
-Unary requests get a **15 second** slow notice; known provider updates/refreshes,
-Git action/worktree/provisioning requests get **120 seconds**. Tracking is capped
+Unary requests get a **15 second** slow notice. Requests opting out with
+`timeoutMs: null` get **120 seconds**; explicit timeouts above 60 seconds become
+their slow-notice threshold. This uses caller options, without a fixed operation
+list. Slow notices display only while the transport is open; interrupted
+connections use the reconnecting state. Tracking is capped
 at 256 requests per transport. Subscriptions and heartbeats are excluded. Older
 servers without the capability still get the slow-request explanation. The
 notice lives outside the transcript and does not affect message auto-follow.
-Visibility changes, delayed renderer timers, reconnects and dispose fence prior
+A retryable `ORCHESTRATION_STREAM_OVERFLOW` restarts only the failed subscription
+with exponential backoff from 250 ms to 16 seconds. It preserves the thread's
+last successfully applied `afterSequence`; explicit unsubscribe/disposal cancels
+its keyed retry. It does not clear cursors or reconnect unrelated subscriptions.
+The independently shipped server stream-budget change owns the corresponding
+strict count/byte bounds and removal of redundant buffers.
+
+One compact status surface covers busy, real reconnecting and recent recovery; there
+is no separate slow-request toast. A slow RPC alone says the request is waiting,
+without claiming the connection is broken. Visibility changes, delayed renderer
+timers, reconnects and dispose fence prior
 heartbeat replies and reset liveness evidence.
+When a responsiveness timer fires over 500 ms late, the renderer gives queued
+socket responses another event-loop turn before declaring the server busy.
 
 The default **60 second acknowledgement timeout remains**. Removing it globally
 would leave reads and mutations with uncertain external effects waiting indefinitely
@@ -73,8 +94,24 @@ through fingerprint-bound receipt settlement; that path keeps waiting/retrying
 settlement until acceptance, rejection, caller cancellation or transport disposal.
 Known long operations already opt out of the default timeout in `wsNativeApi.ts`.
 The new indicator neither reconnects automatically on a slow heartbeat nor retries
-mutations. Existing reconnect, resume, cancellation and settlement behavior stays
-in charge. Timeout copy now tells users to check the result before retrying.
+mutations. The installed Effect protocol otherwise tears down an open socket after one missed
+5 second pong (about 10 seconds of silence). Synara now reuses Effect's scoped
+socket, JSON parser and RPC protocol buffering/acknowledgements with informational
+5 second keepalives. Late pongs do not replace the connection. Actual browser socket
+errors/closures still enter the existing coalesced reconnect path and restore
+subscriptions. WebSocket upgrades have a bounded 90 second budget, covering the
+observed 45–60 second stalls plus startup/transfer overhead; failure to open still
+enters the reconnect ladder. The first feature-socket probe also waits for a reply instead of
+replacing an open socket every 10 seconds during startup/recovery. Its wait is
+included in the compact pending-request state. A close just after a reconnect
+probe succeeds is rechecked after the active recovery settles, avoiding a lost retry.
+
+This deliberately cannot distinguish a server stall from a half-open network path:
+an open socket that never errors or closes remains waiting, including its startup
+probe and explicitly unbounded requests. Ordinary unary requests still have their
+60 second deadline; reload/disposal can replace the connection if the network never
+reports failure. Inferring death from latency alone would reintroduce stall-driven
+reconnect storms. Existing cancellation and receipt settlement remain in charge. Timeout copy now tells users to check the result before retrying.
 
 ## Attribution: measured limitation
 

@@ -162,6 +162,11 @@ export function formatSynaraServerStatus(result: SynaraServerStatusResult): stri
       ? loop.available
         ? [
             `Event loop: p50 ${Math.round(loop.delayP50Ms)}ms / p99 ${Math.round(loop.delayP99Ms)}ms / max ${Math.round(loop.delayMaxMs)}ms; ELU ${(loop.utilization * 100).toFixed(1)}%; stall windows ${loop.stallWindowCount}`,
+            ...(loop.discardedIdleGapCount
+              ? [
+                  `Ambiguous idle gaps: ${loop.discardedIdleGapCount} (${Math.round(loop.discardedIdleGapMs ?? 0)}ms total; suspend or scheduling pressure)`,
+                ]
+              : []),
             ...(loop.lastStall
               ? [
                   `Last stall: ${Math.round(loop.lastStall.durationMs)}ms (${Math.round(loop.lastStall.ageMs)}ms ago)`,

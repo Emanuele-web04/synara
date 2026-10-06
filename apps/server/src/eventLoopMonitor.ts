@@ -25,6 +25,8 @@ export const unavailableEventLoopStatus: ServerRuntimeStatus = {
   utilization: 0,
   stallWindowCount: 0,
   maxStallMs: 0,
+  discardedIdleGapCount: 0,
+  discardedIdleGapMs: 0,
   lastStall: null,
 };
 
@@ -58,6 +60,9 @@ export function makeEventLoopMonitor(
   let maxStallMs = 0;
   let suppressedStallWindows = 0;
   let suppressedMaxMs = 0;
+  let discardedIdleGapCount = 0;
+  let discardedIdleGapMs = 0;
+  let lastIdleLog = -Infinity;
   let stopped = false;
   let completed = {
     sampleWindowMs: 0,
@@ -87,6 +92,8 @@ export function makeEventLoopMonitor(
     utilization,
     stallWindowCount,
     maxStallMs,
+    discardedIdleGapCount,
+    discardedIdleGapMs,
     lastStall:
       lastStallAt === null
         ? null
@@ -140,8 +147,25 @@ export function makeEventLoopMonitor(
       countedDrift = !corroboration && activeDelay >= STALL_MS && histogramMs < STALL_MS;
       histogram.reset();
       if (maxMs > RESOLUTION_MS && activeDelay === 0) {
-        // Sleep contaminates the native summary histogram as well. Start a fresh
-        // window rather than publishing sleep as a runtime latency percentile.
+        // ELU cannot distinguish suspend from descheduling while the loop is
+        // idle. Retain ambiguous gaps instead of silently assuming sleep.
+        if (maxMs >= STALL_MS) {
+          discardedIdleGapCount++;
+          discardedIdleGapMs += Math.round(maxMs);
+          if (sampledAt - lastIdleLog >= SUMMARY_MS) {
+            logger.info("[server-event-loop] idle gap", {
+              gapDurationMs: Math.round(maxMs),
+              discardedIdleGapCount,
+              discardedIdleGapMs,
+              utilization,
+              ...resourceDelta,
+              cpuPercent,
+              loadAverage: loadavg(),
+            });
+            lastIdleLog = sampledAt;
+          }
+        }
+        // Ambiguous gaps contaminate native percentiles. Start a fresh window.
         aggregate.reset();
         windowMaxMs = 0;
         windowStart = sampledAt;
@@ -189,6 +213,8 @@ export function makeEventLoopMonitor(
           utilization,
           stallWindowCount,
           maxStallMs,
+          discardedIdleGapCount,
+          discardedIdleGapMs,
           suppressedStallWindows,
           suppressedMaxMs,
         });

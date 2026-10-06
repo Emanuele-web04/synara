@@ -694,6 +694,9 @@ export const ServerRuntimeStatus = Schema.Struct({
   utilization: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
   stallWindowCount: NonNegativeInt,
   maxStallMs: RuntimeMilliseconds,
+  /** Ambiguous suspend/scheduling gaps excluded from active-stall percentiles. */
+  discardedIdleGapCount: Schema.optional(NonNegativeInt),
+  discardedIdleGapMs: Schema.optional(RuntimeMilliseconds),
   lastStall: Schema.NullOr(
     Schema.Struct({ durationMs: RuntimeMilliseconds, ageMs: RuntimeMilliseconds }),
   ),

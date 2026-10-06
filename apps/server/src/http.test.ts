@@ -755,6 +755,8 @@ it("exposes only aggregate stall metrics in unauthenticated health", async () =>
         available: true,
         stallWindowCount: 2,
         maxStallMs: 5200,
+        discardedIdleGapCount: 1,
+        discardedIdleGapMs: 60_000,
         lastStall: { durationMs: 5200, ageMs: 1000 },
       },
     },
@@ -764,6 +766,8 @@ it("exposes only aggregate stall metrics in unauthenticated health", async () =>
       expect(body.eventLoop).toMatchObject({
         available: true,
         stallWindowCount: 2,
+        discardedIdleGapCount: 1,
+        discardedIdleGapMs: 60_000,
         lastStall: { durationMs: 5200, ageMs: 1000 },
       });
       expect(Object.keys(body.eventLoop).sort()).toEqual([
@@ -771,6 +775,8 @@ it("exposes only aggregate stall metrics in unauthenticated health", async () =>
         "delayMaxMs",
         "delayP50Ms",
         "delayP99Ms",
+        "discardedIdleGapCount",
+        "discardedIdleGapMs",
         "lastStall",
         "maxStallMs",
         "sampleCount",

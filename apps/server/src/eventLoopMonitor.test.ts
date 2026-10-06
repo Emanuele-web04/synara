@@ -114,22 +114,40 @@ describe("event loop monitor", () => {
   });
 });
 
-it("does not report system sleep as a stall", () => {
+it("retains ambiguous idle gaps without classifying them as active stalls", () => {
   let now = 0;
   const histogram = Object.assign(createHistogram(), { enable: () => true, disable: () => true });
   const warn = vi.fn();
+  const info = vi.fn();
   const monitor = makeMonitor({
     histogram,
     now: () => now,
     readLoop: () => ({ activeMs: 10, utilization: 0.001 }),
-    logger: { warn, info: vi.fn() },
+    logger: { warn, info },
   });
   monitor.sample();
   now = 61_000;
   histogram.record(60_020_000_000);
   monitor.sample();
   expect(monitor.getSnapshot()).toMatchObject({ stallWindowCount: 0, lastStall: null });
+  expect(monitor.getSnapshot()).toMatchObject({
+    discardedIdleGapCount: 1,
+    discardedIdleGapMs: expect.any(Number),
+  });
+  expect(monitor.getSnapshot().discardedIdleGapMs).toBeGreaterThanOrEqual(60_000);
+  expect(info).toHaveBeenCalledWith(
+    "[server-event-loop] idle gap",
+    expect.objectContaining({
+      discardedIdleGapCount: 1,
+      loadAverage: expect.any(Array),
+    }),
+  );
   expect(warn).not.toHaveBeenCalled();
+  now = 122_000;
+  histogram.record(60_020_000_000);
+  monitor.sample();
+  expect(monitor.getSnapshot().discardedIdleGapCount).toBe(2);
+  expect(monitor.getSnapshot().discardedIdleGapMs).toBeGreaterThanOrEqual(120_000);
 });
 
 it("disables an enabled histogram if summary monitoring cannot start", () => {

@@ -58,13 +58,35 @@ it("explains slow requests without claiming a responsive server is blocked", asy
   expect(controller.getSnapshot().slowRequests).toBe(0);
 });
 
-it("gives provider updates a longer slow-request threshold and ignores subscriptions", async () => {
-  controller.trackRequest("server.updateProvider");
+it("derives long-request thresholds from caller options and ignores subscriptions", async () => {
+  controller.trackRequest("provider.compactThread", { timeoutMs: null });
   controller.trackRequest("orchestration.subscribeThread");
   await vi.advanceTimersByTimeAsync(15000);
   expect(controller.getSnapshot()).toMatchObject({ pendingRequests: 1, slowRequests: 0 });
   await vi.advanceTimersByTimeAsync(105000);
   expect(controller.getSnapshot().slowRequests).toBe(1);
+});
+
+it("honors an explicit extended timeout for the slow-request threshold", async () => {
+  controller.trackRequest("custom.longOperation", { timeoutMs: 180_000 });
+  await vi.advanceTimersByTimeAsync(179_999);
+  expect(controller.getSnapshot().slowRequests).toBe(0);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(controller.getSnapshot().slowRequests).toBe(1);
+});
+
+it("lets a queued heartbeat response settle before declaring a late renderer timer busy", async () => {
+  const changes = vi.fn();
+  controller.dispose();
+  controller = new ServerBusyController({ onChange: changes });
+  controller.startHeartbeat(
+    () => new Promise((resolve) => setTimeout(() => resolve(healthy), 3000)),
+  );
+  const clock = vi.spyOn(performance, "now").mockReturnValue(4000);
+  await vi.advanceTimersByTimeAsync(3001);
+  expect(changes.mock.calls.some(([snapshot]) => snapshot.reason === "unresponsive")).toBe(false);
+  expect(controller.getSnapshot().reason).toBe(null);
+  clock.mockRestore();
 });
 
 it("reports a recent recovered stall and expires it without relying on clock synchronization", async () => {

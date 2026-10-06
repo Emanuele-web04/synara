@@ -6,13 +6,6 @@ const RECENT_STALL_MS = 30_000;
 const SLOW_REQUEST_MS = 15_000;
 const LONG_REQUEST_MS = 120_000;
 const MAX_TRACKED_REQUESTS = 256;
-const LONG_REQUESTS = new Set([
-  "server.updateProvider",
-  "server.refreshProviders",
-  "git.runStackedAction",
-  "git.createDetachedWorktree",
-  "projects.provisionFromGitHub",
-]);
 
 export interface ServerBusySnapshot {
   readonly reason: "unresponsive" | "recent-stall" | null;
@@ -84,7 +77,7 @@ export class ServerBusyController {
     this.snapshot = next;
     this.options.onChange?.(next);
   }
-  trackRequest(method: string): () => void {
+  trackRequest(method: string, options?: { readonly timeoutMs?: number | null }): () => void {
     if (
       this.disposed ||
       method.includes("subscribe") ||
@@ -100,7 +93,11 @@ export class ServerBusyController {
         entry.slow = true;
         this.update({ slowRequests: this.snapshot.slowRequests + 1 });
       },
-      LONG_REQUESTS.has(method) ? LONG_REQUEST_MS : SLOW_REQUEST_MS,
+      options?.timeoutMs === null
+        ? LONG_REQUEST_MS
+        : options?.timeoutMs !== undefined && options.timeoutMs > 60_000
+          ? options.timeoutMs
+          : SLOW_REQUEST_MS,
     );
     this.pending.set(token, { slow: false, timer });
     this.update({ pendingRequests: this.pending.size });
@@ -157,8 +154,16 @@ export class ServerBusyController {
         this.visibilityChanged();
         return;
       }
-      this.update({ reason: "unresponsive" });
-      abort.abort();
+      const markUnresponsive = () => {
+        if (!current() || this.requestAbort !== abort) return;
+        this.update({ reason: "unresponsive" });
+        abort.abort();
+      };
+      // A delayed renderer may process timers before an already queued socket
+      // response. Give that response one turn before publishing busy.
+      if (performance.now() - started > RESPONSE_MS + 500)
+        this.deadlineTimer = setTimeout(markUnresponsive, 0);
+      else markUnresponsive();
     }, RESPONSE_MS);
     try {
       const status = await this.heartbeat(abort.signal);

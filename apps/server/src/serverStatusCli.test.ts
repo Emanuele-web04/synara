@@ -159,6 +159,8 @@ it("prints aggregate loop metrics and rejects malformed optional metrics", async
     utilization: 0.9,
     stallWindowCount: 2,
     maxStallMs: 5200,
+    discardedIdleGapCount: 1,
+    discardedIdleGapMs: 60_000,
     lastStall: { durationMs: 5200, ageMs: 1000 },
   };
   const result = await fetchSynaraServerStatus({
@@ -174,6 +176,7 @@ it("prints aggregate loop metrics and rejects malformed optional metrics", async
     "Event loop: p50 20ms / p99 35ms / max 5200ms; ELU 90.0%; stall windows 2",
   );
   expect(formatSynaraServerStatus(result)).toContain("Last stall: 5200ms (1000ms ago)");
+  expect(formatSynaraServerStatus(result)).toContain("Ambiguous idle gaps: 1 (60000ms total");
   const malformed = await fetchSynaraServerStatus({
     fetch: async () =>
       Response.json({

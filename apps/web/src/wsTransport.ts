@@ -1,9 +1,9 @@
-import { ServerBusyController, publishServerBusySnapshot } from "./serverBusyState";
 // FILE: wsTransport.ts
 // Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
 // Layer: Web transport
 // Exports: WsTransport plus stream-selection helpers used by tests.
 
+import { ServerBusyController, publishServerBusySnapshot } from "./serverBusyState";
 import { recordRendererActivity, rendererRpcActivity } from "./lib/rendererErrorDiagnostics";
 
 import {
@@ -239,7 +239,6 @@ const makeRpcClient = RpcClient.make(
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
-const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
 const INITIAL_RECONNECT_RETRY_MS = 500;
 const MAX_RECONNECT_RETRY_MS = 5_000;
 
@@ -369,24 +368,96 @@ export async function negotiateOverHttp(
   return Option.isSome(result) ? result.value : null;
 }
 
+// A 90s upgrade budget covers observed 45–60s stalls plus startup/transfer
+// overhead. This bounds unopened sockets; an already-open socket has no pong
+// deadline and keeps its subscriptions while the server is busy.
+const SOCKET_OPEN_TIMEOUT_MS = 90_000;
+
 function makeProtocolLayer(url: string, onFailure?: () => void) {
-  const socketLayer = Socket.layerWebSocket(url).pipe(
+  const socketLayer = Socket.layerWebSocket(url, { openTimeout: SOCKET_OPEN_TIMEOUT_MS }).pipe(
     Layer.provide(Socket.layerWebSocketConstructorGlobal),
   );
   // JSON keeps the wire format symmetric with any server build: a serialization
   // mismatch on this single multiplexed socket is a hard connect failure, and the
   // desktop/dev setup routinely runs web and server on independently-built copies.
   return Layer.effect(RpcClient.Protocol)(
-    Effect.map(RpcClient.makeProtocolSocket(), (protocol) => ({
-      ...protocol,
-      run: (writeResponse) =>
-        protocol.run((response) => {
-          // The socket library retries its connection, but its failed RPCs and
-          // subscriptions have already ended. Rebuild the whole client session.
-          if (response._tag === "ClientProtocolError") onFailure?.();
-          return writeResponse(response);
-        }),
-    })),
+    RpcClient.Protocol.make(
+      Effect.fnUntraced(function* (writeResponse) {
+        const socket = yield* Socket.Socket;
+        const serialization = yield* RpcSerialization.RpcSerialization;
+        const parser = serialization.makeUnsafe();
+        const write = yield* socket.writer;
+        let currentError: RpcClientError.RpcClientError | undefined;
+        const reportFailure = (error: RpcClientError.RpcClientError) => {
+          if (currentError) return Effect.void;
+          currentError = error;
+          onFailure?.();
+          return writeResponse({ _tag: "ClientProtocolError", error });
+        };
+
+        // Reuse Effect's socket, serialization and RPC buffering/acknowledgement
+        // machinery. Its default protocol pinger replaces an open connection
+        // after one missed 5s pong; a blocked server cannot answer that pong.
+        // Keep sending keepalives, but let actual socket errors/closure drive
+        // the existing session recovery. Heartbeat latency only drives the UI.
+        yield* socket
+          .runRaw((message) => {
+            try {
+              const responses = parser.decode(message) as Array<
+                Parameters<Parameters<RpcClient.Protocol["Service"]["run"]>[0]>[0]
+              >;
+              return Effect.forEach(responses, writeResponse, { discard: true });
+            } catch (cause) {
+              return reportFailure(
+                new RpcClientError.RpcClientError({
+                  reason: new RpcClientError.RpcClientDefect({
+                    message: "Error decoding message",
+                    cause,
+                  }),
+                }),
+              );
+            }
+          })
+          .pipe(
+            Effect.flatMap(() =>
+              reportFailure(
+                new RpcClientError.RpcClientError({
+                  reason: new Socket.SocketCloseError({ code: 1000 }),
+                }),
+              ),
+            ),
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+              const error = Cause.squash(cause);
+              return reportFailure(
+                new RpcClientError.RpcClientError({
+                  reason: Schema.is(Socket.SocketError)(error)
+                    ? error.reason
+                    : new RpcClientError.RpcClientDefect({
+                        message: "Socket protocol failed",
+                        cause: error,
+                      }),
+                }),
+              );
+            }),
+            Effect.forkScoped,
+          );
+        yield* Effect.suspend(() => {
+          if (currentError) return Effect.void;
+          const encoded = parser.encode({ _tag: "Ping" });
+          return encoded === undefined ? Effect.void : write(encoded);
+        }).pipe(Effect.delay("5 seconds"), Effect.ignore, Effect.forever, Effect.forkScoped);
+        return {
+          send(request) {
+            if (currentError) return Effect.fail(currentError);
+            const encoded = parser.encode(request);
+            return encoded === undefined ? Effect.void : Effect.orDie(write(encoded));
+          },
+          supportsAck: true,
+          supportsTransferables: false,
+        };
+      }),
+    ),
   ).pipe(Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)));
 }
 
@@ -414,6 +485,8 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   // and recover via the slow snapshot-fault retry (see startStream).
   "ORCHESTRATION_RESNAPSHOT_REQUIRED",
   "ORCHESTRATION_SNAPSHOT_STALLED",
+  // Retry only the overflowing subscription, preserving its applied cursor.
+  "ORCHESTRATION_STREAM_OVERFLOW",
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
   // A server that does not offer Tasks (Stable) refuses its stream for good;
   // reconnecting the socket would only be refused again.
@@ -818,6 +891,7 @@ export class WsTransport {
   private readonly streamResnapshotRetries = new Map<string, number>();
   private readonly projectFileWatchRetries = new Map<string, number>();
   private readonly streamCapacityRetryTimers = new Map<string, number>();
+  private readonly streamOverflowRetries = new Map<string, number>();
   private readonly streamCompletionRetries = new Map<string, number>();
   private readonly streamCompletionRetryTimers = new Map<string, number>();
   private readonly activeThreadStreamInputs = new Map<string, unknown>();
@@ -858,7 +932,7 @@ export class WsTransport {
     params?: unknown,
     options?: WsRequestOptions,
   ): Promise<T> {
-    const finish = this.serverBusy?.trackRequest(method);
+    const finish = this.serverBusy?.trackRequest(method, options);
     const activity = rendererRpcActivity(method, params);
     if (activity) recordRendererActivity(activity, "started");
     try {
@@ -1000,7 +1074,7 @@ export class WsTransport {
       let failure = error;
       if (abortScope.didTimeout()) {
         failure = new WsTransportRequestInterruptedError({
-          message: `WebSocket RPC ${method} timed out after ${requestOptions.timeoutMs}ms. ${this.serverBusy?.getSnapshot().reason === "unresponsive" ? "Synara server is not responding. " : "The server did not finish this request in time. "}Check the result before retrying; it may have been applied.`,
+          message: `WebSocket RPC ${method} timed out after ${requestOptions.timeoutMs}ms. ${this.serverBusy?.getSnapshot().reason === "unresponsive" ? "Synara server is not responding. " : "The server did not finish this request in time. "}${method === ORCHESTRATION_WS_METHODS.dispatchCommand ? "Check the result before retrying; the command may have been applied." : "Try again when the server responds."}`,
           code: "WS_REQUEST_TIMEOUT",
           method,
           ...(requestOptions.timeoutMs !== undefined && requestOptions.timeoutMs !== null
@@ -1323,7 +1397,15 @@ export class WsTransport {
       >
     )[ORCHESTRATION_WS_METHODS.unsubscribeShell];
     if (!probe) return;
-    await runtime.runPromise(probe({}).pipe(Effect.timeout(FEATURE_CONNECTION_PROBE_TIMEOUT_MS)));
+    // An open socket with a delayed reply is not evidence of a dead session.
+    // Socket open/error/close still has its own failure path; replacing it on
+    // this RPC deadline would loop during startup or recovery under load.
+    const finish = this.serverBusy?.trackRequest("server.connection");
+    try {
+      await runtime.runPromise(probe({}));
+    } finally {
+      finish?.();
+    }
   }
 
   private createSession() {
@@ -1342,11 +1424,19 @@ export class WsTransport {
           // Defer teardown out of the failing protocol fiber, and fence failures
           // from an old socket so they cannot replace a newer healthy session.
           queueMicrotask(() => {
-            if (this.disposed || this.sessionVersion !== sessionVersion || this.reconnectPromise) {
-              return;
+            const recover = () => {
+              if (this.disposed || this.sessionVersion !== sessionVersion) return;
+              if (this.state !== "open") this.setCompatibility(null);
+              void this.reconnect().catch(() => undefined);
+            };
+            // A close may arrive just after the probe sets "open", before an
+            // active recovery promise has settled. Recheck after it settles;
+            // otherwise that new socket can remain closed without a retry.
+            if (this.reconnectPromise) {
+              void this.reconnectPromise.then(recover, () => undefined);
+            } else {
+              recover();
             }
-            if (this.state !== "open") this.setCompatibility(null);
-            void this.reconnect().catch(() => undefined);
           });
         }),
       );
@@ -1489,6 +1579,7 @@ export class WsTransport {
     this.streamThreadBootstrapRetries.delete(key);
     this.streamResnapshotRetries.delete(key);
     this.projectFileWatchRetries.delete(key);
+    this.streamOverflowRetries?.delete(key);
   }
 
   private resetAllStreamCapacityRetries(): void {
@@ -1501,6 +1592,7 @@ export class WsTransport {
     this.streamThreadBootstrapRetries.clear();
     this.streamResnapshotRetries.clear();
     this.projectFileWatchRetries.clear();
+    this.streamOverflowRetries?.clear();
   }
 
   private clearStreamCompletionRetryTimer(key: string): void {
@@ -2069,6 +2161,30 @@ export class WsTransport {
               return;
             }
 
+            if (restart && getStreamFailureCode(exit.cause) === "ORCHESTRATION_STREAM_OVERFLOW") {
+              const attempt =
+                performance.now() - streamStartedAt >= STABLE_STREAM_LIFETIME_MS
+                  ? 0
+                  : (this.streamOverflowRetries.get(key) ?? 0);
+              this.streamOverflowRetries.set(key, attempt + 1);
+              // A snapshot alone does not establish recovery. Back off repeated
+              // overflow up to 16s, without dropping the last applied cursor.
+              const delay = Math.min(16_000, 250 * 2 ** Math.min(attempt, 6));
+              this.clearStreamCapacityRetryTimer(key);
+              const timeoutId = window.setTimeout(() => {
+                if (this.streamCapacityRetryTimers.get(key) !== timeoutId) return;
+                this.streamCapacityRetryTimers.delete(key);
+                if (
+                  !this.disposed &&
+                  this.sessionVersion === streamSessionVersion &&
+                  !this.streamCleanups.has(key)
+                )
+                  restart();
+              }, delay);
+              this.streamCapacityRetryTimers.set(key, timeoutId);
+              return;
+            }
+
             const previousFileWatchAttempts =
               performance.now() - streamStartedAt >= STABLE_STREAM_LIFETIME_MS
                 ? 0
@@ -2197,6 +2313,7 @@ export class WsTransport {
       this.streamThreadBootstrapRetries.delete(key);
       this.streamResnapshotRetries.delete(key);
       this.projectFileWatchRetries.delete(key);
+      this.streamOverflowRetries?.delete(key);
     }
     this.streamCompletionRetries.delete(key);
     this.activeThreadStreamInputs.delete(key);

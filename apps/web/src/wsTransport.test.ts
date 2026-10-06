@@ -1,9 +1,9 @@
-import { ServerBusyController } from "./serverBusyState";
 // FILE: wsTransport.test.ts
 // Purpose: Verifies browser WebSocket construction around the Effect RPC transport.
 // Layer: Web transport tests
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
+import { ServerBusyController } from "./serverBusyState";
 import { Cause, Effect, Exit, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -62,6 +62,7 @@ import {
 } from "./wsTransport";
 import {
   advanceThreadDetailResumeCursor,
+  buildThreadSubscribeInput,
   hasThreadDetailResumeCursor,
   resetThreadDetailResumeCursorsForTests,
 } from "./threadDetailResumeCursors";
@@ -161,6 +162,7 @@ interface WsTransportInternals {
   readonly streamResnapshotRetries: Map<string, number>;
   readonly projectFileWatchRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
+  readonly streamOverflowRetries: Map<string, number>;
   readonly streamCompletionRetries: Map<string, number>;
   readonly streamCompletionRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
@@ -211,6 +213,7 @@ function makeBareTransport(): {
     streamResnapshotRetries: new Map(),
     projectFileWatchRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
+    streamOverflowRetries: new Map(),
     streamCompletionRetries: new Map(),
     streamCompletionRetryTimers: new Map(),
     activeThreadStreamInputs: new Map(),
@@ -615,7 +618,10 @@ describe("WsTransport", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(sockets).toHaveLength(1);
       expect(transport.getState()).toBe("connecting");
-      await vi.advanceTimersByTimeAsync(10_501);
+      await vi.advanceTimersByTimeAsync(89_000);
+      expect(sockets).toHaveLength(1);
+      expect(transport.getState()).toBe("connecting");
+      await vi.advanceTimersByTimeAsync(1501);
       expect(sockets[0]!.readyState).toBe(MockWebSocket.CLOSED);
       expect(sockets).toHaveLength(2);
       expect(transport.getState()).toBe("connecting");
@@ -1025,6 +1031,87 @@ describe("WsTransport", () => {
       expect(reconnect).not.toHaveBeenCalled();
     } finally {
       resetThreadDetailResumeCursorsForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["orchestration.shell", "orchestration.thread:thread-overflow"])(
+    "retries an overflowing %s stream locally and preserves the thread resume cursor",
+    async (key) => {
+      vi.useFakeTimers();
+      bindWindowTimersToCurrentGlobals();
+      resetThreadDetailResumeCursorsForTests();
+      try {
+        const { internals } = makeBareTransport();
+        const threadId = ThreadId.makeUnsafe("thread-overflow");
+        advanceThreadDetailResumeCursor(threadId, 100);
+        const restartedInputs: unknown[] = [];
+        const restart = () => restartedInputs.push(buildThreadSubscribeInput(threadId));
+        const reconnect = vi.mocked(internals.reconnect);
+        const cause = Cause.fail({ code: "ORCHESTRATION_STREAM_OVERFLOW", retryable: true });
+
+        expect(shouldReconnectAfterStreamFailure(cause)).toBe(false);
+        internals.startStream(
+          {},
+          key,
+          Stream.fail({ code: "ORCHESTRATION_STREAM_OVERFLOW", retryable: true }),
+          () => undefined,
+          restart,
+        );
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(250);
+
+        expect(restartedInputs).toEqual([{ threadId: "thread-overflow", afterSequence: 100 }]);
+        expect(reconnect).not.toHaveBeenCalled();
+      } finally {
+        resetThreadDetailResumeCursorsForTests();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("backs off repeated overflow locally and cancels the pending retry on unsubscribe", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.shell";
+    const restart = vi.fn();
+    try {
+      for (const delay of [250, 500, 1000, 2000, 4000, 8000, 16000, 16000]) {
+        internals.startStream(
+          {},
+          key,
+          Stream.fail({
+            code: "ORCHESTRATION_STREAM_OVERFLOW",
+            retryable: true,
+          }),
+          () => undefined,
+          restart,
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const before = restart.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(restart).toHaveBeenCalledTimes(before);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(restart).toHaveBeenCalledTimes(before + 1);
+      }
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({
+          code: "ORCHESTRATION_STREAM_OVERFLOW",
+          retryable: true,
+        }),
+        () => undefined,
+        restart,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await internals.stopStream(key);
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(restart).toHaveBeenCalledTimes(8);
+      expect(internals.reconnect).not.toHaveBeenCalled();
+      expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
+    } finally {
       vi.useRealTimers();
     }
   });
@@ -2361,6 +2448,206 @@ describe("WsTransport", () => {
   });
 });
 
+it.each([false, true])(
+  "keeps a silent open socket and RPC alive until a late response (heartbeat: %s)",
+  async (heartbeat) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, {
+            ...NEGOTIATION_RESULT,
+            capabilities: heartbeat ? [WS_SERVER_RUNTIME_STATUS_CAPABILITY] : [],
+          }),
+        ),
+      ),
+    );
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const transport = new WsTransport("ws://localhost:3020");
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      const socket = sockets[0]!;
+      socket.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      socket.onSend = null;
+      const start = socket.sent.length;
+      const pending = transport.request(WS_METHODS.serverGetRuntimeStatus, undefined, {
+        timeoutMs: null,
+      });
+      const verdict = pending.catch((error) => error);
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(sockets).toHaveLength(1);
+      expect(transport.getState()).toBe("open");
+      expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      expect(
+        (transport as unknown as { serverBusy: ServerBusyController }).serverBusy.getSnapshot()
+          .reason,
+      ).toBe(heartbeat ? "unresponsive" : null);
+      socket.receive(JSON.stringify({ _tag: "Pong" }));
+      const request = socket.sent
+        .slice(start)
+        .map((data) => JSON.parse(String(data)))
+        .find(
+          (frame) => frame._tag === "Request" && frame.tag === WS_METHODS.serverGetRuntimeStatus,
+        );
+      expect(request).toBeDefined();
+      const status = {
+        available: false,
+        sampleWindowMs: 0,
+        sampleCount: 0,
+        delayP50Ms: 0,
+        delayP99Ms: 0,
+        delayMaxMs: 0,
+        utilization: 0,
+        stallWindowCount: 0,
+        maxStallMs: 0,
+        lastStall: null,
+      };
+      socket.receive(
+        JSON.stringify({
+          _tag: "Exit",
+          requestId: request.id,
+          exit: { _tag: "Success", value: status },
+        }),
+      );
+      expect(await verdict).toEqual(status);
+      socket.close(1006, "real connection loss after recovery");
+      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      sockets[1]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sockets).toHaveLength(2);
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each([false, true])(
+  "waits for a silent feature probe without reconnect loops (recovery: %s)",
+  async (recovery) => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+    );
+    const transport = new WsTransport("ws://localhost:3020");
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      if (recovery) {
+        sockets[0]!.serveVoidRpc();
+        await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+        const recovering = (transport as unknown as WsTransportInternals).reconnect();
+        void recovering.catch(() => undefined);
+        await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      }
+      const socket = sockets[recovery ? 1 : 0]!;
+      socket.open();
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(sockets).toHaveLength(recovery ? 2 : 1);
+      expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      expect(transport.getState()).toBe("connecting");
+      const request = socket.sent
+        .map((data) => JSON.parse(String(data)))
+        .find(
+          (frame) =>
+            frame._tag === "Request" && frame.tag === ORCHESTRATION_WS_METHODS.unsubscribeShell,
+        );
+      expect(request).toBeDefined();
+      socket.receive(
+        JSON.stringify({
+          _tag: "Exit",
+          requestId: request.id,
+          exit: { _tag: "Success", value: null },
+        }),
+      );
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("allows a slow WebSocket upgrade without a short handshake reconnect loop", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+  );
+  const transport = new WsTransport("ws://localhost:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]!.readyState).toBe(MockWebSocket.CONNECTING);
+    sockets[0]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("disposes a silent feature probe and stops its keepalives promptly", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+  );
+  const transport = new WsTransport("ws://localhost:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0]!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await transport.dispose();
+    const sent = socket.sent.length;
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(sockets).toHaveLength(1);
+    expect(socket.sent).toHaveLength(sent);
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    expect(transport.getState()).toBe("disposed");
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("recovers a failed thread subscription on a responsive session using its latest cursor", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const { internals } = makeBareTransport();
+  const threadId = ThreadId.makeUnsafe("healthy-session-failed-subscription");
+  const input = { threadId, afterSequence: 5 };
+  const subscribe = vi
+    .fn()
+    .mockReturnValueOnce(Stream.fail(new Error("transport blip")))
+    .mockReturnValue(Stream.never);
+  const client = { [ORCHESTRATION_WS_METHODS.subscribeThread]: subscribe };
+  Object.assign(internals, { getClient: async () => client, emit: vi.fn() });
+  internals.threadSubscriptions.set(threadId, input);
+  try {
+    await internals.startThreadStream(client, threadId, input);
+    await vi.advanceTimersByTimeAsync(0);
+    advanceThreadDetailResumeCursor(threadId, 12);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(internals.reconnect).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(subscribe).toHaveBeenLastCalledWith({ threadId, afterSequence: 12 });
+  } finally {
+    internals.disposed = true;
+    await internals.stopStream(`orchestration.thread:${threadId}`);
+    resetThreadDetailResumeCursorsForTests();
+    vi.useRealTimers();
+  }
+});
+
 it("tracks the real unary wait while keeping the heartbeat out of pending counts", async () => {
   vi.useFakeTimers();
   bindWindowTimersToCurrentGlobals();
@@ -2400,7 +2687,7 @@ it("tracks the real unary wait while keeping the heartbeat out of pending counts
   });
   await vi.advanceTimersByTimeAsync(45000);
   expect(await verdict).toMatchObject({
-    message: expect.stringContaining("Check the result before retrying"),
+    message: expect.stringContaining("Try again when the server responds"),
   });
   expect(serverBusy.getSnapshot()).toMatchObject({
     reason: null,
@@ -2409,6 +2696,42 @@ it("tracks the real unary wait while keeping the heartbeat out of pending counts
   });
   serverBusy.dispose();
   vi.useRealTimers();
+});
+
+it("uses the caller's long-operation budget for providerCompactThread", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const { transport, internals } = makeBareTransport();
+  const serverBusy = new ServerBusyController();
+  const caller = new AbortController();
+  Object.assign(internals, {
+    serverBusy,
+    getClient: async () => ({ [WS_METHODS.providerCompactThread]: () => Effect.never }),
+    getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+  });
+  const pending = transport
+    .request(
+      WS_METHODS.providerCompactThread,
+      {},
+      {
+        timeoutMs: null,
+        signal: caller.signal,
+      },
+    )
+    .catch((error) => error);
+  try {
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(serverBusy.getSnapshot()).toMatchObject({ pendingRequests: 1, slowRequests: 0 });
+    await vi.advanceTimersByTimeAsync(105_000);
+    expect(serverBusy.getSnapshot().slowRequests).toBe(1);
+    caller.abort();
+    expect(await pending).toMatchObject({ code: "WS_REQUEST_ABORTED" });
+    expect(serverBusy.getSnapshot().pendingRequests).toBe(0);
+  } finally {
+    caller.abort();
+    serverBusy.dispose();
+    vi.useRealTimers();
+  }
 });
 
 it.each([true, false])(
