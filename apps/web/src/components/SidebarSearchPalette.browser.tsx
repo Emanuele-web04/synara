@@ -10,6 +10,12 @@ import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSe
 import type { SidebarSearchThread } from "./SidebarSearchPalette.logic";
 import type { ThreadImportTarget } from "../lib/threadImport";
 
+const searchThreads = vi.hoisted(() => vi.fn());
+vi.mock("~/nativeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/nativeApi")>()),
+  readNativeApi: () => ({ orchestration: { searchThreads } }),
+}));
+
 const thread: SidebarSearchThread = {
   id: "thread-1",
   title: "Fix login flow",
@@ -84,6 +90,25 @@ it("keeps recent and title matches compact, while retaining message snippets", a
   await input.fill("expired");
   await expect.element(result).toHaveTextContent("Check the expired session token");
   await expect.element(result).toHaveTextContent("Chat match");
+});
+
+it("finds a thread through server message hits when its messages are not loaded", async () => {
+  searchThreads.mockResolvedValue({
+    matches: [
+      {
+        threadId: thread.id,
+        excerpt: "The refund webhook retries three times before giving up.",
+        matchCount: 2,
+      },
+    ],
+  });
+  await renderPalette({ ...thread, messages: [] });
+  await page.getByPlaceholder("Search chats or run a command").fill("webhook retries");
+
+  const result = page.getByRole("option", { name: /Fix login flow/ });
+  await expect.element(result).toHaveTextContent("refund webhook retries three times");
+  await expect.element(result).toHaveTextContent("2 chat hits");
+  expect(searchThreads).toHaveBeenCalledWith({ query: "webhook retries", limit: 50 });
 });
 
 it("shows only unique matching metadata so a space match is not buried behind project names", async () => {
