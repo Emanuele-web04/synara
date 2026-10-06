@@ -48,6 +48,7 @@ import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeRe
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
 import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
@@ -70,6 +71,7 @@ export interface ServerShape {
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | KeepAwakeService
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
@@ -184,6 +186,7 @@ export const createEffectServer = Effect.fn(function* (
   const providerRuntimeReconciler = yield* ProviderRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
+  const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const threadSnoozeReactor = yield* ThreadSnoozeReactor;
   const readiness = yield* makeServerReadiness;
@@ -269,6 +272,7 @@ export const createEffectServer = Effect.fn(function* (
       threadSnoozeReactor,
       providerSessionReaper,
       providerRuntimeReconciler,
+      { start: () => keepAwake.start },
     ],
     subscriptionsScope,
   });
