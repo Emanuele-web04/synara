@@ -505,6 +505,210 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  it("coalesces changed task progress during durable replay without discarding raw journal rows", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "task.progress",
+            eventId: asEventId(`progress-burst-${index}`),
+            provider: "codex",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("turn-progress-burst"),
+            payload: { taskId: "task-burst", description: `Latest progress ${index}` },
+          } as ProviderRuntimeEvent),
+        ),
+      );
+    }
+    await harness.startIngestion();
+    await harness.drain();
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "progress-burst-19"),
+    );
+    expect(
+      thread.activities
+        .filter((activity) => activity.kind === "task.progress")
+        .map((activity) => ({
+          id: activity.id,
+          detail: (activity.payload as { detail: string }).detail,
+        })),
+    ).toEqual([{ id: "progress-burst-19", detail: "Latest progress 19" }]);
+    const raw = await Effect.runPromise(
+      harness.runtimeEventRepository.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: rows[19]!.sequence,
+        limit: 100,
+      }),
+    );
+    expect(raw.map((row) => row.event.eventId)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `progress-burst-${index}`),
+    );
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(rows[19]!.sequence);
+  });
+
+  it("flushes the newest live task progress within the window without an explicit drain", async () => {
+    const harness = await createHarness({ persistedStream: true });
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "task.progress",
+            eventId: asEventId(`live-progress-${index}`),
+            provider: "codex",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("turn-live-progress"),
+            payload: { taskId: "live-task", description: `Progress ${index}` },
+          } as ProviderRuntimeEvent),
+        ),
+      );
+    }
+    rows.forEach(harness.emitPersisted);
+    const before = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!;
+    expect(before.activities.filter((activity) => activity.kind === "task.progress")).toEqual([]);
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.activities.some((activity) => activity.id === "live-progress-9"),
+      300,
+    );
+    expect(
+      thread.activities
+        .filter((activity) => activity.kind === "task.progress")
+        .map((activity) => activity.id),
+    ).toEqual(["live-progress-9"]);
+  });
+
+  it("flushes trailing progress before a terminal task snapshot in source order", async () => {
+    const harness = await createHarness({ persistedStream: true });
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "task.progress",
+            eventId: asEventId(`terminal-progress-${index}`),
+            provider: "codex",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("turn-terminal-progress"),
+            payload: { taskId: "terminal-task", description: `Progress ${index}` },
+          } as ProviderRuntimeEvent),
+        ),
+      );
+    }
+    rows.push(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "task.completed",
+          eventId: asEventId("terminal-progress-complete"),
+          provider: "codex",
+          createdAt: "2026-10-06T12:00:00.001Z",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-terminal-progress"),
+          payload: { taskId: "terminal-task", status: "completed", summary: "Finished" },
+        } as ProviderRuntimeEvent),
+      ),
+    );
+    rows.forEach(harness.emitPersisted);
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.activities.some((activity) => activity.id === "terminal-progress-complete"),
+      300,
+    );
+    expect(
+      thread.activities
+        .filter((activity) => activity.kind.startsWith("task."))
+        .map((activity) => activity.id),
+    ).toEqual(["terminal-progress-4", "terminal-progress-complete"]);
+  });
+
+  it("commits trailing progress and its cursor when the producer scope shuts down", async () => {
+    const harness = await createHarness({ persistedStream: true });
+    const last = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "task.progress",
+        eventId: asEventId("shutdown-progress"),
+        provider: "codex",
+        createdAt: "2026-10-06T12:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-shutdown-progress"),
+        payload: { taskId: "shutdown-task", description: "Last progress" },
+      } as ProviderRuntimeEvent),
+    );
+    harness.emitPersisted(last);
+    await Effect.runPromise(Scope.close(scope!, Exit.void));
+    scope = null;
+    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!;
+    expect(
+      thread.activities
+        .filter((activity) => activity.kind === "task.progress")
+        .map((activity) => activity.id),
+    ).toEqual(["shutdown-progress"]);
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(last.sequence);
+  });
+
+  it("does not resurrect coalesced accepted progress while rebuilding open-turn state", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    let lastSequence = 0;
+    for (let index = 0; index < 5; index += 1) {
+      const row = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "task.progress",
+          eventId: asEventId(`accepted-progress-${index}`),
+          provider: "codex",
+          createdAt: "2026-10-06T12:00:00.000Z",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-accepted-progress"),
+          payload: { taskId: "accepted-task", description: `Progress ${index}` },
+        } as ProviderRuntimeEvent),
+      );
+      lastSequence = row.sequence;
+    }
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("accepted-progress-snapshot"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-10-06T12:00:00.000Z",
+        activity: {
+          id: asEventId("accepted-progress-4"),
+          kind: "task.progress",
+          tone: "info",
+          summary: "Task progress",
+          payload: { taskId: "accepted-task", detail: "Progress 4" },
+          createdAt: "2026-10-06T12:00:00.000Z",
+          turnId: asTurnId("turn-accepted-progress"),
+        },
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence: lastSequence,
+        updatedAt: "2026-10-06T12:00:00.000Z",
+      }),
+    );
+    await harness.startIngestion();
+    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!;
+    expect(
+      thread.activities
+        .filter((activity) => activity.kind === "task.progress")
+        .map((activity) => activity.id),
+    ).toEqual(["accepted-progress-4"]);
+  });
+
   it.each([
     { type: "turn.completed", payload: { state: "completed" } },
     { type: "turn.aborted", payload: { reason: "User interrupted" } },
@@ -3302,53 +3506,77 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("settles buffered Codex reasoning when a turn is aborted", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
+  it.each(["turn.aborted", "turn.completed"] as const)(
+    "settles buffered Codex reasoning when a turn is %s",
+    async (type) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
+      const publishedActivities: string[] = [];
+      await Effect.runPromise(
+        Effect.forkScoped(
+          Stream.runForEach(harness.engine.streamDomainEvents, (event) =>
+            Effect.sync(() => {
+              if (event.type === "thread.activity-appended")
+                publishedActivities.push(event.payload.activity.id);
+            }),
+          ),
+        ).pipe(Scope.provide(scope!)),
+      );
 
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-aborted-reasoning-delta"),
-      provider: "codex",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-aborted-reasoning"),
-      itemId: asItemId("reasoning-aborted-1"),
-      payload: {
-        streamKind: "reasoning_summary_text",
-        summaryIndex: 0,
-        delta: "**Preserve this partial summary**\n\n<!-- -->",
-      },
-    });
-    harness.emit({
-      type: "turn.aborted",
-      eventId: asEventId("evt-aborted-reasoning-terminal"),
-      provider: "codex",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-aborted-reasoning"),
-      payload: { state: "interrupted", reason: "provider aborted" },
-    });
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId("evt-aborted-reasoning-delta"),
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-aborted-reasoning"),
+        itemId: asItemId("reasoning-aborted-1"),
+        payload: {
+          streamKind: "reasoning_summary_text",
+          summaryIndex: 0,
+          delta: "**Preserve this partial summary**\n\n<!-- -->",
+        },
+      });
+      harness.emit({
+        type,
+        eventId: asEventId("evt-aborted-reasoning-terminal"),
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-aborted-reasoning"),
+        payload: { state: "interrupted", reason: "provider aborted" },
+      });
 
-    const stableActivityId = "provider-reasoning:thread-1:reasoning-aborted-1";
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
-      ),
-    );
+      const stableActivityId = "provider-reasoning:thread-1:reasoning-aborted-1";
+      const thread = await waitForThread(
+        harness.engine,
+        (entry) =>
+          (type !== "turn.completed" || publishedActivities.length >= 2) &&
+          entry.activities.some(
+            (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+          ),
+      );
 
-    expect(
-      thread.activities.find(
-        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
-      ),
-    ).toMatchObject({
-      summary: "Reasoning trace",
-      payload: {
-        status: "failed",
-        detail: "**Preserve this partial summary**\n\n<!-- -->",
-      },
-    });
-  });
+      expect(
+        thread.activities.find(
+          (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+        ),
+      ).toMatchObject({
+        summary: "Reasoning trace",
+        payload: {
+          status: "failed",
+          detail: "**Preserve this partial summary**\n\n<!-- -->",
+        },
+      });
+      if (type === "turn.completed") {
+        expect(
+          publishedActivities.filter(
+            (id) => id === stableActivityId || id === "evt-aborted-reasoning-terminal",
+          ),
+        ).toEqual([stableActivityId, "evt-aborted-reasoning-terminal"]);
+      }
+    },
+  );
 
   it("settles and clears buffered Codex reasoning on runtime errors", async () => {
     const harness = await createHarness();

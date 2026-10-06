@@ -21,6 +21,9 @@ export interface ProviderRuntimeIngestionShape {
    *
    * Uses an internal queue and continues after non-interrupt failures by
    * logging warnings.
+   * Stable task/tool progress snapshots share a bounded 50 ms wake window;
+   * text, approvals and terminal events flush their preceding progress
+   * immediately. Shutdown drains the durable journal before stopping workers.
    */
   readonly start: Effect.Effect<void, never, Scope.Scope>;
 
@@ -31,7 +34,8 @@ export interface ProviderRuntimeIngestionShape {
   readonly reconcileSettledOpenTurns: Effect.Effect<void>;
 
   /**
-   * Resolves when the internal processing queue is empty and idle.
+   * Resolves after the durable journal's captured high-water fence is processed
+   * and acknowledged, including trailing progress, and the worker is idle.
    * Intended for test use to replace timing-sensitive sleeps.
    */
   readonly drain: Effect.Effect<void>;

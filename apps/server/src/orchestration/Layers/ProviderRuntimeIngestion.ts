@@ -41,6 +41,11 @@ import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { isProviderKind } from "@synara/shared/providerInstances";
 import {
+  coalesceProviderRuntimeProgress,
+  providerRuntimeProgressKey,
+  PROVIDER_RUNTIME_PROGRESS_WINDOW_MS,
+} from "../providerRuntimeProgressCoalescing.ts";
+import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
   extractSubagentIdentityHints,
@@ -234,6 +239,7 @@ type RuntimeIngestionInput =
       source: "runtime";
       sequence: number;
       event: ProviderRuntimeEvent;
+      suppressProgressActivity?: boolean;
     }
   | {
       source: "domain";
@@ -2095,7 +2101,11 @@ const make = Effect.gen(function* () {
   >();
   const bufferedTextSpilledByMessageKey = new Set<string>();
 
-  const processRuntimeEvent = (event: ProviderRuntimeEvent, runtimeSequence: number) =>
+  const processRuntimeEvent = (
+    event: ProviderRuntimeEvent,
+    runtimeSequence: number,
+    suppressProgressActivity = false,
+  ) =>
     Effect.gen(function* () {
       const now = event.createdAt;
       // Load the full (heavy) detail only when this event's handlers actually read
@@ -3197,16 +3207,6 @@ const make = Effect.gen(function* () {
             : event.type === "item.updated" && toolOutputKey
               ? withBufferedToolOutputData(event, yield* getBufferedToolOutput(toolOutputKey))
               : event;
-      yield* Effect.forEach(
-        projectProviderRuntimeActivities(
-          activityEvent,
-          event.provider === "claudeAgent"
-            ? (completedReasoning?.sequence ?? runtimeSequence)
-            : runtimeSequence,
-        ),
-        (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
-      );
-
       if (isTerminalTurnEvent) {
         yield* settleBufferedReasoningSummaries(thread.id, event, toTurnId(event.turnId));
       } else if (event.type === "session.exited") {
@@ -3218,6 +3218,18 @@ const make = Effect.gen(function* () {
           eventTurnId ?? activeTurnId ?? undefined,
         );
       }
+
+      yield* Effect.forEach(
+        suppressProgressActivity && providerRuntimeProgressKey(event) !== undefined
+          ? []
+          : projectProviderRuntimeActivities(
+              activityEvent,
+              event.provider === "claudeAgent"
+                ? (completedReasoning?.sequence ?? runtimeSequence)
+                : runtimeSequence,
+            ),
+        (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
+      );
 
       // Exact-turn delivery modes deliberately survive terminal events for a
       // bounded TTL: providers may send late item/delta events after settlement.
@@ -3335,7 +3347,7 @@ const make = Effect.gen(function* () {
 
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime"
-      ? processRuntimeEvent(input.event, input.sequence).pipe(
+      ? processRuntimeEvent(input.event, input.sequence, input.suppressProgressActivity).pipe(
           Effect.andThen(
             Effect.sync(() => {
               pendingAckedSequence = Math.max(pendingAckedSequence ?? 0, input.sequence);
@@ -3528,11 +3540,15 @@ const make = Effect.gen(function* () {
           }
 
           runtimeJournalPageBlocked = false;
+          const progressSurvivors = new Set(coalesceProviderRuntimeProgress(page));
+          // Every row still updates process-local state and durable cursor
+          // bookkeeping; only replaceable activity snapshots are suppressed.
           yield* Effect.forEach(page, (entry) =>
             worker.enqueue({
               source: "runtime",
               sequence: entry.sequence,
               event: entry.event,
+              suppressProgressActivity: !progressSurvivors.has(entry),
             }),
           );
           yield* worker.drain;
@@ -3624,7 +3640,9 @@ const make = Effect.gen(function* () {
   // recoverable without deleting user data.
   const rebuildAcceptedOpenTurnStateForEvent = (event: ProviderRuntimeEvent, sequence: number) =>
     prepareAcceptedRuntimeEventReplay(event).pipe(
-      Effect.andThen(processRuntimeEvent(event, sequence)),
+      // Accepted progress rows already contributed their durable snapshots.
+      // Rebuild caches without resurrecting intermediate coalesced updates.
+      Effect.andThen(processRuntimeEvent(event, sequence, true)),
       Effect.as({ replayed: true } as const),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
@@ -3686,6 +3704,9 @@ const make = Effect.gen(function* () {
   const start: ProviderRuntimeIngestionShape["start"] = startDrainableWorkerProducers(
     worker,
     Effect.gen(function* () {
+      // Registered before the producer fibers: stop subscriptions and timers
+      // first, then commit their final durable progress before worker.stop.
+      yield* Effect.addFinalizer(() => drainRuntimeJournalSafely.pipe(Effect.asVoid, Effect.orDie));
       const streamPersistedEvents = providerService.streamPersistedEvents;
       const persistedRuntimeEvents = selectProviderRuntimeJournalStream({
         streamEvents: providerService.streamEvents,
@@ -3697,10 +3718,25 @@ const make = Effect.gen(function* () {
       // while newer notifications moved the fence, so events that arrive while
       // a drain is in flight are processed as pages (and acknowledged once per
       // page) instead of one drain and one acknowledgement per notification.
-      // With no backlog this still drains one event at a time; the batching
-      // engages exactly when ingestion falls behind the providers.
+      // Replaceable progress snapshots share a 50 ms wake window. Every other
+      // notification flushes the pending prefix immediately, preserving text,
+      // approval and terminal boundaries without retaining session-sized maps.
       let requestedLiveFence = 0;
+      let pendingProgressFence = 0;
       const liveDrainWakeups = yield* Queue.sliding<void>(1);
+      const progressWakeups = yield* Queue.sliding<void>(1);
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Effect.gen(function* () {
+            yield* Queue.take(progressWakeups);
+            yield* Effect.sleep(Duration.millis(PROVIDER_RUNTIME_PROGRESS_WINDOW_MS));
+            if (pendingProgressFence === 0) return;
+            requestedLiveFence = Math.max(requestedLiveFence, pendingProgressFence);
+            pendingProgressFence = 0;
+            yield* Queue.offer(liveDrainWakeups, undefined);
+          }),
+        ),
+      );
       yield* Effect.forkScoped(
         Effect.forever(
           Effect.gen(function* () {
@@ -3731,11 +3767,22 @@ const make = Effect.gen(function* () {
         Stream.runForEach(persistedRuntimeEvents, (persisted) =>
           Deferred.await(startupRuntimeReplayComplete).pipe(
             Effect.andThen(
-              Effect.sync(() => {
-                requestedLiveFence = Math.max(requestedLiveFence, persisted.sequence);
+              Effect.gen(function* () {
+                if (providerRuntimeProgressKey(persisted.event) !== undefined) {
+                  const wasPending = pendingProgressFence !== 0;
+                  pendingProgressFence = Math.max(pendingProgressFence, persisted.sequence);
+                  if (!wasPending) yield* Queue.offer(progressWakeups, undefined);
+                  return;
+                }
+                requestedLiveFence = Math.max(
+                  requestedLiveFence,
+                  pendingProgressFence,
+                  persisted.sequence,
+                );
+                pendingProgressFence = 0;
+                yield* Queue.offer(liveDrainWakeups, undefined);
               }),
             ),
-            Effect.andThen(Queue.offer(liveDrainWakeups, undefined)),
             Effect.catchCause((cause) =>
               Cause.hasInterruptsOnly(cause)
                 ? Effect.failCause(cause)
