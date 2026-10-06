@@ -12,6 +12,7 @@ export const WS_REQUEST_CLASS_LIMITS: Readonly<Record<WsRequestClass, number>> =
 };
 
 const CONTROL_METHODS = new Set<string>([
+  WS_METHODS.serverGetRuntimeStatus,
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   ORCHESTRATION_WS_METHODS.settleTurnDispatch,
   ORCHESTRATION_WS_METHODS.reconcileProviderDelivery,

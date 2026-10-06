@@ -46,6 +46,7 @@ import { ProfileStatsQueryLive } from "./profileStats";
 import { RecapStatsQueryLive } from "./recapStats";
 import { ThreadSearchQueryLive } from "./threadSearch";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
+import { ServerEventLoopMonitorLive } from "./eventLoopMonitor";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
@@ -323,6 +324,7 @@ export function makeServerRuntimeServicesLayer(
     ThreadSearchQueryLive,
     authServicesLayer,
     ServerLifecycleEventsLive,
+    ServerEventLoopMonitorLive,
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,

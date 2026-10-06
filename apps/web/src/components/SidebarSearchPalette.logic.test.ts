@@ -191,6 +191,32 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(typed[0]?.id, "switch-space-work");
   });
 
+  it("matches command words across labels and keywords without admitting partial queries", () => {
+    const commands: SidebarSearchAction[] = [
+      { id: "go-inbox", label: "Go to Inbox", description: "Open Inbox.", keywords: ["navigate"] },
+      { id: "go-kanban", label: "Go to Kanban", description: "Open Kanban.", keywords: ["board"] },
+      {
+        id: "new-automation",
+        label: "New automation",
+        description: "Schedule a recurring task.",
+        keywords: ["create"],
+      },
+    ];
+    assert.deepEqual(
+      matchSidebarSearchActions(commands, "go inbox").map((action) => action.id),
+      ["go-inbox"],
+    );
+    assert.deepEqual(
+      matchSidebarSearchActions(commands, "kanban board").map((action) => action.id),
+      ["go-kanban"],
+    );
+    assert.deepEqual(
+      matchSidebarSearchActions(commands, "create automation").map((action) => action.id),
+      ["new-automation"],
+    );
+    assert.deepEqual(matchSidebarSearchActions(commands, "go missing"), []);
+  });
+
   it("matches themes by query relevance", () => {
     const result = matchSidebarSearchThemes(themes, "dark");
 

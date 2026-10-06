@@ -1,3 +1,4 @@
+import { readEventLoopStatus } from "./eventLoopMonitor";
 import * as fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -335,6 +336,7 @@ export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
       return HttpServerResponse.jsonUnsafe(
         {
           status: "ok",
+          eventLoop: yield* readEventLoopStatus,
           startupReady: snapshot.startupReady,
           pushBusReady: snapshot.pushBusReady,
           keybindingsReady: snapshot.keybindingsReady,

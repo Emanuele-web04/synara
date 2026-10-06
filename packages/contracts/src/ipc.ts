@@ -909,6 +909,7 @@ export type DesktopDiagnosticBreadcrumb = typeof DesktopDiagnosticBreadcrumb.Typ
 /** Handled failures carry fixed categories, never exception text or operation arguments. */
 export const DesktopDiagnosticIssue = Schema.Struct({
   code: Schema.Literals([
+    "server.event-loop.stall",
     "git.request.failed",
     "git.branch.failed",
     "git.commit.failed",

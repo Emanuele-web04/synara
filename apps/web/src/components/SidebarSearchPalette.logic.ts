@@ -15,6 +15,8 @@ export interface SidebarSearchAction {
   description: string;
   keywords?: readonly string[];
   shortcutLabel?: string | null;
+  /** Context shown beside the command, such as the owning Settings section. */
+  metaLabel?: string;
   /** Dynamic actions (e.g. "Switch to <space>") execute this instead of a wired-up prop. */
   run?: () => void;
   /** Overrides the id-keyed icon map for actions whose glyph is data (a space's icon). */
@@ -240,6 +242,11 @@ function scoreAction(action: SidebarSearchAction, query: string): number | null 
   if (label.includes(query)) return 100;
   if (keywords.some((keyword) => keyword.includes(query))) return 90;
   if (description.includes(query)) return 70;
+  const tokens = tokenizeQuery(query);
+  const fields = [label, description, ...keywords];
+  if (tokens.length > 1 && tokens.every((token) => fields.some((field) => field.includes(token)))) {
+    return 60;
+  }
   return null;
 }
 
