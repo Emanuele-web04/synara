@@ -3111,8 +3111,6 @@ export default function ChatView({
     activeProject,
     gitCwd,
     isGroupContainer,
-    requestTerminalFocus,
-    setTerminalOpen,
     setThreadError,
   });
   const stopActiveThreadSession = useCallback(async () => {

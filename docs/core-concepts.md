@@ -395,10 +395,11 @@ with its own shell session. Switching tabs preserves their sessions; closing or
 exiting one terminal leaves the others running. Dock tabs and session identities
 are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
 drawer. Opening the main-view terminal again focuses its existing session.
-Project actions replace an idle
-session with the requested working directory and environment; a busy terminal
-must be stopped before another action runs in that chat. On upgrade, the last
-active terminal is retained. Retired nested sessions are closed only when the
+Project actions open a fresh session in the right dock with the requested working
+directory and environment, keeping the center chat unchanged, including in split
+chats. They replace only the selected idle dock terminal; its busy command must
+be stopped before another action runs there. Other dock sessions remain running.
+On upgrade, the last active terminal is retained. Retired nested sessions are closed only when the
 server verifies they are idle, preserving their saved history. Busy sessions or
 sessions whose activity cannot be checked remain pending for the next mount.
 Project actions use the same server check, including after reloading the app.

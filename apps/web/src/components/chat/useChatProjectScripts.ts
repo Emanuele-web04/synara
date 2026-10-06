@@ -7,9 +7,10 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
-import { newCommandId } from "~/lib/utils";
+import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
   commandForProjectScript,
@@ -18,10 +19,10 @@ import {
   type ProjectScriptRunResult,
 } from "~/projectScripts";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
+import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { isElectron } from "../../env";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import type { Project, Thread } from "../../types";
-import { DEFAULT_THREAD_TERMINAL_ID } from "../../types";
 import {
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -37,8 +38,6 @@ interface ChatProjectScriptsInput {
   activeProject: Project | undefined;
   gitCwd: string | null;
   isGroupContainer: boolean;
-  requestTerminalFocus: () => void;
-  setTerminalOpen: (open: boolean) => void;
   setThreadError: (threadId: ThreadId, error: string | null) => void;
 }
 
@@ -48,13 +47,11 @@ export function useChatProjectScripts({
   activeProject,
   gitCwd,
   isGroupContainer,
-  requestTerminalFocus,
-  setTerminalOpen,
   setThreadError,
 }: ChatProjectScriptsInput) {
   const queryClient = useQueryClient();
   const pendingScriptThreads = useRef(new Set<ThreadId>());
-  const storeNewTerminal = useTerminalStateStore((state) => state.newTerminal);
+  const storeEnsureDockTerminal = useTerminalStateStore((state) => state.ensureDockTerminal);
   const storeSetTerminalMetadata = useTerminalStateStore((state) => state.setTerminalMetadata);
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -76,15 +73,26 @@ export function useChatProjectScripts({
         });
       }
       const targetCwd = options?.cwd ?? gitCwd ?? activeProject.cwd;
+      const terminalThreadId = dockTerminalThreadId(activeThreadId);
       const terminalState =
-        useTerminalStateStore.getState().terminalStateByThreadId[activeThreadId];
-      const baseTerminalId = terminalState?.activeTerminalId ?? DEFAULT_THREAD_TERMINAL_ID;
+        useTerminalStateStore.getState().terminalStateByThreadId[terminalThreadId];
+      const dock = selectRightDockState(activeThreadId)(useRightDockStore.getState());
+      const terminalPane =
+        dock.panes.find((pane) => pane.id === dock.activePaneId && pane.kind === "terminal") ??
+        dock.panes.find(
+          (pane) =>
+            pane.kind === "terminal" &&
+            terminalState?.dockTerminalIdsByPaneId?.[pane.id] === terminalState?.activeTerminalId,
+        ) ??
+        dock.panes.find((pane) => pane.kind === "terminal");
+      const targetPaneId = terminalPane?.id ?? randomUUID();
+      const baseTerminalId = terminalState?.dockTerminalIdsByPaneId?.[targetPaneId];
       if (
         pendingScriptThreads.current.has(activeThreadId) ||
-        terminalState?.runningTerminalIds.includes(baseTerminalId)
+        (baseTerminalId !== undefined && terminalState?.runningTerminalIds.includes(baseTerminalId))
       ) {
         const error = new Error(
-          "The terminal is busy. Stop its command or use another chat before running this action.",
+          "The right-side terminal is busy. Stop its command before running another action.",
         );
         setThreadError(activeThreadId, error.message);
         if (options?.throwOnError) throw error;
@@ -97,7 +105,7 @@ export function useChatProjectScripts({
       const runScriptInTargetTerminal = async () => {
         const { metadata } = await runProjectCommandInTerminal({
           api,
-          threadId: activeThreadId,
+          threadId: terminalThreadId,
           terminalId: targetTerminalId,
           project: {
             cwd: isGroupContainer ? targetCwd : activeProject.cwd,
@@ -106,9 +114,25 @@ export function useChatProjectScripts({
           command: script.command,
           worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
           ...(options?.env ? { env: options.env } : {}),
+          onOpened: () => {
+            // Attach only after the requested cwd/env are set, but before writing
+            // so the session stays accessible if command delivery fails.
+            storeEnsureDockTerminal(terminalThreadId, targetPaneId, targetTerminalId);
+            const dockStore = useRightDockStore.getState();
+            if (
+              selectRightDockState(activeThreadId)(dockStore).panes.some(
+                (pane) => pane.id === targetPaneId,
+              )
+            ) {
+              dockStore.setActivePane(activeThreadId, targetPaneId);
+              dockStore.setDockOpen(activeThreadId, true);
+            } else {
+              dockStore.openPane(activeThreadId, { kind: "terminal", paneId: targetPaneId });
+            }
+          },
         });
         if (metadata) {
-          storeSetTerminalMetadata(activeThreadId, targetTerminalId, {
+          storeSetTerminalMetadata(terminalThreadId, targetTerminalId, {
             cliKind: metadata.cliKind,
             label: metadata.label,
           });
@@ -117,22 +141,21 @@ export function useChatProjectScripts({
 
       pendingScriptThreads.current.add(activeThreadId);
       try {
-        // Persisted client activity is intentionally empty after reload. Always
-        // ask the server, even for a legacy default session hidden in the UI.
-        await disposeAndCloseTerminalSession({
-          api,
-          threadId: activeThreadId,
-          terminalId: baseTerminalId,
-          onlyIfIdle: true,
-          deleteHistory: false,
-        });
-        useTerminalStateStore.getState().closeTerminal(activeThreadId, baseTerminalId);
-        storeNewTerminal(activeThreadId, targetTerminalId);
-        setTerminalOpen(true);
-        requestTerminalFocus();
+        // Hydration omits client activity, so the server must verify an owned
+        // session is idle. An unmapped pane must never borrow a sibling's ID.
+        if (baseTerminalId !== undefined) {
+          await disposeAndCloseTerminalSession({
+            api,
+            threadId: terminalThreadId,
+            terminalId: baseTerminalId,
+            onlyIfIdle: true,
+            deleteHistory: false,
+          });
+          useTerminalStateStore.getState().closeTerminal(terminalThreadId, baseTerminalId);
+        }
         await runScriptInTargetTerminal();
         pendingScriptThreads.current.delete(activeThreadId);
-        return { terminalId: targetTerminalId };
+        return { threadId: terminalThreadId, terminalId: targetTerminalId };
       } catch (error) {
         pendingScriptThreads.current.delete(activeThreadId);
         setThreadError(
@@ -153,10 +176,8 @@ export function useChatProjectScripts({
       activeThreadId,
       gitCwd,
       isGroupContainer,
-      requestTerminalFocus,
-      setTerminalOpen,
       setThreadError,
-      storeNewTerminal,
+      storeEnsureDockTerminal,
       storeSetTerminalMetadata,
       setLastInvokedScriptByProjectId,
     ],

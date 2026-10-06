@@ -625,17 +625,25 @@ function newThreadTerminal(state: ThreadTerminalState, terminalId: string): Thre
   });
 }
 
-function ensureDockTerminal(state: ThreadTerminalState, paneId: string): ThreadTerminalState {
+function ensureDockTerminal(
+  state: ThreadTerminalState,
+  paneId: string,
+  openedTerminalId?: string,
+): ThreadTerminalState {
   const normalized = normalizeThreadTerminalState(state);
-  if (normalized.dockTerminalIdsByPaneId?.[paneId]) return normalized;
-  const terminalId = normalized.dockTerminalIdsByPaneId
-    ? randomTerminalId()
-    : normalized.activeTerminalId;
+  const existingId = normalized.dockTerminalIdsByPaneId?.[paneId];
+  if (existingId && (!openedTerminalId || existingId === openedTerminalId)) return normalized;
+  const terminalId =
+    openedTerminalId ??
+    (normalized.dockTerminalIdsByPaneId ? randomTerminalId() : normalized.activeTerminalId);
+  if (!isValidTerminalId(terminalId)) return normalized;
   return normalizeThreadTerminalState({
     ...normalized,
     terminalOpen: true,
     hasSession: true,
-    terminalIds: [...new Set([...normalized.terminalIds, terminalId])],
+    terminalIds: [
+      ...new Set([...(normalized.hasSession ? normalized.terminalIds : []), terminalId]),
+    ],
     activeTerminalId: terminalId,
     dockTerminalIdsByPaneId: { ...normalized.dockTerminalIdsByPaneId, [paneId]: terminalId },
   });
@@ -843,7 +851,7 @@ interface TerminalStateStoreState {
     titleOverride: string | null | undefined,
   ) => void;
   newTerminal: (threadId: ThreadId, terminalId: string) => void;
-  ensureDockTerminal: (threadId: ThreadId, paneId: string) => void;
+  ensureDockTerminal: (threadId: ThreadId, paneId: string, openedTerminalId?: string) => void;
   openNewFullWidthTerminal: (threadId: ThreadId) => void;
   closeWorkspaceChat: (threadId: ThreadId) => void;
   setActiveTerminal: (threadId: ThreadId, terminalId: string) => void;
@@ -924,8 +932,8 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
           updateTerminal(threadId, (state) =>
             setThreadTerminalTitleOverride(state, terminalId, titleOverride),
           ),
-        ensureDockTerminal: (threadId, paneId) =>
-          updateTerminal(threadId, (state) => ensureDockTerminal(state, paneId)),
+        ensureDockTerminal: (threadId, paneId, openedTerminalId) =>
+          updateTerminal(threadId, (state) => ensureDockTerminal(state, paneId, openedTerminalId)),
         newTerminal: (threadId, terminalId) =>
           updateTerminal(threadId, (state) => newThreadTerminal(state, terminalId)),
         openNewFullWidthTerminal: (threadId) =>
