@@ -11,6 +11,7 @@ import {
   getTerminalContextComposerTarget,
   subscribeTerminalContextComposerTarget,
 } from "~/lib/terminalContextComposerRegistry";
+import { useTerminalStateStore } from "~/terminalStateStore";
 import { projectScriptRuntimeEnv } from "~/projectScripts";
 import { useStore } from "~/store";
 import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
@@ -18,6 +19,7 @@ import ThreadTerminalDrawer from "../ThreadTerminalDrawer";
 
 export function DockTerminalPane(props: {
   hostThreadId: ThreadId;
+  paneId: string;
   projectId: ProjectId | null;
   paneScopeId?: string;
   // When false the pane stays mounted but hidden (another dock tab is active),
@@ -49,8 +51,11 @@ export function DockTerminalPane(props: {
     : {};
 
   const terminal = useTerminalSurfaceController(scopeId);
-  const { terminalState, openTerminalThreadPage } = terminal;
-  const initializedScopeRef = useRef<ThreadId | null>(null);
+  const { terminalState } = terminal;
+  const ensureDockTerminal = useTerminalStateStore((state) => state.ensureDockTerminal);
+  const terminalId = terminalState.dockTerminalIdsByPaneId?.[props.paneId];
+  const initializedPaneRef = useRef<string | null>(null);
+  const setActiveTerminal = useTerminalStateStore((state) => state.setActiveTerminal);
   const subscribeToComposerTarget = useCallback(
     (listener: () => void) => subscribeTerminalContextComposerTarget(paneScopeId, listener),
     [paneScopeId],
@@ -68,19 +73,24 @@ export function DockTerminalPane(props: {
   // Ensure a session only on first mount of this scope. Explicit close and shell
   // exit must not race an effect that creates a replacement behind the panel.
   useEffect(() => {
-    if (initializedScopeRef.current === scopeId) return;
-    initializedScopeRef.current = scopeId;
-    if (!terminalState.terminalOpen) openTerminalThreadPage(scopeId, { terminalOnly: true });
-  }, [openTerminalThreadPage, scopeId, terminalState.terminalOpen]);
+    const paneKey = `${scopeId}:${props.paneId}`;
+    if (initializedPaneRef.current === paneKey) return;
+    initializedPaneRef.current = paneKey;
+    ensureDockTerminal(scopeId, props.paneId);
+  }, [ensureDockTerminal, props.paneId, scopeId]);
+
+  useEffect(() => {
+    if (terminalId && (props.isActive ?? true)) setActiveTerminal(scopeId, terminalId);
+  }, [props.isActive, scopeId, setActiveTerminal, terminalId]);
 
   const onSessionExited = (terminalId: string) => {
     const disposition = terminal.handleDockTerminalSessionExited(terminalId);
-    if (disposition === "final") {
+    if (disposition !== "ignored") {
       props.onClosePanel();
     }
   };
 
-  if (!terminalState.terminalOpen) return null;
+  if (!terminalId) return null;
 
   return (
     <ThreadTerminalDrawer
@@ -92,7 +102,7 @@ export function DockTerminalPane(props: {
       terminalLabelsById={terminalState.terminalLabelsById}
       terminalTitleOverridesById={terminalState.terminalTitleOverridesById}
       terminalCliKindsById={terminalState.terminalCliKindsById}
-      activeTerminalId={terminalState.activeTerminalId}
+      activeTerminalId={terminalId}
       focusRequestId={terminal.focusRequestId}
       onTerminalSessionExited={onSessionExited}
       onTerminalMetadataChange={terminal.setTerminalMetadata}

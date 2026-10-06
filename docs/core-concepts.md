@@ -389,12 +389,16 @@ navigation rather than full Obsidian support.
 
 ### Terminal panels
 
-Terminal panels appear in a chat's main view or right dock, with independent sessions.
-Terminals have no nested tabs, groups, splits, or bottom drawer. Opening the
-terminal again focuses the existing session. Project actions open a fresh session
-in the right dock with the requested working directory and environment, keeping
-the center view unchanged, including in split chats. They replace only an idle right-dock session; a busy
-right-dock terminal must be stopped before another action runs in that chat.
+Each chat has one main-view terminal panel and can have multiple independent
+terminal tabs in its right dock. Every **+ → Terminal** creates a new dock tab
+with its own shell session. Switching tabs preserves their sessions; closing or
+exiting one terminal leaves the others running. Dock tabs and session identities
+are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
+drawer. Opening the main-view terminal again focuses its existing session.
+Project actions open a fresh session in the right dock with the requested working
+directory and environment, keeping the center chat unchanged, including in split
+chats. They replace only the selected idle dock terminal; its busy command must
+be stopped before another action runs there. Other dock sessions remain running.
 On upgrade, the last active terminal is retained. Retired nested sessions are closed only when the
 server verifies they are idle, preserving their saved history. Busy sessions or
 sessions whose activity cannot be checked remain pending for the next mount.
