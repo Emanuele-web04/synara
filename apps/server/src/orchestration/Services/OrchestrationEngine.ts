@@ -56,10 +56,10 @@ export interface OrchestrationEngineShape {
   /** Reject new normal mutations while retaining reserved lifecycle progress. */
   readonly quiesce: Effect.Effect<void>;
 
-  /** Resolve after every command admitted before the current idle fence settles. */
+  /** Resolve after admitted commands and their accepted deferred projection work settle. */
   readonly drain: Effect.Effect<void>;
 
-  /** Reject all admission, drain queued commands, and stop the command worker. */
+  /** Reject all admission, drain command lanes and deferred work, then stop the workers. */
   readonly stop: Effect.Effect<void>;
 
   /** Current deferred-projection recovery state for health and diagnostics. */
@@ -75,10 +75,11 @@ export interface OrchestrationEngineShape {
     fromSequenceExclusive: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
-  /** Read a durable, inclusive high-water-fenced event range for transport catch-up. */
+  /** Read a durable inclusive range; an optional limit bounds SQL fetches and eager decoding. */
   readonly readEventsThrough: (
     fromSequenceExclusive: number,
     throughSequenceInclusive: number,
+    limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
   /** Replay one thread's persisted events from an exclusive global cursor. */
@@ -88,12 +89,13 @@ export interface OrchestrationEngineShape {
     eventTypes?: ReadonlyArray<string>,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
-  /** Read one thread's inclusive high-water-fenced event range. */
+  /** Read one thread's inclusive range, filtering event types before the optional SQL limit. */
   readonly readThreadEventsThrough: (
     threadId: string,
     fromSequenceExclusive: number,
     throughSequenceInclusive: number,
     eventTypes?: ReadonlyArray<string>,
+    limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
   /** Capture the durable orchestration event-log high-water sequence. */
@@ -127,8 +129,11 @@ export interface OrchestrationEngineShape {
    * @param command - Valid orchestration command.
    * @returns Effect containing the sequence of the persisted event.
    *
-   * Dispatch is serialized through an internal queue and deduplicated via
-   * command receipts.
+   * Dispatch preserves FIFO within each thread/project/space aggregate and
+   * bounds concurrency across independent aggregates. Receipts deduplicate
+   * retries. Success follows the atomic event/receipt/hot-projection commit and
+   * ordered publication; deferred shell projections may still be catching up.
+   * Use `drain` when accepted deferred work must also have settled.
    */
   readonly dispatch: (
     command: OrchestrationCommand,

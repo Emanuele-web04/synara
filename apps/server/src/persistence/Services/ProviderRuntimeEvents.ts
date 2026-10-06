@@ -4,6 +4,8 @@ import type { Effect } from "effect";
 
 import type { PersistenceDecodeError, PersistenceSqlError } from "../Errors.ts";
 
+export const CHECKPOINT_RUNTIME_CONSUMER = "checkpoint-reactor.runtime.v1";
+
 export const PROVIDER_RUNTIME_INGESTION_CONSUMER = "provider-runtime-ingestion.v1";
 export const PROVIDER_RUNTIME_EVENT_MAX_BYTES = 2 * 1024 * 1024;
 export const PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED = 512;
@@ -24,6 +26,8 @@ export interface ProviderRuntimeEventRepositoryShape {
     readonly sequenceExclusive: number;
     readonly throughSequenceInclusive: number;
     readonly limit: number;
+    /** Filter checkpoint inputs in SQL before limiting and decoding; raw reads are unchanged. */
+    readonly checkpointRelevantOnly?: boolean;
   }) => Effect.Effect<
     ReadonlyArray<PersistedProviderRuntimeEvent>,
     ProviderRuntimeEventRepositoryError
@@ -71,7 +75,8 @@ export interface ProviderRuntimeEventRepositoryShape {
   /**
    * Acknowledge every stored row in (cursor, throughSequence] in one
    * transaction. Equivalent to calling advanceConsumerCursor for each of those
-   * rows in order, including open-turn bookkeeping and retention, but paying
+   * rows in order, including ingestion-owned open-turn bookkeeping and retention only for the
+   * ingestion consumer; checkpoint acknowledgement only moves its cursor. Pays
    * one commit per drained page instead of one per event. Returns false when
    * the cursor is not positioned exactly below those rows.
    */

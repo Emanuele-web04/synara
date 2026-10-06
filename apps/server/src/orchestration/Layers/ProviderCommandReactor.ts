@@ -10,6 +10,8 @@ import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
 // Layer: Orchestration provider reactor
 
 import { isDeepStrictEqual } from "node:util";
+import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
+import { makeKeyedLock } from "../../provider/keyedLock.ts";
 
 import {
   type ChatAttachment,
@@ -21,6 +23,7 @@ import {
   type ModelSelection,
   MessageId,
   type OrchestrationEvent,
+  OrchestrationEventType,
   type OrchestrationRegenerateThreadTitleResult,
   PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -174,6 +177,7 @@ import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
 import {
   isClaimedProviderIntent,
   isProviderIntentEvent,
+  isProviderIntentEventType,
   isProviderSideEffectIntent,
   isQuarantineExemptProviderIntent,
   isReplaySafeClaimedProviderIntent,
@@ -182,6 +186,8 @@ import {
 import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
+
+const providerIntentEventTypes = OrchestrationEventType.literals.filter(isProviderIntentEventType);
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
 type ProviderQueueDrainEvent = Extract<
@@ -922,7 +928,7 @@ const make = Effect.gen(function* () {
     timeToLive: HANDLED_TURN_START_KEY_TTL,
     lookup: () => Effect.succeed(true),
   });
-  const deliverySourceLock = yield* Semaphore.make(1);
+  const deliveryThreadLock = makeKeyedLock<string>();
   const pendingClaudeCacheResponses = new Map<
     number,
     {
@@ -3440,14 +3446,17 @@ const make = Effect.gen(function* () {
       // Capture before provider dispatch so the later turn diff is bounded by
       // the user's submit moment, not early provider edits. skipIfExists keeps
       // a backup baseline from CheckpointReactor as the first-writer winner.
-      yield* checkpointStore.captureCheckpoint({
+      yield* turnCheckpointCoordinator.withWorkspaceLease(
         cwd,
-        checkpointRef: checkpointRefForThreadMessageStart(
-          input.threadId,
-          MessageId.makeUnsafe(input.messageId),
-        ),
-        skipIfExists: true,
-      });
+        checkpointStore.captureCheckpoint({
+          cwd,
+          checkpointRef: checkpointRefForThreadMessageStart(
+            input.threadId,
+            MessageId.makeUnsafe(input.messageId),
+          ),
+          skipIfExists: true,
+        }),
+      );
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to capture provider turn start checkpoint", {
@@ -7055,6 +7064,21 @@ const make = Effect.gen(function* () {
 
     const processOwner = `provider-command-reactor:${crypto.randomUUID()}`;
     let cursor = consumerState.value.lastAckedSequence;
+    // Source admission retains one durable range per thread, not one event
+    // per intent. A stalled thread cannot fill admission with its followers.
+    // The journal supplies FIFO payloads; only the earliest unsettled position
+    // of each bounded lane may fence the global acknowledgement prefix.
+    type ProviderSourceLane = {
+      readonly threadId: string;
+      priority: number;
+      reschedule: boolean;
+      firstUnsettledSequence: number;
+      latestFence: number;
+    };
+    const sourceLanes = new Map<string, ProviderSourceLane>();
+    const sourceLaneSlots = yield* Semaphore.make(256);
+    let admittedThroughSequence = cursor;
+    const cursorLock = yield* Semaphore.make(1);
     const refreshCursor = Effect.gen(function* () {
       const state = yield* deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER);
       if (Option.isSome(state)) cursor = Math.max(cursor, state.value.lastAckedSequence);
@@ -7070,13 +7094,80 @@ const make = Effect.gen(function* () {
       return advanced;
     });
 
-    const requireCursorAdvance = Effect.fnUntraced(function* (event: OrchestrationEvent) {
-      if (yield* advanceCursor(event)) return;
-      yield* refreshCursor;
-      if (cursor < event.sequence) {
-        return yield* Effect.die(
-          new Error(`Provider command cursor could not advance through event ${event.sequence}`),
+    const acknowledgementWake = yield* Queue.sliding<void>(1);
+    yield* Effect.addFinalizer(() => Queue.shutdown(acknowledgementWake));
+    let requestedAcknowledgement = 0;
+    let settledAcknowledgement = 0;
+    let acknowledgementIdle = yield* Deferred.make<void>();
+    yield* Deferred.succeed(acknowledgementIdle, undefined);
+    const requireCursorAdvance = Effect.fnUntraced(function* (
+      event: Pick<OrchestrationEvent, "sequence">,
+    ) {
+      // A normal source callback must not wait for the acknowledgement lock:
+      // the pump may be catching up a large prefix or waiting on persistence.
+      if (event.sequence > admittedThroughSequence) {
+        yield* cursorLock.withPermits(1)(
+          Effect.gen(function* () {
+            yield* refreshCursor;
+            if (cursor >= event.sequence) return;
+            return yield* Effect.die(new Error(`Unadmitted provider event ${event.sequence}`));
+          }),
         );
+      }
+      const nextIdle = yield* Deferred.make<void>();
+      yield* Effect.sync(() => {
+        if (requestedAcknowledgement === settledAcknowledgement) acknowledgementIdle = nextIdle;
+        requestedAcknowledgement += 1;
+        Queue.offerUnsafe(acknowledgementWake, undefined);
+      });
+    });
+    const drainAcknowledgements: Effect.Effect<void> = Effect.suspend(
+      function awaitAcknowledgements(): Effect.Effect<void> {
+        return Deferred.await(acknowledgementIdle).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              settledAcknowledgement >= requestedAcknowledgement
+                ? Effect.void
+                : awaitAcknowledgements(),
+            ),
+          ),
+        );
+      },
+    );
+    const advanceEligiblePrefix = Effect.gen(function* () {
+      while (true) {
+        const fullChunk = yield* cursorLock.withPermits(1)(
+          Effect.gen(function* () {
+            // Settlement belongs to lane readers. Source fast paths only wake
+            // this pump; neither telemetry nor an intermediate claim skips an intent.
+            let through = admittedThroughSequence;
+            for (const lane of sourceLanes.values()) {
+              through = Math.min(through, lane.firstUnsettledSequence - 1);
+            }
+            if (through <= cursor) return false;
+            let processed = 0;
+            yield* Stream.runForEach(
+              orchestrationEngine.readEventsThrough(cursor, through, 32),
+              (next) =>
+                Effect.gen(function* () {
+                  processed += 1;
+                  if (yield* advanceCursor(next)) return;
+                  yield* refreshCursor;
+                  if (cursor >= next.sequence) return;
+                  return yield* Effect.die(
+                    new Error(
+                      `Provider command cursor could not advance through event ${next.sequence}`,
+                    ),
+                  );
+                }),
+            );
+            // Count stored rows, not sequence numbers: deleted events can leave
+            // gaps, and an empty eligible range must not spin forever.
+            return processed === 32;
+          }),
+        );
+        if (!fullChunk) return;
+        yield* Effect.yieldNow;
       }
     });
 
@@ -7573,7 +7664,8 @@ const make = Effect.gen(function* () {
       }
       if (
         event.type === "thread.claude-cache-response-requested" &&
-        event.payload.decision === "compact"
+        event.payload.decision === "compact" &&
+        !isRecoveringClaudeCompactions
       ) {
         const earlyTerminal = earlyClaudeCompactionTerminals.get(event.payload.threadId);
         earlyClaudeCompactionTerminals.delete(event.payload.threadId);
@@ -7685,8 +7777,9 @@ const make = Effect.gen(function* () {
       Effect.suspend(() => {
         let awaitCacheRetry: Effect.Effect<void, unknown> = Effect.void;
         return Effect.scoped(
-          deliverySourceLock
-            .withPermits(1)(
+          deliveryThreadLock
+            .withLock(
+              input.threadId,
               Effect.gen(function* () {
                 const reconciledAt = new Date().toISOString();
                 const delivery = yield* deliveryRepository.getDelivery({
@@ -8052,40 +8145,231 @@ const make = Effect.gen(function* () {
     const retryableDeliveries = yield* deliveryRepository.listRetryableDeliveries(
       PROVIDER_COMMAND_REACTOR_CONSUMER,
     );
-    yield* deliverySourceLock.withPermits(1)(
-      Effect.forEach(
-        retryableDeliveries,
-        (delivery) =>
-          Effect.gen(function* () {
-            const event = yield* readProviderIntentEvent(delivery.eventSequence);
-            return yield* event.type === "thread.claude-cache-response-requested"
+    yield* Effect.forEach(
+      retryableDeliveries,
+      (delivery) =>
+        Effect.gen(function* () {
+          const event = yield* readProviderIntentEvent(delivery.eventSequence);
+          return yield* deliveryThreadLock.withLock(
+            delivery.threadId,
+            event.type === "thread.claude-cache-response-requested"
               ? runClaudeCacheResponseDelivery(event, resumeRetryableDelivery(delivery))
-              : resumeRetryableDelivery(delivery);
-          }),
-        { discard: true },
-      ),
+              : resumeRetryableDelivery(delivery),
+          );
+        }),
+      { discard: true, concurrency: 4 },
     );
 
-    const processOrderedEventSerially = (event: OrchestrationEvent) =>
-      deliverySourceLock.withPermits(1)(
+    const processLaneEvent = (event: OrchestrationEvent) =>
+      deliveryThreadLock.withLock(
+        event.aggregateId,
         Effect.suspend(() =>
           event.sequence > cursor && event.type === "thread.claude-cache-response-requested"
             ? runClaudeCacheResponseDelivery(event, processOrderedEvent(event))
             : processOrderedEvent(event),
-        ),
+        ).pipe(Effect.andThen(requireCursorAdvance(event))),
       );
+    const sourceFailure = yield* Deferred.make<never, Cause.Cause<unknown>>();
+    const stoppingLanes = yield* Deferred.make<void>();
+    let lanesStopping = false;
+    const stopProviderLanes = Effect.sync(() => {
+      lanesStopping = true;
+    }).pipe(Effect.andThen(Deferred.succeed(stoppingLanes, undefined)));
+    // One permanent consumer owns cursor IO. Wakeups coalesce, so neither
+    // event payloads nor one detached acknowledgement fiber per event accrue.
+    yield* Effect.forever(
+      Queue.take(acknowledgementWake).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const requested = requestedAcknowledgement;
+            yield* advanceEligiblePrefix;
+            const idle = yield* Effect.sync(() => {
+              settledAcknowledgement = Math.max(settledAcknowledgement, requested);
+              return settledAcknowledgement >= requestedAcknowledgement
+                ? acknowledgementIdle
+                : undefined;
+            });
+            if (idle !== undefined) yield* Deferred.succeed(idle, undefined);
+          }),
+        ),
+      ),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (Cause.hasInterruptsOnly(cause) && lanesStopping) return;
+          yield* Deferred.fail(sourceFailure, cause);
+          return yield* Effect.failCause(cause);
+        }),
+      ),
+      Effect.forkScoped,
+    );
+    const intentWorker = yield* makeKeyedDrainableWorker(
+      (lane: ProviderSourceLane) =>
+        Effect.gen(function* () {
+          lane.reschedule = false;
+          if (yield* Deferred.isDone(stoppingLanes)) return;
+          const processThreadRange = Effect.gen(function* () {
+            const through = lane.latestFence;
+            let processedIntents = 0;
+            yield* Stream.runForEach(
+              orchestrationEngine
+                .readThreadEventsThrough(
+                  lane.threadId,
+                  lane.firstUnsettledSequence - 1,
+                  through,
+                  providerIntentEventTypes,
+                  32,
+                )
+                .pipe(Stream.filter(isProviderIntentEvent), Stream.take(32)),
+              (event) =>
+                processLaneEvent(event).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      // Synchronous fence mutation cannot interleave with a pump
+                      // snapshot. Increasing eligibility is safe for its already
+                      // captured prefix and must not wait on cursor persistence.
+                      lane.firstUnsettledSequence = Math.max(
+                        lane.firstUnsettledSequence,
+                        event.sequence + 1,
+                      );
+                      processedIntents += 1;
+                    }),
+                  ),
+                  Effect.andThen(requireCursorAdvance(event)),
+                ),
+            );
+            const finished = yield* Effect.sync(() => {
+              // A full quantum may have stopped before the captured fence. Never
+              // acknowledge that unread tail merely because this quantum ended.
+              if (processedIntents < 32 || lane.firstUnsettledSequence > through) {
+                lane.firstUnsettledSequence = Math.max(lane.firstUnsettledSequence, through + 1);
+              }
+              if (lane.firstUnsettledSequence <= lane.latestFence) return false;
+              // Confirmation/removal is synchronous: new source admission either
+              // extends this range or registers a fresh same-thread FIFO item.
+              sourceLanes.delete(lane.threadId);
+              return true;
+            });
+            if (finished) yield* sourceLaneSlots.release(1);
+            yield* requireCursorAdvance({ sequence: through });
+            if (finished) return;
+            // Choose continuation priority from the actual next head. Retaining
+            // an earlier control event's priority would starve later user work
+            // even though the ready-key scheduler rechecks between quanta.
+            const nextHead = yield* orchestrationEngine
+              .readThreadEventsThrough(
+                lane.threadId,
+                lane.firstUnsettledSequence - 1,
+                lane.latestFence,
+                providerIntentEventTypes,
+                1,
+              )
+              .pipe(Stream.filter(isProviderIntentEvent), Stream.take(1), Stream.runCollect);
+            const next = nextHead[0];
+            lane.priority =
+              next === undefined
+                ? 2
+                : isQuarantineExemptProviderIntent(next)
+                  ? 0
+                  : next.type === "thread.turn-start-requested"
+                    ? 1
+                    : 2;
+            lane.reschedule = true;
+          });
+          yield* processThreadRange.pipe(
+            Effect.raceFirst(Deferred.await(stoppingLanes).pipe(Effect.andThen(Effect.interrupt))),
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                // Unfinished ranges stay behind the durable cursor for restart.
+                if (Cause.hasInterruptsOnly(cause) && (yield* Deferred.isDone(stoppingLanes)))
+                  return;
+                yield* Deferred.fail(sourceFailure, cause);
+                return yield* Effect.failCause(cause);
+              }),
+            ),
+          );
+        }),
+      {
+        key: (lane) => lane.threadId,
+        concurrency: 4,
+        capacity: 256,
+        // Only the next unsettled head determines priority. No continuation
+        // may overtake an earlier logical item within its own thread.
+        priority: (lane) => lane.priority,
+        shouldContinue: (lane) => lane.reschedule && !lanesStopping,
+      },
+    );
+    yield* Effect.addFinalizer(() => stopProviderLanes);
+    const failOnSourceError = Deferred.await(sourceFailure).pipe(
+      Effect.catch((cause) => Effect.failCause(cause)),
+    );
+    const stopAfterSourceFailure = Effect.onExit((exit) =>
+      exit._tag === "Failure"
+        ? stopProviderLanes.pipe(Effect.andThen(intentWorker.stop))
+        : Effect.void,
+    );
+    const admitOrderedEvent = (event: OrchestrationEvent) =>
+      Effect.gen(function* () {
+        if (event.sequence <= admittedThroughSequence) return;
+        if (!isProviderIntentEvent(event)) {
+          admittedThroughSequence = event.sequence;
+          yield* requireCursorAdvance(event);
+          return;
+        }
+        const existing = sourceLanes.get(event.aggregateId);
+        if (existing !== undefined) {
+          existing.latestFence = event.sequence;
+          admittedThroughSequence = event.sequence;
+          return;
+        }
+        // Do not advance the source fence while waiting for a distinct-thread
+        // slot: this not-yet-admitted event must remain durable replay work.
+        yield* sourceLaneSlots.take(1);
+        const lane: ProviderSourceLane = {
+          threadId: event.aggregateId,
+          priority: isQuarantineExemptProviderIntent(event)
+            ? 0
+            : event.type === "thread.turn-start-requested"
+              ? 1
+              : 2,
+          reschedule: false,
+          firstUnsettledSequence: event.sequence,
+          latestFence: event.sequence,
+        };
+        sourceLanes.set(lane.threadId, lane);
+        admittedThroughSequence = event.sequence;
+        if (!(yield* intentWorker.enqueue(lane))) {
+          return yield* Effect.die(new Error("Provider command lanes closed during admission"));
+        }
+      });
 
     const replayThrough = yield* orchestrationEngine.getEventHighWaterSequence;
+    // Startup recovery expects replay effects to settle before scanning pending
+    // compactions/goals; cross-thread execution remains bounded during replay.
+    // A failed lane must fail startup rather than leave a healthy-looking
+    // reactor whose durable source has already stopped.
     yield* Stream.runForEach(
       orchestrationEngine.readEventsThrough(cursor, replayThrough),
-      processOrderedEventSerially,
+      admitOrderedEvent,
+    ).pipe(
+      Effect.andThen(intentWorker.drain),
+      Effect.andThen(drainAcknowledgements),
+      Effect.raceFirst(failOnSourceError),
+      Effect.andThen(
+        Effect.gen(function* () {
+          if (yield* Deferred.isDone(sourceFailure)) yield* failOnSourceError;
+        }),
+      ),
+      stopAfterSourceFailure,
     );
-    yield* Stream.runForEach(liveEvents, processOrderedEventSerially).pipe(
+    yield* Stream.runForEach(liveEvents, admitOrderedEvent).pipe(
+      Effect.raceFirst(failOnSourceError),
       Effect.catchCause((cause) =>
         Effect.logError("provider command durable source stopped", {
           cause: Cause.pretty(cause),
         }).pipe(Effect.andThen(Effect.failCause(cause))),
       ),
+      stopAfterSourceFailure,
       Effect.forkScoped,
     );
   });

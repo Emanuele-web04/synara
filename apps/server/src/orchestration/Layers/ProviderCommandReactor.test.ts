@@ -1503,6 +1503,111 @@ describe("ProviderCommandReactor", () => {
       await harness.drain();
     }
 
+    it("recovers a retryable cache response ahead of the source cursor before source admission", async () => {
+      const observation = expiredCacheObservation();
+      const harness = await createCacheHarness(() => observation, false);
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      const source = await dispatchHarnessUserTurn(harness, {
+        messageId: "cache-retry-ahead-message",
+        text: "Continue this recovered held message",
+        createdAt: now,
+      });
+      const review = {
+        reviewId: "cache-retry-ahead-review",
+        messageId: asMessageId("cache-retry-ahead-message"),
+        sourceEventSequence: source.sequence,
+        assessment: observation,
+        status: "pending" as const,
+        createdAt: now,
+      };
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.claude-cache.set",
+          commandId: CommandId.makeUnsafe("cmd-cache-retry-ahead-review"),
+          threadId,
+          review,
+          expectedReviewId: null,
+          createdAt: now,
+        }),
+      );
+      const sourceKey = {
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: source.sequence,
+      };
+      await Effect.runPromise(
+        harness.deliveryRepository.claim({
+          ...sourceKey,
+          threadId,
+          claimOwner: "previous-process",
+          claimedAt: now,
+          claimExpiresAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.complete({
+          ...sourceKey,
+          claimOwner: "previous-process",
+          completedAt: now,
+        }),
+      );
+      const response = await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.claude-cache.respond",
+          commandId: CommandId.makeUnsafe("cmd-cache-retry-ahead-continue"),
+          threadId,
+          reviewId: review.reviewId,
+          messageId: review.messageId,
+          decision: "continue",
+          createdAt: now,
+        }),
+      );
+      const responseKey = { ...sourceKey, eventSequence: response.sequence };
+      await Effect.runPromise(
+        harness.deliveryRepository.claim({
+          ...responseKey,
+          threadId,
+          claimOwner: "previous-process",
+          claimedAt: now,
+          claimExpiresAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.markRetryable({
+          ...responseKey,
+          expectedClaimOwner: "previous-process",
+          error: "Previous process confirmed rejection before provider dispatch",
+          updatedAt: now,
+        }),
+      );
+      const before = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(before.lastAckedSequence).toBeLessThan(response.sequence);
+
+      await harness.startReactor();
+      await harness.drain();
+
+      expect(
+        Option.getOrThrow(
+          await Effect.runPromise(harness.deliveryRepository.getDelivery(responseKey)),
+        ),
+      ).toMatchObject({ state: "succeeded", attemptCount: 2 });
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId,
+        input: expect.stringContaining("Continue this recovered held message"),
+      });
+      const after = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(after.lastAckedSequence).toBeGreaterThanOrEqual(response.sequence);
+    });
+
     it("retains completion context while parked and consumes it only after Continue sends", async () => {
       const { harness } = await createCompactionHarness();
       await harness.seedCompletion();
@@ -4348,7 +4453,12 @@ describe("ProviderCommandReactor", () => {
         text: "Preserve this send across recovery",
         createdAt: new Date().toISOString(),
       });
-      await Effect.runPromise(harness.engine.refreshCommandReadModel());
+      await waitFor(async () => {
+        await Effect.runPromise(harness.engine.refreshCommandReadModel());
+        return (
+          (await Effect.runPromise(harness.engine.getReadModel())).threads[0]?.messages.length === 0
+        );
+      });
       expect((await Effect.runPromise(harness.engine.getReadModel())).threads[0]?.messages).toEqual(
         [],
       );
@@ -4367,7 +4477,12 @@ describe("ProviderCommandReactor", () => {
       const observation = expiredCacheObservation();
       const harness = await createCacheHarness(() => observation);
       const review = await sendHeldMessage(harness);
-      await Effect.runPromise(harness.engine.refreshCommandReadModel());
+      await waitFor(async () => {
+        await Effect.runPromise(harness.engine.refreshCommandReadModel());
+        return (
+          (await Effect.runPromise(harness.engine.getReadModel())).threads[0]?.messages.length === 0
+        );
+      });
       expect((await Effect.runPromise(harness.engine.getReadModel())).threads[0]?.messages).toEqual(
         [],
       );
@@ -5191,6 +5306,209 @@ describe("ProviderCommandReactor", () => {
       state: "succeeded",
       attemptCount: 2,
     });
+  });
+
+  it("recovers a retryable delivery ahead of the source cursor before replaying its settled prefix", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    );
+    const event = events.find((candidate) => candidate.type === "thread.created")!;
+    const key = { consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER, eventSequence: event.sequence };
+    await Effect.runPromise(
+      harness.deliveryRepository.claim({
+        ...key,
+        threadId: "thread-1",
+        claimOwner: "previous-process",
+        claimedAt: "2020-01-01T00:00:00.000Z",
+        claimExpiresAt: "2020-01-01T00:01:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.deliveryRepository.markRetryable({
+        ...key,
+        expectedClaimOwner: "previous-process",
+        error: "safe retry before dispatch",
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    await harness.startReactor();
+    expect(
+      Option.getOrThrow(await Effect.runPromise(harness.deliveryRepository.getDelivery(key))),
+    ).toMatchObject({ state: "succeeded", attemptCount: 2 });
+    expect(
+      Option.getOrThrow(
+        await Effect.runPromise(harness.deliveryRepository.getConsumerState(key.consumerName)),
+      ).lastAckedSequence,
+    ).toBe(events.at(-1)!.sequence);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("fails startup when a replay lane cannot read durable delivery ownership", async () => {
+    const harness = await createHarness({ startReactor: false });
+    vi.spyOn(harness.deliveryRepository, "getDelivery").mockImplementation(() =>
+      Effect.fail(
+        new PersistenceSqlError({
+          operation: "OrchestrationEventDelivery.getDelivery",
+          detail: "injected replay ownership read failure",
+        }),
+      ),
+    );
+    await expect(harness.startReactor()).rejects.toThrow("injected replay ownership read failure");
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("fails startup when the acknowledgement pump cannot persist its prefix", async () => {
+    const harness = await createHarness({ startReactor: false });
+    vi.spyOn(harness.deliveryRepository, "advanceCursor").mockImplementation(() =>
+      Effect.fail(
+        new PersistenceSqlError({
+          operation: "OrchestrationEventDelivery.advanceCursor",
+          detail: "injected acknowledgement persistence failure",
+        }),
+      ),
+    );
+    await expect(harness.startReactor()).rejects.toThrow(
+      "injected acknowledgement persistence failure",
+    );
+  });
+
+  it("cancels blocked acknowledgement catch-up during reactor shutdown", async () => {
+    const harness = await createHarness();
+    await harness.drain();
+    const ackStarted = Deferred.makeUnsafe<void>();
+    const ackCancelled = Deferred.makeUnsafe<void>();
+    const releaseAck = Deferred.makeUnsafe<void>();
+    const advanceCursor = harness.deliveryRepository.advanceCursor;
+    vi.spyOn(harness.deliveryRepository, "advanceCursor").mockImplementationOnce((input) =>
+      Deferred.succeed(ackStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseAck)),
+        Effect.andThen(advanceCursor(input)),
+        Effect.onInterrupt(() => Deferred.succeed(ackCancelled, undefined)),
+      ),
+    );
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("ack-shutdown-progress"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("ack-shutdown-progress"),
+          kind: "tool.progress",
+          tone: "info",
+          summary: "Tool is running",
+          payload: {},
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    const activeScope = scope!;
+    try {
+      await Effect.runPromise(Deferred.await(ackStarted).pipe(Effect.timeout("1 second")));
+      await Effect.runPromise(Scope.close(activeScope, Exit.void).pipe(Effect.timeout("1 second")));
+      expect(await Effect.runPromise(Deferred.isDone(ackCancelled))).toBe(true);
+      scopes.delete(activeScope);
+      scope = null;
+    } finally {
+      await Effect.runPromise(Deferred.succeed(releaseAck, undefined));
+    }
+  });
+
+  it("recovers an unfinished earlier lane without replaying another lane's succeeded provider turn", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-recovery-independent-create"),
+        threadId: ThreadId.makeUnsafe("thread-recovery-independent"),
+        projectId: asProjectId("project-1"),
+        title: "Recovered independent thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    for (const threadId of ["thread-1", "thread-recovery-independent"]) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-recovery-${threadId}`),
+          threadId: ThreadId.makeUnsafe(threadId),
+          message: {
+            messageId: asMessageId(`message-recovery-${threadId}`),
+            role: "user",
+            text: "Preserve provider ownership",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+    }
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    );
+    const starts = events.filter((event) => event.type === "thread.turn-start-requested");
+    for (const event of starts) {
+      await Effect.runPromise(
+        harness.deliveryRepository.claim({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: event.sequence,
+          threadId: event.aggregateId,
+          claimOwner: "crashed-process",
+          claimedAt: "2020-01-01T00:00:00.000Z",
+          claimExpiresAt: "2020-01-01T00:01:00.000Z",
+        }),
+      );
+    }
+    const completed = starts.find((event) => event.aggregateId === "thread-recovery-independent")!;
+    await Effect.runPromise(
+      harness.deliveryRepository.complete({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: completed.sequence,
+        claimOwner: "crashed-process",
+        completedAt: now,
+      }),
+    );
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(
+      Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: completed.sequence,
+          }),
+        ),
+      ),
+    ).toMatchObject({ state: "succeeded", attemptCount: 1 });
+    const unfinished = starts.find((event) => event.aggregateId === "thread-1")!;
+    expect(
+      Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: unfinished.sequence,
+          }),
+        ),
+      ),
+    ).toMatchObject({ state: "uncertain", attemptCount: 1 });
+    expect(
+      Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      ).lastAckedSequence,
+    ).toBeGreaterThanOrEqual(completed.sequence);
   });
 
   // The settlement wait is claim-kind agnostic; an external turn start also
@@ -11307,6 +11625,383 @@ describe("ProviderCommandReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
       toolUseId: "tool-task-bg-failing",
     });
+  });
+
+  it("admits new threads while acknowledgement catch-up is blocked", async () => {
+    const releaseCapture = Deferred.makeUnsafe<void>();
+    const releaseAck = Deferred.makeUnsafe<void>();
+    const ackStarted = Deferred.makeUnsafe<void>();
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() =>
+      Deferred.await(releaseCapture),
+    );
+    const harness = await createHarness({
+      checkpointStore: {
+        isGitRepository: () => Effect.succeed(true),
+        captureCheckpoint,
+      },
+    });
+    const now = new Date().toISOString();
+    const independent = Array.from({ length: 5 }, (_, index) =>
+      ThreadId.makeUnsafe(`ack-independent-${index}`),
+    );
+    for (const [index, threadId] of independent.entries()) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe(`ack-independent-create-${index}`),
+          threadId,
+          projectId: asProjectId("project-1"),
+          title: "Independent",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        }),
+      );
+    }
+    await harness.drain();
+    const start = (threadId: ThreadId, id: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`ack-start-${id}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`ack-message-${id}`),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+    try {
+      await start(ThreadId.makeUnsafe("thread-1"), "blocked");
+      await waitFor(() => captureCheckpoint.mock.calls.length === 1);
+      for (let index = 0; index < 40; index += 1) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(`ack-tail-${index}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            activity: {
+              id: EventId.makeUnsafe(`ack-tail-${index}`),
+              kind: "tool.progress",
+              tone: "info",
+              summary: "Tool is running",
+              payload: {},
+              turnId: null,
+              createdAt: now,
+            },
+            createdAt: now,
+          }),
+        );
+      }
+      const events = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
+      const firstProgress = events.find(
+        (event) =>
+          event.type === "thread.activity-appended" && event.payload.activity.id === "ack-tail-0",
+      )!;
+      expect(firstProgress).toBeDefined();
+      const advanceCursor = harness.deliveryRepository.advanceCursor;
+      vi.spyOn(harness.deliveryRepository, "advanceCursor").mockImplementation((input) =>
+        input.eventSequence === firstProgress.sequence
+          ? Deferred.succeed(ackStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseAck)),
+              Effect.andThen(advanceCursor(input)),
+            )
+          : advanceCursor(input),
+      );
+      await Effect.runPromise(Deferred.succeed(releaseCapture, undefined));
+      await Effect.runPromise(Deferred.await(ackStarted).pipe(Effect.timeout("1 second")));
+      const startedAt = Date.now();
+      for (const [index, threadId] of independent.entries())
+        await start(threadId, `independent-${index}`);
+      await waitFor(
+        () =>
+          independent.every((threadId) =>
+            harness.sendTurn.mock.calls.some(([input]) => input.threadId === threadId),
+          ),
+        500,
+      );
+      console.info(
+        `Five independent provider turns delivered with acknowledgement catch-up blocked: ${Date.now() - startedAt}ms`,
+      );
+      const consumer = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(consumer.lastAckedSequence).toBeLessThan(firstProgress.sequence);
+    } finally {
+      await Effect.runPromise(Deferred.succeed(releaseCapture, undefined));
+      await Effect.runPromise(Deferred.succeed(releaseAck, undefined));
+      await harness.drain();
+    }
+  });
+
+  it("bounds provider journal queries while resuming every intent past interleaved telemetry", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("bounded-provider-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("bounded-provider-message"),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    await harness.drain();
+    const globalReads = vi.spyOn(harness.engine, "readEventsThrough");
+    const threadReads = vi.spyOn(harness.engine, "readThreadEventsThrough");
+    const release = Deferred.makeUnsafe<void>();
+    harness.backgroundTask.mockImplementationOnce(() => Deferred.await(release));
+    const background = (index: number) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.task.background",
+          commandId: CommandId.makeUnsafe(`bounded-background-${index}`),
+          threadId,
+          toolUseId: `bounded-${index}`,
+          createdAt,
+        }),
+      );
+    try {
+      await background(0);
+      await waitFor(() => harness.backgroundTask.mock.calls.length === 1, 1_000);
+      for (let index = 1; index <= 40; index++) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(`bounded-telemetry-${index}`),
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe(`bounded-telemetry-${index}`),
+              kind: "tool.progress",
+              tone: "info",
+              summary: "Working",
+              payload: {},
+              turnId: null,
+              createdAt,
+            },
+            createdAt,
+          }),
+        );
+        await background(index);
+      }
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+      await harness.drain();
+      expect(harness.backgroundTask.mock.calls.map(([input]) => input.toolUseId)).toEqual(
+        Array.from({ length: 41 }, (_, index) => `bounded-${index}`),
+      );
+      expect(globalReads.mock.calls.length).toBeGreaterThan(0);
+      expect(globalReads.mock.calls.every(([, , limit]) => limit === 32)).toBe(true);
+      expect(threadReads.mock.calls.some(([, , , , limit]) => limit === 32)).toBe(true);
+      expect(threadReads.mock.calls.some(([, , , , limit]) => limit === 1)).toBe(true);
+      expect(
+        threadReads.mock.calls.every(
+          ([, , , types, limit]) =>
+            (limit === 1 || limit === 32) &&
+            types?.includes("thread.task-background-requested") &&
+            !types.includes("thread.activity-appended"),
+        ),
+      ).toBe(true);
+    } finally {
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+      await harness.drain();
+    }
+  });
+
+  it("starts an unrelated thread while another thread's message checkpoint is blocked", async () => {
+    let releaseCapture!: () => void;
+    const captureGate = new Promise<void>((resolve) => {
+      releaseCapture = resolve;
+    });
+    const captureCheckpoint = vi
+      .fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void)
+      .mockImplementationOnce(() => Effect.promise(() => captureGate));
+    const harness = await createHarness({
+      checkpointStore: {
+        isGitRepository: () => Effect.succeed(true),
+        captureCheckpoint,
+      },
+    });
+    // Startup replay has already settled. Subsequent global range reads are
+    // acknowledgement catch-up; count actual pulls rather than the range size.
+    const acknowledgementReadSizes: number[] = [];
+    const readEventsThrough = harness.engine.readEventsThrough;
+    vi.spyOn(harness.engine, "readEventsThrough").mockImplementation((after, through, limit) => {
+      let consumed = 0;
+      return readEventsThrough(after, through, limit).pipe(
+        Stream.rechunk(1),
+        Stream.tap(() =>
+          Effect.sync(() => {
+            consumed += 1;
+          }),
+        ),
+        Stream.ensuring(
+          Effect.sync(() => {
+            acknowledgementReadSizes.push(consumed);
+          }),
+        ),
+      );
+    });
+    const now = new Date().toISOString();
+    // An independent checkout can capture concurrently; the same physical checkout
+    // intentionally shares the baseline/undo lease.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-isolated-create"),
+        threadId: ThreadId.makeUnsafe("thread-isolated"),
+        projectId: asProjectId("project-1"),
+        title: "Independent",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        envMode: "worktree",
+        worktreePath: "/tmp/provider-project-isolated",
+        createdAt: now,
+      }),
+    );
+    const start = (threadId: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-isolated-${threadId}`),
+          threadId: ThreadId.makeUnsafe(threadId),
+          message: {
+            messageId: asMessageId(`message-isolated-${threadId}`),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+    try {
+      await start("thread-1");
+      await waitFor(() => captureCheckpoint.mock.calls.length > 0);
+      // A tool/progress burst in the blocked lane must not consume provider
+      // delivery admission: these events have no provider side effect.
+      for (let index = 0; index < 300; index += 1) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(`cmd-progress-${index}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            requireUnarchived: true,
+            activity: {
+              id: EventId.makeUnsafe(`progress-${index}`),
+              kind: "tool.progress",
+              tone: "info",
+              summary: "Tool is running",
+              payload: {},
+              turnId: null,
+              createdAt: now,
+            },
+            createdAt: now,
+          }),
+        );
+      }
+      // Real intents from one busy thread remain in its durable lane rather
+      // than occupying every cross-thread admission slot.
+      for (let index = 0; index < 300; index += 1) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.task.background",
+            commandId: CommandId.makeUnsafe(`cmd-busy-intent-${index}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            toolUseId: `busy-tool-${index}`,
+            createdAt: now,
+          }),
+        );
+      }
+      const independentStartedAt = Date.now();
+      await start("thread-isolated");
+      await waitFor(
+        () => harness.sendTurn.mock.calls.some(([input]) => input.threadId === "thread-isolated"),
+        500,
+      );
+      console.info(
+        `Independent provider turn latency with a blocked checkpoint, 300 progress events and 300 queued intents: ${Date.now() - independentStartedAt}ms`,
+      );
+      expect(harness.sendTurn.mock.calls.some(([input]) => input.threadId === "thread-1")).toBe(
+        false,
+      );
+      const events = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      );
+      const blocked = events.find(
+        (event) =>
+          event.type === "thread.turn-start-requested" && event.payload.threadId === "thread-1",
+      )!;
+      const independent = events.find(
+        (event) =>
+          event.type === "thread.turn-start-requested" &&
+          event.payload.threadId === "thread-isolated",
+      )!;
+      await waitFor(
+        async () =>
+          Option.getOrUndefined(
+            await Effect.runPromise(
+              harness.deliveryRepository.getDelivery({
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: independent.sequence,
+              }),
+            ),
+          )?.state === "succeeded",
+      );
+      const consumer = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(consumer.lastAckedSequence).toBeLessThan(blocked.sequence);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.task.background",
+          commandId: CommandId.makeUnsafe("cmd-isolated-same-thread-follower"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          toolUseId: "fifo-follower",
+          createdAt: now,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(harness.backgroundTask).not.toHaveBeenCalled();
+    } finally {
+      releaseCapture();
+      await harness.drain();
+    }
+    await waitFor(() => harness.backgroundTask.mock.calls.length === 301);
+    expect(harness.backgroundTask.mock.calls.map(([input]) => input.toolUseId)).toEqual([
+      ...Array.from({ length: 300 }, (_, index) => `busy-tool-${index}`),
+      "fifo-follower",
+    ]);
+    const blockedTurnIndex = harness.sendTurn.mock.calls.findIndex(
+      ([input]) => input.threadId === "thread-1",
+    );
+    expect(harness.sendTurn.mock.invocationCallOrder[blockedTurnIndex]).toBeLessThan(
+      harness.backgroundTask.mock.invocationCallOrder[0]!,
+    );
+    expect(acknowledgementReadSizes.reduce((total, size) => total + size, 0)).toBeGreaterThan(300);
+    expect(Math.max(...acknowledgementReadSizes)).toBeLessThanOrEqual(32);
   });
 
   it("waits for the message-start checkpoint before sending the provider turn", async () => {

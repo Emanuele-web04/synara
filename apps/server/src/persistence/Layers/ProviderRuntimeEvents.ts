@@ -9,6 +9,8 @@ import {
   toPersistenceSqlError,
 } from "../Errors.ts";
 import {
+  CHECKPOINT_RUNTIME_CONSUMER,
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
   PROVIDER_RUNTIME_EVENT_MAX_BYTES,
   PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED,
   ProviderRuntimeEventRepository,
@@ -207,12 +209,21 @@ const make = Effect.gen(function* () {
 
   const readAfter: ProviderRuntimeEventRepositoryShape["readAfter"] = (input) => {
     const limit = Math.max(1, Math.min(1_000, Math.floor(input.limit)));
+    const checkpointFilter = input.checkpointRelevantOnly
+      ? sql`AND (
+          event_type IN ('turn.started', 'turn.completed')
+          OR CASE WHEN event_type = 'item.completed'
+            THEN json_extract(event_json, '$.payload.itemType') = 'file_change'
+            ELSE 0 END
+        )`
+      : sql``;
     return Effect.gen(function* () {
       const rows = yield* sql<Record<string, unknown>>`
         SELECT sequence, event_json AS "eventJson"
         FROM provider_runtime_events
         WHERE sequence > ${input.sequenceExclusive}
           AND sequence <= ${input.throughSequenceInclusive}
+          ${checkpointFilter}
         ORDER BY sequence ASC
         LIMIT ${limit}
       `.pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.readAfter")));
@@ -490,6 +501,16 @@ const make = Effect.gen(function* () {
     DELETE FROM provider_runtime_events AS event
     WHERE event.sequence <= ${throughSequence}
       AND NOT EXISTS (
+        SELECT 1 FROM provider_runtime_event_consumers AS checkpoint
+        WHERE checkpoint.consumer_name = ${CHECKPOINT_RUNTIME_CONSUMER}
+          AND event.sequence > checkpoint.last_acked_sequence
+          AND (
+            event.event_type IN ('turn.started', 'turn.completed')
+            OR (event.event_type = 'item.completed'
+              AND json_extract(event.event_json, '$.payload.itemType') = 'file_change')
+          )
+      )
+      AND NOT EXISTS (
         SELECT 1
         FROM provider_runtime_open_turns AS open_turn
         WHERE open_turn.thread_id = event.thread_id
@@ -578,6 +599,7 @@ const make = Effect.gen(function* () {
           });
           if (!advanced) return false;
 
+          if (input.consumerName !== PROVIDER_RUNTIME_INGESTION_CONSUMER) return true;
           const settlesOpenTurns = yield* recordAckedOpenTurn(event, input.updatedAt);
 
           // Nothing below the cursor can become deletable while a turn only
@@ -641,6 +663,7 @@ const make = Effect.gen(function* () {
             });
             if (!advanced) return false;
 
+            if (input.consumerName !== PROVIDER_RUNTIME_INGESTION_CONSUMER) return true;
             let settlesOpenTurns = false;
             for (const event of events) {
               if (yield* recordAckedOpenTurn(event, input.updatedAt)) settlesOpenTurns = true;
