@@ -23,6 +23,7 @@ import {
 } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+let reportShellFailure: ((failure: { code: string | null; error: Error }) => void) | undefined;
 const requestMock = vi.fn<(...args: Array<unknown>) => Promise<unknown>>();
 const disposeMock = vi.fn();
 const unsubscribeProjectAgentEventsMock = vi.fn(async (_projectId: string) => undefined);
@@ -68,6 +69,12 @@ vi.mock("./wsTransport", () => {
       }
       onCompatibilityIssue() {
         return () => undefined;
+      }
+      onShellStreamFailure(listener: (failure: { code: string | null; error: Error }) => void) {
+        reportShellFailure = listener;
+        return () => {
+          reportShellFailure = undefined;
+        };
       }
       onThreadStreamFailure() {
         return () => undefined;
@@ -157,6 +164,23 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("forwards exhausted shell failures and removes unsubscribed listeners", async () => {
+    const { createWsNativeApi, onShellStreamFailure } = await import("./wsNativeApi");
+    createWsNativeApi();
+    const listener = vi.fn();
+    const unsubscribe = onShellStreamFailure(listener);
+    const failure = {
+      code: "ORCHESTRATION_STREAM_OVERFLOW",
+      error: new Error("overflow exhausted"),
+    };
+    expect(reportShellFailure).toBeDefined();
+    reportShellFailure!(failure);
+    expect(listener).toHaveBeenCalledWith(failure);
+    unsubscribe();
+    reportShellFailure!(failure);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it("gives a slow provider refresh a bounded deadline beyond the generic RPC timeout", async () => {
     const { createWsNativeApi } = await import("./wsNativeApi");
     const api = createWsNativeApi();
@@ -280,6 +304,7 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        lowerProviderProcessPriority: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         githubInboxIncludeUpstreams: false,
