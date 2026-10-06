@@ -19,7 +19,7 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterAll, it, vi } from "@effect/vitest";
 
-import { Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
 
 import {
   CodexAppServerManager,
@@ -159,12 +159,19 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.sessionSnapshots;
   }
 
+  private readonly rejectedOrigins = new WeakSet<object>();
+
   override getSessionEventOrigin(threadId: ThreadId) {
+    const origin = this.sessionSnapshots.find((entry) => entry.threadId === threadId);
     return {
       providerInstanceId: this.sessionSnapshots.find((entry) => entry.threadId === threadId)
         ?.providerInstanceId,
+      validationKey: origin,
+      rejectInspection: () => {
+        if (origin) this.rejectedOrigins.add(origin);
+      },
       inspect: () => this.inspectSessionAsync(threadId),
-      isAuthRejected: () => false,
+      isAuthRejected: () => origin !== undefined && this.rejectedOrigins.has(origin),
       codexOptions: this.codexOptionsByThreadId.get(threadId),
     };
   }
@@ -1571,6 +1578,146 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.type, "session.exited");
       assert.equal(firstEvent.value.providerInstanceId, "codex_work");
     }),
+  );
+
+  it.effect("fences unexpected inspection failures but preserves trusted manager closure", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-inspection-error");
+      lifecycleManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          threadId,
+          status: "ready",
+          runtimeMode: "full-access",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+      const inspection = vi
+        .spyOn(lifecycleManager, "inspectSessionAsync")
+        .mockRejectedValue(new Error("fixture unexpected error"));
+      const collected = yield* Stream.runHead(
+        adapter.streamEvents.pipe(Stream.filter((event) => event.threadId === threadId)),
+      ).pipe(Effect.forkChild);
+      try {
+        for (const index of [0, 1])
+          lifecycleManager.emit("event", {
+            id: asEventId(`inspection-error-${index}`),
+            provider: "codex",
+            kind: "notification",
+            threadId,
+            method: "item/agentMessage/delta",
+            createdAt: new Date().toISOString(),
+            payload: { itemId: "inspection-error-assistant", delta: "rejected" },
+          } satisfies ProviderEvent);
+        lifecycleManager.emit("event", {
+          id: asEventId("inspection-error-closed"),
+          provider: "codex",
+          kind: "session",
+          threadId,
+          method: "session/closed",
+          createdAt: new Date().toISOString(),
+          message: "Session stopped",
+        } satisfies ProviderEvent);
+        const result = yield* Fiber.join(collected);
+        assert.equal(result._tag, "Some");
+        if (result._tag === "Some") assert.equal(result.value.type, "session.exited");
+        assert.equal(lifecycleManager.getSessionEventOrigin(threadId).isAuthRejected(), true);
+      } finally {
+        inspection.mockRestore();
+        lifecycleManager.sessionSnapshots = [];
+      }
+    }),
+  );
+
+  it.effect(
+    "publishes 3000 ordered deltas with slow coalesced auth checks without delta loss",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const threadId = asThreadId("thread-throughput");
+        lifecycleManager.sessionSnapshots = [
+          {
+            provider: "codex",
+            providerInstanceId: "codex_work",
+            threadId,
+            status: "ready",
+            runtimeMode: "full-access",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ];
+        const original = lifecycleManager.inspectSessionAsync.bind(lifecycleManager);
+        const releases: Array<() => void> = [];
+        let active = 0;
+        let maxActive = 0;
+        const inspection = vi
+          .spyOn(lifecycleManager, "inspectSessionAsync")
+          .mockImplementation(async (id) => {
+            if (id !== threadId) return original(id);
+            active++;
+            maxActive = Math.max(maxActive, active);
+            await new Promise<void>((resolve) => releases.push(resolve));
+            active--;
+            return original(id);
+          });
+        const firstBatch = yield* Deferred.make<void>();
+        const secondBatch = yield* Deferred.make<void>();
+        const deltas: string[] = [];
+        const collected = yield* Stream.runDrain(
+          adapter.streamEvents.pipe(
+            Stream.filter((event) => event.threadId === threadId && event.type === "content.delta"),
+            Stream.take(3000),
+            Stream.tap((event) =>
+              Effect.gen(function* () {
+                if (event.type === "content.delta") deltas.push(event.payload.delta);
+                if (deltas.length === 500) yield* Deferred.succeed(firstBatch, undefined);
+                if (deltas.length === 1900) yield* Deferred.succeed(secondBatch, undefined);
+              }),
+            ),
+          ),
+        ).pipe(Effect.forkChild);
+        const emit = (from: number, count: number) => {
+          for (let index = from; index < from + count; index++)
+            lifecycleManager.emit("event", {
+              id: asEventId(`throughput-${index}`),
+              provider: "codex",
+              kind: "notification",
+              threadId,
+              method: "item/agentMessage/delta",
+              createdAt: new Date().toISOString(),
+              payload: { itemId: "throughput-assistant", delta: `${index},` },
+            } satisfies ProviderEvent);
+        };
+        try {
+          emit(0, 500);
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          assert.equal(releases.length, 1);
+          emit(500, 1400);
+          assert.equal(releases.length, 1);
+          releases[0]!();
+          yield* Deferred.await(firstBatch);
+          assert.equal(releases.length, 2);
+          releases[1]!();
+          yield* Deferred.await(secondBatch);
+          emit(1900, 1100);
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          assert.equal(releases.length, 3);
+          releases[2]!();
+          yield* Fiber.join(collected);
+          assert.deepEqual(
+            deltas,
+            Array.from({ length: 3000 }, (_, index) => `${index},`),
+          );
+          assert.equal(maxActive, 1);
+        } finally {
+          for (const release of releases) release();
+          inspection.mockRestore();
+          lifecycleManager.sessionSnapshots = [];
+        }
+      }),
   );
 
   it.effect(

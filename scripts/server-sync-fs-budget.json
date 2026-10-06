@@ -234,5 +234,62 @@
       "chmodSync": 1,
       "unlinkSync": 1
     }
+  },
+  "packages/shared/src/codexConfig.ts": {
+    "reason": "Shared Codex config compatibility reader; existing references frozen pending profiling.",
+    "references": {
+      "existsSync": 1,
+      "readFileSync": 1
+    }
+  },
+  "packages/shared/src/executable.ts": {
+    "reason": "Shared executable resolution boundary; existing discovery references frozen pending profiling.",
+    "references": {
+      "statSync": 2,
+      "accessSync": 1,
+      "readdirSync": 1
+    }
+  },
+  "packages/shared/src/logging.ts": {
+    "reason": "Shared synchronous rotating log sink (writes, rotation and initialization); existing legacy references frozen pending profiling.",
+    "references": {
+      "mkdirSync": 1,
+      "appendFileSync": 2,
+      "existsSync": 3,
+      "rmSync": 2,
+      "renameSync": 2,
+      "readdirSync": 1,
+      "statSync": 1
+    }
+  },
+  "packages/shared/src/loginShellEnvironment.ts": {
+    "reason": "Shared platform login-shell environment probing; existing compatibility/identity references frozen.",
+    "references": {
+      "statSync": 1,
+      "readFileSync": 1,
+      "mkdirSync": 1,
+      "writeFileSync": 1,
+      "renameSync": 1,
+      "unlinkSync": 1,
+      "existsSync": 1
+    }
+  },
+  "packages/shared/src/platformProcess.ts": {
+    "reason": "Shared process boundary executable checks; existing references frozen, process behavior unchanged.",
+    "references": {
+      "statSync": 1
+    }
+  },
+  "packages/shared/src/staticSnapshot.ts": {
+    "reason": "Shared static snapshot validation/loading; existing references frozen pending profiling.",
+    "references": {
+      "mkdirSync": 2,
+      "readdirSync": 2,
+      "writeFileSync": 1,
+      "readFileSync": 1,
+      "rmSync": 3,
+      "existsSync": 3,
+      "renameSync": 1
+    }
   }
 }

@@ -48,7 +48,7 @@ import {
 } from "@synara/shared/jsonrpc-stdio";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { spawnProcess } from "@synara/shared/processRuntime";
-import { Effect, ServiceMap } from "effect";
+import { Effect, Semaphore, ServiceMap } from "effect";
 
 import {
   CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
@@ -82,6 +82,7 @@ import {
   buildCodexAppServerArgs,
   buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
+  CodexPreparedHomeFileSnapshotError,
   prepareCodexAuthTracking,
   readCodexAuthFingerprintAsync,
   readCodexPreparedAuthTrackingFingerprint,
@@ -1226,6 +1227,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
   private readonly discoverySessionIdleMs: number;
+  private readonly authRevalidationTimeoutMs: number;
+  // Native filesystem promises cannot be cancelled. Keep their permits until
+  // they settle, even after the caller's deadline rejects its session origin.
+  private readonly authReadSlots = Semaphore.makeUnsafe(8);
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -1241,6 +1246,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
       readonly discoverySessionIdleMs?: number;
+      readonly authRevalidationTimeoutMs?: number;
     },
   ) {
     super();
@@ -1254,6 +1260,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       0,
       options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
     );
+    this.authRevalidationTimeoutMs = Math.max(1, options?.authRevalidationTimeoutMs ?? 5_000);
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -3114,6 +3121,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly codexOptions: CodexDiscoveryOptions | undefined;
     readonly inspect: () => Promise<CodexSessionInspection | undefined>;
     readonly isAuthRejected: () => boolean;
+    readonly validationKey: object | undefined;
+    readonly rejectInspection: () => void;
   } {
     const context = this.sessions.get(threadId);
     const matches =
@@ -3122,7 +3131,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return {
       providerInstanceId: matches ? context.session.providerInstanceId : undefined,
       codexOptions: matches ? normalizeCodexDiscoveryOptions(context.codexOptions) : undefined,
+      validationKey: matches ? context : undefined,
       isAuthRejected: () => context?.authInvalidation !== undefined,
+      rejectInspection: () => {
+        if (matches)
+          this.invalidateContextAuth(
+            context,
+            "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.",
+          );
+      },
       inspect: async () => {
         if (context?.authInvalidation)
           throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
@@ -3150,9 +3167,48 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let stalenessMessage: string | undefined;
     if (context.authTracking && context.authFingerprint !== undefined) {
       try {
-        const fingerprint = await readCodexAuthFingerprintAsync(
-          codexProcessEnvInputForOptions(context.codexOptions),
-        );
+        let expired = false;
+        const abort = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const read = async () => {
+          for (let attempt = 0; ; attempt++) {
+            if (expired || context.authInvalidation)
+              throw new CodexSessionAuthInvalidatedError("Codex auth revalidation expired.");
+            try {
+              return await readCodexAuthFingerprintAsync(
+                codexProcessEnvInputForOptions(context.codexOptions),
+              );
+            } catch (error) {
+              // A token refresh may replace/rewrite auth between the descriptor checks.
+              // Retry the entire security algorithm, never a partial or cached snapshot.
+              if (
+                !(error instanceof CodexPreparedHomeFileSnapshotError) ||
+                error.failure !== "file-changed" ||
+                attempt >= 2
+              )
+                throw error;
+            }
+          }
+        };
+        let fingerprint: string;
+        try {
+          fingerprint = await Promise.race([
+            Effect.runPromise(
+              this.authReadSlots.withPermit(Effect.uninterruptible(Effect.promise(read))),
+              { signal: abort.signal },
+            ),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                expired = true;
+                abort.abort();
+                reject(new Error("Codex auth revalidation timed out."));
+              }, this.authRevalidationTimeoutMs);
+              timer.unref();
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
         if (fingerprint !== context.authFingerprint) {
           stalenessMessage =
             "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";

@@ -44,6 +44,8 @@ export interface BoundedCallbackIngressOptions<A, P = never> {
   /** Prepare small metadata only. Do not retain payloads after eviction; publication stays serial. */
   readonly prepare?: (item: A) => Promise<P>;
   readonly prepareConcurrency?: number;
+  /** Coalesce pending metadata checks by origin. A running check never validates later arrivals. */
+  readonly prepareKey?: (item: A) => object | undefined;
 }
 
 type BufferedItem<A, P> = {
@@ -51,10 +53,15 @@ type BufferedItem<A, P> = {
   readonly bytes: number;
   readonly terminal: boolean;
   prepared?: Promise<{ readonly metadata: P } | { readonly cause: unknown }> | undefined;
-  resolvePrepared?:
-    | ((result: { readonly metadata: P } | { readonly cause: unknown }) => void)
-    | undefined;
+  preparation?: Preparation<A, P> | undefined;
   discarded?: boolean;
+};
+
+type Preparation<A, P> = {
+  readonly key: object | undefined;
+  readonly items: Set<BufferedItem<A, P>>;
+  readonly prepared: Promise<{ readonly metadata: P } | { readonly cause: unknown }>;
+  readonly resolve: (result: { readonly metadata: P } | { readonly cause: unknown }) => void;
 };
 
 type ResumeTake<A, P> = (effect: Effect.Effect<Option.Option<BufferedItem<A, P>>>) => void;
@@ -81,48 +88,71 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
     let evictedForTerminal = 0;
     let terminalOverflow = 0;
     let aborted = false;
-    const preparing = new Set<BufferedItem<A, P>>();
-    const waitingPreparation = new Set<BufferedItem<A, P>>();
+    const preparing = new Set<Preparation<A, P>>();
+    const waitingPreparation = new Set<Preparation<A, P>>();
+    const pendingByKey = new Map<object, Preparation<A, P>>();
+    const activeKeys = new Set<object>();
     const prepareConcurrency = normalizedPositiveInt(options.prepareConcurrency ?? 1, 1);
     const pumpPreparation = () => {
       if (!options.prepare || aborted) return;
-      for (const buffered of waitingPreparation) {
+      for (const group of waitingPreparation) {
         if (preparing.size >= prepareConcurrency) break;
-        waitingPreparation.delete(buffered);
-        preparing.add(buffered);
-        // Capture synchronous throws too, and handle rejection before the serial
-        // consumer reaches this item. No detached, unbounded callback promises.
+        if (group.key && activeKeys.has(group.key)) continue;
+        waitingPreparation.delete(group);
+        preparing.add(group);
+        if (group.key) activeKeys.add(group.key);
         void Promise.resolve()
           .then(async () => {
-            if (aborted || buffered.discarded) return;
+            // Keep this group joinable until the check actually starts. All its
+            // events were admitted before this point; later arrivals need a new check.
+            if (group.key && pendingByKey.get(group.key) === group) pendingByKey.delete(group.key);
+            const buffered = group.items.values().next().value;
+            if (aborted || !buffered || buffered.discarded) return;
             try {
               const metadata = await options.prepare!(buffered.item as A);
-              buffered.resolvePrepared?.({ metadata });
+              group.resolve({ metadata });
             } catch (cause) {
-              buffered.resolvePrepared?.({ cause });
+              group.resolve({ cause });
             }
           })
           .finally(() => {
-            preparing.delete(buffered);
+            group.items.clear();
+            preparing.delete(group);
+            if (group.key) activeKeys.delete(group.key);
             pumpPreparation();
           });
       }
     };
     const prepare = (buffered: BufferedItem<A, P>) => {
       if (!options.prepare) return;
-      buffered.prepared = new Promise((resolve) => {
-        buffered.resolvePrepared = resolve;
-      });
-      waitingPreparation.add(buffered);
+      const key = options.prepareKey?.(buffered.item!);
+      let group = key ? pendingByKey.get(key) : undefined;
+      if (!group) {
+        let resolve!: Preparation<A, P>["resolve"];
+        const prepared = new Promise<Awaited<Preparation<A, P>["prepared"]>>((resume) => {
+          resolve = resume;
+        });
+        group = { key, prepared, resolve, items: new Set() };
+        if (key) pendingByKey.set(key, group);
+        waitingPreparation.add(group);
+      }
+      group.items.add(buffered);
+      buffered.preparation = group;
+      buffered.prepared = group.prepared;
       pumpPreparation();
     };
 
     const discard = (buffered: BufferedItem<A, P>) => {
       buffered.discarded = true;
       buffered.item = undefined;
-      buffered.resolvePrepared = undefined;
       buffered.prepared = undefined;
-      waitingPreparation.delete(buffered);
+      const group = buffered.preparation;
+      buffered.preparation = undefined;
+      group?.items.delete(buffered);
+      if (group && group.items.size === 0) {
+        waitingPreparation.delete(group);
+        if (group.key && pendingByKey.get(group.key) === group) pendingByKey.delete(group.key);
+      }
     };
 
     const take = Effect.callback<Option.Option<BufferedItem<A, P>>>((resume) => {
@@ -258,8 +288,9 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
       aborted = true;
       stopRequested = true;
       for (const buffered of buffer) discard(buffered);
-      for (const buffered of preparing) discard(buffered);
+      for (const group of preparing) for (const buffered of group.items) discard(buffered);
       waitingPreparation.clear();
+      pendingByKey.clear();
       buffer.length = 0;
       queuedBytes = 0;
       return Fiber.interrupt(worker).pipe(Effect.asVoid);

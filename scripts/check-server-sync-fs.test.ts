@@ -33,7 +33,7 @@ describe("server synchronous filesystem guard", () => {
     expect(
       syncFsViolations("startup.ts", prefix + 'fs.statSync("a"); fs.statSync("b")', budget),
     ).toHaveLength(1);
-    expect(syncFsViolations("startup.ts", prefix + 'fs.readFileSync("a")', budget)).toHaveLength(1);
+    expect(syncFsViolations("startup.ts", prefix + 'fs.readFileSync("a")', budget)).toHaveLength(2);
     expect(syncFsViolations("new.ts", prefix + 'fs.statSync("a")', budget)).toHaveLength(1);
     expect(syncFsViolations("new.ts", prefix + 'fs[name]("a")', budget)).toHaveLength(1);
     expect(
@@ -44,6 +44,26 @@ describe("server synchronous filesystem guard", () => {
     );
     expect(
       syncFsViolations("new.ts", 'export { readFileSync } from "node:fs"', budget),
+    ).toHaveLength(1);
+  });
+  it("requires reducing a budget when synchronous references are removed", () => {
+    expect(
+      syncFsViolations("startup.ts", "", {
+        "startup.ts": { reason: "Startup", references: { statSync: 1 } },
+      }),
+    ).toHaveLength(1);
+  });
+  it("tracks namespace aliases and rejects escaping namespaces and import-equals", () => {
+    expect(
+      countSyncFsReferences(
+        'import fs from "node:fs"; const f = fs; const g = f; g.readFileSync("a");',
+      ),
+    ).toEqual({ readFileSync: 1 });
+    expect(syncFsViolations("new.ts", 'import fs from "node:fs"; consume(fs);', {})).toHaveLength(
+      1,
+    );
+    expect(
+      syncFsViolations("new.ts", 'import fs = require("node:fs"); fs.readFileSync("a");', {}),
     ).toHaveLength(1);
   });
 });

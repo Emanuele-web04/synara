@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventId, ThreadId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Fiber, Stream } from "effect";
+import { Effect, Fiber, type Semaphore, Stream } from "effect";
 import { afterEach, expect, it, vi } from "vitest";
 import { ServerConfig } from "./config.ts";
 import { CodexAppServerManager } from "./codexAppServerManager.ts";
@@ -23,7 +23,7 @@ afterEach(() => {
 const auth = (account: string, token: string) =>
   JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: account, access_token: token } });
 
-function fixture() {
+function fixture(options?: { authRevalidationTimeoutMs?: number }) {
   const homePath = fs.mkdtempSync(path.join(os.tmpdir(), "codex-async-inspection-"));
   roots.push(homePath);
   const authPath = path.join(homePath, "auth.json");
@@ -31,7 +31,7 @@ function fixture() {
   const codexOptions = { homePath };
   const authTracking = prepareCodexAuthTracking(codexOptions);
   const threadId = ThreadId.makeUnsafe("async-inspection");
-  const manager = new CodexAppServerManager();
+  const manager = new CodexAppServerManager(undefined, options);
   const context = {
     session: {
       provider: "codex",
@@ -72,6 +72,80 @@ it("preserves same-account token rotation and stops an account change asynchrono
   expect(stop).toHaveBeenCalledWith(threadId);
 });
 
+it.each(["first", "changed-account", "unstable"])(
+  "retries a concurrent token rewrite for %s",
+  async (account) => {
+    const { manager, threadId, authPath, auth, stop } = fixture();
+    const open = fs.promises.open.bind(fs.promises);
+    let rewrites = 0;
+    const closed = vi.fn();
+    vi.spyOn(fs.promises, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await open(file, flags, mode);
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        closed();
+        await close();
+      });
+      if (
+        typeof file === "string" &&
+        path.basename(file) === "auth.json" &&
+        (rewrites++ === 0 || account === "unstable")
+      ) {
+        const read = handle.readFile.bind(handle);
+        vi.spyOn(handle, "readFile").mockImplementation(async () => {
+          const content = await read();
+          await fs.promises.writeFile(
+            authPath,
+            auth(account, "concurrent-refresh-token".repeat(rewrites)),
+          );
+          return content;
+        });
+      }
+      return handle;
+    });
+    if (account === "first") {
+      await expect(manager.inspectSessionAsync(threadId)).resolves.toBeDefined();
+      expect(stop).not.toHaveBeenCalled();
+    } else {
+      await expect(manager.inspectSessionAsync(threadId)).rejects.toThrow(
+        account === "unstable" ? "revalidated" : "authentication changed",
+      );
+      expect(stop).toHaveBeenCalledOnce();
+    }
+    expect(rewrites).toBe(account === "unstable" ? 3 : 2);
+    expect(closed).toHaveBeenCalledTimes(account === "unstable" ? 3 : 2);
+  },
+);
+
+it("bounds a hung revalidation and fences its origin without stopping a healthy session", async () => {
+  const { manager, context, sessions, threadId, stop } = fixture({ authRevalidationTimeoutMs: 25 });
+  const healthyThread = ThreadId.makeUnsafe("healthy-session");
+  sessions.set(healthyThread, {
+    ...context,
+    authTracking: undefined,
+    authFingerprint: undefined,
+    session: { ...context.session, threadId: healthyThread },
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const realpath = fs.promises.realpath.bind(fs.promises);
+  vi.spyOn(fs.promises, "realpath").mockImplementationOnce(async (file) => {
+    await gate;
+    return realpath(file);
+  });
+  const origin = manager.getSessionEventOrigin(threadId);
+  await expect(origin.inspect()).rejects.toThrow("revalidated");
+  expect(origin.isAuthRejected()).toBe(true);
+  expect(stop).toHaveBeenCalledExactlyOnceWith(threadId);
+  await expect(manager.inspectSessionAsync(healthyThread)).resolves.toBeDefined();
+  release();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await expect(origin.inspect()).rejects.toThrow("revalidated");
+  expect(stop).toHaveBeenCalledOnce();
+}, 1_000);
+
 it("binds queued events to their original context even without a generation tag", async () => {
   const { manager, context, sessions, threadId, stop } = fixture();
   const origin = manager.getSessionEventOrigin(threadId);
@@ -83,6 +157,52 @@ it("binds queued events to their original context even without a generation tag"
   await expect(origin.inspect()).resolves.toBeUndefined();
   expect(stop).not.toHaveBeenCalled();
 });
+
+it("retains native I/O leases after timeout and removes expired lease waiters", async () => {
+  const { manager, sessions } = fixture({ authRevalidationTimeoutMs: 100 });
+  const contexts = Array.from({ length: 10 }, (_, index) => {
+    const { context } = fixture();
+    const threadId = ThreadId.makeUnsafe(`lease-${index}`);
+    sessions.set(threadId, { ...context, session: { ...context.session, threadId } });
+    return { threadId, homePath: context.codexOptions.homePath };
+  });
+  const gates = Array.from({ length: 8 }, () => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  });
+  const started = new Set<string>();
+  const realpath = fs.promises.realpath.bind(fs.promises);
+  vi.spyOn(fs.promises, "realpath").mockImplementation(async (file) => {
+    const index = contexts.findIndex(({ homePath }) => homePath === file);
+    if (index >= 0 && !started.has(contexts[index]!.homePath)) {
+      started.add(contexts[index]!.homePath);
+      if (index < 8) await gates[index]!.promise;
+    }
+    return realpath(file);
+  });
+  try {
+    const inspections = contexts
+      .slice(0, 8)
+      .map(({ threadId }) =>
+        expect(manager.inspectSessionAsync(threadId)).rejects.toThrow("revalidated"),
+      );
+    await Promise.all(inspections);
+    expect(started.size).toBe(8);
+    await expect(manager.inspectSessionAsync(contexts[8]!.threadId)).rejects.toThrow("revalidated");
+    expect(started.has(contexts[8]!.homePath)).toBe(false);
+    gates[0]!.release();
+    await expect(manager.inspectSessionAsync(contexts[9]!.threadId)).resolves.toBeDefined();
+    expect(started.has(contexts[9]!.homePath)).toBe(true);
+    expect(started.has(contexts[8]!.homePath)).toBe(false);
+  } finally {
+    for (const gate of gates) gate.release();
+    const slots = (manager as unknown as { authReadSlots: Semaphore.Semaphore }).authReadSlots;
+    await Effect.runPromise(slots.withPermits(8)(Effect.void));
+  }
+}, 2_000);
 
 it.each(["hasSession", "listSessions"] as const)(
   "fences queued origins when synchronous %s prunes stale auth",
@@ -196,7 +316,7 @@ it("suppresses already stamped custom-account output when async auth validation 
   );
 });
 
-it("suppresses a completed preparation invalidated by an earlier delayed reader", async () => {
+it("suppresses a completed preparation invalidated by synchronous lifecycle pruning", async () => {
   const { manager, context, sessions, threadId, authPath, auth } = fixture();
   const sentinelThread = ThreadId.makeUnsafe("valid-sentinel");
   sessions.set(sentinelThread, {
@@ -216,11 +336,12 @@ it("suppresses a completed preparation invalidated by an earlier delayed reader"
   const inspect = manager.inspectSessionAsync.bind(manager);
   let calls = 0;
   vi.spyOn(manager, "inspectSessionAsync").mockImplementation(async (id, generation) => {
-    if (id !== threadId) return inspect(id, generation);
-    const call = ++calls;
-    if (call === 1) await gate;
+    if (id === sentinelThread) {
+      await gate;
+      return inspect(id, generation);
+    }
     const result = await inspect(id, generation);
-    if (call === 2) prepared();
+    if (++calls === 1) prepared();
     return result;
   });
   await Effect.runPromise(
@@ -228,19 +349,19 @@ it("suppresses a completed preparation invalidated by an earlier delayed reader"
       Effect.gen(function* () {
         const adapter = yield* CodexAdapter;
         const collected = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-        for (const id of ["delayed", "prepared", "sentinel"])
+        for (const id of ["sentinel", "prepared", "later"])
           manager.emit("event", {
             id: EventId.makeUnsafe(id),
-            kind: id === "sentinel" ? "session" : "notification",
+            kind: "notification",
             provider: "codex",
             threadId: id === "sentinel" ? sentinelThread : threadId,
             createdAt: new Date().toISOString(),
-            method: id === "sentinel" ? "session/closed" : "item/agentMessage/delta",
+            method: "item/agentMessage/delta",
             payload: { itemId: "fixture-assistant", delta: "Stale account output" },
-            message: "Session stopped",
           });
         yield* Effect.promise(() => laterPrepared);
         fs.writeFileSync(authPath, auth("changed-after-preparation", "new-token"));
+        expect(manager.hasSession(threadId)).toBe(false);
         release();
         const result = yield* Fiber.join(collected);
         expect(result._tag).toBe("Some");

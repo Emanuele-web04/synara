@@ -41,8 +41,45 @@ export function countSyncFsReferences(source: string): Record<string, number> {
       }
     }
   }
+  // Resolve simple namespace aliases to a fixed point, including aliases declared
+  // before their source. This is a syntax guard, not interprocedural type analysis.
+  let addedAlias = true;
+  while (addedAlias) {
+    addedAlias = false;
+    const alias = (node: ts.Node) => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        ts.isIdentifier(node.initializer) &&
+        namespaces.has(node.initializer.text) &&
+        !namespaces.has(node.name.text)
+      ) {
+        namespaces.add(node.name.text);
+        addedAlias = true;
+      }
+      ts.forEachChild(node, alias);
+    };
+    alias(ast);
+  }
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node)) return;
+    if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression &&
+      ts.isStringLiteral(node.moduleReference.expression) &&
+      ["fs", "node:fs"].includes(node.moduleReference.expression.text)
+    ) {
+      count("non-static fs import");
+      return;
+    }
+    if (ts.isCallExpression(node)) {
+      for (const argument of node.arguments) {
+        if (ts.isIdentifier(argument) && namespaces.has(argument.text))
+          count("fs namespace escape");
+      }
+    }
     if (
       ts.isCallExpression(node) &&
       node.arguments[0] &&
@@ -99,13 +136,19 @@ export function countSyncFsReferences(source: string): Record<string, number> {
 
 export function syncFsViolations(file: string, source: string, budget: SyncFsBudget): string[] {
   const exception = budget[file];
-  return Object.entries(countSyncFsReferences(source)).flatMap(([name, count]) =>
-    count <= (exception?.reason.trim() ? (exception.references[name] ?? 0) : 0)
-      ? []
-      : [
-          `${file}: ${name} has ${count} references; allowed ${exception?.references[name] ?? 0}. Use async fs/Effect FileSystem or justify a narrowly scoped exception.`,
-        ],
-  );
+  const actual = countSyncFsReferences(source);
+  return [
+    ...new Set([...Object.keys(actual), ...Object.keys(exception?.references ?? {})]),
+  ].flatMap((name) => {
+    const count = actual[name] ?? 0;
+    const expected = exception?.reason.trim() ? (exception.references[name] ?? 0) : 0;
+    if (count === expected) return [];
+    return [
+      count < expected
+        ? `${file}: stale ${name} budget (${expected} expected, ${count} present). Reduce the budget when removing sync references.`
+        : `${file}: ${name} has ${count} references; allowed ${expected}. Use async fs/Effect FileSystem or justify a narrowly scoped exception.`,
+    ];
+  });
 }
 
 export function serverSources(root: string): string[] {
@@ -122,13 +165,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const budget = JSON.parse(
     fs.readFileSync(path.join(import.meta.dirname, "server-sync-fs-budget.json"), "utf8"),
   ) as SyncFsBudget;
-  const violations = serverSources(path.join(root, "apps/server/src")).flatMap((file) =>
+  const sources = ["apps/server/src", "packages/shared/src"].flatMap((directory) =>
+    serverSources(path.join(root, directory)),
+  );
+  const violations = sources.flatMap((file) =>
     syncFsViolations(
       path.relative(root, file).replaceAll("\\", "/"),
       fs.readFileSync(file, "utf8"),
       budget,
     ),
   );
+  const present = new Set(sources.map((file) => path.relative(root, file).replaceAll("\\", "/")));
+  for (const file of Object.keys(budget))
+    if (!present.has(file)) violations.push(`${file}: stale budget for a removed source file.`);
   if (violations.length) {
     console.error(violations.join("\n"));
     process.exitCode = 1;

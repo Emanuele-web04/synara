@@ -6,83 +6,161 @@ scheduling, provider process priority and the event-loop watchdog are separate w
 
 ## Root cause and change
 
-| Profile finding                                                          | Evidence                                                                                                                                                         | Action                                                                                                                                  |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Codex stdout callback scans every live session and revalidates disk auth | `CodexAdapter.listener` → `listSessions` → `pruneStaleAuthSessions` → `contextAuthStalenessMessage`; then `getSessionCodexOptions` revalidates the emitter again | Bind immutable origin metadata without I/O; asynchronously revalidate only the emitter                                                  |
-| Main-thread synchronous filesystem chains                                | Baseline CPU profile's largest `pruneStaleAuthSessions` subtree: 6,073 ms inclusive; `realpathSync`, `lstatSync`, `openSync`, `readFileSync` underneath it       | One shared security algorithm with synchronous compatibility and asynchronous filesystem interpreters                                   |
-| Serial asynchronous validation can reduce streaming throughput           | An intermediate implementation left seven turns behind reconciliation at 25 seconds despite lowering synchronous call counts                                     | Overlap at most eight metadata preparations; keep the existing serial publisher, byte/count admission, compaction and terminal reserves |
-| Large SQLite history                                                     | Actual hot SQL tested against 304,388 events and 10,016 projected messages in a 1,302,536,192-byte synthetic database                                            | Existing event indexes work; no schema migration justified by the measured tail latency                                                 |
-| Checkpoint/provider starts under load                                    | Inline checkpoint/Studio baseline work is inside the global reactor delivery lock; slow starts and reconciliation persist in the load fixture                    | Evidence for the orchestration sibling; no orchestration/checkpoint files changed                                                       |
+| Profile finding                                                          | Evidence                                                                                                                                                         | Action                                                                                                                                                                            |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex stdout callback scans every live session and revalidates disk auth | `CodexAdapter.listener` → `listSessions` → `pruneStaleAuthSessions` → `contextAuthStalenessMessage`; then `getSessionCodexOptions` revalidates the emitter again | Bind immutable origin metadata without I/O; asynchronously revalidate only the emitter                                                                                            |
+| Main-thread synchronous filesystem chains                                | Fresh loaded upstream `pruneStaleAuthSessions` subtree: 6,919 ms inclusive; `realpathSync`, `lstatSync`, `openSync`, `readFileSync` underneath it                | One shared security algorithm with synchronous compatibility and asynchronous filesystem interpreters                                                                             |
+| Serial asynchronous validation can reduce streaming throughput           | Two pre-review captures dropped 1,444–1,469 events under 40 CPU workers despite responsive HTTP/RPCs                                                             | Coalesce pending checks per session origin; at most one running and one pending check per origin, eight native checks globally; preserve serial publication and admission budgets |
+| Large SQLite history                                                     | Actual hot SQL tested against 304,388 events and 10,016 projected messages in a 1,302,536,192-byte synthetic database                                            | Existing event indexes work; no schema migration justified by the measured tail latency                                                                                           |
+| Checkpoint/provider starts under load                                    | Inline checkpoint/Studio baseline work is inside the global reactor delivery lock; slow starts and reconciliation persist in the load fixture                    | Evidence for the orchestration sibling; no orchestration/checkpoint files changed                                                                                                 |
 
 Auth results are never cached. The shared algorithm retains logical/canonical home
 identity, symlink rejection, `O_NOFOLLOW`, descriptor identity/mode/size/timestamps,
 pre/post read checks, content fingerprints and descriptor closure. A stale-auth fence
 belongs to the originating context, including synchronous pruning, cancellation,
 replacement and preparations that finish out of order. Same-account token rotation
-keeps its existing fingerprint behavior.
+keeps its existing fingerprint behavior. A `file-changed` snapshot retries the full
+security algorithm up to three total attempts; other failures do not retry.
+
+Each admitted event uses a check that starts after its admission. Events arriving
+while that check runs join the next pending check for the same immutable context.
+Results are shared only among that check's already-admitted events; there is no
+cross-check auth cache. Replacements have different keys. Publication remains one
+ordered consumer and checks the originating context's rejection fence again.
+
+The five-second revalidation deadline includes waiting for a native I/O lease.
+A timeout rejects that origin and releases its queued publication work. Native fs
+promises cannot be cancelled, so started reads retain their semaphore permits until
+settlement and descriptor cleanup. Timed-out lease waiters are removed. Eight
+permanently hung reads can exhaust the native-read budget; subsequent origins then
+fail closed at their own deadlines rather than accumulating more native reads.
+This bounds server work but does not make an unavailable filesystem healthy.
+
+Unexpected inspector errors also reject the original origin and emit a fixed error
+message with its thread ID, without the error or credentials. They cannot silently
+publish without auth validation. The generic ingress logs failed preparations and
+skips the affected item; the Codex adapter handles inspector errors explicitly.
+Trusted manager-authored session closes remain deliverable. Provider stdout cannot
+forge that exception. Dropped/evicted events now produce warnings at totals 1, 2, 4,
+8, etc., avoiding both silent loss and a warning for every delta.
 
 Startup/private permission checks and the manager's synchronous lifecycle APIs remain
 synchronous. They no longer run for every stdout event: the largest remaining
-`pruneStaleAuthSessions` profile subtree is 100 ms inclusive versus 6,073 ms at the
-base. Other legacy filesystem sites not implicated by this profile are unchanged;
+`pruneStaleAuthSessions` loaded profile subtree is 481–502 ms inclusive versus
+6,919 ms at the base (including startup/shutdown). Other legacy filesystem sites not implicated by this profile are unchanged;
 their references are frozen in
 `scripts/server-sync-fs-budget.json`. `bun run lint` runs the AST-based guard, which
-rejects added synchronous API references, new files, dynamic namespace access and
-non-static filesystem imports. Each existing exception has a reason and a per-method
-budget. This narrowly targets blocking filesystem APIs rather than banning harmless
+scans server and shared runtime sources. It requires exact per-method budgets:
+removing a reference also requires reducing its budget. It tracks simple namespace
+alias chains and rejects direct namespace arguments, dynamic access, re-exports and
+non-static/import-equals fs imports. Each existing exception has a reason.
+
+This is a syntax guard, not interprocedural analysis: object wrappers, reassignment
+and indirect calls can hide references, and moving an existing call into a hot path
+within the same file still requires review/profiling. This narrowly targets blocking filesystem APIs rather than banning harmless
 Node builtins throughout the server.
 
-## Before / after
+## Before / after (final production behavior)
 
-Each cell is **before → after**, in milliseconds unless specified otherwise.
+A fresh control at upstream `a83a6248b` and two final captures use the same synthetic
+`auth.json`/`config.toml`, eight sessions, 500 deltas per session and four tool pairs.
+Each cell is **upstream control → final range across two captures**, in milliseconds.
+The original profile was collected on a much busier shared host; these fresh latency
+numbers replace its preliminary latency table.
 
-| Workload                    |  Event-loop p99 |  Event-loop max |   Command RPC p99 |   Command RPC max |   `/health` p99 |   `/health` max |
-| --------------------------- | --------------: | --------------: | ----------------: | ----------------: | --------------: | --------------: |
-| No added synthetic CPU load |   57.02 → 43.32 |  224.13 → 76.94 |    315.87 → 97.19 |   598.37 → 147.06 |  115.72 → 58.08 |  261.49 → 82.72 |
-| 40 CPU worker threads       | 412.35 → 170.00 | 823.13 → 382.99 | 2,000.71 → 416.02 | 2,000.71 → 628.31 | 470.45 → 161.51 | 470.45 → 169.92 |
+| Workload          |         Event-loop p99 |         Event-loop max |        Command RPC p99 |        Command RPC max |          `/health` p99 |          `/health` max |
+| ----------------- | ---------------------: | ---------------------: | ---------------------: | ---------------------: | ---------------------: | ---------------------: |
+| No added CPU load |    26.94 → 16.08–16.55 |    67.50 → 60.10–63.80 |    72.69 → 23.17–25.43 |    94.06 → 44.44–48.53 |     47.19 → 9.15–11.30 |    48.84 → 26.66–28.00 |
+| 40 CPU workers    | 220.73 → 118.42–138.67 | 347.60 → 206.70–237.63 | 734.05 → 260.95–348.27 | 734.05 → 289.80–412.93 | 496.97 → 126.88–154.18 | 496.97 → 132.26–180.64 |
 
-| Workload       | Synchronous fs calls | Sum of instrumented fs elapsed time | RPC samples | HTTP samples |
-| -------------- | -------------------: | ----------------------------------: | ----------: | -----------: |
-| No added load  |     899,268 → 23,590 |                      4,874 → 223 ms |   187 → 213 |    170 → 196 |
-| 40 CPU workers |      150,489 → 7,979 |                      4,278 → 300 ms |    58 → 129 |     41 → 112 |
+| Workload          | Synchronous fs calls: upstream → final | Instrumented fs elapsed: upstream → final | Provider emission → publication p99: upstream → final |
+| ----------------- | -------------------------------------: | ----------------------------------------: | ----------------------------------------------------: |
+| No added CPU load |              1,127,023 → 24,820–25,688 |                         3900 → 131–134 ms |                              36.00 → 100.00–105.00 ms |
+| 40 CPU workers    |                376,182 → 20,548–21,449 |                         5683 → 441–497 ms |                         267.00 → 1,407.00–1,810.00 ms |
 
-Both no-added-load captures completed all eight turns. Under added load, the baseline
-had one running turn and seven not started at the snapshot; the final capture had two
-running, two interrupted by runtime reconciliation and four not started. These are
-25-second observations, not provider completion benchmarks. Improving server
-responsiveness does not resolve the remaining orchestration bottleneck.
+Async validation has a streaming latency cost relative to synchronous validation on
+a cached local filesystem. The upstream callback validates before ingress admission,
+so its admission-to-publication delay alone would misleadingly look almost zero.
+The emission timestamps include that pre-admission work. The final version improves
+server responsiveness and delivers more events under CPU pressure, while adding fs
+pool/ordered-publication waiting. This is not a claim of faster streaming than upstream.
+
+## Review revision: ingress throughput
+
+Compared exact PR commit `3e48382` (one check per event, eight overlapping checks) with
+final coalesced validation. Both use the same valid synthetic auth/config and probe.
+Paired captures reverse version order on the second pair. No event payload is merged.
+
+| Workload / pair    | Dropped: before → after | Deltas published: before → after | Admission → publication p99: before → after | Publication max: before → after | Queued at boundary: before → after | Native checks started: before → after |
+| ------------------ | ----------------------: | -------------------------------: | ------------------------------------------: | ------------------------------: | ---------------------------------: | ------------------------------------: |
+| No added load / 1  |                   0 → 0 |                    4,000 → 4,000 |                           391.36 → 98.86 ms |              418.46 → 121.54 ms |                              0 → 0 |                           4,176 → 865 |
+| No added load / 2  |                   0 → 0 |                    4,000 → 4,000 |                           267.91 → 96.16 ms |              289.76 → 127.86 ms |                              0 → 0 |                           4,176 → 864 |
+| 40 CPU workers / 1 |               1,469 → 0 |                      791 → 4,000 |                     18,271.59 → 1,773.13 ms |         18,495.05 → 1,818.06 ms |                          1,822 → 0 |                             852 → 182 |
+| 40 CPU workers / 2 |               1,444 → 0 |                      820 → 4,000 |                     17,804.16 → 1,377.51 ms |         18,022.55 → 1,391.00 ms |                          1,818 → 3 |                             881 → 213 |
+
+Both loaded pre-review captures received 4,000 deltas, filled the 1,984 normal slots
+and dropped events. Their queue high-water was 1,985 including reserved terminal work;
+only 791/820 deltas had been published at the boundary. The final captures published
+all 4,000 deltas, all 40 item starts/completions and all eight turn completions, with
+zero drops/terminal overflow. Loaded queue high-water fell to 527/374. The three
+remaining queued items in the second final capture were session lifecycle work,
+not missing streaming deltas.
+
+The pre-review loaded snapshots each had two running, three interrupted and three
+not-started projected turns. Final snapshots had four completed/four not started,
+and three completed/one running/four not started, respectively. The provider runtime
+journal after isolated shutdown contains 500 deltas and one completion per thread in
+the first final capture. Ingress delivery does not prove timely orchestration projection.
+The extra delivered work also raised RPC/event-loop p99 relative to the pre-review
+version; see the raw per-capture summary rather than comparing unequal delivered work.
+
+The two interrupted turns in the original preliminary capture have durable recovery
+activities with this reason: "The live provider session is 'ready', but the projection
+is still running." Their journals were partial and had no completed turn at the capture
+boundary. The original probe did not measure drops, so it cannot distinguish delayed
+or lost events retrospectively. The new captures demonstrate both the ingress loss
+mechanism before review and continuing orchestration/projection lag after it is fixed.
 
 ### Method and limits
 
-- Built the Node server CLI once at the base and once with the change. Used separate
-  homes under `/tmp`, server port 46171, dev URL port 46172 and fixture authentication.
-  Checked the dev runner's isolation dry-run. User Stable/Beta homes were not used.
-- Reused `scripts/computer-use-fixtures/packaged-client.ts` for the WebSocket owner
-  connection and contract-validated command RPCs. A fake Codex JSONL executable
-  streams eight sessions, 500 text deltas and four tool start/complete pairs per turn,
-  with ordinary orchestration checkpoints on an isolated Git fixture.
-- Sampled `monitorEventLoopDelay({ resolution: 10 })` after startup, covering session
-  creation plus a 25-second HTTP/metadata-update loop. Node `--cpu-prof` runs in the
-  same captures. Commands include project/thread creation, turn requests and metadata
-  updates; latency measures the RPC response, not completion of queued provider work.
-- CPU workers continuously compute `Math.sin`; the supervisor stops its own workers
-  and server. The shared machine has unrelated background load. “No added load” is
-  not a verified unloaded-host benchmark. Results are single paired captures with
-  variable scheduling, not statistical performance guarantees.
-- Lightweight fs/SQLite counters run in both versions. Nested fs timings overlap and
-  are not exclusive CPU time. Full `Error().stack` instrumentation was used only to
-  identify callers and discarded from latency comparisons. CPU profile subtree time
-  includes startup and shutdown; the delay/counter table excludes startup/shutdown.
-- These captures precede the final stale-auth closure/teardown edge-case fixes.
-  The valid-auth streaming path measured here is unchanged by those fixes.
-- The production Stable 30-second total HTTP stall was not reproduced exactly. Live
-  providers, packaged Windows and production database contents were not tested.
-  This change removes a measured matching synchronous stack, not every possible stall.
+- Separate homes under `/tmp`, unused server port 46171/dev URL port 46172; the dev
+  runner's isolation dry-run and IPv4/IPv6 listeners were checked. Provider overlay
+  home is also isolated per capture. User Stable/Beta homes were never used.
+- Reused `scripts/computer-use-fixtures/packaged-client.ts`, contract-validated owner
+  WebSocket RPCs, the fake Codex JSONL provider and Git/checkpoint fixture. The source
+  home contains synthetic account/token values only. This is not live provider testing.
+- `monitorEventLoopDelay({ resolution: 10 })` and Node `--cpu-prof` run together.
+  The latency window starts after server initialization, includes session creation,
+  a 25-second health/metadata-command loop, and the final snapshot/connection close.
+  Commands measure their RPC response, not completion of provider side effects.
+- A temporary probe observes actual `ingress.status()`, offer results, ordered runtime
+  publication, queue/byte high-water and check starts. Admission-to-publication timings
+  include all mapped native events (mostly text deltas). Child timestamps measure
+  emission-to-publication separately. No probe is included in shipped code.
+- Each CPU-pressure capture uses 40 finite workers computing `Math.sin`; the supervisor
+  stops its own workers and server. The coordinator verified no heavy checks before
+  the window (host load about 3); no other heavy suite was started during these captures.
+  Host uptime/load samples are in the archive. This is a shared host, not a statistical
+  guarantee or an exactly reproduced production load of 80. No-added-load is literal.
+- Lightweight fs/SQLite counters use the same 11 fs APIs in all captures. Nested fs
+  timings overlap. Stack-string instrumentation is excluded from latency captures.
+  CPU profile aggregates include startup/shutdown; delay/counter windows exclude them.
+  Started native reads are counted by manager validation entry; lease bounds on timeout
+  are verified with gated real fs tests, not inferred from that counter.
+- New loaded upstream CPU profiles spend 6,919 ms inclusive in `pruneStaleAuthSessions`
+  versus 481–502 ms in final profiles. Remaining raw profiles are dominated by process
+  spawning and process-tree capture (including shutdown), plus SQLite event writes.
+  Global queue/checkpoint scheduling and process priority remain sibling work.
+- Same-account token rotation, retries and timeout failures are regression-tested;
+  the benchmark holds auth constant. The production Stable 30-second total HTTP stall
+  was not reproduced exactly. Packaged Windows and production database contents are
+  unverified. No worker-thread SQLite implementation or schema migration was added.
 
-Typical isolated capture command (developer probe is a temporary artifact):
+Typical isolated capture command (temporary developer probe):
 
 ```sh
-node --require /tmp/synara-perf-hot-path/probe.cjs --cpu-prof \
+SYNARA_HOME=/tmp/synara-perf-hot-path/home-fixture/dev \
+node --require /tmp/synara-perf-hot-path/review-probe.cjs --cpu-prof \
   --cpu-prof-dir=/tmp/synara-perf-hot-path/evidence \
   apps/server/dist/index.mjs \
   --home-dir /tmp/synara-perf-hot-path/home-fixture \
@@ -90,10 +168,11 @@ node --require /tmp/synara-perf-hot-path/probe.cjs --cpu-prof \
   --no-browser --auth-token perf-isolated-token
 ```
 
-The isolated `dev/settings.json` selects the fake binary and isolated Codex home;
-per-command provider options do not override server settings. Raw profiles, the
-fixture/probe and measurement JSON are retained in the local task evidence archive.
-There is no new runtime telemetry or Stable diagnostics collection.
+The isolated `dev/settings.json` selects the fake binary and isolated Codex source
+home; per-command provider options do not override server settings. Probe hooks are
+in temporary compiled bundle copies only. Raw profiles, counters, client snapshots,
+host samples, harness and summaries are in the PR evidence archive. There is no new
+runtime telemetry or Stable diagnostics collection.
 
 ## Large SQLite measurements
 
@@ -123,7 +202,14 @@ the measured read plans.
 
 ## Verification
 
-Focused tests cover async-only reads, descriptor races and closure, home replacement,
+Focused regressions publish 3,000 ordered deltas through three gated checks with no
+loss, verify every coalesced event's check starts after admission, and exercise
+count/byte saturation with terminal eviction. A native-read regression holds eight
+reads past their deadlines: a ninth times out without starting, then a new context
+succeeds after one read settles. Concurrent same-account rewrites succeed on retry;
+account changes and three unstable snapshots still reject, closing all descriptors.
+
+Focused tests also cover async-only reads, descriptor races and closure, home replacement,
 logical symlink retargeting, symlinked auth/private homes, token rotation, context
 replacement, sync/async stale-auth pruning, out-of-order auth invalidation, trusted
 manager closure, failed teardown retry, ordered bounded preparation, rejection,

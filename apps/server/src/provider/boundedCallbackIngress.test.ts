@@ -7,9 +7,105 @@ type TestItem = {
   readonly id: string;
   readonly terminal?: boolean;
   readonly bytes?: number;
+  readonly key?: object;
 };
 
 describe("makeBoundedCallbackIngress", () => {
+  it("coalesces only checks that start after admission, serial per key and parallel across keys", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const a = { name: "a" };
+          const b = { name: "b" };
+          const admitted = new Map<object, number>();
+          const checks: Array<{ key: object; through: number; release: () => void }> = [];
+          const published: string[] = [];
+          const ingress = yield* makeBoundedCallbackIngress<TestItem, never, never, number>(
+            (item, through) =>
+              Effect.sync(() => {
+                expect(Number(item.id.slice(1))).toBeLessThanOrEqual(through!);
+                published.push(item.id);
+              }),
+            {
+              capacity: 1024,
+              maxBufferedBytes: 100_000,
+              terminalReserve: 1,
+              sizeOf: () => 1,
+              isTerminal: () => false,
+              prepareKey: (item) => item.key,
+              prepareConcurrency: 2,
+              prepare: ({ key }) =>
+                new Promise<number>((resolve) => {
+                  const through = admitted.get(key!)!;
+                  checks.push({ key: key!, through, release: () => resolve(through) });
+                }),
+            },
+          );
+          const offer = (key: object, id: string) => {
+            admitted.set(key, Number(id.slice(1)));
+            expect(ingress.offer({ key, id })).toBe("accepted");
+          };
+          offer(a, "a0");
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          for (let index = 1; index <= 900; index++) offer(a, `a${index}`);
+          offer(b, "b0");
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          expect(checks.map((check) => check.key)).toEqual([a, b]);
+          checks[1]!.release();
+          checks[0]!.release();
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          expect(checks.map((check) => check.through)).toEqual([0, 0, 900]);
+          checks[2]!.release();
+          yield* ingress.stop;
+          expect(published).toEqual([
+            ...Array.from({ length: 901 }, (_, index) => `a${index}`),
+            "b0",
+          ]);
+          expect(ingress.status()).toMatchObject({ dropped: 0, queued: 0 });
+        }),
+      ),
+    );
+  });
+
+  it("keeps count/byte admission and terminal reserve while a coalesced check is slow", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const key = {};
+          const releases: Array<() => void> = [];
+          const published: string[] = [];
+          const ingress = yield* makeBoundedCallbackIngress<TestItem, never, never, void>(
+            (item) =>
+              Effect.sync(() => {
+                published.push(item.id);
+              }),
+            {
+              capacity: 4,
+              maxBufferedBytes: 4,
+              terminalReserve: 1,
+              sizeOf: () => 1,
+              isTerminal: (item) => item.terminal === true,
+              prepareKey: (item) => item.key,
+              prepareConcurrency: 2,
+              prepare: () => new Promise<void>((resolve) => releases.push(resolve)),
+            },
+          );
+          ingress.offer({ id: "head", key });
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          for (let index = 0; index < 10; index++) ingress.offer({ id: `delta-${index}`, key });
+          expect(ingress.offer({ id: "terminal", terminal: true, key })).toBe("accepted");
+          expect(ingress.status()).toMatchObject({ queued: 4, dropped: 7, terminalOverflow: 0 });
+          expect(releases).toHaveLength(1);
+          releases[0]!();
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          expect(releases).toHaveLength(2);
+          releases[1]!();
+          yield* ingress.stop;
+          expect(published).toEqual(["head", "delta-0", "delta-1", "delta-2", "terminal"]);
+        }),
+      ),
+    );
+  });
   it("drains ordered preparation after a rejection and terminal eviction", async () => {
     await Effect.runPromise(
       Effect.scoped(

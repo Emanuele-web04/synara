@@ -129,6 +129,8 @@ type CodexRuntimeIngressItem = {
   readonly nativeEvent: ProviderEvent;
   readonly inspect: () => Promise<CodexSessionInspection | undefined>;
   readonly isAuthRejected: () => boolean;
+  readonly validationKey: object | undefined;
+  readonly rejectInspection: () => void;
   readonly trustedClose: boolean;
   readonly runtimeEvents: ReadonlyArray<ProviderRuntimeEvent>;
   readonly bytes: number;
@@ -2594,13 +2596,29 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }),
           {
             prepareConcurrency: 8,
-            prepare: ({ inspect, trustedClose }) =>
-              trustedClose
-                ? Promise.resolve(undefined)
-                : inspect().catch((error: unknown) => {
-                    if (error instanceof CodexSessionAuthInvalidatedError) return null;
-                    throw error;
-                  }),
+            prepareKey: (item) => (item.trustedClose ? undefined : item.validationKey),
+            prepare: ({
+              inspect,
+              trustedClose,
+              isAuthRejected,
+              rejectInspection,
+              nativeEvent: { threadId },
+            }) => {
+              if (trustedClose) return Promise.resolve(undefined);
+              if (isAuthRejected()) return Promise.resolve(null);
+              return Promise.resolve()
+                .then(inspect)
+                .catch((error: unknown) => {
+                  if (error instanceof CodexSessionAuthInvalidatedError) return null;
+                  rejectInspection();
+                  void Effect.runPromise(
+                    Effect.logError("Codex callback auth inspection failed; origin rejected", {
+                      threadId,
+                    }),
+                  );
+                  return null;
+                });
+            },
             capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
             maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
             terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
@@ -2608,6 +2626,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             sizeOf: (item) => item.bytes,
           },
         );
+        let nextDroppedWarning = 1;
         const listener = (event: ProviderEvent) => {
           const origin = manager.getSessionEventOrigin(event.threadId, event.lifecycleGeneration);
           const stampedEvent = stampEvent(event, origin.providerInstanceId);
@@ -2629,6 +2648,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             nativeEvent: nativeEvent.event,
             inspect: origin.inspect,
             isAuthRejected: origin.isAuthRejected,
+            validationKey: origin.validationKey,
+            rejectInspection: origin.rejectInspection,
             // This notice is authored by the manager, not by provider stdout.
             // Stale auth must suppress provider output but still durably close its session.
             trustedClose: event.kind === "session" && event.method === "session/closed",
@@ -2636,6 +2657,20 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             bytes:
               nativeEvent.bytes + sizedRuntimeEvents.reduce((total, item) => total + item.bytes, 0),
           });
+          if (result === "dropped" || result === "evicted-for-terminal") {
+            const status = ingress.status();
+            // Report the first loss and exponentially spaced totals, not one warning per delta.
+            if (status.dropped >= nextDroppedWarning) {
+              while (nextDroppedWarning <= status.dropped) nextDroppedWarning *= 2;
+              void Effect.runPromise(
+                Effect.logWarning("Codex callback ingress dropped provider events", {
+                  threadId: stampedEvent.threadId,
+                  method: stampedEvent.method,
+                  status,
+                }),
+              );
+            }
+          }
           if (result === "terminal-overflow") {
             // This means the reserved terminal budget itself was exhausted.
             // The runtime reconciler remains the final recovery fence.
