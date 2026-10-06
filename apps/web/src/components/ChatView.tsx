@@ -1320,20 +1320,24 @@ export default function ChatView({
     [openOrReuseProjectDraftThread],
   );
 
+  // Read on a visit or new completion, not when the user explicitly marks this chat unread.
+  const autoReadThreadId = activeThread?.id;
+  const activeTurnCompletedAt = activeLatestTurn?.completedAt;
   useEffect(() => {
-    if (!activeThread?.id) return;
+    if (!autoReadThreadId || isInactiveSplitPane) return;
     if (!latestTurnSettled) return;
-    if (!activeLatestTurn?.completedAt) return;
-    const turnCompletedAt = Date.parse(activeLatestTurn.completedAt);
+    if (!activeTurnCompletedAt) return;
+    const turnCompletedAt = Date.parse(activeTurnCompletedAt);
     if (Number.isNaN(turnCompletedAt)) return;
-    const lastVisitedAt = activeThread.lastVisitedAt ? Date.parse(activeThread.lastVisitedAt) : NaN;
+    const visitedAt = getThreadFromState(useStore.getState(), autoReadThreadId)?.lastVisitedAt;
+    const lastVisitedAt = visitedAt ? Date.parse(visitedAt) : NaN;
     if (!Number.isNaN(lastVisitedAt) && lastVisitedAt >= turnCompletedAt) return;
 
-    markThreadVisited(activeThread.id);
+    markThreadVisited(autoReadThreadId);
   }, [
-    activeThread?.id,
-    activeThread?.lastVisitedAt,
-    activeLatestTurn?.completedAt,
+    autoReadThreadId,
+    activeTurnCompletedAt,
+    isInactiveSplitPane,
     latestTurnSettled,
     markThreadVisited,
   ]);
@@ -1342,20 +1346,20 @@ export default function ChatView({
   // rather than now: a client clock behind the server would leave the stamp before it.
   const activeSnoozedUntil = activeThread?.snoozedUntil;
   const activeSnoozeReminderAt = activeThread?.snoozeReminderAt;
-  const activeLastVisitedAt = activeThread?.lastVisitedAt;
   useEffect(() => {
-    if (!activeThread?.id || !activeSnoozeReminderAt) return;
+    if (!autoReadThreadId || isInactiveSplitPane || !activeSnoozeReminderAt) return;
     const returned = {
       snoozedUntil: activeSnoozedUntil,
       snoozeReminderAt: activeSnoozeReminderAt,
-      lastVisitedAt: activeLastVisitedAt,
+      lastVisitedAt: getThreadFromState(useStore.getState(), autoReadThreadId)?.lastVisitedAt,
     };
-    if (hasUnseenSnoozeReturn(returned)) markThreadVisited(activeThread.id, activeSnoozeReminderAt);
+    if (hasUnseenSnoozeReturn(returned))
+      markThreadVisited(autoReadThreadId, activeSnoozeReminderAt);
   }, [
-    activeThread?.id,
+    autoReadThreadId,
+    isInactiveSplitPane,
     activeSnoozedUntil,
     activeSnoozeReminderAt,
-    activeLastVisitedAt,
     markThreadVisited,
   ]);
 
