@@ -151,7 +151,10 @@ export function spawnPlannedProcess(
     windowsHide: plan.windowsHide,
     windowsVerbatimArguments: plan.windowsVerbatimArguments,
   });
-  if (options.lowerPriority && (options.platform ?? process.platform) === "win32") {
+  if (
+    options.lowerPriority &&
+    ((options.platform ?? process.platform) === "win32" || !plan.priorityBeforeExec)
+  ) {
     lowerProcessPriority(child.pid, options);
   }
   return trackProcessSpawn(child);

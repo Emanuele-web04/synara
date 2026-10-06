@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as executable from "./executable";
 import os from "node:os";
+import path from "node:path";
 
 import { execShellCommandSync, spawnProcess } from "./processRuntime";
 
@@ -26,7 +28,66 @@ function run(
   });
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("processRuntime", () => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(["unresolved executable", "missing POSIX shell"] as const)(
+    "applies post-spawn priority for a successful direct launch (%s)",
+    async (reason) => {
+      const resolveExecutable = executable.resolveExecutable;
+      vi.spyOn(executable, "resolveExecutable").mockImplementation((command, options) =>
+        reason === "unresolved executable" || command === "/bin/sh"
+          ? null
+          : resolveExecutable(command, options),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.spyOn(os, "getPriority").mockReturnValue(0);
+      const setPriority = vi.spyOn(os, "setPriority").mockImplementation(() => {});
+      const child = spawnProcess(process.execPath, ["-e", "process.exit(0)"], {
+        lowerPriority: true,
+        stdio: "pipe",
+      });
+      expect(setPriority).toHaveBeenCalledWith(child.pid, 5);
+      if (reason === "missing POSIX shell") {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("/bin/sh is unavailable"));
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["bare", "absolute"] as const)(
+    "preserves spawn ENOENT with priority enabled for a missing %s executable",
+    async (kind) => {
+      const command =
+        kind === "bare"
+          ? "synara-missing-priority-test-executable"
+          : path.join(os.tmpdir(), "synara-missing-priority-test-executable");
+      const serverPriority = os.getPriority();
+      const child = spawnProcess(command, [], {
+        lowerPriority: true,
+        stdio: "pipe",
+        env: { ...process.env, PATH: "" },
+      });
+      const error = await new Promise<NodeJS.ErrnoException>((resolve, reject) => {
+        child.once("error", resolve);
+        child.once("close", () =>
+          reject(new Error("missing executable exited without a spawn error")),
+        );
+      });
+      expect(error.code).toBe("ENOENT");
+      expect(error.message).toContain(command);
+      expect(child.pid).toBeUndefined();
+      expect(os.getPriority()).toBe(serverPriority);
+    },
+  );
+
   it.each([false, true])(
     "applies opt-in priority before descendants launch (enabled=%s)",
     async (enabled) => {

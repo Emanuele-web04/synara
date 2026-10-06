@@ -18,8 +18,9 @@ export type ProcessExecutionBackend = "native" | "wsl";
 
 /**
  * Best-effort CPU scheduling only: no background I/O or network QoS.
- * Windows callers apply this immediately after spawn. POSIX launches instead
- * adjust priority before exec so all agent threads and descendants inherit it.
+ * Windows callers and unresolved POSIX commands apply this after spawn.
+ * Resolved POSIX launches adjust priority before exec so initial agent threads
+ * and descendants inherit it.
  */
 export function lowerProcessPriority(
   pid: number | undefined,
@@ -56,6 +57,8 @@ export interface ProcessLaunchPlan extends WindowsSafeProcessCommand {
   readonly requestedCommand: string;
   readonly resolvedCommand: string;
   readonly executionBackend: ProcessExecutionBackend;
+  /** A POSIX launcher will attempt priority adjustment before agent exec. */
+  readonly priorityBeforeExec?: boolean;
 }
 
 export class ExecutableNotFoundError extends Error {
@@ -124,7 +127,7 @@ function priorityExecArgs(
 ): string[] {
   return [
     "-c",
-    'renice "$1" -p "$$" >/dev/null || printf "%s\\n" "Synara: failed to lower agent process priority; continuing" >&2; shift; exec "$@"',
+    'renice "$1" -p "$$" >/dev/null 2>/dev/null || printf "%s\\n" "Synara: failed to lower agent process priority; continuing" >&2; shift; exec "$@"',
     "synara-agent-priority",
     String(priority),
     command,
@@ -171,6 +174,7 @@ export function prepareProcess(
       requestedCommand: command,
       resolvedCommand: command,
       executionBackend: "wsl",
+      priorityBeforeExec: input.lowerPriority === true,
     };
   }
 
@@ -181,15 +185,24 @@ export function prepareProcess(
   const resolvedCommand = resolved ?? command;
 
   if (platform !== "win32") {
+    // Let the runtime preserve ENOENT/EACCES for unresolved commands instead of
+    // converting startup errors to shell exit codes. A successful direct spawn
+    // still receives best-effort post-spawn priority from the runtime boundary.
+    let priorityBeforeExec = input.lowerPriority === true && resolved !== null;
+    if (priorityBeforeExec && resolveExecutable("/bin/sh", { platform, env }) === null) {
+      console.warn("Agent priority launcher /bin/sh is unavailable; using post-spawn priority");
+      priorityBeforeExec = false;
+    }
     return {
-      command: input.lowerPriority ? "/bin/sh" : resolvedCommand,
-      args: input.lowerPriority
+      command: priorityBeforeExec ? "/bin/sh" : resolvedCommand,
+      args: priorityBeforeExec
         ? priorityExecArgs(resolvedCommand, args, inheritedAgentPriority())
         : [...args],
       shell: false,
       requestedCommand: command,
       resolvedCommand,
       executionBackend: "native",
+      priorityBeforeExec,
     };
   }
 

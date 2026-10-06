@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ExecutableNotFoundError, prepareProcess } from "./platformProcess";
+import * as executable from "./executable";
 import { spawnProcess } from "./processRuntime";
 import os from "node:os";
 
@@ -32,6 +33,7 @@ describe("prepareProcess", () => {
   it.each(["linux", "darwin"] as const)(
     "preserves lower inherited priority before exec on %s",
     (platform) => {
+      vi.spyOn(executable, "resolveExecutable").mockReturnValue("agent");
       vi.spyOn(os, "getPriority").mockReturnValue(15);
       const plan = prepareProcess("agent", ["literal $arg"], { platform, lowerPriority: true });
       expect(plan).toMatchObject({ command: "/bin/sh", resolvedCommand: "agent" });
@@ -40,6 +42,7 @@ describe("prepareProcess", () => {
   );
 
   it("logs an inherited priority read failure and still plans the launch", () => {
+    vi.spyOn(executable, "resolveExecutable").mockReturnValue("agent");
     vi.spyOn(os, "getPriority").mockImplementation(() => {
       throw new Error("access denied");
     });
@@ -61,7 +64,11 @@ describe("prepareProcess", () => {
     "sets %s priority before exec and tolerates failure (reniceFails=%s)",
     async (backend, reniceFails) => {
       if (reniceFails)
-        writeFileSync(path.join(root, "renice"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        writeFileSync(
+          path.join(root, "renice"),
+          "#!/bin/sh\nprintf 'raw renice diagnostic\\n' >&2\nexit 1\n",
+          { mode: 0o755 },
+        );
       const plan = prepareProcess(
         process.execPath,
         [
@@ -108,7 +115,8 @@ describe("prepareProcess", () => {
         priority: reniceFails ? os.getPriority() : Math.max(5, os.getPriority()),
         args: ["a b", "quote'\"$", "--flag"],
       });
-      if (reniceFails) expect(stderr).toContain("failed to lower agent process priority");
+      if (reniceFails)
+        expect(stderr).toBe("Synara: failed to lower agent process priority; continuing\n");
     },
   );
   it.skipIf(process.platform === "win32")(

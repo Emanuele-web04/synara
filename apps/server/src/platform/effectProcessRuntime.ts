@@ -20,10 +20,15 @@ export function spawnProviderProcess(
 ): ReturnType<ChildProcessSpawner.ChildProcessSpawner["Service"]["spawn"]> {
   return Effect.gen(function* () {
     const enabled = yield* providerProcessPriorityEnabled;
-    const child = yield* spawner.spawn(
-      makeEffectProcessCommand(command, args, { ...options, lowerPriority: enabled }),
-    );
-    if (enabled && (options.platform ?? process.platform) === "win32") {
+    const prepared = prepareEffectProcessCommand(command, args, {
+      ...options,
+      lowerPriority: enabled,
+    });
+    const child = yield* spawner.spawn(prepared.command);
+    if (
+      enabled &&
+      ((options.platform ?? process.platform) === "win32" || !prepared.priorityBeforeExec)
+    ) {
       lowerProcessPriority(child.pid, options);
     }
     return child;
@@ -51,15 +56,23 @@ export type EffectProcessRuntimeOptions = Omit<
  * provider/application code.
  *
  * Unlike the Node runtime there is deliberately no `requireExecutable`: the
- * Effect spawner is injectable. With priority disabled, a missing POSIX
- * executable surfaces as the spawner's ENOENT; with priority enabled it exits
- * through the pre-exec launcher. Neither path throws during command planning.
+ * Effect spawner is injectable. Unresolved POSIX executables bypass the priority
+ * launcher so startup failures retain the spawner's ENOENT/EACCES in either
+ * setting state. Neither path throws during command planning.
  */
 export function makeEffectProcessCommand(
   command: string,
   args: ReadonlyArray<string>,
   options: EffectProcessRuntimeOptions = {},
 ): ReturnType<typeof ChildProcess.make> {
+  return prepareEffectProcessCommand(command, args, options).command;
+}
+
+function prepareEffectProcessCommand(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: EffectProcessRuntimeOptions,
+): { command: ReturnType<typeof ChildProcess.make>; priorityBeforeExec: boolean } {
   const { platform, lowerPriority, ...commandOptions } = options;
   const effectivePlatform = platform ?? process.platform;
 
@@ -70,10 +83,10 @@ export function makeEffectProcessCommand(
   // Windows still needs centralized launch planning for PATHEXT, batch shims,
   // PowerShell scripts, and WSL dispatch before the spawner receives the command.
   if (effectivePlatform !== "win32" && !lowerPriority) {
-    return ChildProcess.make(command, [...args], {
-      ...commandOptions,
-      shell: false,
-    });
+    return {
+      command: ChildProcess.make(command, [...args], { ...commandOptions, shell: false }),
+      priorityBeforeExec: false,
+    };
   }
 
   const cwd = typeof commandOptions.cwd === "string" ? commandOptions.cwd : undefined;
@@ -92,5 +105,8 @@ export function makeEffectProcessCommand(
     ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   };
 
-  return ChildProcess.make(plan.command, plan.args, effectOptions);
+  return {
+    command: ChildProcess.make(plan.command, plan.args, effectOptions),
+    priorityBeforeExec: plan.priorityBeforeExec === true,
+  };
 }

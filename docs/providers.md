@@ -58,7 +58,7 @@ Synara gives newly launched local agent processes a moderate CPU scheduling prio
 nice +5 on macOS/Linux and Below Normal on Windows. Their children normally inherit it,
 including tests, compilers, and browsers. Processes that explicitly change their own priority
 can override that inheritance. This does not use background I/O or network throttling.
-macOS/Linux and WSL workspaces adjust nice before executing the agent, so its initial threads
+Resolved native macOS/Linux executables and WSL workspaces adjust nice before executing the agent, so its initial threads
 and immediate children inherit the lower priority. Native launches preserve an already lower
 inherited priority. Windows applies Below Normal immediately after spawn; a launcher or `.cmd`
 shim that creates a child before that call can race the adjustment. The Effect runtime applies
@@ -72,10 +72,16 @@ so its supervised shell commands receive the priority selected when that session
 An externally managed OpenCode server must be configured by its operator.
 
 The Synara server, terminals opened by the user, Git checkpoint helpers, and brief version,
-authentication, and model-list probes keep their existing priority. Auxiliary Codex/Claude
-model-generation processes use the agent priority. Priority changes are best effort: an OS
+authentication, and dedicated Codex/Claude model-list probes keep their existing priority.
+ACP/OpenCode discovery uses the shared agent process/server and retains its agent priority.
+Auxiliary Codex/Claude model-generation processes use the agent priority. Priority changes are best effort: an OS
 failure is logged and the agent launch continues. Lower CPU priority improves scheduling
 under contention; it does not impose a CPU quota or guarantee response times under overload.
+Unresolved native executables launch directly to preserve startup errors such as ENOENT;
+if that direct launch succeeds, priority is adjusted after spawn as a best-effort fallback.
+If the native system `/bin/sh` is unavailable, Synara logs a warning and uses the same
+direct-spawn fallback. These fallback paths can race initial threads/children; actual shell-less
+Linux images and WSL guests without `/bin/sh` have not been verified.
 
 ## What remains provider-owned
 

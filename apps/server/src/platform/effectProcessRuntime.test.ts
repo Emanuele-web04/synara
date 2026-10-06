@@ -2,16 +2,86 @@
 // Purpose: Verifies shared Windows launch decisions reach Effect child-process commands.
 // Layer: Server platform runtime test
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as executable from "@synara/shared/executable";
 import os from "node:os";
+import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Stream } from "effect";
+import { Cause, Effect, Exit, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { ServerSettingsService } from "../serverSettings";
 
 import { makeEffectProcessCommand, spawnProviderProcess } from "./effectProcessRuntime";
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("spawnProviderProcess", () => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(["unresolved executable", "missing POSIX shell"] as const)(
+    "applies post-spawn priority for a successful direct Effect launch (%s)",
+    async (reason) => {
+      const resolveExecutable = executable.resolveExecutable;
+      vi.spyOn(executable, "resolveExecutable").mockImplementation((command, options) =>
+        reason === "unresolved executable" || command === "/bin/sh"
+          ? null
+          : resolveExecutable(command, options),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.spyOn(os, "getPriority").mockReturnValue(0);
+      const setPriority = vi.spyOn(os, "setPriority").mockImplementation(() => {});
+      const pid = await Effect.runPromise(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const child = yield* spawnProviderProcess(spawner, process.execPath, [
+            "-e",
+            "process.exit(0)",
+          ]);
+          yield* child.exitCode;
+          return child.pid;
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(NodeServices.layer),
+          Effect.provide(ServerSettingsService.layerTest({ lowerProviderProcessPriority: true })),
+        ),
+      );
+      expect(setPriority).toHaveBeenCalledWith(pid, 5);
+      if (reason === "missing POSIX shell") {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("/bin/sh is unavailable"));
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["bare", "absolute"] as const)(
+    "preserves the Effect spawn error with priority enabled for a missing %s executable",
+    async (kind) => {
+      const command =
+        kind === "bare"
+          ? "synara-missing-priority-test-executable"
+          : path.join(os.tmpdir(), "synara-missing-priority-test-executable");
+      const result = await Effect.runPromiseExit(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const child = yield* spawnProviderProcess(spawner, command, [], {
+            env: { ...process.env, PATH: "" },
+          });
+          return yield* child.exitCode;
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(NodeServices.layer),
+          Effect.provide(ServerSettingsService.layerTest({ lowerProviderProcessPriority: true })),
+        ),
+      );
+      expect(Exit.isFailure(result)).toBe(true);
+      if (Exit.isFailure(result)) {
+        expect(Cause.pretty(result.cause)).toContain("ENOENT");
+        expect(Cause.pretty(result.cause)).toContain(command);
+      }
+    },
+  );
+
   it.each([false, true])(
     "wires the server setting into a real Effect child (enabled=%s)",
     async (enabled) => {
