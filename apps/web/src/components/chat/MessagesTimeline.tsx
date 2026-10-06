@@ -69,8 +69,6 @@ import {
   SteerIcon,
   ThinkingIcon,
   Undo2Icon,
-  WorkDetailsIcon,
-  WorkingIcon,
   WorktreeIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
@@ -2264,17 +2262,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // ChatView's click anchor preserves this trigger's screen position
                       // while the disclosure height animates, so opening it should not tail-scroll.
                       className={cn(
-                        "inline-flex items-center gap-1.5 pb-2 text-left transition-colors duration-200 hover:text-foreground",
+                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
                         MUTED_LABEL_TEXT_CLASS_NAME,
                       )}
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
-                      <span aria-hidden="true" className="flex shrink-0">
-                        {renderWorkEntryIcon(
-                          row.collapsedWorkElapsed ? ClockIcon : WorkDetailsIcon,
-                          MESSAGE_ACTION_ICON_CLASS_NAME,
-                        )}
-                      </span>
                       <span>
                         {row.collapsedWorkElapsed
                           ? `Worked for ${row.collapsedWorkElapsed}`
@@ -2663,18 +2655,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           {/* Non-collapsible twin of the settled "Worked for" header: same label
               tone, size, and full-width divider, but counting up live. */}
           <div
-            className={cn("flex items-center gap-1.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
+            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
-            <WorkingIcon className={cn("shrink-0", MESSAGE_ACTION_ICON_CLASS_NAME)} />
-            <span>
-              Working for{" "}
-              {nowIso ? (
-                (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
-              ) : (
-                <WorkingTimer createdAt={row.createdAt} />
-              )}
-            </span>
+            Working for{" "}
+            {nowIso ? (
+              (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
+            ) : (
+              <WorkingTimer createdAt={row.createdAt} />
+            )}
           </div>
           <div className="h-px w-full bg-border" />
         </div>
@@ -2682,8 +2671,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
+          ref={syncAnimationsToTimelineOrigin}
           className={cn(
-            "flex items-center gap-1.5 pt-0.5 font-system-ui",
+            "shimmer-group flex w-fit items-center gap-1.5 pt-0.5 font-system-ui",
             MUTED_LABEL_TEXT_CLASS_NAME,
           )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
@@ -2691,9 +2681,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <span aria-hidden="true" className="flex shrink-0">
             {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
           </span>
-          <span ref={syncAnimationsToTimelineOrigin} className="shimmer">
-            {workingLabel}
-          </span>
+          <span>{workingLabel}</span>
         </div>
       )}
 

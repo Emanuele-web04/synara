@@ -107,6 +107,7 @@ function mockSpawnerLayer(
     options:
       | {
           readonly env?: NodeJS.ProcessEnv;
+          readonly cwd?: string;
           readonly windowsVerbatimArguments?: boolean;
           readonly stdin?: "pipe" | "ignore" | "inherit";
         }
@@ -125,6 +126,7 @@ function mockSpawnerLayer(
         args: ReadonlyArray<string>;
         options?: {
           env?: NodeJS.ProcessEnv;
+          cwd?: string;
           windowsVerbatimArguments?: boolean;
           stdin?: "pipe" | "ignore" | "inherit";
         };
@@ -1604,8 +1606,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.notStrictEqual(configuredHome, tmpDir);
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args, _command, env) => {
+          mockSpawnerLayer((args, _command, env, options) => {
             assert.strictEqual(env?.CODEX_HOME, expectedCodexHome);
+            assert.strictEqual(options?.cwd, expectedCodexHome);
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             if (joined === "-c mcp_servers={} login status") {

@@ -2500,8 +2500,8 @@ label:has(> select#reasoning-effort) select {
 /* Text shimmer utility — vendored verbatim from shadcn 4.12.0
    (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
    imported because it would clash with this project's custom theme, so the
-   self-contained shimmer block lives here instead. Applied on the
-   "Working for …" status line via the `shimmer` class. Provides `shimmer`,
+   self-contained shimmer block lives here instead. Applied on typing and
+   worktree-preparation indicators. Provides `shimmer`,
    `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`,
    `shimmer-color-*`, `shimmer-once`, `shimmer-reverse`, and `shimmer-none`.
    One deliberate deviation: the animation is duty-cycled via `--shimmer-timing`
@@ -2525,9 +2525,11 @@ label:has(> select#reasoning-effort) select {
   @keyframes tw-shimmer {
     from {
       background-position: 100% 0;
+      mask-position: 100% 0;
     }
     to {
       background-position: 0 0;
+      mask-position: 0 0;
     }
   }
 }
@@ -2572,6 +2574,22 @@ label:has(> select#reasoning-effort) select {
   }
 }
 
+/* Mask the whole indicator so SVG strokes shimmer together with its text. */
+@utility shimmer-group {
+  @apply shimmer;
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
+  mask-image: linear-gradient(
+    calc(90deg + var(--shimmer-angle)),
+    #000 calc(50% - var(--_spread)),
+    rgb(0 0 0 / 0.2) 50%,
+    #000 calc(50% + var(--_spread))
+  );
+  mask-repeat: no-repeat;
+  mask-size: calc(200% + var(--_spread) * 2) 100%;
+  mask-position: 0 0;
+}
+
 @utility shimmer-once {
   animation-iteration-count: 1;
 }
@@ -2612,6 +2630,11 @@ label:has(> select#reasoning-effort) select {
     animation: none;
     background-image: none;
     -webkit-text-fill-color: currentColor;
+  }
+
+  .shimmer-group {
+    animation: none;
+    mask-image: none;
   }
 }
 
