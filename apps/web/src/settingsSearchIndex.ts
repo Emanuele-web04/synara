@@ -495,6 +495,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Providers ─────────────────────────────────────────────────────────────────
   {
+    id: "providers:cpu-priority",
+    section: "providers",
+    title: "Keep Synara responsive",
+    keywords:
+      "Lower agent CPU scheduling priority performance load nice responsiveness restart sessions",
+  },
+  {
     id: "providers:automatic-cli-update-checks",
     section: "providers",
     title: "Automatic CLI update checks",

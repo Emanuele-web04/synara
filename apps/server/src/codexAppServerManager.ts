@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "./providerProcessPriority";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -852,6 +853,7 @@ export function resolveCodexModelForAccount(
 }
 
 function spawnCodexAppServer(input: {
+  readonly lowerPriority: boolean;
   readonly binaryPath: string;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
@@ -861,6 +863,7 @@ function spawnCodexAppServer(input: {
     throw new Error("Codex app-server requires a verified shared continuation home.");
   }
   return spawnProcess(input.binaryPath, buildCodexAppServerArgs(sourceHomePath), {
+    lowerPriority: input.lowerPriority,
     requireExecutable: true,
     cwd: input.cwd,
     env: input.env,
@@ -1400,6 +1403,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       const launchAuthFingerprint = processLaunch.authFingerprint;
       const child = this.spawnAppServer({
+        lowerPriority: (await this.runPromise(providerProcessPriorityEnabled)) as boolean,
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: processLaunch.env,
@@ -2422,7 +2426,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       signal?.throwIfAborted();
       const launchAuthFingerprint = processLaunch.authFingerprint;
+      const lowerPriority = (await this.runPromise(providerProcessPriorityEnabled)) as boolean;
+      signal?.throwIfAborted();
       const child = this.spawnAppServer({
+        lowerPriority,
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: processLaunch.env,
@@ -3834,6 +3841,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("Codex authentication changed before discovery launch; retry the request.");
     }
     const child = this.spawnAppServer({
+      lowerPriority: false,
       binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
       env: processLaunch.env,

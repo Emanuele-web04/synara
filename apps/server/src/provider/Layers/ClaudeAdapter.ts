@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claudeResultUsage.ts";
 import { restoreClaudeImportedCopyDates } from "../claudeImportedCopyDates.ts";
 /**
@@ -575,8 +576,12 @@ interface ClaudeProcessOwner {
   process?: ClaudeOwnedProcess;
 }
 
-function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedProcess {
+function spawnOwnedClaudeCodeProcess(
+  options: ClaudeSpawnOptions,
+  lowerPriority: boolean,
+): ClaudeOwnedProcess {
   return spawnProcess(options.command, options.args, {
+    lowerPriority,
     requireExecutable: true,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: options.env,
@@ -2098,7 +2103,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       const { forkSession } = await loadClaudeAgentSdk();
       return forkSession(sessionId, forkOptions);
     };
-    const spawnClaudeProcess = options?.spawnClaudeCodeProcess ?? spawnOwnedClaudeCodeProcess;
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     const readClaudeCliVersion = options?.readClaudeCliVersion ?? readInstalledClaudeCliVersion;
 
@@ -2194,9 +2198,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       );
 
     const bindClaudeProcessOwner =
-      (owner: ClaudeProcessOwner) =>
+      (owner: ClaudeProcessOwner, lowerPriority: boolean) =>
       (spawnOptions: ClaudeSpawnOptions): ClaudeSpawnedProcess => {
-        const process = spawnClaudeProcess(spawnOptions);
+        const process = options?.spawnClaudeCodeProcess
+          ? options.spawnClaudeCodeProcess(spawnOptions)
+          : spawnOwnedClaudeCodeProcess(spawnOptions, lowerPriority);
         owner.process = process;
         return process;
       };
@@ -6206,7 +6212,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           },
           canUseTool,
           env: withClaudeArtifactOptIn(claudeSdkEnv, providerOptions?.enableArtifacts),
-          spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
+          spawnClaudeCodeProcess: bindClaudeProcessOwner(
+            processOwner,
+            yield* providerProcessPriorityEnabled,
+          ),
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
           ...(agentGatewayCredentials
             ? {
@@ -7546,7 +7555,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             permissionMode: "plan" as PermissionMode,
             persistSession: false,
             env,
-            spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
+            spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner, false),
           },
         });
         const queryRuntime = tempQuery;

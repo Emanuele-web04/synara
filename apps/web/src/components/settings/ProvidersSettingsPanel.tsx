@@ -2266,6 +2266,35 @@ export function ProvidersSettingsPanel({
         </SettingsRow>
       </SettingsSection>
 
+      <SettingsSection title="Performance">
+        <SettingsRow
+          title="Keep Synara responsive"
+          description="Give agent processes and their commands a moderately lower CPU priority when the machine is busy."
+          status="Applies to newly launched agent processes. Restart existing sessions to apply consistently."
+          resetAction={
+            settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority ? (
+              <SettingResetButton
+                label="Keep Synara responsive"
+                onClick={() =>
+                  updateSettings({
+                    lowerProviderProcessPriority: defaults.lowerProviderProcessPriority,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.lowerProviderProcessPriority}
+              onCheckedChange={(checked) =>
+                updateSettings({ lowerProviderProcessPriority: Boolean(checked) })
+              }
+              aria-label="Keep Synara responsive"
+            />
+          }
+        />
+      </SettingsSection>
+
       <div id={SETTINGS_TARGETS.providerUpdates}>
         <SettingsSection title="Updates">
           <SettingsRow

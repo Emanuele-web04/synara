@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -227,6 +228,7 @@ export interface PiBashProcessSupervisor {
 }
 
 export interface PiBashProcessSupervisorOptions {
+  readonly lowerPriority?: boolean;
   readonly getShellConfig: (shellPath?: string) => PiShellConfig;
   readonly environment?: Readonly<Record<string, string>>;
   readonly instanceId?: string;
@@ -291,6 +293,7 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
+          lowerPriority: options.lowerPriority ?? true,
           env: buildProviderChildEnvironment({
             provider: "pi",
             baseEnv: buildProviderProcessEnv({
@@ -3349,6 +3352,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }
         const piSdk = yield* loadPiSdk("session/start");
         const processSupervisor = makePiBashProcessSupervisor({
+          lowerPriority: yield* providerProcessPriorityEnabled,
           getShellConfig: () => piSdk.getShellConfig(),
           ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
           ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),

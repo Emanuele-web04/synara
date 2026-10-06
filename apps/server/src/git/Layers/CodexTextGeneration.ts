@@ -31,7 +31,10 @@ import {
   type CodexPreparedAuthSource,
 } from "../../codexProcessEnv.ts";
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
-import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
+import {
+  makeEffectProcessCommand,
+  spawnProviderProcess,
+} from "../../platform/effectProcessRuntime.ts";
 import { compareCodexCliVersions, parseCodexCliVersion } from "../../provider/codexCliVersion.ts";
 import { withoutProviderCredentialEnvironment } from "../../providerChildEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
@@ -710,7 +713,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             outputPath,
             "-",
           ];
-          const command = makeEffectProcessCommand(codexBinaryPath, args, {
+          const child = yield* spawnProviderProcess(commandSpawner, codexBinaryPath, args, {
             cwd: isolatedCodexHome.workDirectoryPath,
             detached: true,
             env,
@@ -718,20 +721,16 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             stdin: {
               stream: Stream.make(new TextEncoder().encode(prompt)),
             },
-          });
-
-          const child = yield* commandSpawner
-            .spawn(command)
-            .pipe(
-              Effect.mapError((cause) =>
-                normalizeCodexError(
-                  codexBinaryPath,
-                  operation,
-                  cause,
-                  "Failed to spawn Codex CLI process",
-                ),
+          }).pipe(
+            Effect.mapError((cause) =>
+              normalizeCodexError(
+                codexBinaryPath,
+                operation,
+                cause,
+                "Failed to spawn Codex CLI process",
               ),
-            );
+            ),
+          );
           const { exitCode, stdout, stderr } = yield* collectCodexChildResult({
             binaryPath: codexBinaryPath,
             child,
