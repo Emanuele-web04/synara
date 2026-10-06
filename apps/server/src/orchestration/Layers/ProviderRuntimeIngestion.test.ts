@@ -1015,7 +1015,10 @@ describe("ProviderRuntimeIngestion", () => {
             createdAt: "2026-10-06T12:00:00.000Z",
             threadId: asThreadId("thread-1"),
             turnId: asTurnId("accepted-task-turn"),
-            payload: { taskId: "accepted-task", description: `Distinct section ${index}` },
+            payload: {
+              taskId: RuntimeTaskId.makeUnsafe("accepted-task"),
+              description: `Distinct section ${index}`,
+            },
           }),
         ),
       );
