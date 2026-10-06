@@ -74,6 +74,17 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("<strong>Medium Risk</strong>");
   });
 
+  it("renders <br> tags as line breaks instead of literal text", async () => {
+    const markup = await renderMarkdown(
+      "One<br>two<BR/>three\n\n| a |\n| - |\n| x<br />y |\n\nDone.\n\n<br>",
+    );
+
+    expect(markup).not.toContain("&lt;br");
+    expect(markup).toContain("One<br/>\ntwo<br/>\nthree");
+    expect(markup).toContain("x<br/>\ny");
+    expect(markup).toMatch(/<p>Done\.<\/p><\/div>$/);
+  });
+
   it("leaves blockquotes with inline text after the marker as plain quotes", async () => {
     const markup = await renderMarkdown("> [!NOTE] not an alert");
 

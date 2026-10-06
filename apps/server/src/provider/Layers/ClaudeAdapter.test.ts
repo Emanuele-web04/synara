@@ -746,43 +746,46 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("keeps command discovery caches and homes isolated by provider instance id", () => {
-    const harness = makeMultiQueryHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      if (!adapter.listCommands) {
-        assert.fail("Expected ClaudeAdapter to expose command discovery");
-      }
-      const sharedInput = {
-        provider: "claudeAgent" as const,
-        cwd: "/tmp/claude-work",
-        environment: { ANTHROPIC_AUTH_TOKEN: "shared-token" },
-      };
-      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_a" });
-      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_b" });
+  it.effect(
+    "keeps command discovery caches and account directories isolated by provider instance id",
+    () => {
+      const harness = makeMultiQueryHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        if (!adapter.listCommands) {
+          assert.fail("Expected ClaudeAdapter to expose command discovery");
+        }
+        const sharedInput = {
+          provider: "claudeAgent" as const,
+          cwd: "/tmp/claude-work",
+          environment: { ANTHROPIC_AUTH_TOKEN: "shared-token" },
+        };
+        yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_a" });
+        yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_b" });
 
-      assert.equal(harness.createInputs.length, 2);
-      assert.equal(
-        harness.createInputs[0]?.options.env?.HOME,
-        claudeIsolatedHomePath({
-          isolationRootDir: "/tmp/userdata",
-          providerInstanceId: "claude_work_a",
-        }),
+        assert.equal(harness.createInputs.length, 2);
+        for (const [index, instanceId] of ["claude_work_a", "claude_work_b"].entries()) {
+          const env = harness.createInputs[index]?.options.env;
+          const accountHome = claudeIsolatedHomePath({
+            isolationRootDir: "/tmp/userdata",
+            providerInstanceId: instanceId,
+          });
+          if (process.platform === "darwin") {
+            assert.equal(env?.CLAUDE_CONFIG_DIR, path.join(accountHome, ".claude"));
+            assert.equal(env?.CLAUDE_SECURESTORAGE_CONFIG_DIR, env?.CLAUDE_CONFIG_DIR);
+            assert.notEqual(env?.HOME, accountHome);
+          } else {
+            assert.equal(env?.HOME, accountHome);
+          }
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
       );
-      assert.equal(
-        harness.createInputs[1]?.options.env?.HOME,
-        claudeIsolatedHomePath({
-          isolationRootDir: "/tmp/userdata",
-          providerInstanceId: "claude_work_b",
-        }),
-      );
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+    },
+  );
 
-  it.effect("starts an environment-only runtime in its Synara-scoped home", () => {
+  it.effect("starts an environment-only runtime with its Synara-scoped account directories", () => {
     const harness = makeHarness();
     return Effect.acquireUseRelease(
       Effect.sync(() => {
@@ -811,14 +814,18 @@ describe("ClaudeAdapterLive", () => {
           });
 
           const queryEnv = harness.getLastCreateQueryInput()?.options.env;
-          assert.equal(
-            queryEnv?.HOME,
-            claudeIsolatedHomePath({
-              isolationRootDir: "/tmp/userdata",
-              providerInstanceId: "claude_work",
-            }),
-          );
-          assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, undefined);
+          const accountHome = claudeIsolatedHomePath({
+            isolationRootDir: "/tmp/userdata",
+            providerInstanceId: "claude_work",
+          });
+          if (process.platform === "darwin") {
+            assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, path.join(accountHome, ".claude"));
+            assert.equal(queryEnv?.CLAUDE_SECURESTORAGE_CONFIG_DIR, queryEnv?.CLAUDE_CONFIG_DIR);
+            assert.notEqual(queryEnv?.HOME, accountHome);
+          } else {
+            assert.equal(queryEnv?.HOME, accountHome);
+            assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, undefined);
+          }
           assert.equal(queryEnv?.ANTHROPIC_AUTH_TOKEN, "work-token");
         }),
       (previous) =>

@@ -4,6 +4,7 @@ import { SettingsIcon } from "~/lib/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { Button } from "./ui/button";
+import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import {
   Dialog,
   DialogDescription,
@@ -57,7 +58,14 @@ export function SafariAccessSetupButton() {
 }
 
 /** Intro decisions are persisted, never permission claims. No protected files are probed here. */
-export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
+export function SafariAccessOnboarding({
+  children,
+  startup = false,
+}: {
+  children?: ReactNode;
+  /** The root opts automatic first-launch guidance into startup arbitration. */
+  startup?: boolean;
+}) {
   const info = useSafariAccessInfo();
   const [decision, setDecision] = useLocalStorage(SAFARI_ACCESS_STORAGE_KEY, "unseen", Decision);
   const [revisit, setRevisit] = useState(false);
@@ -65,7 +73,12 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
-  const open = info?.supported === true && (decision === "unseen" || revisit);
+  const wantsOpen = info?.supported === true && (decision === "unseen" || revisit);
+  const { open: startupOpen } = useAnnouncementSheetSlot(startup && wantsOpen && !revisit);
+  // Local setup and deliberate Settings revisits must not depend on the root's
+  // first-run gate or wait behind an automatic announcement.
+  const open = wantsOpen && (!startup || revisit || startupOpen);
+  const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
 
   useEffect(() => {
     const show = () => {
@@ -109,7 +122,7 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
 
   return (
     <>
-      {info && !open ? children : null}
+      {info && (!wantsOpen || revisit || handedOff) ? children : null}
       <Dialog
         open={open}
         onOpenChange={(value) => {

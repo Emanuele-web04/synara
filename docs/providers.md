@@ -335,6 +335,21 @@ same account as the login. Imported directories and explicit environment values 
 These account environments block ambient API credentials; explicitly configured secrets remain
 available to managed sessions and the selected login process, and are never written into terminal shims.
 
+On macOS, managed Claude accounts keep the system home and username for Keychain access.
+Separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` values isolate each account;
+login, chats, health checks, and usage use the same resolved account directories. Explicit home
+overrides remain supported, but a private home can select a different macOS Keychain. Prefer the
+system home with separate config and secure-storage directories. Existing credential files are
+left in place. If an older sign-in saved credentials under `unknown` or in a private Keychain,
+sign in again from the account settings; Synara does not copy or delete Keychain entries.
+
+Claude's account status says **Signed in locally** when the CLI reports stored authentication.
+This is not a guarantee that Anthropic will accept the next request. Usage authentication errors
+are shown on the matching account in Settings. Inference-only tokens, including tokens from
+`claude setup-token`, can run chats without the `user:profile` scope required for live usage.
+Tokens injected inside wrapper scripts are not visible to the usage reader.
+Restoring an account's appearance and enablement defaults preserves its display name.
+
 **Cancel / close** stops the login process and deletes its terminal history. Sign-in output is kept
 in memory while the window is active and is not persisted as a terminal log. Cancellation does not
 log out or remove credentials already saved by the provider. Closing errors stay visible and can be
