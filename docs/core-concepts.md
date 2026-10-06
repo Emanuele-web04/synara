@@ -32,6 +32,10 @@ is cancelled, the task and its prompt remain available for retry.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
+  The command palette searches titles, project metadata, and settled user/assistant messages
+  across saved chats, including chats not recently opened. Archived, deleted, and subagent
+  chats stay out of message results. Every search word must match the message body;
+  the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
   across projects, ordered by its last human message (or creation time). If none remains, New
   thread reopens an unsent draft. Actions on other threads keep the current chat open.

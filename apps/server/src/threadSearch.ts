@@ -17,8 +17,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { type PersistenceSqlError, toPersistenceSqlError } from "./persistence/Errors.ts";
 
 const DEFAULT_LIMIT = 20;
-// Every token is one LIKE predicate; long pasted queries should not fan out.
-const MAX_QUERY_TOKENS = 8;
+// The RPC schema bounds the whole query to 200 characters; never discard
+// words here because every distinct token must match.
 const EXCERPT_CONTEXT_BEFORE = 80;
 const ELLIPSIS = "...";
 
@@ -37,11 +37,7 @@ export function tokenizeThreadSearchQuery(query: string): string[] {
     .toLowerCase()
     .split(" ")
     .filter((token) => token.length > 0);
-  return [...new Set(tokens)].slice(0, MAX_QUERY_TOKENS);
-}
-
-function escapeLikePattern(value: string): string {
-  return value.replaceAll(/[!%_]/g, (character) => `!${character}`);
+  return [...new Set(tokens)];
 }
 
 /** A window around the phrase (or earliest token) so the client can build its own snippet. */
@@ -94,13 +90,16 @@ export const makeThreadSearchQuery = Effect.gen(function* () {
       const limit = Math.min(input.limit ?? DEFAULT_LIMIT, ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT);
       // Settled bodies live in `text`, or JSON-encoded in `text_json` when they
       // carry NULs or lone surrogates; streaming rows are skipped.
+      // Literal substring matching avoids wildcard interpretation and LIKE's
+      // truncation at NUL in decoded persisted bodies. SQLite lower remains
+      // ASCII-only, matching the existing search case-folding contract.
       const tokenPredicates = sql.join(
         " AND ",
         false,
       )(
         tokens.map(
           (token) =>
-            sql`COALESCE(json_extract(messages.text_json, '$'), messages.text) LIKE ${`%${escapeLikePattern(token)}%`} ESCAPE '!'`,
+            sql`instr(lower(COALESCE(json_extract(messages.text_json, '$'), messages.text)), ${token}) > 0`,
         ),
       );
       // One row per thread: its best user hit (else assistant), newest first.

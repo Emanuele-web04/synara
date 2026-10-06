@@ -99,6 +99,31 @@ describe("ThreadSearchQuery", () => {
     ]);
   });
 
+  it("requires every token even beyond the first eight", async () => {
+    const result = await runSearchTest(
+      Effect.gen(function* () {
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          UPDATE projection_thread_messages
+          SET text = 'one two three four five six seven eight present'
+          WHERE message_id = 'm-new-1'
+        `;
+        const search = yield* ThreadSearchQuery;
+        return {
+          missing: yield* search.searchThreads({
+            query: "one two three four five six seven eight absent",
+          }),
+          matching: yield* search.searchThreads({
+            query: "one two three four five six seven eight present",
+          }),
+        };
+      }),
+    );
+    expect(result.missing.matches).toEqual([]);
+    expect(result.matching.matches.map((match) => match.threadId)).toEqual(["thread-new"]);
+  });
+
   it("treats LIKE wildcards in the query literally and honors the limit", async () => {
     const result = await runSearchTest(
       Effect.gen(function* () {
@@ -117,23 +142,26 @@ describe("ThreadSearchQuery", () => {
     expect(result.limited.matches.map((match) => match.threadId)).toEqual(["thread-new"]);
   });
 
-  it("reads JSON-encoded bodies", async () => {
-    const result = await runSearchTest(
-      Effect.gen(function* () {
-        yield* seed;
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`
+  it.each(["needle", "body"])(
+    "reads JSON-encoded bodies on either side of NUL: %s",
+    async (query) => {
+      const result = await runSearchTest(
+        Effect.gen(function* () {
+          yield* seed;
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`
           UPDATE projection_thread_messages
           SET text = '', text_json = ${JSON.stringify("encoded needle\u0000body")}
           WHERE message_id = 'm-new-1'
         `;
-        const search = yield* ThreadSearchQuery;
-        return yield* search.searchThreads({ query: "needle" });
-      }),
-    );
+          const search = yield* ThreadSearchQuery;
+          return yield* search.searchThreads({ query });
+        }),
+      );
 
-    expect(result.matches.map((match) => match.threadId)).toEqual(["thread-new"]);
-  });
+      expect(result.matches.map((match) => match.threadId)).toEqual(["thread-new"]);
+    },
+  );
 });
 
 describe("buildThreadSearchExcerpt", () => {
