@@ -55,21 +55,26 @@ describe("rail usage accounts", () => {
 });
 
 describe("toggleRailUsageAccount", () => {
+  const available = getRailUsageAccounts(
+    deriveProviderInstances({
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providerInstances: { claude_work: { driver: "claudeAgent" } },
+    }),
+  );
   it("adds a second Claude account while there is room and removes it again", () => {
-    expect(toggleRailUsageAccount(["claudeAgent"], "claude_work", true)).toEqual([
+    expect(toggleRailUsageAccount(["claudeAgent"], "claude_work", true, available)).toEqual([
       "claudeAgent",
       "claude_work",
     ]);
-    expect(toggleRailUsageAccount(["claudeAgent", "claude_work"], "claudeAgent", false)).toEqual([
-      "claude_work",
-    ]);
+    expect(
+      toggleRailUsageAccount(["claudeAgent", "claude_work"], "claudeAgent", false, available),
+    ).toEqual(["claude_work"]);
   });
 
   it("ignores another account past the cap", () => {
-    expect(toggleRailUsageAccount(["claudeAgent", "claude_work"], "codex", true)).toEqual([
-      "claudeAgent",
-      "claude_work",
-    ]);
+    expect(
+      toggleRailUsageAccount(["claudeAgent", "claude_work"], "codex", true, available),
+    ).toEqual(["claudeAgent", "claude_work"]);
   });
 });
 

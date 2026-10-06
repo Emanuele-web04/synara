@@ -52,7 +52,8 @@ In Settings → Usage → Sidebar, select up to two enabled accounts for the rai
 two accounts of the same provider (for example, personal and work Claude accounts). Each ring's
 hover card identifies the account and shows its own usage. The rings use the same account color
 dots as the model picker. Existing provider selections keep
-their default accounts selected.
+their default accounts selected. Temporarily disabled accounts keep their saved selection;
+only the first two available selected accounts appear in the rail.
 Usage checks follow each account's configured credentials; unassigned thread telemetry and
 provider-wide local totals are not used as a fallback for an individual account.
 

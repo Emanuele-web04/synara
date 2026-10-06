@@ -204,6 +204,46 @@ describe("AppRailUsage", () => {
     expect(work.element().querySelector('span[aria-hidden="true"]')).not.toBeNull();
   });
 
+  it("preserves a disabled account selection when another ring is changed", async () => {
+    settings.railUsageInstanceIds = ["claude_work", "codex"];
+    const { client, rerender } = await renderAccounts(
+      claudeSnapshots,
+      {
+        ...claudeSettings,
+        providerInstances: {
+          claude_work: { driver: "claudeAgent", displayName: "Work", enabled: false },
+        },
+      },
+      true,
+    );
+    await page
+      .getByRole("switch", { name: "Show Codex usage at the bottom of the sidebar" })
+      .click();
+    await rerender();
+    expect(settings.railUsageInstanceIds).toEqual(["claude_work"]);
+    await page
+      .getByRole("switch", { name: "Show Claude usage at the bottom of the sidebar" })
+      .click();
+    await rerender();
+    await page
+      .getByRole("switch", { name: "Show Codex usage at the bottom of the sidebar" })
+      .click();
+    await rerender();
+    expect(settings.railUsageInstanceIds).toEqual(["claude_work", "claudeAgent", "codex"]);
+    client.setQueryData(serverQueryKeys.settings(), claudeSettings);
+    await rerender();
+    await expect
+      .element(
+        page.getByRole("switch", { name: "Show Claude · Work usage at the bottom of the sidebar" }),
+      )
+      .toBeChecked();
+    await expect.element(page.getByRole("button", { name: /^Claude · Work usage:/ })).toBeVisible();
+    await expect
+      .element(page.getByRole("switch", { name: "Show Codex usage at the bottom of the sidebar" }))
+      .not.toBeChecked();
+    expect(settings.railUsageInstanceIds).toEqual(["claude_work", "claudeAgent", "codex"]);
+  });
+
   it("hides disabled and removed accounts even when their usage remains cached", async () => {
     settings.railUsageInstanceIds = ["claude_work", "claude_removed"];
     await renderAccounts(

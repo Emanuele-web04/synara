@@ -1905,6 +1905,13 @@ describe("AppSettingsSchema", () => {
     expect(
       normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(updated))).railUsageInstanceIds,
     ).toEqual(["claudeAgent", "claude_work"]);
+    const withDisabledChoice = applyLocalAppSettingsPatch(updated, {
+      railUsageInstanceIds: ["claudeAgent", "claude_work", "codex"],
+    });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(withDisabledChoice)))
+        .railUsageInstanceIds,
+    ).toEqual(["claudeAgent", "claude_work", "codex"]);
     const hidden = applyLocalAppSettingsPatch(updated, { railUsageInstanceIds: [] });
     expect(
       normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(hidden))).railUsageInstanceIds,

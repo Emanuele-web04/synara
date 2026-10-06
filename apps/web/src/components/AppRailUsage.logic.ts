@@ -64,12 +64,16 @@ export function toggleRailUsageAccount(
   selected: ReadonlyArray<ProviderInstanceId>,
   instanceId: ProviderInstanceId,
   enabled: boolean,
+  available: ReadonlyArray<RailUsageAccount>,
 ): ReadonlyArray<ProviderInstanceId> {
-  const current = [...new Set(selected)].slice(0, MAX_RAIL_USAGE_ACCOUNTS);
+  const current = [...new Set(selected)];
   if (!enabled) {
     return current.filter((entry) => entry !== instanceId);
   }
-  if (current.includes(instanceId) || current.length >= MAX_RAIL_USAGE_ACCOUNTS) {
+  if (
+    current.includes(instanceId) ||
+    resolveRailUsageAccounts(current, available).length >= MAX_RAIL_USAGE_ACCOUNTS
+  ) {
     return current;
   }
   return [...current, instanceId];

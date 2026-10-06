@@ -174,6 +174,10 @@ export function ProviderUsageSettingsPanel() {
     [serverSettingsQuery.data],
   );
   const railUsageAccounts = getRailUsageAccounts([...providerInstances.values()]);
+  // Disabled accounts keep their saved choice; only deleted accounts are discarded.
+  const savedRailUsageInstanceIds = (
+    settings.railUsageInstanceIds ?? settings.railUsageProviders
+  ).filter((instanceId) => providerInstances.has(instanceId));
   const railUsageInstanceIds = resolveRailUsageAccounts(
     settings.railUsageInstanceIds ?? settings.railUsageProviders,
     railUsageAccounts,
@@ -233,9 +237,10 @@ export function ProviderUsageSettingsPanel() {
                   onCheckedChange={(next) =>
                     updateSettings({
                       railUsageInstanceIds: toggleRailUsageAccount(
-                        railUsageInstanceIds,
+                        savedRailUsageInstanceIds,
                         instance.instanceId,
                         Boolean(next),
+                        railUsageAccounts,
                       ),
                     })
                   }
