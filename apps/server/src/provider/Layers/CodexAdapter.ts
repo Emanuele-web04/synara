@@ -276,6 +276,12 @@ function asTrimmedString(value: unknown): string | undefined {
   return stringValue ? stringValue : undefined;
 }
 
+function codexErrorCode(value: unknown): string | undefined {
+  const error = asObject(value);
+  const code = asTrimmedString(error?.codexErrorInfo) ?? asTrimmedString(error?.codex_error_info);
+  return code === "serverOverloaded" ? "server_overloaded" : code;
+}
+
 function asArray(value: unknown): unknown[] | undefined {
   return Array.isArray(value) ? value : undefined;
 }
@@ -1416,6 +1422,7 @@ function mapToRuntimeEvents(
 
   if (event.method === "turn/completed") {
     const errorMessage = asString(asObject(turn?.error)?.message);
+    const errorCode = codexErrorCode(turn?.error);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1429,6 +1436,7 @@ function mapToRuntimeEvents(
             ? { totalCostUsd: asNumber(turn?.totalCostUsd) }
             : {}),
           ...(errorMessage ? { errorMessage } : {}),
+          ...(errorCode ? { errorCode } : {}),
         },
       },
     ];
@@ -1888,6 +1896,7 @@ function mapToRuntimeEvents(
     const message =
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
     const willRetry = payload?.willRetry === true;
+    const errorCode = codexErrorCode(payload?.error);
     const treatAsWarning = willRetry || isNonFatalCodexErrorMessage(message);
     return [
       {
@@ -1896,6 +1905,8 @@ function mapToRuntimeEvents(
         payload: {
           message,
           ...(!treatAsWarning ? { class: "provider_error" as const } : {}),
+          ...(!treatAsWarning && errorCode ? { errorCode } : {}),
+          ...(willRetry ? { willRetry: true } : {}),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },

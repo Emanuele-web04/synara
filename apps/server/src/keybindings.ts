@@ -219,6 +219,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // Copying the active thread id is not terminal input on macOS, but Ctrl+Shift+C is the
   // terminal copy chord on Linux/Windows, so it keeps the same `|| isMac` escape hatch.
   { key: "mod+shift+c", command: "thread.copyId", when: "!terminalFocus || isMac" },
+  // Keep these distinct from browser Save As / View Source and side-chat / Activity.
+  { key: "mod+alt+shift+a", command: "thread.archive", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+shift+s", command: "thread.snooze", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+shift+u", command: "thread.markUnread", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
   // Open thread tabs, browser-style: Cmd+Ctrl+Left/Right on macOS (Cmd+Shift+Left/Right

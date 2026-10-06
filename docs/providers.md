@@ -36,6 +36,12 @@ Synara provides the shared operating surface around each provider:
 - Provider handoffs
 - Usage information where the provider exposes it
 
+Commands remain ordered within a task, while independent tasks use separate delivery lanes
+with bounded concurrency. A command receipt confirms durable acceptance; provider execution
+continues in the background. After restart, Synara resumes from the settled event prefix and
+the delivery journal, preserving completed deliveries and requiring reconciliation for ambiguous
+provider calls. A task waiting on a slow provider operation does not hold another task's lane.
+
 Claude's readable reasoning appears as compact progress text between tool actions while it works.
 Open a reasoning row to read its available detail. This text comes from the running provider;
 Synara does not make another model request to generate it. Models that do not return readable

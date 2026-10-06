@@ -11,9 +11,11 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@synara/contracts";
+import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
+import type { DrainableWorkerStatus } from "@synara/shared/DrainableWorker";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Effect, Layer, ManagedRuntime, Option, Stream } from "effect";
+import { Cause, Effect, Fiber, Layer, ManagedRuntime, Option, PubSub, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it, vi } from "vitest";
 
@@ -27,7 +29,7 @@ import {
 } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
-import { pruneThreadGoalFiles } from "../threadGoalMaterialization.ts";
+import { materializeThreadGoalFile, pruneThreadGoalFiles } from "../threadGoalMaterialization.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive as OrchestrationProjectionSnapshotQueryBase } from "./ProjectionSnapshotQuery.ts";
@@ -51,6 +53,16 @@ const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshot
  */
 const fingerprintPoison = vi.hoisted(() => new Set<string>());
 
+vi.mock("@synara/shared/KeyedDrainableWorker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synara/shared/KeyedDrainableWorker")>();
+  return { ...actual, makeKeyedDrainableWorker: vi.fn(actual.makeKeyedDrainableWorker) };
+});
+
+vi.mock("effect", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("effect")>();
+  return { ...actual, PubSub: { ...actual.PubSub, publish: vi.fn(actual.PubSub.publish) } };
+});
+
 vi.mock("../commandFingerprint.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../commandFingerprint.ts")>();
   return {
@@ -71,6 +83,7 @@ vi.mock("../threadGoalMaterialization.ts", async (importOriginal) => {
   return {
     ...actual,
     pruneThreadGoalFiles: vi.fn(actual.pruneThreadGoalFiles),
+    materializeThreadGoalFile: vi.fn(actual.materializeThreadGoalFile),
   };
 });
 
@@ -134,12 +147,16 @@ const TestServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "synara-orchestration-engine-test-",
 });
 
-async function createOrchestrationSystem() {
+async function createOrchestrationSystem(pipeline?: OrchestrationProjectionPipelineShape) {
   const ServerConfigLayer = TestServerConfigLayer;
   const orchestrationLayer = OrchestrationEngineLive.pipe(
-    Layer.provide(OrchestrationProjectionPipelineLive),
+    Layer.provideMerge(
+      pipeline
+        ? Layer.succeed(OrchestrationProjectionPipeline, pipeline)
+        : OrchestrationProjectionPipelineLive,
+    ),
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provideMerge(OrchestrationEventStoreLive),
     Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerSettingsService.layerTest()),
@@ -156,10 +173,16 @@ async function createOrchestrationSystem() {
   const receiptRepository = await runtime.runPromise(
     Effect.service(OrchestrationCommandReceiptRepository),
   );
+  const eventStore = await runtime.runPromise(Effect.service(OrchestrationEventStore));
+  const projectionPipeline = await runtime.runPromise(
+    Effect.service(OrchestrationProjectionPipeline),
+  );
   return {
     engine,
     sql,
     receiptRepository,
+    eventStore,
+    projectionPipeline,
     managedAttachmentRepository,
     stateDir: serverConfig.stateDir,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
@@ -172,6 +195,894 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it("commits the metadata snapshot cursor before publishing its accepted event", async () => {
+    const system = await createOrchestrationSystem();
+    const commandId = CommandId.makeUnsafe("metadata-phase-commit");
+    let cursorAtPublication: ReadonlyArray<{ sequence: number }> = [];
+    const originalPublish = vi.mocked(PubSub.publish).getMockImplementation()!;
+    const publish = vi.spyOn(PubSub, "publish").mockImplementation((pubsub, event) => {
+      if ((event as OrchestrationEvent).commandId !== commandId)
+        return originalPublish(pubsub, event);
+      return system.sql<{ sequence: number }>`SELECT last_applied_sequence AS sequence
+        FROM projection_state WHERE projector = 'projection.thread-shell-summaries'`.pipe(
+        Effect.orDie,
+        Effect.tap((rows) =>
+          Effect.sync(() => {
+            cursorAtPublication = rows;
+          }),
+        ),
+        Effect.andThen(originalPublish(pubsub, event)),
+      );
+    });
+    try {
+      const accepted = await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId,
+          projectId: asProjectId("metadata-phase-commit"),
+          title: "Atomic metadata phase",
+          workspaceRoot: "/tmp/metadata-phase-commit",
+          defaultModelSelection: null,
+          createdAt: now(),
+        }),
+      );
+      expect(cursorAtPublication).toEqual([{ sequence: accepted.sequence }]);
+      expect((await system.run(system.engine.getProjectionCatchUpStatus)).state).toBe("healthy");
+    } finally {
+      publish.mockRestore();
+      await system.dispose();
+    }
+  });
+
+  it("reserves lifecycle admission while a worker is finishing its released engine reservation", async () => {
+    let releaseFinishing!: () => void;
+    let finishingEntered!: () => void;
+    const finishingGate = new Promise<void>((resolve) => {
+      releaseFinishing = resolve;
+    });
+    const finishingStarted = new Promise<void>((resolve) => {
+      finishingEntered = resolve;
+    });
+    let workerStatus: Effect.Effect<DrainableWorkerStatus> | undefined;
+    const workerFactory = vi.mocked(makeKeyedDrainableWorker);
+    const originalWorkerFactory = workerFactory.getMockImplementation()!;
+    workerFactory.mockImplementation((process, options) =>
+      originalWorkerFactory(
+        (item) =>
+          process(item).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                (item as { command: OrchestrationCommand }).command.commandId ===
+                "reserve-actual-normal-0"
+                  ? Effect.sync(finishingEntered).pipe(
+                      Effect.andThen(Effect.promise(() => finishingGate)),
+                    )
+                  : Effect.void,
+              ),
+            ),
+          ),
+        options,
+      ).pipe(
+        Effect.tap((worker) =>
+          Effect.sync(() => {
+            workerStatus = worker.status;
+          }),
+        ),
+      ),
+    );
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("reserve-actual-project");
+    const threadId = ThreadId.makeUnsafe("reserve-actual-thread");
+    const createdAt = now();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalAppend = system.eventStore.append;
+    const pending: Array<Promise<import("effect").Exit.Exit<unknown, unknown>>> = [];
+    let append: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("reserve-actual-project"),
+          projectId,
+          title: "Reserve",
+          workspaceRoot: "/tmp/reserve-actual",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("reserve-actual-thread"),
+          threadId,
+          projectId,
+          title: "Reserve",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      append = vi
+        .spyOn(system.eventStore, "append")
+        .mockImplementation((event) =>
+          originalAppend(event).pipe(
+            Effect.tap(() =>
+              event.commandId === "reserve-actual-normal-0"
+                ? Effect.sync(entered).pipe(Effect.andThen(Effect.promise(() => gate)))
+                : Effect.void,
+            ),
+          ),
+        );
+      const admitNormal = (index: number) =>
+        system.run(
+          Effect.exit(
+            system.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe(`reserve-actual-normal-${index}`),
+              threadId,
+              title: `Normal ${index}`,
+            }),
+          ),
+        );
+      pending.push(admitNormal(0));
+      await started;
+      for (let index = 1; index < 224; index++) pending.push(admitNormal(index));
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("reserve-actual-normal-overflow"),
+            threadId,
+            title: "Overflow",
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "overloaded" });
+      for (let index = 0; index < 32; index++)
+        pending.push(
+          system.run(
+            Effect.exit(
+              system.engine.dispatch({
+                type: "thread.session.stop",
+                commandId: CommandId.makeUnsafe(`reserve-actual-control-${index}`),
+                threadId,
+                createdAt,
+              }),
+            ),
+          ),
+        );
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.session.stop",
+            commandId: CommandId.makeUnsafe("reserve-actual-control-overflow"),
+            threadId,
+            createdAt,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "overloaded" });
+      release();
+      await finishingStarted;
+      pending.push(
+        system.run(
+          Effect.exit(
+            system.engine.dispatch({
+              type: "thread.session.stop",
+              commandId: CommandId.makeUnsafe("reserve-actual-control-refill"),
+              threadId,
+              createdAt,
+            }),
+          ),
+        ),
+      );
+      // The engine released one reservation, but the real worker is still closing it.
+      await vi.waitFor(async () => expect((await system.run(workerStatus!)).outstanding).toBe(257));
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.session.stop",
+            commandId: CommandId.makeUnsafe("reserve-actual-control-refill-overflow"),
+            threadId,
+            createdAt,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "overloaded" });
+      releaseFinishing();
+      const outcomes = await Promise.all(pending);
+      expect(outcomes).toHaveLength(257);
+      for (const outcome of outcomes) {
+        if (outcome._tag === "Failure") {
+          const error = Cause.findErrorOption(outcome.cause);
+          if (Option.isSome(error))
+            expect(error.value).not.toMatchObject({ _tag: "OrchestrationCommandAdmissionError" });
+        }
+      }
+    } finally {
+      releaseFinishing();
+      release();
+      await Promise.allSettled(pending);
+      append?.mockRestore();
+      await system.dispose();
+      workerFactory.mockImplementation(originalWorkerFactory);
+    }
+  });
+
+  it("rejects a project deletion decided after its thread creation commits", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("delete-create-project");
+    const threadId = ThreadId.makeUnsafe("delete-create-thread");
+    const createdAt = now();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalAppend = system.eventStore.append;
+    const append = vi
+      .spyOn(system.eventStore, "append")
+      .mockImplementation((event) =>
+        originalAppend(event).pipe(
+          Effect.tap(() =>
+            event.type === "thread.created"
+              ? Effect.sync(entered).pipe(Effect.andThen(Effect.promise(() => gate)))
+              : Effect.void,
+          ),
+        ),
+      );
+    const pending: Promise<unknown>[] = [];
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("delete-create-project"),
+          projectId,
+          title: "Delete race",
+          workspaceRoot: "/tmp/delete-create",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      const creation = system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("delete-create-thread"),
+          projectId,
+          threadId,
+          title: "Create first",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      pending.push(creation);
+      await started;
+      const commandId = CommandId.makeUnsafe("delete-create-delete");
+      const deletion = system.run(
+        Effect.exit(
+          system.engine.dispatch({
+            type: "project.delete",
+            commandId,
+            projectId,
+          }),
+        ),
+      );
+      pending.push(deletion);
+      release();
+      await creation;
+      expect((await deletion)._tag).toBe("Failure");
+      const model = await system.run(system.engine.getReadModel());
+      expect(model.threads.map((thread) => thread.id)).toEqual([threadId]);
+      expect(model.projects.find((project) => project.id === projectId)?.deletedAt).toBeNull();
+      const receipt = await system.run(system.receiptRepository.getByCommandId({ commandId }));
+      expect(Option.isSome(receipt) && receipt.value.status).toBe("rejected");
+      const events = Array.from(await system.run(Stream.runCollect(system.engine.readEvents(0))));
+      expect(events.map((event) => event.type)).toEqual(["project.created", "thread.created"]);
+    } finally {
+      release();
+      await Promise.allSettled(pending);
+      append.mockRestore();
+      await system.dispose();
+    }
+  });
+
+  it("does not reconcile the journal for an invariant rejected before persistence", async () => {
+    const system = await createOrchestrationSystem();
+    const reads = vi.spyOn(system.eventStore, "readFromSequence");
+    try {
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("precommit-invariant"),
+            threadId: ThreadId.makeUnsafe("absent-precommit-thread"),
+            title: "Cannot commit",
+          }),
+        ),
+      ).rejects.toThrow();
+      expect(reads).not.toHaveBeenCalled();
+      expect((await system.run(system.engine.getReadModel())).snapshotSequence).toBe(0);
+    } finally {
+      reads.mockRestore();
+      await system.dispose();
+    }
+  });
+
+  it("refreshes purged command rows when the hot fence is current and deferred summaries lag", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("refresh-purged-project");
+    const threadId = ThreadId.makeUnsafe("refresh-purged-thread");
+    const createdAt = now();
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("refresh-purged-project"),
+          projectId,
+          title: "Refresh purge",
+          workspaceRoot: "/tmp/refresh-purged",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      const accepted = await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("refresh-purged-thread"),
+          threadId,
+          projectId,
+          title: "Purge me",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await system.run(system.engine.drain);
+      // Local purge can remove a shell without producing another domain event.
+      // Lagging deferred summaries must not preserve that removed command row.
+      await system.run(
+        system.sql.withTransaction(
+          Effect.gen(function* () {
+            yield* system.sql`DELETE FROM projection_threads WHERE thread_id = ${threadId}`;
+            yield* system.sql`UPDATE projection_state SET last_applied_sequence = 0
+          WHERE projector = 'projection.thread-shell-summaries'`;
+          }),
+        ),
+      );
+      expect(
+        (await system.run(system.engine.getReadModel())).threads.map((thread) => thread.id),
+      ).toContain(threadId);
+      const refreshed = await system.run(system.engine.refreshCommandReadModel());
+      expect(refreshed.snapshotSequence).toBe(accepted.sequence);
+      expect(refreshed.threads.map((thread) => thread.id)).not.toContain(threadId);
+    } finally {
+      await system.dispose();
+    }
+  });
+
+  it("preserves committed hot summaries and every publication when interrupted after commit", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("interrupted-publication-project");
+    const threadId = ThreadId.makeUnsafe("interrupted-publication-thread");
+    const createdAt = now();
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("interrupted-publication-project"),
+        projectId,
+        title: "Committed publication",
+        workspaceRoot: "/tmp/interrupted-publication",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("interrupted-publication-thread"),
+        projectId,
+        threadId,
+        title: "Committed publication",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    const commandId = CommandId.makeUnsafe("interrupted-publication-turn");
+    let releasePublication!: () => void;
+    const publicationGate = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    let enteredPublication!: (fiber: Fiber.Fiber<unknown, unknown>) => void;
+    const publicationEntered = new Promise<Fiber.Fiber<unknown, unknown>>((resolve) => {
+      enteredPublication = resolve;
+    });
+    const originalPublish = vi.mocked(PubSub.publish).getMockImplementation()!;
+    let gated = false;
+    const publish = vi.spyOn(PubSub, "publish").mockImplementation((pubsub, event) => {
+      if ((event as OrchestrationEvent).commandId !== commandId || gated)
+        return originalPublish(pubsub, event);
+      gated = true;
+      return originalPublish(pubsub, event).pipe(
+        Effect.tap(() =>
+          Effect.withFiber((fiber) => Effect.sync(() => enteredPublication(fiber))).pipe(
+            Effect.andThen(Effect.promise(() => publicationGate)),
+          ),
+        ),
+      );
+    });
+    const notifications = Effect.runFork(
+      Effect.scoped(
+        system.engine.subscribeDomainEvents.pipe(
+          Effect.flatMap((events) => Stream.runCollect(Stream.take(events, 2))),
+        ),
+      ),
+    );
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId,
+      threadId,
+      message: {
+        messageId: asMessageId("interrupted-publication-user"),
+        role: "user" as const,
+        text: "Commit before cancel",
+        attachments: [],
+      },
+      interactionMode: "default" as const,
+      runtimeMode: "full-access" as const,
+      createdAt,
+    };
+    const dispatch = Effect.runFork(system.engine.dispatch(command));
+    try {
+      const worker = await Promise.race([
+        publicationEntered,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Publication not reached")), 1000),
+        ),
+      ]);
+      const interruption = Effect.runFork(Fiber.interrupt(worker));
+      await Effect.runPromise(Effect.yieldNow);
+      releasePublication();
+      await Effect.runPromise(Fiber.join(interruption));
+      await system.run(system.engine.drain);
+      const receipt = Option.getOrThrow(
+        await system.run(system.receiptRepository.getByCommandId({ commandId })),
+      );
+      expect(receipt.status).toBe("accepted");
+      const published = Array.from(await Effect.runPromise(Fiber.join(notifications)));
+      expect(published.map((event) => event.commandId)).toEqual([commandId, commandId]);
+      expect(published.map((event) => event.sequence)).toEqual([
+        receipt.resultSequence - 1,
+        receipt.resultSequence,
+      ]);
+      const summary = await system.run(system.sql<{ userAt: string; humanAt: string }>`
+        SELECT latest_user_message_at AS "userAt", latest_human_message_at AS "humanAt"
+        FROM projection_threads WHERE thread_id = ${threadId}
+      `);
+      expect(summary).toEqual([{ userAt: createdAt, humanAt: createdAt }]);
+      const cursors = await system.run(system.sql<{
+        sequence: number;
+      }>`SELECT last_applied_sequence AS sequence
+        FROM projection_state WHERE projector IN ('projection.hot', 'projection.thread-shell-summaries') ORDER BY projector`);
+      expect(cursors).toEqual([
+        { sequence: receipt.resultSequence },
+        { sequence: receipt.resultSequence },
+      ]);
+      expect(await system.run(system.engine.dispatch(command))).toEqual({
+        sequence: receipt.resultSequence,
+      });
+      expect(
+        Array.from(await system.run(Stream.runCollect(system.engine.readEvents(0)))),
+      ).toHaveLength(4);
+    } finally {
+      releasePublication();
+      publish.mockRestore();
+      await Effect.runPromise(Fiber.interrupt(notifications));
+      await Effect.runPromise(Fiber.interrupt(dispatch));
+      await system.dispose();
+    }
+  });
+
+  it.each(["global", "thread"] as const)(
+    "bounds eager persisted decoding for a %s journal page and resumes without skipping rows",
+    async (scope) => {
+      const system = await createOrchestrationSystem();
+      const projectId = asProjectId("bounded-page-project");
+      const threadId = ThreadId.makeUnsafe("bounded-page-thread");
+      const createdAt = now();
+      try {
+        await system.run(
+          system.engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("bounded-page-project"),
+            projectId,
+            title: "Bounded page",
+            workspaceRoot: "/tmp/bounded-page",
+            defaultModelSelection: null,
+            createdAt,
+          }),
+        );
+        const created = await system.run(
+          system.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("bounded-page-thread"),
+            threadId,
+            projectId,
+            title: "Bounded page",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: "default",
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          }),
+        );
+        const sequences: number[] = [];
+        for (let index = 0; index < 33; index++) {
+          const result = await system.run(
+            system.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe(`bounded-page-${index}`),
+              threadId,
+              title: `Bounded ${index}`,
+            }),
+          );
+          sequences.push(result.sequence);
+        }
+        await system.run(system.engine.drain);
+        const through = sequences.at(-1)!;
+        const original = await system.run(
+          system.sql<{
+            payload: string;
+          }>`SELECT payload_json AS payload FROM orchestration_events WHERE sequence = ${through}`,
+        );
+        await system.run(
+          system.sql`UPDATE orchestration_events SET payload_json = '{}' WHERE sequence = ${through}`,
+        );
+        const read = (from: number, limit?: number) =>
+          Stream.runCollect(
+            scope === "global"
+              ? system.engine.readEventsThrough(from, through, limit)
+              : system.engine.readThreadEventsThrough(threadId, from, through, undefined, limit),
+          ).pipe(Effect.mapError((error) => new Error(error.message)));
+        await expect(system.run(read(created.sequence))).rejects.toThrow();
+        const prefix = await system.run(read(created.sequence, 32));
+        expect(prefix.map((event) => event.sequence)).toEqual(sequences.slice(0, 32));
+        await system.run(
+          system.sql`UPDATE orchestration_events SET payload_json = ${original[0]!.payload} WHERE sequence = ${through}`,
+        );
+        const resumed = await system.run(read(prefix.at(-1)!.sequence, 32));
+        expect([...prefix, ...resumed].map((event) => event.sequence)).toEqual(sequences);
+        expect((await system.run(read(created.sequence))).map((event) => event.sequence)).toEqual(
+          sequences,
+        );
+      } finally {
+        await system.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "publishes a ready control before queued normal commits with cancelled maintenance waiter=%s",
+    async (cancelWaiter) => {
+      const system = await createOrchestrationSystem();
+      const projectId = asProjectId("commit-priority-project");
+      const threads = ["active", "normal-first", "normal-second", "control"].map((name) =>
+        ThreadId.makeUnsafe(`commit-priority-${name}`),
+      );
+      const createdAt = now();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const active = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const pending: Promise<unknown>[] = [];
+      try {
+        await system.run(
+          system.engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("commit-priority-project"),
+            projectId,
+            title: "Commit priority",
+            workspaceRoot: "/tmp/commit-priority",
+            defaultModelSelection: null,
+            createdAt,
+          }),
+        );
+        for (const threadId of threads) {
+          await system.run(
+            system.engine.dispatch({
+              type: "thread.create",
+              commandId: CommandId.makeUnsafe(`create-${threadId}`),
+              threadId,
+              projectId,
+              title: "Before",
+              modelSelection: { provider: "codex", model: "gpt-5-codex" },
+              interactionMode: "default",
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+            }),
+          );
+        }
+        await system.run(system.engine.drain);
+        const titleSequence = await system.run(
+          system.eventStore.getThreadTitleHighWaterSequence(threads[0]!),
+        );
+        const titleRead = system.eventStore.getThreadTitleHighWaterSequence.bind(system.eventStore);
+        vi.spyOn(system.eventStore, "getThreadTitleHighWaterSequence").mockImplementation((id) =>
+          id === threads[0]
+            ? Effect.promise(async () => {
+                entered();
+                await gate;
+              }).pipe(Effect.andThen(titleRead(id)))
+            : titleRead(id),
+        );
+        let subscribed!: () => void;
+        const subscriptionReady = new Promise<void>((resolve) => {
+          subscribed = resolve;
+        });
+        const publications = system.run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const stream = yield* system.engine.subscribeDomainEvents;
+              subscribed();
+              return yield* Stream.runCollect(stream.pipe(Stream.take(4)));
+            }),
+          ),
+        );
+        pending.push(publications);
+        await subscriptionReady;
+        pending.push(
+          system.run(
+            system.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe("commit-active"),
+              threadId: threads[0]!,
+              title: "Active",
+              expectedTitleSequence: titleSequence,
+            }),
+          ),
+        );
+        await system.run(Effect.promise(() => active).pipe(Effect.timeout("1 second")));
+        if (cancelWaiter) {
+          // This caller owns a queued maintenance lease. Cancellation must
+          // remove that lease without consuming the next command's permit.
+          const refresh = Effect.runFork(system.engine.refreshCommandReadModel());
+          await system.run(Effect.yieldNow);
+          await system.run(Fiber.interrupt(refresh));
+        }
+        const receiptRead = system.receiptRepository.getByCommandId.bind(system.receiptRepository);
+        const prepared = new Map<string, () => void>();
+        vi.spyOn(system.receiptRepository, "getByCommandId").mockImplementation((id) =>
+          receiptRead(id).pipe(Effect.tap(() => Effect.sync(() => prepared.get(id.commandId)?.()))),
+        );
+        for (const [index, id] of [
+          "commit-normal-first",
+          "commit-normal-second",
+          "commit-control",
+        ].entries()) {
+          let ready!: () => void;
+          const preparationFinished = new Promise<void>((resolve) => {
+            ready = resolve;
+          });
+          prepared.set(id, ready);
+          pending.push(
+            system.run(
+              system.engine.dispatch(
+                index === 2
+                  ? {
+                      type: "thread.session.stop",
+                      commandId: CommandId.makeUnsafe(id),
+                      threadId: threads[index + 1]!,
+                      createdAt,
+                    }
+                  : {
+                      type: "thread.meta.update",
+                      commandId: CommandId.makeUnsafe(id),
+                      threadId: threads[index + 1]!,
+                      title: id,
+                    },
+              ),
+            ),
+          );
+          await system.run(
+            Effect.promise(() => preparationFinished).pipe(Effect.timeout("1 second")),
+          );
+          // Preparation has no more asynchronous work before the commit gate.
+          await system.run(Effect.yieldNow);
+          await system.run(Effect.yieldNow);
+        }
+        release();
+        await Promise.all(pending);
+        expect((await publications).map((event) => event.commandId)).toEqual([
+          "commit-active",
+          "commit-control",
+          "commit-normal-first",
+          "commit-normal-second",
+        ]);
+        await system.run(system.engine.drain.pipe(Effect.timeout("300 millis")));
+        // A later command also proves the cancelled maintenance lease did not
+        // leak a permit after the ready queue was exhausted.
+        await system.run(
+          system.engine
+            .dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe("commit-after-cancellation"),
+              threadId: threads[0]!,
+              title: "After",
+            })
+            .pipe(Effect.timeout("300 millis")),
+        );
+      } finally {
+        release();
+        await Promise.allSettled(pending);
+        vi.restoreAllMocks();
+        await system.dispose();
+      }
+    },
+  );
+
+  it.each(["materialization", "housekeeping"] as const)(
+    "commits another aggregate while goal %s is blocked and preserves same-thread FIFO",
+    async (phase) => {
+      const system = await createOrchestrationSystem();
+      const projectId = asProjectId("lane-project");
+      const threadId = ThreadId.makeUnsafe("lane-thread");
+      const createdAt = now();
+      let release!: () => void;
+      let started!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const blocked = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const pending: Promise<unknown>[] = [];
+      try {
+        await system.run(
+          system.engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("lane-project-create"),
+            projectId,
+            title: "Lanes",
+            workspaceRoot: "/tmp/lane-project",
+            defaultModelSelection: null,
+            createdAt,
+          }),
+        );
+        await system.run(
+          system.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("lane-thread-create"),
+            threadId,
+            projectId,
+            title: "Before",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: "default",
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          }),
+        );
+        let subscriptionReady!: () => void;
+        const subscribed = new Promise<void>((resolve) => {
+          subscriptionReady = resolve;
+        });
+        const published = system.run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const stream = yield* system.engine.subscribeDomainEvents;
+              subscriptionReady();
+              return yield* Stream.runCollect(stream.pipe(Stream.take(3)));
+            }),
+          ),
+        );
+        pending.push(published);
+        await subscribed;
+        if (phase === "housekeeping") {
+          vi.mocked(pruneThreadGoalFiles).mockImplementationOnce(async () => {
+            started();
+            await gate;
+          });
+        } else {
+          const actual = await vi.importActual<typeof import("../threadGoalMaterialization.ts")>(
+            "../threadGoalMaterialization.ts",
+          );
+          vi.mocked(materializeThreadGoalFile).mockImplementationOnce(async (input) => {
+            started();
+            await gate;
+            return actual.materializeThreadGoalFile(input);
+          });
+        }
+        pending.push(
+          system.run(
+            system.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe("lane-thread-goal"),
+              threadId,
+              goal:
+                phase === "housekeeping"
+                  ? "Keep working"
+                  : "g".repeat(THREAD_GOAL_INLINE_MAX_CHARS + 1),
+            }),
+          ),
+        );
+        await blocked;
+        let sameThreadSettled = false;
+        pending.push(
+          system
+            .run(
+              system.engine.dispatch({
+                type: "thread.meta.update",
+                commandId: CommandId.makeUnsafe("lane-thread-next"),
+                threadId,
+                title: "After",
+              }),
+            )
+            .then(() => {
+              sameThreadSettled = true;
+            }),
+        );
+        const other = system.run(
+          system.engine.dispatch({
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("lane-project-next"),
+            projectId,
+            title: "Independent",
+          }),
+        );
+        pending.push(other);
+        const result = await Promise.race([
+          other,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
+        ]);
+        expect(result).not.toBeNull();
+        expect(sameThreadSettled).toBe(false);
+        const snapshot = await system.run(system.engine.getReadModel());
+        expect(snapshot.projects.find((entry) => entry.id === projectId)?.title).toBe(
+          "Independent",
+        );
+        if (phase === "housekeeping")
+          expect(snapshot.threads.find((entry) => entry.id === threadId)?.goal).toBe(
+            "Keep working",
+          );
+        release();
+        const liveEvents = await published;
+        expect(Array.from(liveEvents).map((event) => event.sequence)).toEqual([3, 4, 5]);
+      } finally {
+        release();
+        await Promise.allSettled(pending);
+        await system.dispose();
+      }
+    },
+  );
+
   it.each([false, true])(
     "settles an uncertain send without executing it again (already accepted=%s)",
     async (accepted) => {
@@ -1604,9 +2515,8 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.succeed({ deferredPhaseSettled: false });
+        return Effect.void;
       },
-      projectDeferredEvent: () => Effect.void,
     };
 
     const runtime = ManagedRuntime.make(
@@ -1751,8 +2661,7 @@ describe("OrchestrationEngine", () => {
         return Effect.void;
       },
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
-      projectDeferredEvent: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.void,
     };
 
     const runtime = ManagedRuntime.make(
@@ -1869,9 +2778,8 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.succeed({ deferredPhaseSettled: false });
+        return Effect.void;
       },
-      projectDeferredEvent: () => Effect.void,
     };
 
     const runtime = ManagedRuntime.make(
@@ -2046,6 +2954,7 @@ describe("OrchestrationEngine", () => {
       }),
     );
 
+    await system.run(system.engine.drain);
     await expect(system.run(system.engine.getProjectionCatchUpStatus)).resolves.toMatchObject({
       state: "healthy",
       missingProjectors: [],
@@ -2054,136 +2963,95 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("retries deferred projection catch-up while idle until it recovers", async () => {
-    let bootstrapCalls = 0;
-    let deferredCalls = 0;
-    let resolveRecoveryBootstrap: (() => void) | null = null;
-    const recoveryBootstrap = new Promise<void>((resolve) => {
-      resolveRecoveryBootstrap = resolve;
-    });
-
-    const flakyProjectionPipeline: OrchestrationProjectionPipelineShape = {
-      bootstrap: Effect.suspend(() => {
-        bootstrapCalls += 1;
-        if (bootstrapCalls === 2 || bootstrapCalls === 3) {
-          return Effect.fail(
-            new PersistenceSqlError({
-              operation: "test.deferredProjectionBootstrap",
-              detail: "deferred projection bootstrap failed transiently",
-            }),
-          );
-        }
-        if (bootstrapCalls === 4) {
-          resolveRecoveryBootstrap?.();
-        }
-        return Effect.void;
-      }),
-      projectMetadataEvent: () => Effect.void,
-      projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
-      projectDeferredEvent: () => {
-        deferredCalls += 1;
-        if (deferredCalls === 1) {
-          return Effect.fail(
-            new PersistenceSqlError({
-              operation: "test.deferredProjection",
-              detail: "deferred projection failed",
-            }),
-          );
-        }
-        return Effect.void;
-      },
-    };
-
-    const runtime = ManagedRuntime.make(
-      OrchestrationEngineLive.pipe(
-        Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
-        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-        Layer.provide(OrchestrationEventStoreLive),
-        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-        Layer.provide(SqlitePersistenceMemory),
-        Layer.provideMerge(TestServerConfigLayer),
-        Layer.provideMerge(NodeServices.layer),
-      ),
-    );
-    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
-    const createdAt = now();
-
-    await runtime.runPromise(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-deferred-recovery"),
-        projectId: asProjectId("project-deferred-recovery"),
-        title: "Deferred Recovery Project",
-        workspaceRoot: "/tmp/project-deferred-recovery",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
-    );
-    await runtime.runPromise(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-deferred-recovery"),
-        threadId: ThreadId.makeUnsafe("thread-deferred-recovery"),
-        projectId: asProjectId("project-deferred-recovery"),
-        title: "deferred-recovery",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
-
-    const result = await runtime.runPromise(
-      engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-deferred-recovery"),
-        threadId: ThreadId.makeUnsafe("thread-deferred-recovery"),
-        message: {
-          messageId: asMessageId("msg-deferred-recovery"),
-          role: "user",
-          text: "hello",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt,
-      }),
-    );
-
-    await recoveryBootstrap;
-
-    expect(result.sequence).toBe(4);
-    expect(deferredCalls).toBeGreaterThanOrEqual(1);
-    expect(bootstrapCalls).toBe(4);
-    await vi.waitFor(async () => {
-      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toMatchObject({
-        state: "healthy",
-        inFlight: false,
-        retryAttempts: 0,
-        lastFailure: null,
-        missingProjectors: [],
+  it.each(["typed", "synchronous"] as const)(
+    "retries projection bootstrap while idle after an ambiguous persisted commit (%s failure)",
+    async (failureKind) => {
+      const system = await createOrchestrationSystem();
+      const originalBootstrap = system.projectionPipeline.bootstrap;
+      let bootstrapCalls = 0;
+      let recovered!: () => void;
+      const recovery = new Promise<void>((resolve) => {
+        recovered = resolve;
       });
-    });
-
-    await runtime.dispose();
-  });
+      Object.assign(system.projectionPipeline, {
+        bootstrap: Effect.suspend(() => {
+          bootstrapCalls++;
+          if (bootstrapCalls <= 2) {
+            if (failureKind === "synchronous")
+              throw new Error("transient synchronous bootstrap failure");
+            return Effect.fail(
+              new PersistenceSqlError({
+                operation: "test.projectionBootstrap",
+                detail: "transient bootstrap failure",
+              }),
+            );
+          }
+          return originalBootstrap.pipe(Effect.tap(() => Effect.sync(recovered)));
+        }),
+      });
+      const originalTransaction = system.sql.withTransaction;
+      const transaction = vi.spyOn(system.sql, "withTransaction").mockImplementationOnce((effect) =>
+        originalTransaction(effect).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new PersistenceSqlError({
+                operation: "test.ambiguousCommit",
+                detail: "connection failed after the commit",
+              }),
+            ),
+          ),
+        ),
+      );
+      const command = {
+        type: "project.create" as const,
+        commandId: CommandId.makeUnsafe(`idle-reconcile-${failureKind}`),
+        projectId: asProjectId(`idle-reconcile-${failureKind}`),
+        title: "Idle recovery",
+        workspaceRoot: `/tmp/idle-reconcile-${failureKind}`,
+        defaultModelSelection: null,
+        createdAt: now(),
+      };
+      try {
+        await system.run(Effect.exit(system.engine.dispatch(command)));
+        await Promise.race([
+          recovery,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Recovery did not finish while idle")), 4000),
+          ),
+        ]);
+        expect(bootstrapCalls).toBe(3);
+        await vi.waitFor(async () =>
+          expect(await system.run(system.engine.getProjectionCatchUpStatus)).toMatchObject({
+            state: "healthy",
+            inFlight: false,
+            retryAttempts: 0,
+            lastFailure: null,
+            missingProjectors: [],
+          }),
+        );
+        const receipt = Option.getOrThrow(
+          await system.run(
+            system.receiptRepository.getByCommandId({ commandId: command.commandId }),
+          ),
+        );
+        expect(receipt.status).toBe("accepted");
+        expect(await system.run(system.engine.dispatch(command))).toEqual({
+          sequence: receipt.resultSequence,
+        });
+      } finally {
+        transaction.mockRestore();
+        Object.assign(system.projectionPipeline, { bootstrap: originalBootstrap });
+        await system.dispose();
+      }
+    },
+  );
 
   it("restores the repair backup when rebuilt projectors do not reach the captured fence", async () => {
     const nonAdvancingProjectionPipeline: OrchestrationProjectionPipelineShape = {
       bootstrap: Effect.void,
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
-      projectDeferredEvent: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.void,
     };
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
@@ -2246,8 +3114,7 @@ describe("OrchestrationEngine", () => {
       ),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
-      projectDeferredEvent: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.void,
     };
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(

@@ -8,7 +8,50 @@ import {
   hasUnseenCompletion,
   hasUnseenSnoozeReturn,
   isThreadActivelyWorking,
+  resolveThreadStatusTrailingIndicator,
+  type ThreadStatusPill,
 } from "./Sidebar.logic";
+
+/** The rail summarizes the same resolved statuses as the rows, including dismissals. */
+export function countSidebarActivity(
+  threads: readonly SidebarThreadSummary[],
+  resolveStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null,
+  activeThreadId: ThreadId | null,
+): { working: number; review: number; snoozed: number } {
+  const groups = groupSidebarActivityThreads(threads, resolveStatus, activeThreadId);
+  return {
+    working: groups.working.length,
+    review: groups.review.length,
+    snoozed: groups.snoozed.length,
+  };
+}
+
+/** Membership shared by the rail counters and their interactive hover lists. */
+export function groupSidebarActivityThreads(
+  threads: readonly SidebarThreadSummary[],
+  resolveStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null,
+  activeThreadId: ThreadId | null,
+): Record<"working" | "review" | "snoozed", SidebarThreadSummary[]> {
+  const groups: Record<"working" | "review" | "snoozed", SidebarThreadSummary[]> = {
+    working: [],
+    review: [],
+    snoozed: [],
+  };
+  for (const thread of threads) {
+    if (thread.archivedAt != null || thread.parentThreadId != null) continue;
+    if (thread.snoozedUntil != null) {
+      groups.snoozed.push(thread);
+      continue;
+    }
+    const status = resolveThreadStatusTrailingIndicator({
+      status: resolveStatus(thread),
+      isActive: thread.id === activeThreadId,
+    });
+    if (status?.pulse || status?.label === "In Background") groups.working.push(thread);
+    else if (status?.dismissible) groups.review.push(thread);
+  }
+  return groups;
+}
 
 export function isThreadRunningForActivity(
   thread: Pick<SidebarThreadSummary, "hasLiveTailWork" | "session" | "latestTurn">,
@@ -97,6 +140,8 @@ export interface ActivityViewModel {
 export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
+  /** Compact Activity shows current work, never settled or archived conversations. */
+  compact?: boolean;
   draftThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
@@ -112,6 +157,8 @@ export function buildActivityViewModel(input: {
 
   for (const thread of input.threads) {
     if (!isActivityThread(thread)) continue;
+    if (input.compact && isThreadSettledForActivity(thread, input.settledOverrideByThreadId))
+      continue;
     if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
     // The server clears snooze on expiry. Client clocks must not surface a thread
     // before that durable update, and pins cannot bypass the user's snooze.
