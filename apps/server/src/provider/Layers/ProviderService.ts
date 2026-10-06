@@ -119,6 +119,7 @@ import {
   parseCodexSharedContinuationIdentity,
   prepareProviderContinuationIdentity,
   prepareProviderContinuationIdentityForExplicitResume,
+  prepareProviderContinuationIdentityForImport,
   providerContinuationIdentity,
 } from "../continuationIdentity.ts";
 
@@ -3632,6 +3633,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // An earlier interrupted import may still own a subprocess even when
             // it never managed to persist a directory binding.
             yield* adapter.stopSession(input.threadId);
+            // A first external import may establish the account's shared
+            // continuation generation; persisted resume paths keep the stricter
+            // prepared-source requirement.
+            const importContinuationIdentity = yield* Effect.tryPromise({
+              try: () =>
+                prepareProviderContinuationIdentityForImport(input.provider, importProviderOptions),
+              catch: (cause) =>
+                toValidationError(
+                  operation,
+                  cause instanceof Error
+                    ? cause.message
+                    : "Provider continuation storage could not be prepared safely.",
+                  cause,
+                ),
+            });
+            const expectedCodexContinuationGeneration = codexSharedContinuationGeneration(
+              importContinuationIdentity,
+            );
+            if (input.provider === "codex" && expectedCodexContinuationGeneration === undefined) {
+              return yield* toValidationError(
+                operation,
+                "The Codex import source has no verified continuation generation.",
+              );
+            }
             return yield* Effect.gen(function* () {
               const forkedOption = yield* adapter.forkThread!({
                 threadId: input.threadId,
@@ -3649,6 +3674,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   : {}),
                 providerInstanceId: resolved.instance.instanceId,
                 lifecycleGeneration: lease.generation,
+                ...(expectedCodexContinuationGeneration
+                  ? { expectedCodexContinuationGeneration }
+                  : {}),
                 requireCompletedSource: true,
               }).pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
               if (Option.isNone(forkedOption)) {
@@ -3700,8 +3728,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     importProviderOptions,
                     credentialsFingerprintKey,
                   ) ?? null,
-                continuationIdentity:
-                  providerContinuationIdentity(input.provider, importProviderOptions) ?? null,
+                continuationIdentity: importContinuationIdentity ?? null,
                 activeTurnId: null,
                 lastError: null,
                 lastRuntimeEvent: "provider.thread.imported",

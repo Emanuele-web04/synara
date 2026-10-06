@@ -120,6 +120,11 @@ Synara reports that delivery is still unknown; reconnect to an updated server an
 before sending again. Socket recovery restores active subscriptions
 and reports the connection as open only after the feature socket answers.
 
+Thread runtime errors appear above the transcript. Use **Show details** to read the full error
+or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
+quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
+not offer a generic Retry because an error message alone cannot prove that resending is safe.
+
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
 
@@ -304,8 +309,9 @@ Pre-turn checkpoint and Studio output baselines share a five-second preparation 
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;
 invalid values use the default and positive values are clamped to that range. When preparation fails
 or the combined budget expires, Synara reports unavailable baselines and preserves independently
-completed results. The provider starts after cancellation cleanup finishes, which can extend beyond
-the preparation budget; an absolute process-cleanup bound has not been verified. A bounded exact-ref
+completed results. Studio reports completed, not-applicable and failed preparation separately;
+failed or inapplicable preparation is never presented as a preserved baseline. The provider starts
+after cancellation cleanup finishes, which can extend beyond the preparation budget; an absolute process-cleanup bound has not been verified. A bounded exact-ref
 check after cleanup recognizes a checkpoint published just before cancellation. Initial and later
 baseline notices share one message or turn identity. A stored initial notice suppresses redundant
 later notices; concurrently published native notices may retain the latest owner's detail in that row.
@@ -403,12 +409,17 @@ navigation rather than full Obsidian support.
 
 ### Terminal panels
 
-Each chat has one terminal panel, shown in the main view or in its right dock.
-Terminals have no nested tabs, groups, splits, or bottom drawer. Opening the
-terminal again focuses the existing session. Project actions replace an idle
-session with the requested working directory and environment; a busy terminal
-must be stopped before another action runs in that chat. On upgrade, the last
-active terminal is retained. Retired nested sessions are closed only when the
+Each chat has one main-view terminal panel and can have multiple independent
+terminal tabs in its right dock. Every **+ → Terminal** creates a new dock tab
+with its own shell session. Switching tabs preserves their sessions; closing or
+exiting one terminal leaves the others running. Dock tabs and session identities
+are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
+drawer. Opening the main-view terminal again focuses its existing session.
+Project actions open a fresh session in the right dock with the requested working
+directory and environment, keeping the center chat unchanged, including in split
+chats. They replace only the selected idle dock terminal; its busy command must
+be stopped before another action runs there. Other dock sessions remain running.
+On upgrade, the last active terminal is retained. Retired nested sessions are closed only when the
 server verifies they are idle, preserving their saved history. Busy sessions or
 sessions whose activity cannot be checked remain pending for the next mount.
 Project actions use the same server check, including after reloading the app.

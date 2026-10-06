@@ -111,6 +111,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
+import { StudioOutputReactorLive } from "./StudioOutputReactor.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
@@ -668,7 +669,10 @@ describe("ProviderCommandReactor", () => {
     );
     const captureStudioOutputBaseline = vi.fn<
       StudioOutputReactorShape["captureBaselineBeforeTurn"]
-    >(input?.studioOutputReactor?.captureBaselineBeforeTurn ?? (() => Effect.void));
+    >(
+      input?.studioOutputReactor?.captureBaselineBeforeTurn ??
+        (() => Effect.succeed({ status: "completed" as const })),
+    );
     const cancelPendingStudioOutputBaseline = vi.fn<
       StudioOutputReactorShape["cancelPendingTurnBaseline"]
     >(input?.studioOutputReactor?.cancelPendingTurnBaseline ?? (() => Effect.void));
@@ -2083,7 +2087,9 @@ describe("ProviderCommandReactor", () => {
         lastResponseAt: new Date().toISOString(),
       };
       const getObservation = vi.fn(() => Effect.succeed(observation));
-      const captureBaselineBeforeTurn = vi.fn(() => Effect.promise(() => preparation));
+      const captureBaselineBeforeTurn = vi.fn(() =>
+        Effect.promise(() => preparation).pipe(Effect.as({ status: "completed" as const })),
+      );
       let releaseSubscriber!: () => void;
       let subscriberEntered = false;
       const subscriberGate = new Promise<void>((resolve) => {
@@ -13123,6 +13129,81 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
+  it.each(["git-and-studio-failed", "studio-failed", "not-applicable"] as const)(
+    "reports real Studio preparation state when %s",
+    async (mode) => {
+      const studioRuntime = ManagedRuntime.make(
+        StudioOutputReactorLive.pipe(
+          Layer.provide(
+            Layer.succeed(ProviderService, {
+              streamEvents: Stream.empty,
+            } as unknown as ProviderServiceShape),
+          ),
+          Layer.provide(Layer.succeed(OrchestrationEngineService, {} as OrchestrationEngineShape)),
+          Layer.provide(
+            Layer.succeed(ProjectionSnapshotQuery, {
+              getThreadShellById: () =>
+                mode === "not-applicable"
+                  ? Effect.succeed(Option.none())
+                  : Effect.die(new Error("Studio workspace lookup failed")),
+            } as never),
+          ),
+          Layer.provide(NodeServices.layer),
+          Layer.provide(SqlitePersistenceMemory),
+        ),
+      );
+      try {
+        const studio = await studioRuntime.runPromise(Effect.service(StudioOutputReactor));
+        const harness = await createHarness({
+          checkpointStore: {
+            isGitRepository: () => Effect.succeed(true),
+            captureCheckpoint: () =>
+              mode === "studio-failed"
+                ? Effect.void
+                : Effect.fail(
+                    new GitCommandError({
+                      operation: "test.capture",
+                      cwd: "/tmp/provider-project",
+                      command: "git add",
+                      detail: "Git capture failed",
+                    }),
+                  ),
+            hasCheckpointRef: () => Effect.succeed(false),
+          },
+          studioOutputReactor: {
+            captureBaselineBeforeTurn: (threadId) =>
+              Effect.promise(() =>
+                studioRuntime.runPromise(studio.captureBaselineBeforeTurn(threadId)),
+              ),
+            cancelPendingTurnBaseline: studio.cancelPendingTurnBaseline,
+          },
+        });
+        await dispatchHarnessUserTurn(harness, {
+          messageId: "both-baselines-failed",
+          text: "Continue with truthful baseline feedback",
+          createdAt: new Date().toISOString(),
+        });
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1, 500);
+        const notices = (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "checkpoint.baseline.skipped",
+        );
+        expect(notices).toHaveLength(1);
+        expect(notices?.[0]?.payload).toMatchObject({
+          checkpointBaseline: mode === "studio-failed" ? "captured" : "unavailable",
+          studioPreparation: mode === "not-applicable" ? "not-applicable" : "unavailable",
+          detail: expect.stringContaining(
+            mode === "not-applicable" ? "not applicable" : "Studio workspace lookup failed",
+          ),
+        });
+        expect(JSON.stringify(notices?.[0]?.payload)).not.toContain(
+          "Completed Studio preparation is preserved",
+        );
+      } finally {
+        await studioRuntime.dispose();
+      }
+    },
+  );
+
   it.each(["git-failed", "not-git", "prepared"] as const)(
     "retains independently prepared Studio baseline when Git preparation is %s",
     async (mode) => {
@@ -13146,6 +13227,7 @@ describe("ProviderCommandReactor", () => {
           captureBaselineBeforeTurn: () =>
             Effect.sync(() => {
               studioPrepared = true;
+              return { status: "completed" as const };
             }),
           cancelPendingTurnBaseline: () =>
             Effect.sync(() => {
@@ -13200,7 +13282,10 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness({
         preTurnBaselineTimeout: Duration.millis(30),
         studioOutputReactor: {
-          captureBaselineBeforeTurn: () => (kind === "studio" ? hungCapture : Effect.void),
+          captureBaselineBeforeTurn: () =>
+            (kind === "studio" ? hungCapture : Effect.void).pipe(
+              Effect.as({ status: "completed" as const }),
+            ),
           cancelPendingTurnBaseline: () =>
             Effect.sync(() => {
               studioCleared = true;
@@ -13275,7 +13360,7 @@ describe("ProviderCommandReactor", () => {
         hasCheckpointRef: () => Effect.sync(() => published),
       },
       studioOutputReactor: {
-        captureBaselineBeforeTurn: () => Effect.void,
+        captureBaselineBeforeTurn: () => Effect.succeed({ status: "completed" as const }),
         cancelPendingTurnBaseline: () =>
           Effect.sync(() => {
             studioCleared = true;
@@ -13311,7 +13396,10 @@ describe("ProviderCommandReactor", () => {
         captureCheckpoint: () => Deferred.await(release),
         hasCheckpointRef: () => Effect.succeed(false),
       },
-      studioOutputReactor: { captureBaselineBeforeTurn: () => Deferred.await(release) },
+      studioOutputReactor: {
+        captureBaselineBeforeTurn: () =>
+          Deferred.await(release).pipe(Effect.as({ status: "completed" as const })),
+      },
     });
     try {
       await dispatchHarnessUserTurn(harness, {
@@ -13339,7 +13427,7 @@ describe("ProviderCommandReactor", () => {
       releaseCapture = resolve;
     });
     const captureBaselineBeforeTurn = vi.fn<StudioOutputReactorShape["captureBaselineBeforeTurn"]>(
-      () => Effect.promise(() => captureGate),
+      () => Effect.promise(() => captureGate).pipe(Effect.as({ status: "completed" as const })),
     );
     const harness = await createHarness({
       studioOutputReactor: { captureBaselineBeforeTurn },
@@ -16408,12 +16496,60 @@ describe("ProviderCommandReactor", () => {
       expect(after).toMatchObject(
         interveningEvent
           ? { status: "running", activeTurnId: "late-turn" }
-          : { status: "ready", activeTurnId: null, runtimeMode: prior.runtimeMode },
+          : {
+              status: "ready",
+              activeTurnId: null,
+              runtimeMode: prior.runtimeMode,
+              lastError: "Your message was not sent. Background work is active",
+            },
       );
       expect(harness.sendTurn).not.toHaveBeenCalled();
       expect(harness.stopSession).not.toHaveBeenCalled();
     });
   }
+
+  it("defers switching Computer off while Claude still has background work", async () => {
+    const registry = makeAgentGatewaySessionRegistry();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
+      gatewaySessions: registry,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    const send = (id: string) =>
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(id),
+        threadId,
+        message: { messageId: asMessageId(id), role: "user", text: "continue", attachments: [] },
+        enableComputerControl: false,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+    await Effect.runPromise(send("bootstrap-computer"));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    // The previous turn ran with Computer on; this one turns it off.
+    registry.issue(threadId, "claudeAgent", { additionalCapabilities: ["computer:control"] });
+    harness.startSession.mockClear();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: "claudeAgent",
+          operation: "session/reconfigure",
+          issue: "Background work is active",
+        }),
+      ),
+    );
+    await Effect.runPromise(send("computer-off-busy"));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const session = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!.session!;
+    expect(session.lastError).toBeNull();
+  });
 
   it("seeds imported Droid selection before handling idle metadata updates", async () => {
     const harness = await createHarness({
@@ -17201,7 +17337,10 @@ describe("ProviderCommandReactor", () => {
         }),
       );
 
-    const sendSecondTurn = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+    const sendSecondTurn = (
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      enableComputerControl?: boolean,
+    ) =>
       Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
@@ -17213,13 +17352,14 @@ describe("ProviderCommandReactor", () => {
             text: "continue after the handoff",
             attachments: [],
           },
+          ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: new Date().toISOString(),
         }),
       );
 
-    it("starts the target in the same thread and records the transferred context", async () => {
+    it("starts the target in the same thread and carries context through computer control activation", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
       });
@@ -17281,9 +17421,10 @@ describe("ProviderCommandReactor", () => {
       });
 
       // The next turn runs on the target and carries the prior transcript.
-      await sendSecondTurn(harness);
+      await sendSecondTurn(harness, true);
       await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-      expect(harness.startSession.mock.calls).toHaveLength(2);
+      expect(harness.startSession.mock.calls).toHaveLength(3);
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
       // The handoff divider explains the fresh session; no lost-history notice.

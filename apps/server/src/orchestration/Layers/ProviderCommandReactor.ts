@@ -2416,7 +2416,7 @@ const make = Effect.gen(function* () {
       // the runtime, never the projection: terminal-driven drains dispatch
       // the queued turn before the projector clears the session row, so a
       // projected running turn here is stale, not live.
-      if (
+      const computerControlOnlyChange =
         computerControlChanged &&
         !runtimeModeChanged &&
         !providerChanged &&
@@ -2424,18 +2424,18 @@ const make = Effect.gen(function* () {
         !providerOptionsChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !autoApproveSynaraToolsChanged &&
-        (yield* hasLiveProviderTurn(threadId))
-      ) {
-        return {
-          activeSessionBeforeEnsure,
-          activeSession: reusableSession,
-          nativeResumeSucceeded: false,
-          nativeResumeFailed: false,
-          nativeSessionRestarted: false,
-          computerControlRestartDeferred: true,
-          forkComputerControl: undefined,
-        };
+        !autoApproveSynaraToolsChanged;
+      const deferComputerControlRestart = {
+        activeSessionBeforeEnsure,
+        activeSession: reusableSession,
+        nativeResumeSucceeded: false,
+        nativeResumeFailed: false,
+        nativeSessionRestarted: false,
+        computerControlRestartDeferred: true,
+        forkComputerControl: undefined,
+      };
+      if (computerControlOnlyChange && (yield* hasLiveProviderTurn(threadId))) {
+        return deferComputerControlRestart;
       }
 
       if (currentProvider === "claudeAgent" && reusableSession.activeTurnId != null) {
@@ -2492,7 +2492,28 @@ const make = Effect.gen(function* () {
         resumeCursor,
         (workspaceChanged || providerChanged || shouldRestartForModelChange) &&
           shouldRegisterContextBootstrap,
+      ).pipe(
+        // The live-turn check above sees only turns. The adapter also refuses
+        // while background tasks, approvals or questions are open, before it
+        // touches the runtime. Switching Computer off can wait for that work
+        // like it waits for a turn; switching it on cannot, because the turn
+        // would run without the tools it asked for.
+        Effect.catchIf(
+          (error): error is ProviderAdapterValidationError =>
+            computerControlOnlyChange &&
+            requestedComputerControl === false &&
+            error instanceof ProviderAdapterValidationError &&
+            error.operation === "session/reconfigure",
+          (error) =>
+            Effect.logInfo("provider command reactor deferred computer-control restart", {
+              threadId,
+              issue: error.issue,
+            }).pipe(Effect.as(undefined)),
+        ),
       );
+      if (restartedOutcome === undefined) {
+        return deferComputerControlRestart;
+      }
       const restartedSession = restartedOutcome.session;
       if (
         shouldRegisterContextBootstrap &&
@@ -3530,7 +3551,7 @@ const make = Effect.gen(function* () {
 
     let baselineFailure: string | undefined;
     let checkpointPreparation: "captured" | "not-applicable" | "unavailable" = "unavailable";
-    let studioPreparationFinished = false;
+    let studioPreparation: "completed" | "not-applicable" | "unavailable" = "unavailable";
     let checkpointCaptureCwd: string | undefined;
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
@@ -3570,7 +3591,7 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
-        baselineFailure = Cause.pretty(cause);
+        baselineFailure = [baselineFailure, Cause.pretty(cause)].filter(Boolean).join("\n");
         return Effect.logWarning("failed to capture provider turn start checkpoint", {
           threadId: input.threadId,
           messageId: input.messageId,
@@ -3585,9 +3606,13 @@ const make = Effect.gen(function* () {
       [
         captureMessageStartCheckpoint,
         studioOutputReactor.captureBaselineBeforeTurn(input.threadId).pipe(
-          Effect.tap(() =>
+          Effect.tap((result) =>
             Effect.sync(() => {
-              studioPreparationFinished = true;
+              if (result.status === "failed") {
+                baselineFailure = [baselineFailure, result.detail].filter(Boolean).join("\n");
+              } else {
+                studioPreparation = result.status;
+              }
             }),
           ),
         ),
@@ -3616,7 +3641,7 @@ const make = Effect.gen(function* () {
             if (Option.isSome(existing) && existing.value) checkpointPreparation = "captured";
           }
           const checkpointUnavailable = checkpointPreparation === "unavailable";
-          const studioUnavailable = !studioPreparationFinished;
+          const studioUnavailable = studioPreparation === "unavailable";
           if (!checkpointUnavailable && !studioUnavailable) return;
           if (Option.isSome(captured) && baselineFailure === undefined) return;
           const unavailable =
@@ -3629,11 +3654,11 @@ const make = Effect.gen(function* () {
             checkpointUnavailable && studioUnavailable
               ? "Checkpoint diff, file undo and Studio output indexing may be unavailable."
               : checkpointUnavailable
-                ? "Checkpoint diff and file undo may be unavailable. Completed Studio preparation is preserved."
+                ? `Checkpoint diff and file undo may be unavailable. ${studioPreparation === "completed" ? "Completed Studio preparation is preserved." : "Studio preparation is not applicable to this workspace."}`
                 : `Studio output indexing may be unavailable. ${checkpointPreparation === "captured" ? "The independently prepared checkpoint is preserved." : "Checkpoint capture is not applicable to this workspace."}`;
           const detail = `${Option.isNone(captured) ? `The pre-turn ${unavailable} did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms.` : `The pre-turn ${unavailable} could not be prepared.`} The turn continued. ${consequence}${baselineFailure === undefined ? "" : ` ${baselineFailure}`}`;
           return yield* (
-            studioPreparationFinished
+            studioPreparation !== "unavailable"
               ? Effect.void
               : studioOutputReactor.cancelPendingTurnBaseline(input.threadId)
           ).pipe(
@@ -3653,7 +3678,7 @@ const make = Effect.gen(function* () {
                     detail,
                     messageId: input.messageId,
                     checkpointBaseline: checkpointPreparation,
-                    studioPreparation: studioPreparationFinished ? "completed" : "unavailable",
+                    studioPreparation,
                   },
                   turnId: null,
                   createdAt: input.createdAt,
@@ -4634,7 +4659,12 @@ const make = Effect.gen(function* () {
                               ? "starting"
                               : runtime.status,
                         activeTurnId: null,
-                        lastError: runtime.lastError ?? null,
+                        // The refused message never reached the provider, and its
+                        // turn-less failure activity stays out of the transcript.
+                        // The banner is the only place the user learns why.
+                        lastError: cancelledCompaction
+                          ? (runtime.lastError ?? null)
+                          : `Your message was not sent. ${failure.issue}`,
                         updatedAt: runtime.updatedAt,
                       },
                       expectedSession: {
