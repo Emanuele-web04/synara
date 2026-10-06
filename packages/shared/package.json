@@ -60,6 +60,10 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./KeyedSingleFlightCache": {
+      "types": "./src/KeyedSingleFlightCache.ts",
+      "import": "./src/KeyedSingleFlightCache.ts"
+    },
     "./errorMessages": {
       "types": "./src/errorMessages.ts",
       "import": "./src/errorMessages.ts"

@@ -12,6 +12,10 @@ import type { ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
+export type StudioBaselinePreparation =
+  | { readonly status: "completed" | "not-applicable" }
+  | { readonly status: "failed"; readonly detail: string };
+
 /**
  * StudioOutputReactorShape - Service API for Studio output capture lifecycle.
  */
@@ -19,9 +23,13 @@ export interface StudioOutputReactorShape {
   /**
    * Capture a non-Git Studio workspace baseline before provider execution begins.
    * ProviderCommandReactor awaits this immediately before starting a new turn so
-   * fast shell writes cannot race into the baseline.
+   * fast shell writes cannot race into the baseline. Returns whether a baseline
+   * was prepared, no Studio workspace applies, or preparation failed. Cancellation
+   * still propagates so provider dispatch waits for preparation cleanup.
    */
-  readonly captureBaselineBeforeTurn: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly captureBaselineBeforeTurn: (
+    threadId: ThreadId,
+  ) => Effect.Effect<StudioBaselinePreparation>;
 
   /**
    * Drop a prepared baseline when provider dispatch fails before a turn starts.

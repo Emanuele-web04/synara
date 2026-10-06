@@ -13,6 +13,41 @@ import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps skipped baseline feedback visible before a provider turn id exists", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        ...makeActivity({
+          id: "baseline-skipped",
+          kind: "checkpoint.baseline.skipped",
+          tone: "info",
+          summary: "Turn continued without a checkpoint baseline",
+          payload: { detail: "Checkpoint diff and file undo are unavailable." },
+        }),
+        turnId: null,
+      },
+      {
+        ...makeActivity({
+          id: "hidden-other",
+          kind: "tool.completed",
+          summary: "Hidden tool",
+        }),
+        turnId: null,
+      },
+    ];
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "baseline-skipped",
+      activityKind: "checkpoint.baseline.skipped",
+      tone: "info",
+    });
+    const timeline = deriveTimelineEntries([], [], entries);
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.kind).toBe("work");
+  });
+
   it("omits routine approval resolutions between tool lifecycle updates", () => {
     const activities = [
       makeActivity({
