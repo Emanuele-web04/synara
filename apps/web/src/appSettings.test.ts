@@ -52,6 +52,18 @@ import {
   serverSettingsToAppSettings,
 } from "./appSettings";
 
+describe("provider process priority settings", () => {
+  it("defaults on and forwards explicit opt-out and reset to the server", () => {
+    expect(Schema.decodeSync(AppSettingsSchema)({}).lowerProviderProcessPriority).toBe(true);
+    expect(appSettingsPatchToServerSettingsPatch({ lowerProviderProcessPriority: false })).toEqual({
+      lowerProviderProcessPriority: false,
+    });
+    expect(appSettingsPatchToServerSettingsPatch({ lowerProviderProcessPriority: true })).toEqual({
+      lowerProviderProcessPriority: true,
+    });
+  });
+});
+
 describe("source control writing settings", () => {
   it("defaults old settings to repository conventions and saves both preferences to the server", () => {
     const settings = Schema.decodeSync(AppSettingsSchema)({});

@@ -302,6 +302,7 @@ export const WS_METHODS = {
   terminalClose: "terminal.close",
 
   // Server meta
+  serverGetRuntimeStatus: "server.getRuntimeStatus",
   serverGetConfig: "server.getConfig",
   serverGetEnvironment: "server.getEnvironment",
   serverGetSettings: "server.getSettings",
@@ -582,6 +583,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.terminalClose, TerminalCloseInput),
 
   // Server meta
+  tagRequestBody(WS_METHODS.serverGetRuntimeStatus, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetEnvironment, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetSettings, Schema.Struct({})),

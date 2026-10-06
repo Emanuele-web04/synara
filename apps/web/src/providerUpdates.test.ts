@@ -58,6 +58,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     enableAssistantStreaming: false,
     enableProviderUpdateChecks: true,
     keepAwakeMode: "off",
+    lowerProviderProcessPriority: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
     githubInboxIncludeUpstreams: false,

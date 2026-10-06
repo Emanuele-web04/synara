@@ -45,6 +45,7 @@ import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialSer
 import { ProfileStatsQueryLive } from "./profileStats";
 import { RecapStatsQueryLive } from "./recapStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
+import { ServerEventLoopMonitorLive } from "./eventLoopMonitor";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { KeepAwakeLive } from "./keepAwake";
@@ -327,6 +328,7 @@ export function makeServerRuntimeServicesLayer(
     RecapStatsQueryLive,
     authServicesLayer,
     ServerLifecycleEventsLive,
+    ServerEventLoopMonitorLive,
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,

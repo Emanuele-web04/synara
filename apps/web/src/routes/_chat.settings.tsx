@@ -534,6 +534,9 @@ function SettingsRouteView() {
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
+      ? ["Keep Synara responsive"]
+      : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
       ? ["Open pull requests and issues"]

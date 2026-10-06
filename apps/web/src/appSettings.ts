@@ -485,6 +485,7 @@ export const AppSettingsSchema = Schema.Struct({
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(withDefaults(() => "off" as const satisfies KeepAwakeMode)),
+  lowerProviderProcessPriority: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
   // Local desktop preference: frameless custom title bar on Windows/Linux.
@@ -1520,6 +1521,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     keepAwakeMode: settings.keepAwakeMode,
+    lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
@@ -1661,6 +1663,9 @@ export function appSettingsPatchToServerSettingsPatch(
     patch.keepAwakeMode === "off"
   ) {
     serverPatch.keepAwakeMode = patch.keepAwakeMode;
+  }
+  if (hasOwn(patch, "lowerProviderProcessPriority")) {
+    serverPatch.lowerProviderProcessPriority = Boolean(patch.lowerProviderProcessPriority);
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;

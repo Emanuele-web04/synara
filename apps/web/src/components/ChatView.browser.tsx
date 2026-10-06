@@ -70,6 +70,7 @@ import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
+import { emitWsTransportState } from "../wsTransportEvents";
 import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
@@ -4759,6 +4760,41 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows transport recovery without auto-following a detached transcript", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await waitForLayout();
+      scrollContainer.scrollTop = 100;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      const previousTop = scrollContainer.scrollTop;
+      emitWsTransportState("connecting");
+      await expect
+        .element(page.getByRole("status").filter({ hasText: "Reconnecting to Synara…" }), {
+          timeout: 4000,
+        })
+        .toBeVisible();
+      await waitForLayout();
+      expect(Math.abs(scrollContainer.scrollTop - previousTop)).toBeLessThanOrEqual(1);
+      emitWsTransportState("open");
+      await expect
+        .element(page.getByRole("status").filter({ hasText: "Reconnecting to Synara…" }))
+        .not.toBeInTheDocument();
+      await waitForLayout();
+      expect(Math.abs(scrollContainer.scrollTop - previousTop)).toBeLessThanOrEqual(1);
+    } finally {
+      emitWsTransportState("open");
       await mounted.cleanup();
     }
   });
@@ -10732,6 +10768,77 @@ describe("ChatView transcript geometry (full app)", () => {
         await expect
           .element(page.getByRole("combobox", { name: "main", exact: true }))
           .not.toBeInTheDocument();
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it.each(["home", "project", "transcript"] as const)(
+    "prefills the %s empty-state composer without sending or replacing an existing draft",
+    async (surface) => {
+      const base = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+      const snapshot = surface === "home" ? withActiveHomeChatThread(base) : base;
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) => ({
+            ...thread,
+            session: null,
+            ...(surface === "transcript" ? { parentThreadId: OTHER_THREAD_ID } : {}),
+          })),
+        },
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = {
+            ...nextFixture.welcome,
+            homeDir: "/Users/tester",
+            chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          };
+        },
+      });
+
+      try {
+        const editor = await waitForComposerEditor();
+        await expect
+          .element(
+            page.getByRole("heading", {
+              name:
+                surface === "home"
+                  ? "What should we work on?"
+                  : surface === "project"
+                    ? /What should we do in/
+                    : "Let's build",
+            }),
+          )
+          .toBeVisible();
+        await expect.element(page.getByText("to tag files", { exact: false })).toBeVisible();
+        await expect.element(page.getByText("for commands", { exact: false })).toBeVisible();
+        expect(
+          Array.from(document.querySelectorAll('kbd[data-slot="kbd"]')).map(
+            (key) => key.textContent,
+          ),
+        ).toEqual(expect.arrayContaining(["@", "/"]));
+
+        await page.getByRole("button", { name: "Plan a feature", exact: true }).click();
+        await vi.waitFor(() => {
+          expect(editor.textContent).toBe("Help me plan a new feature.");
+          expect(document.activeElement).toBe(editor);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            "Help me plan a new feature.",
+          );
+        });
+        expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+        await expect
+          .element(page.getByRole("button", { name: "Fix a bug", exact: true }))
+          .not.toBeInTheDocument();
+
+        await userEvent.clear(editor);
+        await page.getByRole("button", { name: "Fix a bug", exact: true }).click();
+        await vi.waitFor(() =>
+          expect(editor.textContent).toBe("Help me investigate and fix a bug."),
+        );
+        expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
       } finally {
         await mounted.cleanup();
       }

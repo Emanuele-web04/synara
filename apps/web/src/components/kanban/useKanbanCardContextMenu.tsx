@@ -8,6 +8,7 @@
 
 import { THREAD_GOAL_MAX_CHARS, type ThreadId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
+import { KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type MouseEvent, useState } from "react";
 
@@ -41,7 +42,12 @@ import { useStore } from "../../store";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import { getThreadFromState } from "../../threadDerivation";
 import { toastManager } from "../ui/toast";
-import { isKanbanDraftOnlyCard, resolveDraftDropAction, type KanbanCard } from "./kanban.logic";
+import {
+  isKanbanDraftOnlyCard,
+  resolveDraftDropAction,
+  type KanbanCard,
+  type KanbanColumnKey,
+} from "./kanban.logic";
 
 interface RenameTarget {
   threadId: ThreadId;
@@ -50,7 +56,12 @@ interface RenameTarget {
 
 export interface KanbanCardContextMenuController {
   /** Attach to each card's `onContextMenu`. */
-  onCardContextMenu: (card: KanbanCard, event: MouseEvent) => void;
+  onCardContextMenu: (
+    card: KanbanCard,
+    event: MouseEvent,
+    /** Valid destinations and their actions, owned by the project board's drop path. */
+    moves?: readonly { column: KanbanColumnKey; onMove: () => void }[],
+  ) => void;
   /** Render once near the board root. */
   renameDialog: React.ReactNode;
 }
@@ -146,7 +157,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
     });
   };
 
-  const onCardContextMenu = (card: KanbanCard, event: MouseEvent) => {
+  const onCardContextMenu: KanbanCardContextMenuController["onCardContextMenu"] = (
+    card,
+    event,
+    moves = [],
+  ) => {
     event.preventDefault();
     event.stopPropagation();
     const api = readNativeApi();
@@ -176,6 +191,14 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
                 },
               ]
             : []),
+          ...contextMenuGroup(
+            { id: "move-to", label: "Move to…" },
+            moves.map(({ column }) => ({
+              id: `move-to-${column}`,
+              label: KANBAN_COLUMN_V2_LABELS[column],
+              standaloneLabel: `Move to ${KANBAN_COLUMN_V2_LABELS[column]}`,
+            })),
+          ),
           ...contextMenuGroup(
             {
               id: "copy",
@@ -231,6 +254,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         position,
       );
 
+      const move = moves.find(({ column }) => clicked === `move-to-${column}`);
+      if (move) {
+        move.onMove();
+        return;
+      }
       if (clicked === "rename" && isThreadActionCard && card.thread) {
         setRenameTarget({ threadId: card.threadId, title: card.thread.title });
         return;
