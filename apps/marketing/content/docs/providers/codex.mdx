@@ -145,7 +145,7 @@ Run `codex login status`, then `codex login` if needed. For a custom model provi
 
 ### Authentication check reports `url is not supported for stdio`
 
-This is a configuration error: the same MCP server has both HTTP and stdio settings. Synara rebuilds its saved, managed gateway entry with only its HTTP settings when checking Codex or starting a session. Your original Codex configuration and other MCP servers remain unchanged. If `codex login status` also fails outside Synara, correct the conflicting transport settings in that Codex configuration.
+This is a configuration error: the same MCP server has both HTTP and stdio settings. Synara rebuilds its saved, managed gateway entry with only its HTTP settings when checking Codex or starting a session. Authentication checks run from the prepared Codex home so the desktop's working directory cannot add a conflicting project configuration. Your original Codex configuration and other MCP servers remain unchanged. If `codex login status` also fails outside Synara, correct the conflicting transport settings in that Codex configuration.
 
 ### Models or reasoning options differ
 

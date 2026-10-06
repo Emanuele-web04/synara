@@ -85,7 +85,7 @@ export function AgentActivityDetailView({
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <h2 className="truncate text-[18px] font-medium leading-6 text-foreground/92">
+                <h2 className="truncate text-ui-lg font-medium leading-6 text-foreground/92">
                   {detail.title}
                 </h2>
                 <span className="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/56">
