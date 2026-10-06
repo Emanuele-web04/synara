@@ -20,7 +20,7 @@ export function isEditableEventTarget(event: globalThis.KeyboardEvent): boolean 
 export function hasOpenDismissibleOverlay(): boolean {
   return Array.from(
     document.querySelectorAll<HTMLElement>(
-      '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-slot="context-menu-popup"], [data-testid="composer-extras-panel"]',
+      '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-slot="context-menu-popup"], [data-slot="preview-card-popup"], [data-testid="composer-extras-panel"]',
     ),
   ).some(
     (element) =>

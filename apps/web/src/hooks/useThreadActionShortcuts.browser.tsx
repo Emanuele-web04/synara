@@ -1,10 +1,11 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import "../index.css";
+import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "../components/ui/preview-card";
 import { SnoozeUntilDialog } from "../components/SnoozeUntilDialog";
 import { suspendShortcutDispatch } from "../keybindings";
 import type { SplitView } from "../splitViewStore";
@@ -66,7 +67,7 @@ let host: HTMLDivElement;
 let archived: ThreadId[];
 let unread: ThreadId[];
 
-function Harness({ input }: { input: ThreadActionShortcutsInput }) {
+function Harness({ input, children }: { input: ThreadActionShortcutsInput; children?: ReactNode }) {
   const [snoozeId, setSnoozeId] = useState<ThreadId | null>(null);
   useThreadActionShortcuts({ ...input, onSnooze: setSnoozeId });
   return (
@@ -75,6 +76,7 @@ function Harness({ input }: { input: ThreadActionShortcutsInput }) {
         <textarea aria-label="Composer" />
       </form>
       <output>{snoozeId}</output>
+      {children}
       <SnoozeUntilDialog
         open={snoozeId !== null}
         currentSnoozedUntil={null}
@@ -87,7 +89,7 @@ function Harness({ input }: { input: ThreadActionShortcutsInput }) {
   );
 }
 
-function renderHarness(overrides: Partial<ThreadActionShortcutsInput> = {}) {
+function renderHarness(overrides: Partial<ThreadActionShortcutsInput> = {}, children?: ReactNode) {
   const input: ThreadActionShortcutsInput = {
     enabled: true,
     keybindings: [],
@@ -105,7 +107,7 @@ function renderHarness(overrides: Partial<ThreadActionShortcutsInput> = {}) {
     onSnooze: () => {},
     ...overrides,
   };
-  flushSync(() => root.render(<Harness input={input} />));
+  flushSync(() => root.render(<Harness input={input}>{children}</Harness>));
 }
 
 function press(key: string, overrides: KeyboardEventInit = {}, target: EventTarget = window) {
@@ -162,6 +164,35 @@ describe("active thread action shortcuts", () => {
     press("u");
     expect(archived).toEqual([]);
     expect(unread).toEqual([]);
+  });
+
+  it("leaves active-chat actions idle while an interactive hover card owns focus", async () => {
+    renderHarness(
+      {},
+      <PreviewCard open>
+        <PreviewCardTrigger render={<button type="button" />}>
+          Review conversations
+        </PreviewCardTrigger>
+        <PreviewCardPopup>
+          <button type="button">Select another conversation</button>
+        </PreviewCardPopup>
+      </PreviewCard>,
+    );
+    await expect
+      .poll(
+        () =>
+          document.querySelector('[data-slot="preview-card-popup"]')?.getClientRects().length ?? 0,
+      )
+      .toBeGreaterThan(0);
+    const popup = document.querySelector('[data-slot="preview-card-popup"]')!;
+    const action = popup.querySelector("button")!;
+    action.focus();
+    press("a", {}, action);
+    press("u", {}, action);
+    press("s", {}, action);
+    expect(archived).toEqual([]);
+    expect(unread).toEqual([]);
+    expect(host.querySelector("output")?.textContent).toBe("");
   });
 
   it("ignores repeats, composition, prevented events, and suspended dispatch", () => {
