@@ -5174,6 +5174,7 @@ export default function Sidebar() {
         className={cn(SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME, "whitespace-normal leading-tight")}
       >
         <ThreadHoverCardContent
+          threadId={thread.id}
           title={thread.title}
           timeLabel={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
           projectName={hoverMetadata.projectName}
