@@ -43,6 +43,18 @@ describe("wsStreamBackpressure", () => {
     ).rejects.toThrow("resync");
   });
 
+  it("preserves unrelated sliding-hook errors without orchestration overflow metadata", async () => {
+    const failure = new WsRpcError({ message: "dev-server resubscribe failed" });
+    const result = await Effect.runPromise(
+      bufferLiveUiStream(Stream.make(1, 2), {
+        capacity: 1,
+        onDroppedEvents: () => Effect.fail(failure),
+      }).pipe(Stream.runCollect, Effect.exit),
+    );
+    expect(Exit.isFailure(result)).toBe(true);
+    if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toBe(failure);
+  });
+
   it("fails bounded orchestration streams instead of dropping accepted events", async () => {
     const result = await Effect.runPromise(
       Stream.make({ sequence: 1 }, { sequence: 2 }).pipe(

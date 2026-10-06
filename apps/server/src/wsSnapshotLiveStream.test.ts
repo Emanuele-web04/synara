@@ -39,6 +39,157 @@ const activityEvent = (
 });
 
 describe("makeCursorSafeSnapshotLiveStream", () => {
+  it("delivers 1100 finite replay events with one millisecond acknowledgements", async () => {
+    const rows = Array.from({ length: 1100 }, (_, index) => event(index + 1));
+    const items = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.never),
+        snapshot: Effect.succeed({ snapshotSequence: 0 }),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(rows.length),
+        replay: () => Stream.fromIterable(rows),
+      }).pipe(
+        Stream.take(rows.length + 1),
+        Stream.tap(() => Effect.sleep("1 millis")),
+        Stream.runCollect,
+        Effect.timeout("4 seconds"),
+      ),
+    );
+    expect(items.length).toBe(1101);
+    expect(items.slice(1).map((item) => item.kind === "event" && item.event.sequence)).toEqual(
+      rows.map((row) => row.sequence),
+    );
+  });
+
+  it("does not double charge 600 replay events and 600 distinct live duplicates", async () => {
+    const rows = Array.from({ length: 600 }, (_, index) => event(index + 1));
+    const items = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const input = yield* Queue.unbounded<OrchestrationEvent>();
+          return yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.succeed(Stream.fromQueue(input)),
+            snapshot: Queue.offerAll(
+              input,
+              rows.map((row) => event(row.sequence)),
+            ).pipe(Effect.as({ snapshotSequence: 0 })),
+            snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+            getHighWaterSequence: Effect.succeed(600),
+            replay: () => Stream.fromIterable(rows),
+          }).pipe(
+            Stream.take(601),
+            Stream.tap(() => Effect.sleep("1 millis")),
+            Stream.runCollect,
+            Effect.timeout("3 seconds"),
+          );
+        }),
+      ),
+    );
+    expect(items.length).toBe(601);
+  });
+
+  it("discards live objects covered by the fence before charging their bytes", async () => {
+    const items = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const input = yield* Queue.unbounded<OrchestrationEvent>();
+          const discarded = Array.from({ length: 20 }, () => activityEvent(2, "x".repeat(4096)));
+          return yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.succeed(Stream.fromQueue(input)),
+            snapshot: Effect.succeed({ snapshotSequence: 0 }),
+            snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+            getHighWaterSequence: Effect.succeed(2),
+            replay: () =>
+              Stream.fromEffect(
+                Queue.offerAll(input, [...discarded, event(3)]).pipe(Effect.as(event(2))),
+              ),
+            liveBufferOptions: { capacity: 2, maxSerializedBytes: 1024 },
+          }).pipe(Stream.take(3), Stream.runCollect, Effect.timeout("1 second"));
+        }),
+      ),
+    );
+    expect(items.map((item) => (item.kind === "event" ? item.event.sequence : "snapshot"))).toEqual(
+      ["snapshot", 2, 3],
+    );
+  });
+
+  it("preserves a completed live source's newer tail when pruning its fence", async () => {
+    const items = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.make(event(2), event(3))),
+        snapshot: Effect.sleep("10 millis").pipe(Effect.as({ snapshotSequence: 1 })),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(2),
+        replay: () => Stream.succeed(event(2)),
+      }).pipe(Stream.runCollect, Effect.timeout("1 second")),
+    );
+    expect(items.map((item) => (item.kind === "event" ? item.event.sequence : "snapshot"))).toEqual(
+      ["snapshot", 2, 3],
+    );
+  });
+
+  it("retains a completed live tail when bounded resume falls back to a snapshot", async () => {
+    const oversized = activityEvent(1, "x".repeat(1024 * 1024));
+    const items = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.make(event(1), event(2))),
+        resumeFromSequence: 0,
+        snapshot: Effect.succeed({ snapshotSequence: 1 }),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(1),
+        replay: () => Stream.succeed(oversized).pipe(Stream.tap(() => Effect.sleep("10 millis"))),
+      }).pipe(Stream.runCollect, Effect.timeout("1 second")),
+    );
+    expect(items).toEqual([
+      { kind: "snapshot", snapshot: { snapshotSequence: 1 } },
+      { kind: "event", event: event(2) },
+    ]);
+  });
+
+  it("releases fenced live charges before a slow finite replay admits a newer tail", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const input = yield* Queue.unbounded<OrchestrationEvent>();
+          const replayStarted = yield* Deferred.make<void>();
+          const releaseReplay = yield* Deferred.make<void>();
+          const tailRead = yield* Deferred.make<void>();
+          const reader = yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.succeed(
+              Stream.fromQueue(input).pipe(
+                Stream.tap((row) =>
+                  row.sequence === 1200 ? Deferred.succeed(tailRead, undefined) : Effect.void,
+                ),
+              ),
+            ),
+            snapshot: Queue.offerAll(
+              input,
+              Array.from({ length: 600 }, (_, i) => event(i + 1)),
+            ).pipe(Effect.as({ snapshotSequence: 0 })),
+            snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+            getHighWaterSequence: Effect.succeed(600),
+            replay: () =>
+              Stream.fromEffect(
+                Deferred.succeed(replayStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseReplay)),
+                  Effect.as(event(600)),
+                ),
+              ),
+          }).pipe(Stream.take(602), Stream.runCollect, Effect.forkChild);
+          yield* Deferred.await(replayStarted).pipe(Effect.timeout("500 millis"));
+          yield* Queue.offerAll(
+            input,
+            Array.from({ length: 600 }, (_, i) => event(i + 601)),
+          );
+          yield* Deferred.await(tailRead).pipe(Effect.timeout("500 millis"));
+          yield* Deferred.succeed(releaseReplay, undefined);
+          const items = yield* Fiber.join(reader).pipe(Effect.timeout("1 second"));
+          expect(items.length).toBe(602);
+        }),
+      ),
+    );
+  });
+
   it("falls back to a snapshot without scanning a 129-event resume gap", async () => {
     let snapshotLoaded = false;
     let replayCalls = 0;
@@ -183,6 +334,57 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toBe(failure);
   });
 
+  it("propagates live source failure while bootstrap waits for its fence", async () => {
+    const failure = new Error("live source failed before fence");
+    const result = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.fail(failure)),
+        snapshot: Effect.never,
+        snapshotSequence: () => 0,
+        getHighWaterSequence: Effect.succeed(0),
+        replay: () => Stream.empty,
+      }).pipe(Stream.runCollect, Effect.exit, Effect.timeout("500 millis")),
+    );
+    expect(Exit.isFailure(result)).toBe(true);
+    if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toBe(failure);
+  });
+
+  it("propagates source interruption and finalizes a blocked bootstrap pull", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const snapshotStarted = yield* Deferred.make<void>();
+          const snapshotClosed = yield* Deferred.make<void>();
+          const sourceClosed = yield* Deferred.make<void>();
+          const subscriptionClosed = yield* Deferred.make<void>();
+          const reader = yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.acquireRelease(
+              Effect.succeed(
+                Stream.fromEffect(
+                  Deferred.await(snapshotStarted).pipe(Effect.andThen(Effect.interrupt)),
+                ).pipe(Stream.ensuring(Deferred.succeed(sourceClosed, undefined))),
+              ),
+              () => Deferred.succeed(subscriptionClosed, undefined),
+            ),
+            snapshot: Deferred.succeed(snapshotStarted, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(snapshotClosed, undefined)),
+            ),
+            snapshotSequence: () => 0,
+            getHighWaterSequence: Effect.succeed(0),
+            replay: () => Stream.empty,
+          }).pipe(Stream.runCollect, Effect.forkChild);
+          const result = yield* Fiber.await(reader).pipe(Effect.timeout("500 millis"));
+          expect(Exit.isFailure(result)).toBe(true);
+          if (Exit.isFailure(result)) expect(Cause.hasInterruptsOnly(result.cause)).toBe(true);
+          yield* Deferred.await(sourceClosed).pipe(Effect.timeout("500 millis"));
+          yield* Deferred.await(subscriptionClosed).pipe(Effect.timeout("500 millis"));
+          yield* Deferred.await(snapshotClosed).pipe(Effect.timeout("500 millis"));
+        }),
+      ),
+    );
+  });
+
   it("closes an overflowing live subscription while snapshot IO is blocked", async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -225,13 +427,14 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
   });
 
   it.each(["count", "bytes"] as const)(
-    "shares the %s budget across replay delivery and the waiting live tail",
+    "bounds the waiting live tail by %s and cancels blocked finite replay",
     async (limit) => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
             const input = yield* Queue.unbounded<OrchestrationEvent>();
             const replayBlocked = yield* Deferred.make<void>();
+            const replayClosed = yield* Deferred.make<void>();
             const subscriptionClosed = yield* Deferred.make<void>();
             const replayEvent = event(1);
             const liveEvent = event(2);
@@ -249,22 +452,29 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
                 Stream.concat(
                   Stream.succeed(replayEvent),
                   Stream.fromEffect(
-                    Deferred.succeed(replayBlocked, undefined).pipe(Effect.andThen(Effect.never)),
+                    Deferred.succeed(replayBlocked, undefined).pipe(
+                      Effect.andThen(Effect.never),
+                      Effect.ensuring(Deferred.succeed(replayClosed, undefined)),
+                    ),
                   ).pipe(Stream.drain),
                 ),
               liveBufferOptions:
                 limit === "count"
-                  ? { capacity: 2 }
+                  ? { capacity: 1 }
                   : { capacity: 10, maxSerializedBytes: eventBytes * 2 - 1 },
             });
             const pull = yield* Stream.toPull(stream);
             yield* pull;
+            yield* pull;
+            const blockedPull = yield* Effect.forkChild(pull);
             yield* Deferred.await(replayBlocked).pipe(Effect.timeout("500 millis"));
-            // Snapshot and replay remain unacknowledged. The tail fits either
-            // stage alone, but cannot fit the logical subscription's shared limit.
+            // Finite replay is demand-driven. Its blocked read must be cancelled
+            // when the independent bounded live tail overflows.
             yield* Queue.offer(input, liveEvent);
+            yield* Queue.offer(input, event(3));
             yield* Deferred.await(subscriptionClosed).pipe(Effect.timeout("500 millis"));
-            const result = yield* Effect.exit(pull);
+            const result = yield* Fiber.await(blockedPull);
+            yield* Deferred.await(replayClosed).pipe(Effect.timeout("500 millis"));
             expect(Exit.isFailure(result)).toBe(true);
             if (Exit.isFailure(result)) {
               expect(Cause.squash(result.cause)).toMatchObject({
