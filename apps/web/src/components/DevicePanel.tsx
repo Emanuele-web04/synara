@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ensureNativeApi } from "~/nativeApi";
 import { addWsTransportStateListener } from "~/wsTransportEvents";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
-import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, XIcon } from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, LoaderCircleIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { selectThreadDeviceState, useDeviceStateStore } from "../deviceStateStore";
@@ -56,6 +56,7 @@ import {
 import { useDeviceVideoStream } from "./device/useDeviceVideoStream";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { DockPaneHeader } from "./chat/DockPaneHeader";
 import { Button } from "./ui/button";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import {
@@ -621,61 +622,52 @@ export default function DevicePanel(props: {
   // shows the pane's name where the picker would be rather than a menu whose
   // every entry would be empty.
   const header = (
-    <div className="flex h-full w-full min-w-0 items-center gap-1.5">
-      {availabilityView.kind === "blocked" ? (
-        <span className="truncate px-2 font-medium text-muted-foreground text-ui leading-snug">
-          iOS Simulator
-        </span>
-      ) : (
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
-                <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
-                <ChevronDownIcon />
-              </Button>
-            }
-          />
-          <ComposerPickerMenuPopup align="start">
-            {pickerEntries.length === 0 ? (
-              <MenuItem disabled>No simulators found</MenuItem>
-            ) : (
-              pickerEntries.map((entry) => (
-                <MenuItem
-                  key={entry.device.udid}
-                  disabled={entry.action.kind === "wait"}
-                  onClick={() => selectDevice(entry)}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="truncate">{entry.device.name}</span>
-                    <span className="ml-auto shrink-0 text-muted-foreground text-ui leading-snug">
-                      {entry.detail}
+    <DockPaneHeader
+      variant="embedded"
+      onClose={props.onClosePanel}
+      closeLabel="Close simulator panel"
+      title={
+        availabilityView.kind === "blocked" ? (
+          <span className="truncate px-2 font-medium text-muted-foreground text-ui leading-snug">
+            iOS Simulator
+          </span>
+        ) : (
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
+                  <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
+                  <ChevronDownIcon />
+                </Button>
+              }
+            />
+            <ComposerPickerMenuPopup align="start">
+              {pickerEntries.length === 0 ? (
+                <MenuItem disabled>No simulators found</MenuItem>
+              ) : (
+                pickerEntries.map((entry) => (
+                  <MenuItem
+                    key={entry.device.udid}
+                    disabled={entry.action.kind === "wait"}
+                    onClick={() => selectDevice(entry)}
+                  >
+                    <span className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="truncate">{entry.device.name}</span>
+                      <span className="ml-auto shrink-0 text-muted-foreground text-ui leading-snug">
+                        {entry.detail}
+                      </span>
+                      {entry.attached ? <CheckIcon className="size-3.5 shrink-0" /> : null}
                     </span>
-                    {entry.attached ? <CheckIcon className="size-3.5 shrink-0" /> : null}
-                  </span>
-                </MenuItem>
-              ))
-            )}
-            {/* Detach and shut down live on the toolbar below the bezel, with
+                  </MenuItem>
+                ))
+              )}
+              {/* Detach and shut down live on the toolbar below the bezel, with
                 the rest of the device actions, rather than being duplicated here. */}
-          </ComposerPickerMenuPopup>
-        </Menu>
-      )}
-
-      {/* Screenshot moved to the control rail, where it sits with the other
-          device actions; the header keeps only picker and close. */}
-      <div className="ml-auto flex shrink-0 items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={props.onClosePanel}
-          title="Close"
-          aria-label="Close simulator panel"
-        >
-          <XIcon />
-        </Button>
-      </div>
-    </div>
+            </ComposerPickerMenuPopup>
+          </Menu>
+        )
+      }
+    />
   );
 
   // Every state renders on the phone's screen, so the pane reads as one object
