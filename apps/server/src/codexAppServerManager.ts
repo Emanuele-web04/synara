@@ -3699,7 +3699,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("Codex authentication changed before discovery launch; retry the request.");
     }
     const child = this.spawnAppServer({
-      lowerPriority: (await this.runPromise(providerProcessPriorityEnabled)) as boolean,
+      lowerPriority: false,
       binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
       env: processLaunch.env,

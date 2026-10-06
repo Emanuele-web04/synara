@@ -21,7 +21,22 @@ describe("spawnProviderProcess", () => {
           const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
           const child = yield* spawnProviderProcess(spawner, process.execPath, [
             "-e",
-            "setTimeout(() => console.log(require('node:os').getPriority()), 100)",
+            `
+              const os = require('node:os');
+              const report = () => {
+              const child = require('node:child_process').spawnSync(process.execPath, ['-e', 'console.log(require("node:os").getPriority())']);
+              const threads = process.platform === 'linux'
+                ? require('node:fs').readdirSync('/proc/self/task').map(tid => {
+                    const stat = require('node:fs').readFileSync('/proc/self/task/' + tid + '/stat', 'utf8');
+                    return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[16]);
+                  })
+                : [os.getPriority()];
+              console.log(JSON.stringify({ parent: os.getPriority(), descendant: Number(child.stdout), threads }));
+              };
+              // Windows remains post-spawn; this probe does not prove the shim race absent.
+              if (process.platform === 'win32') setTimeout(report, 100);
+              else report();
+            `,
           ]);
           return yield* Stream.mkString(Stream.decodeText(child.stdout));
         }).pipe(
@@ -32,9 +47,14 @@ describe("spawnProviderProcess", () => {
           ),
         ),
       );
-      expect(Number(observed)).toBe(
-        enabled ? Math.max(serverPriority, process.platform === "win32" ? 10 : 5) : serverPriority,
-      );
+      const expected = enabled
+        ? Math.max(serverPriority, process.platform === "win32" ? 10 : 5)
+        : serverPriority;
+      const priorities = JSON.parse(observed);
+      expect(priorities.parent).toBe(expected);
+      expect(priorities.descendant).toBe(expected);
+      expect(priorities.threads.length).toBeGreaterThan(0);
+      expect(priorities.threads.every((priority: number) => priority === expected)).toBe(true);
       expect(os.getPriority()).toBe(serverPriority);
     },
   );

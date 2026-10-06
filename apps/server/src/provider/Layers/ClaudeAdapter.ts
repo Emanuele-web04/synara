@@ -1,5 +1,4 @@
 import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
-import { lowerProcessPriority } from "@synara/shared/platformProcess";
 import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claudeResultUsage.ts";
 import { restoreClaudeImportedCopyDates } from "../claudeImportedCopyDates.ts";
 /**
@@ -2104,7 +2103,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       const { forkSession } = await loadClaudeAgentSdk();
       return forkSession(sessionId, forkOptions);
     };
-    const runPriorityPolicy = Effect.runPromiseWith(yield* Effect.services<never>());
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     const readClaudeCliVersion = options?.readClaudeCliVersion ?? readInstalledClaudeCliVersion;
 
@@ -2205,7 +2203,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const process = options?.spawnClaudeCodeProcess
           ? options.spawnClaudeCodeProcess(spawnOptions)
           : spawnOwnedClaudeCodeProcess(spawnOptions, lowerPriority);
-        if (lowerPriority) lowerProcessPriority(process.pid);
         owner.process = process;
         return process;
       };
@@ -7557,10 +7554,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             permissionMode: "plan" as PermissionMode,
             persistSession: false,
             env,
-            spawnClaudeCodeProcess: bindClaudeProcessOwner(
-              processOwner,
-              await runPriorityPolicy(providerProcessPriorityEnabled),
-            ),
+            spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner, false),
           },
         });
         const queryRuntime = tempQuery;

@@ -2263,7 +2263,7 @@ export function ProvidersSettingsPanel({
           resetAction={
             settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority ? (
               <SettingResetButton
-                label="agent CPU priority"
+                label="Keep Synara responsive"
                 onClick={() =>
                   updateSettings({
                     lowerProviderProcessPriority: defaults.lowerProviderProcessPriority,

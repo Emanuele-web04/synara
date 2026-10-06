@@ -8,7 +8,12 @@ import { ServerSettingsService } from "./serverSettings";
 // Optional for standalone runtimes/tests; production supplies the authoritative service.
 export const providerProcessPriorityEnabled: Effect.Effect<boolean> = Effect.gen(function* () {
   const service = yield* Effect.serviceOption(ServerSettingsService);
-  if (Option.isNone(service)) return true;
+  if (Option.isNone(service)) {
+    yield* Effect.logWarning(
+      "ServerSettingsService is missing; defaulting agent process priority on",
+    );
+    return true;
+  }
   return yield* service.value.getSettings.pipe(
     Effect.map((settings) => settings.lowerProviderProcessPriority),
     Effect.catch((cause) =>

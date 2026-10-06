@@ -130,7 +130,7 @@ it("saves provider CPU priority opt-out and exposes reset to the default", async
       updateSettings={updateSettings}
     />,
   );
-  await page.getByRole("button", { name: "Reset agent CPU priority to default" }).click();
+  await page.getByRole("button", { name: "Reset Keep Synara responsive to default" }).click();
   expect(updateSettings).toHaveBeenLastCalledWith({ lowerProviderProcessPriority: true });
   expect(control.element().closest('[data-slot="settings-row"]')?.textContent).toContain(
     "Restart existing sessions",

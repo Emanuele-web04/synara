@@ -41,11 +41,19 @@ describe("processRuntime", () => {
           `
       const os = require('node:os');
       const { spawnSync } = require('node:child_process');
-      process.stdin.resume();
-      process.stdin.once('end', () => {
-        const descendant = spawnSync(process.execPath, ['-e', 'console.log(require("node:os").getPriority())']);
-        console.log(JSON.stringify({ parent: os.getPriority(), descendant: Number(descendant.stdout) }));
-      });
+      const report = () => {
+      const descendant = spawnSync(process.execPath, ['-e', 'console.log(require("node:os").getPriority())']);
+      const threads = process.platform === 'linux'
+        ? require('node:fs').readdirSync('/proc/self/task').map(tid => {
+            const stat = require('node:fs').readFileSync('/proc/self/task/' + tid + '/stat', 'utf8');
+            return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[16]);
+          })
+        : [os.getPriority()];
+      console.log(JSON.stringify({ parent: os.getPriority(), descendant: Number(descendant.stdout), threads }));
+      };
+      // Windows still adjusts after spawn; keep its inheritance probe gated.
+      if (process.platform === 'win32') { process.stdin.resume(); process.stdin.once('end', report); }
+      else report();
     `,
         ],
         { stdio: "pipe", lowerPriority: enabled },
@@ -60,10 +68,13 @@ describe("processRuntime", () => {
       });
       child.stdin.end();
       await exited;
-      expect(JSON.parse(stdout)).toEqual({
-        parent: expectedPriority,
-        descendant: expectedPriority,
-      });
+      const observed = JSON.parse(stdout);
+      expect(observed.parent).toBe(expectedPriority);
+      expect(observed.descendant).toBe(expectedPriority);
+      expect(observed.threads.length).toBeGreaterThan(0);
+      expect(observed.threads.every((priority: number) => priority === expectedPriority)).toBe(
+        true,
+      );
       expect(os.getPriority()).toBe(serverPriority);
     },
   );

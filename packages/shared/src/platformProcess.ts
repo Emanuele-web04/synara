@@ -1,5 +1,5 @@
 // FILE: platformProcess.ts
-// Purpose: Plans shell-free child-process launches behind one cross-platform boundary.
+// Purpose: Plans child-process launches behind one cross-platform boundary.
 // Layer: Shared platform runtime
 
 import { statSync } from "node:fs";
@@ -18,8 +18,8 @@ export type ProcessExecutionBackend = "native" | "wsl";
 
 /**
  * Best-effort CPU scheduling only: no background I/O or network QoS.
- * Call immediately after spawning an owned agent so its children inherit it.
- * POSIX nice +5 is moderate; Windows uses the corresponding below-normal class.
+ * Windows callers apply this immediately after spawn. POSIX launches instead
+ * adjust priority before exec so all agent threads and descendants inherit it.
  */
 export function lowerProcessPriority(
   pid: number | undefined,
@@ -48,7 +48,7 @@ export interface ProcessLaunchInput {
   readonly env?: NodeJS.ProcessEnv;
   /** Fail before spawn when the native executable cannot be resolved. */
   readonly requireExecutable?: boolean;
-  /** Apply guest-side CPU priority when a Windows launch is dispatched through WSL. */
+  /** Apply CPU priority before exec on POSIX, including Windows launches through WSL. */
   readonly lowerPriority?: boolean;
 }
 
@@ -117,6 +117,31 @@ function nativeExecutable(
   );
 }
 
+function priorityExecArgs(
+  command: string,
+  args: ReadonlyArray<string>,
+  priority: number,
+): string[] {
+  return [
+    "-c",
+    'renice "$1" -p "$$" >/dev/null || printf "%s\\n" "Synara: failed to lower agent process priority; continuing" >&2; shift; exec "$@"',
+    "synara-agent-priority",
+    String(priority),
+    command,
+    ...args,
+  ];
+}
+
+function inheritedAgentPriority(): number {
+  try {
+    // Do not raise an agent when the server already inherited a lower priority.
+    return Math.max(5, os.getPriority());
+  } catch (cause) {
+    console.warn("Failed to read inherited agent process priority; using nice +5", cause);
+    return 5;
+  }
+}
+
 /**
  * Converts one logical command into the exact executable/argv pair the host
  * runtime must use. Application and provider code must not reproduce the
@@ -135,15 +160,7 @@ export function prepareProcess(
     // The Windows launcher priority does not set Linux guest scheduling. Adjust
     // the guest shell before exec, with literal argv and a logged fail-open fallback.
     const guestCommand = input.lowerPriority ? "/bin/sh" : command;
-    const guestArgs = input.lowerPriority
-      ? [
-          "-c",
-          'renice 5 -p "$$" >/dev/null || printf "%s\\n" "Synara: failed to lower agent process priority in WSL; continuing" >&2; exec "$@"',
-          "synara-agent-priority",
-          command,
-          ...args,
-        ]
-      : args;
+    const guestArgs = input.lowerPriority ? priorityExecArgs(command, args, 5) : args;
     const prepared = prepareWindowsSafeProcess(guestCommand, guestArgs, {
       platform,
       cwd: input.cwd,
@@ -165,8 +182,10 @@ export function prepareProcess(
 
   if (platform !== "win32") {
     return {
-      command: resolvedCommand,
-      args: [...args],
+      command: input.lowerPriority ? "/bin/sh" : resolvedCommand,
+      args: input.lowerPriority
+        ? priorityExecArgs(resolvedCommand, args, inheritedAgentPriority())
+        : [...args],
       shell: false,
       requestedCommand: command,
       resolvedCommand,

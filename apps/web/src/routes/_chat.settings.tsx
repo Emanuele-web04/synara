@@ -532,7 +532,7 @@ function SettingsRouteView() {
       ? ["Provider update checks"]
       : []),
     ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
-      ? ["Agent CPU priority"]
+      ? ["Keep Synara responsive"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget

@@ -23,7 +23,9 @@ export function spawnProviderProcess(
     const child = yield* spawner.spawn(
       makeEffectProcessCommand(command, args, { ...options, lowerPriority: enabled }),
     );
-    if (enabled) lowerProcessPriority(child.pid);
+    if (enabled && (options.platform ?? process.platform) === "win32") {
+      lowerProcessPriority(child.pid, options);
+    }
     return child;
   });
 }
@@ -49,8 +51,9 @@ export type EffectProcessRuntimeOptions = Omit<
  * provider/application code.
  *
  * Unlike the Node runtime there is deliberately no `requireExecutable`: the
- * Effect spawner is injectable, so a missing executable surfaces as the
- * spawner's own ENOENT error in the owning domain rather than a pre-spawn throw.
+ * Effect spawner is injectable. With priority disabled, a missing POSIX
+ * executable surfaces as the spawner's ENOENT; with priority enabled it exits
+ * through the pre-exec launcher. Neither path throws during command planning.
  */
 export function makeEffectProcessCommand(
   command: string,
@@ -61,11 +64,12 @@ export function makeEffectProcessCommand(
   const effectivePlatform = platform ?? process.platform;
 
   // Effect's ChildProcessSpawner is injectable. Keep executable existence and
-  // POSIX PATH resolution behind that seam so test/runtime spawners receive the
-  // logical command and can translate spawn failures in their owning domain.
+  // POSIX PATH resolution behind that seam when no priority launcher is needed.
+  // Priority-enabled POSIX agents must adjust scheduling before exec: Linux
+  // nice is per-thread, so post-spawn adjustment can miss existing agent threads.
   // Windows still needs centralized launch planning for PATHEXT, batch shims,
   // PowerShell scripts, and WSL dispatch before the spawner receives the command.
-  if (effectivePlatform !== "win32") {
+  if (effectivePlatform !== "win32" && !lowerPriority) {
     return ChildProcess.make(command, [...args], {
       ...commandOptions,
       shell: false,

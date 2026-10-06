@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ExecutableNotFoundError, prepareProcess } from "./platformProcess";
 import { spawnProcess } from "./processRuntime";
@@ -15,6 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -28,25 +29,61 @@ function windowsEnv(pathValue = root): NodeJS.ProcessEnv {
 }
 
 describe("prepareProcess", () => {
-  it.runIf(process.platform !== "win32").each([false, true])(
-    "sets WSL guest priority before exec and tolerates failure (reniceFails=%s)",
-    async (reniceFails) => {
+  it.each(["linux", "darwin"] as const)(
+    "preserves lower inherited priority before exec on %s",
+    (platform) => {
+      vi.spyOn(os, "getPriority").mockReturnValue(15);
+      const plan = prepareProcess("agent", ["literal $arg"], { platform, lowerPriority: true });
+      expect(plan).toMatchObject({ command: "/bin/sh", resolvedCommand: "agent" });
+      expect(plan.args.slice(2)).toEqual(["synara-agent-priority", "15", "agent", "literal $arg"]);
+    },
+  );
+
+  it("logs an inherited priority read failure and still plans the launch", () => {
+    vi.spyOn(os, "getPriority").mockImplementation(() => {
+      throw new Error("access denied");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(
+      prepareProcess("agent", [], { platform: "linux", lowerPriority: true }).args.slice(2),
+    ).toEqual(["synara-agent-priority", "5", "agent"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("inherited agent process priority"),
+      expect.any(Error),
+    );
+  });
+  it.runIf(process.platform !== "win32").each([
+    ["native", false],
+    ["native", true],
+    ["wsl", false],
+    ["wsl", true],
+  ] as const)(
+    "sets %s priority before exec and tolerates failure (reniceFails=%s)",
+    async (backend, reniceFails) => {
       if (reniceFails)
         writeFileSync(path.join(root, "renice"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
       const plan = prepareProcess(
         process.execPath,
         [
           "-e",
-          "console.log(JSON.stringify({ priority: require('node:os').getPriority(), args: process.argv.slice(1) }))",
+          "console.log(JSON.stringify({ pid: process.pid, priority: require('node:os').getPriority(), args: process.argv.slice(1) }))",
           "--",
           "a b",
           "quote'\"$",
           "--flag",
         ],
-        { platform: "win32", cwd: "\\\\wsl.localhost\\Ubuntu\\home\\agent", lowerPriority: true },
+        {
+          ...(backend === "wsl"
+            ? { platform: "win32" as const, cwd: "\\\\wsl.localhost\\Ubuntu\\home\\agent" }
+            : {}),
+          lowerPriority: true,
+        },
       );
       // Execute the guest-side argv locally; Windows/WSL host launch remains platform-specific.
-      const guestArgs = plan.args.slice(plan.args.indexOf("--exec") + 1);
+      const guestArgs =
+        backend === "wsl"
+          ? plan.args.slice(plan.args.indexOf("--exec") + 1)
+          : [plan.command, ...plan.args];
       expect(guestArgs[0]).toBe("/bin/sh");
       const child = spawnProcess(guestArgs[0]!, guestArgs.slice(1), {
         stdio: "pipe",
@@ -67,6 +104,7 @@ describe("prepareProcess", () => {
         );
       });
       expect(JSON.parse(stdout)).toEqual({
+        pid: child.pid,
         priority: reniceFails ? os.getPriority() : Math.max(5, os.getPriority()),
         args: ["a b", "quote'\"$", "--flag"],
       });

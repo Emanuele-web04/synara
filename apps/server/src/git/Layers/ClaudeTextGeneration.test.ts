@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { ClaudeTextGeneration } from "../Services/TextGeneration.ts";
 import { ClaudeTextGenerationServiceLive } from "./ClaudeTextGeneration.ts";
 
@@ -54,18 +55,25 @@ function mockSpawnerLayer(
     code: number;
   },
 ) {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as {
-        command: string;
-        args: ReadonlyArray<string>;
-        options?: MockCommandOptions;
-      };
-      return Effect.succeed(
-        mockHandle(handler(cmd.args, cmd.command, cmd.options?.env, cmd.options?.cwd, cmd.options)),
-      );
-    }),
+  // These fixtures inspect logical CLI arguments, not the scheduling launcher.
+  // The real priority-enabled launch is covered by effectProcessRuntime.test.ts.
+  return Layer.mergeAll(
+    ServerSettingsService.layerTest({ lowerProviderProcessPriority: false }),
+    Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make((command) => {
+        const cmd = command as unknown as {
+          command: string;
+          args: ReadonlyArray<string>;
+          options?: MockCommandOptions;
+        };
+        return Effect.succeed(
+          mockHandle(
+            handler(cmd.args, cmd.command, cmd.options?.env, cmd.options?.cwd, cmd.options),
+          ),
+        );
+      }),
+    ),
   );
 }
 

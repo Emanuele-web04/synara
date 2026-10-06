@@ -1,11 +1,20 @@
-import { Effect } from "effect";
+import { Effect, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 import { providerProcessPriorityEnabled } from "./providerProcessPriority";
 import { ServerSettingsService } from "./serverSettings";
 
 describe("providerProcessPriorityEnabled", () => {
-  it("defaults on without a settings service", async () => {
-    expect(await Effect.runPromise(providerProcessPriorityEnabled)).toBe(true);
+  it("logs the fallback when a standalone runtime has no settings service", async () => {
+    const messages: string[] = [];
+    const logger = Logger.make(({ message }) => messages.push(String(message)));
+    expect(
+      await Effect.runPromise(
+        providerProcessPriorityEnabled.pipe(
+          Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        ),
+      ),
+    ).toBe(true);
+    expect(messages).toEqual([expect.stringContaining("ServerSettingsService is missing")]);
   });
 
   it("reads the current server setting for each new launch", async () => {

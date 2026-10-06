@@ -138,23 +138,23 @@ export function spawnPlannedProcess(
   plan: ProcessLaunchPlan,
   options: RuntimeSpawnOptions = {},
 ): ChildProcess {
-  const child = trackProcessSpawn(
-    nodeSpawn(plan.command, plan.args, {
-      ...runtimeOptions(options),
-      ...(options.ownProcessGroup
-        ? {
-            detached:
-              plan.executionBackend === "native" &&
-              (options.platform ?? process.platform) !== "win32",
-          }
-        : {}),
-      shell: false,
-      windowsHide: plan.windowsHide,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    }),
-  );
-  if (options.lowerPriority) lowerProcessPriority(child.pid, options);
-  return child;
+  const child = nodeSpawn(plan.command, plan.args, {
+    ...runtimeOptions(options),
+    ...(options.ownProcessGroup
+      ? {
+          detached:
+            plan.executionBackend === "native" &&
+            (options.platform ?? process.platform) !== "win32",
+        }
+      : {}),
+    shell: false,
+    windowsHide: plan.windowsHide,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
+  });
+  if (options.lowerPriority && (options.platform ?? process.platform) === "win32") {
+    lowerProcessPriority(child.pid, options);
+  }
+  return trackProcessSpawn(child);
 }
 
 /** Synchronous counterpart used by bounded discovery and compatibility probes. */
