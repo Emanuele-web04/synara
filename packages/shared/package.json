@@ -140,6 +140,10 @@
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
     },
+    "./KeyedDrainableWorker": {
+      "types": "./src/KeyedDrainableWorker.ts",
+      "import": "./src/KeyedDrainableWorker.ts"
+    },
     "./DrainableWorker": {
       "types": "./src/DrainableWorker.ts",
       "import": "./src/DrainableWorker.ts"
