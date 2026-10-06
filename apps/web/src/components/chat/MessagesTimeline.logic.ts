@@ -610,9 +610,9 @@ export function deriveTerminalAssistantMessageIds(
 // Server-posted coordinator notices and provider handoff boundaries keep their own
 // row: they are not turn work, so they never merge into or fold with a turn.
 export function isStandaloneWorkEntry(
-  entry: Pick<WorkLogEntry, "synaraWorkerNotice" | "providerHandoff">,
+  entry: Pick<WorkLogEntry, "synaraWorkerNotice" | "providerHandoff" | "turnFailure">,
 ): boolean {
-  return Boolean(entry.synaraWorkerNotice || entry.providerHandoff);
+  return Boolean(entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure);
 }
 
 // Derives transcript rows from timeline entries while keeping live narration and

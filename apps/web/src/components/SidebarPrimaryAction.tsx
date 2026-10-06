@@ -54,6 +54,7 @@ export function SidebarPrimaryAction({
         size="sm"
         data-active={active}
         aria-current={active ? "page" : undefined}
+        aria-label={label}
         className={cn(
           "group/sidebar-primary-action",
           SIDEBAR_HEADER_ROW_CLASS_NAME,

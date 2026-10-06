@@ -16,6 +16,15 @@ const decode = <S extends Schema.Top>(
 
 const decodeResolvedRule = Schema.decodeUnknownEffect(ResolvedKeybindingRule as never);
 
+it.effect("accepts active thread action keybindings", () =>
+  Effect.gen(function* () {
+    for (const command of ["thread.archive", "thread.snooze", "thread.markUnread"]) {
+      const parsed = yield* decode(KeybindingRule, { key: "mod+alt+shift+a", command });
+      assert.strictEqual(parsed.command, command);
+    }
+  }),
+);
+
 it.effect("accepts customizable model effort cycling rules", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(KeybindingRule, {

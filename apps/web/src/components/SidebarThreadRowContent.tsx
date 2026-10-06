@@ -77,7 +77,10 @@ function ProviderAvatarWithTerminal({
     );
 
   return (
-    <span className="relative inline-flex shrink-0 items-center">
+    <span
+      data-slot="sidebar-thread-provider"
+      className="relative inline-flex shrink-0 items-center"
+    >
       {wrappedAvatar}
       {showBadge ? (
         <Tooltip>
@@ -228,7 +231,19 @@ export function SidebarThreadRowContent({
           terminalCount={terminalCount}
         />
       ) : null}
+      {!showThreadProviderAvatar ||
+      terminalEntryPoint ||
+      (variant === "standard" && isSubagentThread) ? (
+        <span data-slot="sidebar-thread-compact-provider" className="hidden">
+          <ProviderAvatarWithTerminal
+            thread={thread}
+            terminalStatus={terminalStatus}
+            terminalCount={terminalCount}
+          />
+        </span>
+      ) : null}
       <div
+        data-slot="sidebar-thread-title"
         className={cn(
           "flex min-w-0 flex-1 items-center text-left",
           variant === "standard" && isSubagentThread ? "gap-[5px]" : "gap-1.5",

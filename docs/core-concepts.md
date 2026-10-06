@@ -61,6 +61,13 @@ is cancelled, the task and its prompt remain available for retry.
   **All tasks** opens the complete backlog in Beta; Stable keeps these to-do controls hidden.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
+  A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
+  including when no final assistant reply arrives. The notice survives reopening and session
+  recovery; a ready connection does not mean the task finished or is being retried. An explicitly
+  announced provider retry remains active and shows **Provider retrying**. **Continue task** sends
+  a new instruction in the same conversation to verify prior operations and resume remaining work;
+  **Change model** opens the existing composer picker before sending. Earlier failure notices stay
+  in the transcript after later turns. User cancellation keeps its interrupted meaning.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
@@ -144,6 +151,27 @@ Use **Snooze** in a thread's context menu to return to it in 30 minutes, 1 hour,
 and attention badges until the reminder is due. **Return now** cancels the snooze;
 choosing another time reschedules it. Snoozing preserves any running agent work.
 Sending a new message also returns the thread to the list.
+
+On desktop, collapsing the sidebar in Activity view moves the conversation list
+into the outer navigation rail, preserving Activity's section and conversation order,
+filters, and expanded sections, with provider icons and status markers arranged
+vertically between navigation and the activity controls. Opening the sidebar
+returns those same rows to the full list; there is no second compact column.
+Compact Activity omits **Done** and archived conversations, including settled pins;
+opening the full list restores Done. The remaining rows keep Activity's order.
+The classic view and other sidebar surfaces collapse fully instead of showing
+compact conversation icons.
+Hover an icon to see its conversation's information without expanding the sidebar.
+The compact list remains usable for selecting chats and opening their context menus;
+use the sidebar toggle to open the full list. Navigation stays visible beside the
+full sidebar, which keeps its configured theme and transparency.
+The left rail summarizes working conversations, conversations needing
+review, and snoozed conversations. Selecting **Snoozed** opens its section; postponed
+conversations stay out of the work and review counts until they return.
+Hover the eye counter to see unread responses and pending review requests. Its
+interactive card lists the chats in Activity order; selecting one opens it through
+the same navigation as a sidebar row. Hovering alone does not mark a chat read or
+expand the sidebar.
 
 When due, the thread returns to recent activity and Synara shows a reminder using
 your notification settings. If Synara and its server are closed, the overdue
