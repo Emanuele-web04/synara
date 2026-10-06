@@ -1230,7 +1230,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly authRevalidationTimeoutMs: number;
   // Native filesystem promises cannot be cancelled. Keep their permits until
   // they settle, even after the caller's deadline rejects its session origin.
-  private readonly authReadSlots = Semaphore.makeUnsafe(8);
+  // Stay below libuv's default four-worker pool so auth reads cannot occupy it all.
+  private readonly authReadSlots = Semaphore.makeUnsafe(2);
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {

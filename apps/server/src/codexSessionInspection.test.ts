@@ -117,13 +117,13 @@ it.each(["first", "changed-account", "unstable"])(
   },
 );
 
-it("bounds a hung revalidation and fences its origin without stopping a healthy session", async () => {
-  const { manager, context, sessions, threadId, stop } = fixture({ authRevalidationTimeoutMs: 25 });
+it("bounds a hung revalidation without stopping another auth-tracked session", async () => {
+  const { manager, context, sessions, threadId, stop } = fixture({
+    authRevalidationTimeoutMs: 100,
+  });
   const healthyThread = ThreadId.makeUnsafe("healthy-session");
   sessions.set(healthyThread, {
     ...context,
-    authTracking: undefined,
-    authFingerprint: undefined,
     session: { ...context.session, threadId: healthyThread },
   });
   let release!: () => void;
@@ -141,7 +141,8 @@ it("bounds a hung revalidation and fences its origin without stopping a healthy 
   expect(stop).toHaveBeenCalledExactlyOnceWith(threadId);
   await expect(manager.inspectSessionAsync(healthyThread)).resolves.toBeDefined();
   release();
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  const slots = (manager as unknown as { authReadSlots: Semaphore.Semaphore }).authReadSlots;
+  await Effect.runPromise(slots.withPermits(2)(Effect.void));
   await expect(origin.inspect()).rejects.toThrow("revalidated");
   expect(stop).toHaveBeenCalledOnce();
 }, 1_000);
@@ -160,13 +161,13 @@ it("binds queued events to their original context even without a generation tag"
 
 it("retains native I/O leases after timeout and removes expired lease waiters", async () => {
   const { manager, sessions } = fixture({ authRevalidationTimeoutMs: 100 });
-  const contexts = Array.from({ length: 10 }, (_, index) => {
+  const contexts = Array.from({ length: 4 }, (_, index) => {
     const { context } = fixture();
     const threadId = ThreadId.makeUnsafe(`lease-${index}`);
     sessions.set(threadId, { ...context, session: { ...context.session, threadId } });
     return { threadId, homePath: context.codexOptions.homePath };
   });
-  const gates = Array.from({ length: 8 }, () => {
+  const gates = Array.from({ length: 2 }, () => {
     let release!: () => void;
     const promise = new Promise<void>((resolve) => {
       release = resolve;
@@ -179,28 +180,28 @@ it("retains native I/O leases after timeout and removes expired lease waiters", 
     const index = contexts.findIndex(({ homePath }) => homePath === file);
     if (index >= 0 && !started.has(contexts[index]!.homePath)) {
       started.add(contexts[index]!.homePath);
-      if (index < 8) await gates[index]!.promise;
+      if (index < 2) await gates[index]!.promise;
     }
     return realpath(file);
   });
   try {
     const inspections = contexts
-      .slice(0, 8)
+      .slice(0, 2)
       .map(({ threadId }) =>
         expect(manager.inspectSessionAsync(threadId)).rejects.toThrow("revalidated"),
       );
     await Promise.all(inspections);
-    expect(started.size).toBe(8);
-    await expect(manager.inspectSessionAsync(contexts[8]!.threadId)).rejects.toThrow("revalidated");
-    expect(started.has(contexts[8]!.homePath)).toBe(false);
+    expect(started.size).toBe(2);
+    await expect(manager.inspectSessionAsync(contexts[2]!.threadId)).rejects.toThrow("revalidated");
+    expect(started.has(contexts[2]!.homePath)).toBe(false);
     gates[0]!.release();
-    await expect(manager.inspectSessionAsync(contexts[9]!.threadId)).resolves.toBeDefined();
-    expect(started.has(contexts[9]!.homePath)).toBe(true);
-    expect(started.has(contexts[8]!.homePath)).toBe(false);
+    await expect(manager.inspectSessionAsync(contexts[3]!.threadId)).resolves.toBeDefined();
+    expect(started.has(contexts[3]!.homePath)).toBe(true);
+    expect(started.has(contexts[2]!.homePath)).toBe(false);
   } finally {
     for (const gate of gates) gate.release();
     const slots = (manager as unknown as { authReadSlots: Semaphore.Semaphore }).authReadSlots;
-    await Effect.runPromise(slots.withPermits(8)(Effect.void));
+    await Effect.runPromise(slots.withPermits(2)(Effect.void));
   }
 }, 2_000);
 

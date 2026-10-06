@@ -6,13 +6,13 @@ scheduling, provider process priority and the event-loop watchdog are separate w
 
 ## Root cause and change
 
-| Profile finding                                                          | Evidence                                                                                                                                                         | Action                                                                                                                                                                            |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Codex stdout callback scans every live session and revalidates disk auth | `CodexAdapter.listener` → `listSessions` → `pruneStaleAuthSessions` → `contextAuthStalenessMessage`; then `getSessionCodexOptions` revalidates the emitter again | Bind immutable origin metadata without I/O; asynchronously revalidate only the emitter                                                                                            |
-| Main-thread synchronous filesystem chains                                | Fresh loaded upstream `pruneStaleAuthSessions` subtree: 6,919 ms inclusive; `realpathSync`, `lstatSync`, `openSync`, `readFileSync` underneath it                | One shared security algorithm with synchronous compatibility and asynchronous filesystem interpreters                                                                             |
-| Serial asynchronous validation can reduce streaming throughput           | Two pre-review captures dropped 1,444–1,469 events under 40 CPU workers despite responsive HTTP/RPCs                                                             | Coalesce pending checks per session origin; at most one running and one pending check per origin, eight native checks globally; preserve serial publication and admission budgets |
-| Large SQLite history                                                     | Actual hot SQL tested against 304,388 events and 10,016 projected messages in a 1,302,536,192-byte synthetic database                                            | Existing event indexes work; no schema migration justified by the measured tail latency                                                                                           |
-| Checkpoint/provider starts under load                                    | Inline checkpoint/Studio baseline work is inside the global reactor delivery lock; slow starts and reconciliation persist in the load fixture                    | Evidence for the orchestration sibling; no orchestration/checkpoint files changed                                                                                                 |
+| Profile finding                                                          | Evidence                                                                                                                                                         | Action                                                                                                                                                                          |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex stdout callback scans every live session and revalidates disk auth | `CodexAdapter.listener` → `listSessions` → `pruneStaleAuthSessions` → `contextAuthStalenessMessage`; then `getSessionCodexOptions` revalidates the emitter again | Bind immutable origin metadata without I/O; asynchronously revalidate only the emitter                                                                                          |
+| Main-thread synchronous filesystem chains                                | Fresh loaded upstream `pruneStaleAuthSessions` subtree: 6,919 ms inclusive; `realpathSync`, `lstatSync`, `openSync`, `readFileSync` underneath it                | One shared security algorithm with synchronous compatibility and asynchronous filesystem interpreters                                                                           |
+| Serial asynchronous validation can reduce streaming throughput           | Two pre-review captures dropped 1,444–1,469 events under 40 CPU workers despite responsive HTTP/RPCs                                                             | Coalesce pending checks per session origin; at most one running and one pending check per origin, two native checks globally; preserve serial publication and admission budgets |
+| Large SQLite history                                                     | Actual hot SQL tested against 304,388 events and 10,016 projected messages in a 1,302,536,192-byte synthetic database                                            | Existing event indexes work; no schema migration justified by the measured tail latency                                                                                         |
+| Checkpoint/provider starts under load                                    | Inline checkpoint/Studio baseline work is inside the global reactor delivery lock; slow starts and reconciliation persist in the load fixture                    | Evidence for the orchestration sibling; no orchestration/checkpoint files changed                                                                                               |
 
 Auth results are never cached. The shared algorithm retains logical/canonical home
 identity, symlink rejection, `O_NOFOLLOW`, descriptor identity/mode/size/timestamps,
@@ -31,10 +31,14 @@ ordered consumer and checks the originating context's rejection fence again.
 The five-second revalidation deadline includes waiting for a native I/O lease.
 A timeout rejects that origin and releases its queued publication work. Native fs
 promises cannot be cancelled, so started reads retain their semaphore permits until
-settlement and descriptor cleanup. Timed-out lease waiters are removed. Eight
+settlement and descriptor cleanup. Timed-out lease waiters are removed. Two
 permanently hung reads can exhaust the native-read budget; subsequent origins then
 fail closed at their own deadlines rather than accumulating more native reads.
-This bounds server work but does not make an unavailable filesystem healthy.
+Two permits keep this auth path below the default four-worker libuv pool. Other
+server fs work retains pool capacity, though this does not reserve workers against
+other pool users or a smaller configured pool. The deadline still fails closed for
+origins that spend it waiting for a lease; relaxing that policy is not part of this
+change. This bounds server work but does not make an unavailable filesystem healthy.
 
 Unexpected inspector errors also reject the original origin and emit a fixed error
 message with its thread ID, without the error or credentials. They cannot silently
@@ -45,7 +49,9 @@ forge that exception. Dropped/evicted events now produce warnings at totals 1, 2
 8, etc., avoiding both silent loss and a warning for every delta.
 
 Startup/private permission checks and the manager's synchronous lifecycle APIs remain
-synchronous. They no longer run for every stdout event: the largest remaining
+synchronous. Their pre-existing `file-changed` handling still rejects immediately
+without the async path's bounded retry; adding equivalent lifecycle retries is a
+follow-up outside this PR. They no longer run for every stdout event: the largest remaining
 `pruneStaleAuthSessions` loaded profile subtree is 481–502 ms inclusive versus
 6,919 ms at the base (including startup/shutdown). Other legacy filesystem sites not implicated by this profile are unchanged;
 their references are frozen in
@@ -60,30 +66,37 @@ and indirect calls can hide references, and moving an existing call into a hot p
 within the same file still requires review/profiling. This narrowly targets blocking filesystem APIs rather than banning harmless
 Node builtins throughout the server.
 
-## Before / after (final production behavior)
+## Before / after (profiled revision `901c5655f`)
 
 A fresh control at upstream `a83a6248b` and two final captures use the same synthetic
 `auth.json`/`config.toml`, eight sessions, 500 deltas per session and four tool pairs.
 Each cell is **upstream control → final range across two captures**, in milliseconds.
 The original profile was collected on a much busier shared host; these fresh latency
-numbers replace its preliminary latency table.
+numbers replace its preliminary latency table. All latency tables below describe
+`901c5655f` with eight native-read permits. The round-two reduction to two permits
+was verified with focused tests and has not been reprofiled; these numbers are not
+a measurement of the lower-permit revision.
 
 | Workload          |         Event-loop p99 |         Event-loop max |        Command RPC p99 |        Command RPC max |          `/health` p99 |          `/health` max |
 | ----------------- | ---------------------: | ---------------------: | ---------------------: | ---------------------: | ---------------------: | ---------------------: |
 | No added CPU load |    26.94 → 16.08–16.55 |    67.50 → 60.10–63.80 |    72.69 → 23.17–25.43 |    94.06 → 44.44–48.53 |     47.19 → 9.15–11.30 |    48.84 → 26.66–28.00 |
 | 40 CPU workers    | 220.73 → 118.42–138.67 | 347.60 → 206.70–237.63 | 734.05 → 260.95–348.27 | 734.05 → 289.80–412.93 | 496.97 → 126.88–154.18 | 496.97 → 132.26–180.64 |
 
-| Workload          | Synchronous fs calls: upstream → final | Instrumented fs elapsed: upstream → final | Provider emission → publication p99: upstream → final |
-| ----------------- | -------------------------------------: | ----------------------------------------: | ----------------------------------------------------: |
-| No added CPU load |              1,127,023 → 24,820–25,688 |                         3900 → 131–134 ms |                              36.00 → 100.00–105.00 ms |
-| 40 CPU workers    |                376,182 → 20,548–21,449 |                         5683 → 441–497 ms |                         267.00 → 1,407.00–1,810.00 ms |
+| Workload          | Synchronous fs calls: upstream → final | Instrumented fs elapsed: upstream → final | Provider emission → publication p99: upstream → final | Deltas published in window: upstream → final |
+| ----------------- | -------------------------------------: | ----------------------------------------: | ----------------------------------------------------: | -------------------------------------------: |
+| No added CPU load |              1,127,023 → 24,820–25,688 |                         3900 → 131–134 ms |                              36.00 → 100.00–105.00 ms |                                4,000 → 4,000 |
+| 40 CPU workers    |                376,182 → 20,548–21,449 |                         5683 → 441–497 ms |                         267.00 → 1,407.00–1,810.00 ms |                                2,785 → 4,000 |
 
 Async validation has a streaming latency cost relative to synchronous validation on
 a cached local filesystem. The upstream callback validates before ingress admission,
 so its admission-to-publication delay alone would misleadingly look almost zero.
 The emission timestamps include that pre-admission work. The final version improves
 server responsiveness and delivers more events under CPU pressure, while adding fs
-pool/ordered-publication waiting. This is not a claim of faster streaming than upstream.
+pool/ordered-publication waiting. The loaded upstream control admitted 2,897 events
+and published only 2,785 of the 4,000 emitted deltas in the measurement window. Its
+267 ms publication p99 excludes the 1,215 deltas still upstream of admission, and
+its loop/RPC percentiles describe less delivered work than the async captures.
+These are unequal-throughput observations, not a claim of faster streaming than upstream.
 
 ## Review revision: ingress throughput
 
@@ -204,9 +217,10 @@ the measured read plans.
 
 Focused regressions publish 3,000 ordered deltas through three gated checks with no
 loss, verify every coalesced event's check starts after admission, and exercise
-count/byte saturation with terminal eviction. A native-read regression holds eight
-reads past their deadlines: a ninth times out without starting, then a new context
-succeeds after one read settles. Concurrent same-account rewrites succeed on retry;
+count/byte saturation with terminal eviction. A native-read regression holds two
+reads past their deadlines: a third times out without starting, then a new context
+succeeds after one read settles. A separate deadline test keeps another auth-tracked
+session healthy while one read is held. Concurrent same-account rewrites succeed on retry;
 account changes and three unstable snapshots still reject, closing all descriptors.
 
 Focused tests also cover async-only reads, descriptor races and closure, home replacement,
