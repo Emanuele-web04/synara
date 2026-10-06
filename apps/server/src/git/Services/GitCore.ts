@@ -218,6 +218,8 @@ export interface GitCoreShape {
   ) => Effect.Effect<A, E | GitCommandError, R>;
   /**
    * Execute a raw Git command.
+   * Live GitCore instances share eight execution slots, including long and unlimited commands.
+   * Queue time precedes the command deadline; each command keeps its existing timeout policy.
    */
   readonly execute: (input: ExecuteGitInput) => Effect.Effect<ExecuteGitResult, GitCommandError>;
 

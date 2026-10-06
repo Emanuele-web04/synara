@@ -59,6 +59,7 @@ import { ServerConfig } from "../../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+const gitProcesses = Semaphore.makeUnsafe(8);
 // Writes can scale with repository size and network speed. Bound captured logs,
 // not the operation; caller interruption still closes the owned process scope.
 const GIT_MUTATION_OPTIONS = { timeoutMs: null, outputMode: "truncate" } as const;
@@ -909,6 +910,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
     }
+
+    const executeWithoutAdmission = execute;
+    // Bound all GitCore commands across instances, including checkpoint writes
+    // and unlimited mutations. Admission precedes each command's own deadline
+    // and owns the complete scoped execution through cancellation cleanup.
+    execute = (input) => gitProcesses.withPermit(executeWithoutAdmission(input));
 
     const executeGit = (
       operation: string,
