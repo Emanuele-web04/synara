@@ -59,97 +59,116 @@ describe("StudioOutputReactor", () => {
     );
   });
 
-  it("uses the pre-dispatch baseline and captures files when the provider session exits", async () => {
-    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "synara-studio-reactor-"));
-    temporaryRoots.push(workspaceRoot);
-    const threadId = ThreadId.makeUnsafe("studio-thread");
-    const projectId = ProjectId.makeUnsafe("studio-project");
-    const turnId = TurnId.makeUnsafe("studio-turn");
-    const runtimeEvents = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
-    const commands: OrchestrationCommand[] = [];
+  it.each(["prepared", "cancelled", "missing"] as const)(
+    "uses only a pre-dispatch Studio baseline when preparation is %s",
+    async (preparation) => {
+      const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "synara-studio-reactor-"));
+      temporaryRoots.push(workspaceRoot);
+      const threadId = ThreadId.makeUnsafe("studio-thread");
+      const projectId = ProjectId.makeUnsafe("studio-project");
+      const turnId = TurnId.makeUnsafe("studio-turn");
+      const runtimeEvents = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+      const commands: OrchestrationCommand[] = [];
 
-    const providerService = {
-      streamEvents: Stream.fromPubSub(runtimeEvents),
-    } as unknown as ProviderServiceShape;
-    const orchestrationEngine = {
-      dispatch: (command: OrchestrationCommand) =>
-        Effect.sync(() => {
-          commands.push(command);
-          return { sequence: commands.length };
-        }),
-      streamDomainEvents: Stream.empty,
-    } as unknown as OrchestrationEngineShape;
-    const projectionSnapshotQuery = {
-      getThreadShellById: () =>
-        Effect.succeed(
-          Option.some({
-            id: threadId,
-            projectId,
-            envMode: "local",
-            worktreePath: null,
-          } as never),
-        ),
-      getProjectShellById: () =>
-        Effect.succeed(
-          Option.some({
-            id: projectId,
-            kind: "studio",
-            workspaceRoot,
-          } as never),
-        ),
-      getSpaceShellById: () => Effect.succeed(Option.none()),
-    } as unknown as ProjectionSnapshotQueryShape;
+      const providerService = {
+        streamEvents: Stream.fromPubSub(runtimeEvents),
+      } as unknown as ProviderServiceShape;
+      const orchestrationEngine = {
+        dispatch: (command: OrchestrationCommand) =>
+          Effect.sync(() => {
+            commands.push(command);
+            return { sequence: commands.length };
+          }),
+        streamDomainEvents: Stream.empty,
+      } as unknown as OrchestrationEngineShape;
+      const projectionSnapshotQuery = {
+        getThreadShellById: () =>
+          Effect.succeed(
+            Option.some({
+              id: threadId,
+              projectId,
+              envMode: "local",
+              worktreePath: null,
+            } as never),
+          ),
+        getProjectShellById: () =>
+          Effect.succeed(
+            Option.some({
+              id: projectId,
+              kind: "studio",
+              workspaceRoot,
+            } as never),
+          ),
+        getSpaceShellById: () => Effect.succeed(Option.none()),
+      } as unknown as ProjectionSnapshotQueryShape;
 
-    const layer = StudioOutputReactorLive.pipe(
-      Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
-      Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
-      Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
-      Layer.provideMerge(NodeServices.layer),
-    );
-    runtime = ManagedRuntime.make(layer);
-    const reactor = await runtime.runPromise(Effect.service(StudioOutputReactor));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
+      const layer = StudioOutputReactorLive.pipe(
+        Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
+        Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
+        Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      runtime = ManagedRuntime.make(layer);
+      const reactor = await runtime.runPromise(Effect.service(StudioOutputReactor));
+      scope = await Effect.runPromise(Scope.make("sequential"));
+      await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
 
-    // This file appears after the command reactor's awaited preparation but before
-    // the provider acknowledges turn.started. A turn.started-time scan would miss it.
-    await runtime.runPromise(reactor.captureBaselineBeforeTurn(threadId));
-    await writeFile(path.join(workspaceRoot, "report.md"), "finished report");
+      // This file appears after the command reactor's awaited preparation but before
+      // the provider acknowledges turn.started. A turn.started-time scan would miss it.
+      if (preparation !== "missing") {
+        await runtime.runPromise(reactor.captureBaselineBeforeTurn(threadId));
+      }
+      if (preparation === "cancelled") {
+        await runtime.runPromise(reactor.cancelPendingTurnBaseline(threadId));
+      }
+      await writeFile(path.join(workspaceRoot, "report.md"), "finished report");
 
-    await Effect.runPromise(
-      PubSub.publish(runtimeEvents, {
-        type: "turn.started",
-        eventId: EventId.makeUnsafe("turn-started"),
-        provider: "codex",
+      await Effect.runPromise(
+        PubSub.publish(runtimeEvents, {
+          type: "turn.started",
+          eventId: EventId.makeUnsafe("turn-started"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt: "2026-07-08T10:00:00.000Z",
+          payload: {},
+        }).pipe(Effect.asVoid),
+      );
+      if (preparation !== "prepared") {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await Effect.runPromise(reactor.drain);
+        await writeFile(path.join(workspaceRoot, "after-start.md"), "late output");
+      }
+      await Effect.runPromise(
+        PubSub.publish(runtimeEvents, {
+          type: "session.exited",
+          eventId: EventId.makeUnsafe("session-exited"),
+          provider: "codex",
+          threadId,
+          createdAt: "2026-07-08T10:00:01.000Z",
+          payload: { reason: "provider crashed" },
+        }).pipe(Effect.asVoid),
+      );
+
+      if (preparation !== "prepared") {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await Effect.runPromise(reactor.drain);
+        expect(commands).toEqual([]);
+        return;
+      }
+      await waitFor(() => commands.length === 1);
+      expect(commands[0]).toMatchObject({
+        type: "thread.activity.append",
         threadId,
-        turnId,
-        createdAt: "2026-07-08T10:00:00.000Z",
-        payload: {},
-      }).pipe(Effect.asVoid),
-    );
-    await Effect.runPromise(
-      PubSub.publish(runtimeEvents, {
-        type: "session.exited",
-        eventId: EventId.makeUnsafe("session-exited"),
-        provider: "codex",
-        threadId,
-        createdAt: "2026-07-08T10:00:01.000Z",
-        payload: { reason: "provider crashed" },
-      }).pipe(Effect.asVoid),
-    );
-
-    await waitFor(() => commands.length === 1);
-    expect(commands[0]).toMatchObject({
-      type: "thread.activity.append",
-      threadId,
-      activity: {
-        kind: STUDIO_OUTPUTS_ACTIVITY_KIND,
-        turnId,
-        payload: {
-          itemType: "studio_outputs",
-          data: { files: [{ path: "report.md" }] },
+        activity: {
+          kind: STUDIO_OUTPUTS_ACTIVITY_KIND,
+          turnId,
+          payload: {
+            itemType: "studio_outputs",
+            data: { files: [{ path: "report.md" }] },
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 });

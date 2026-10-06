@@ -181,6 +181,7 @@ import {
 } from "../providerIntentClassification.ts";
 import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
+import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
@@ -591,6 +592,8 @@ const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
+const PRE_TURN_BASELINE_TIMEOUT = Duration.seconds(5);
+const PROVIDER_CACHE_RESPONSE_TIMEOUT = Duration.minutes(15);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
@@ -841,10 +844,16 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 export interface ProviderCommandReactorLiveOptions {
   readonly commandEventTimeout?: Duration.Duration;
+  readonly preTurnBaselineTimeout?: Duration.Duration;
+  readonly cacheResponseTimeout?: Duration.Duration;
+  readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
 }
 
 interface ProviderCommandReactorConfigShape {
   readonly commandEventTimeout: Duration.Duration;
+  readonly preTurnBaselineTimeout: Duration.Duration;
+  readonly cacheResponseTimeout: Duration.Duration;
+  readonly gatewayOperationCompletionWaitTimeout: Duration.Duration;
 }
 
 class ProviderCommandReactorConfig extends ServiceMap.Service<
@@ -853,7 +862,12 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
 >()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
 
 const make = Effect.gen(function* () {
-  const { commandEventTimeout } = yield* ProviderCommandReactorConfig;
+  const {
+    commandEventTimeout,
+    preTurnBaselineTimeout,
+    cacheResponseTimeout,
+    gatewayOperationCompletionWaitTimeout,
+  } = yield* ProviderCommandReactorConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const deliveryRepository = yield* OrchestrationEventDeliveryRepository;
   const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
@@ -881,7 +895,14 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettings = yield* ServerSettingsService;
 
-  const waitForGatewayOperationCompletion = Effect.fnUntraced(function* (operationId: string) {
+  // All children share one poll and warning for their creating operation. A
+  // failed wait cannot authorize a rename later; retain that outcome in a
+  // bounded cache rather than restarting a two-minute wait on every turn.
+  const gatewayCompletionWaits = yield* makeKeyedSingleFlightCache<boolean, never>({
+    maxEntries: 256,
+    ttlMs: Number.POSITIVE_INFINITY,
+  });
+  const readGatewayOperationCompletion = Effect.fnUntraced(function* (operationId: string) {
     const completed = yield* Effect.gen(function* () {
       while (true) {
         const operation = yield* gatewayOperations
@@ -905,7 +926,7 @@ const make = Effect.gen(function* () {
         }
         yield* Effect.sleep(Duration.millis(100));
       }
-    }).pipe(Effect.timeoutOption(GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT));
+    }).pipe(Effect.timeoutOption(gatewayOperationCompletionWaitTimeout));
     if (Option.isNone(completed)) {
       yield* Effect.logWarning(
         "provider command reactor timed out waiting for creating gateway operation; skipping worktree branch rename",
@@ -915,6 +936,8 @@ const make = Effect.gen(function* () {
     }
     return completed.value;
   });
+  const waitForGatewayOperationCompletion = (operationId: string) =>
+    gatewayCompletionWaits.get(operationId, readGatewayOperationCompletion(operationId));
   const managedAttachments = yield* ManagedAttachmentRepository;
   const serverConfig = yield* ServerConfig;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -3422,6 +3445,7 @@ const make = Effect.gen(function* () {
           : providerService.sendTurn(turnInput);
       });
 
+    let baselineFailure: string | undefined;
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
         return;
@@ -3438,8 +3462,8 @@ const make = Effect.gen(function* () {
       }
 
       // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not early provider edits. skipIfExists keeps
-      // a backup baseline from CheckpointReactor as the first-writer winner.
+      // the user's submit moment, not early provider edits. This hook is the
+      // sole source capturer; reactors may only alias refs already captured.
       yield* checkpointStore.captureCheckpoint({
         cwd,
         checkpointRef: checkpointRefForThreadMessageStart(
@@ -3449,24 +3473,56 @@ const make = Effect.gen(function* () {
         skipIfExists: true,
       });
     }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to capture provider turn start checkpoint", {
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        baselineFailure = Cause.pretty(cause);
+        return Effect.logWarning("failed to capture provider turn start checkpoint", {
           threadId: input.threadId,
           messageId: input.messageId,
           cause: Cause.pretty(cause),
-        }),
-      ),
+        });
+      }),
     );
 
-    // Both Git and non-Git Studio baselines must finish before provider execution
-    // starts. Otherwise a fast command can write a file while the baseline scan is
-    // still running and make that output look unchanged at turn completion.
+    // Both owners stop before provider execution begins. The timeout interrupts
+    // their work and awaits cleanup, so a skipped baseline cannot publish late.
     const capturePreTurnBaselines = Effect.all(
       [
         captureMessageStartCheckpoint,
         studioOutputReactor.captureBaselineBeforeTurn(input.threadId),
       ],
       { concurrency: 2, discard: true },
+    ).pipe(
+      Effect.timeoutOption(preTurnBaselineTimeout),
+      Effect.flatMap((captured) => {
+        if (Option.isSome(captured) && baselineFailure === undefined) return Effect.void;
+        const detail = Option.isNone(captured)
+          ? `The pre-turn baseline did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms. The turn continued without it; checkpoint diff and file undo may be unavailable.`
+          : `The pre-turn baseline could not be captured. The turn continued without it; checkpoint diff and file undo may be unavailable. ${baselineFailure}`;
+        return studioOutputReactor.cancelPendingTurnBaseline(input.threadId).pipe(
+          Effect.andThen(
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: serverCommandId("checkpoint-baseline-skipped"),
+              threadId: input.threadId,
+              activity: {
+                id: EventId.makeUnsafe(crypto.randomUUID()),
+                tone: "info",
+                kind: "checkpoint.baseline.skipped",
+                summary: "Turn continued without a checkpoint baseline",
+                payload: { detail, messageId: input.messageId },
+                turnId: null,
+                createdAt: input.createdAt,
+              },
+              createdAt: input.createdAt,
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("failed to surface skipped pre-turn baseline", { error }),
+          ),
+          Effect.asVoid,
+        );
+      }),
     );
     const cancelPendingStudioBaseline = studioOutputReactor.cancelPendingTurnBaseline(
       input.threadId,
@@ -7402,8 +7458,9 @@ const make = Effect.gen(function* () {
         const workerResult = yield* runBoundedProviderCall({
           label: `The provider command '${event.type}'`,
           // A cache choice owns a durable delivery outside the ordered source.
-          // Native compaction and its follow-up are not wall-clock failures.
-          timeout: cacheResponse ? Duration.infinity : commandEventTimeout,
+          // Native compaction and its follow-up get a longer finite deadline;
+          // a provider that never answers must still release its durable claim.
+          timeout: cacheResponse ? cacheResponseTimeout : commandEventTimeout,
           call:
             cacheResponse &&
             event.type === "thread.claude-cache-response-requested" &&
@@ -8383,11 +8440,28 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorLiveOptions) =>
-  Layer.effect(ProviderCommandReactor, make).pipe(
+export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorLiveOptions) => {
+  const preTurnBaselineTimeout = options?.preTurnBaselineTimeout ?? PRE_TURN_BASELINE_TIMEOUT;
+  const cacheResponseTimeout = options?.cacheResponseTimeout ?? PROVIDER_CACHE_RESPONSE_TIMEOUT;
+  const gatewayOperationCompletionWaitTimeout =
+    options?.gatewayOperationCompletionWaitTimeout ?? GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT;
+  for (const [name, duration] of Object.entries({
+    preTurnBaselineTimeout,
+    cacheResponseTimeout,
+    gatewayOperationCompletionWaitTimeout,
+  })) {
+    const timeoutMs = Duration.toMillis(duration);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new RangeError(`${name} must be positive and finite.`);
+    }
+  }
+  return Layer.effect(ProviderCommandReactor, make).pipe(
     Layer.provide(
       Layer.succeed(ProviderCommandReactorConfig, {
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,
+        preTurnBaselineTimeout,
+        cacheResponseTimeout,
+        gatewayOperationCompletionWaitTimeout,
       }),
     ),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
@@ -8395,5 +8469,6 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
     Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
     Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
   );
+};
 
 export const ProviderCommandReactorLive = makeProviderCommandReactorLive();

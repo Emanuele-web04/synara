@@ -300,6 +300,12 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
+Pre-turn checkpoint and output baselines share a five-second capture budget. If checkpoint capture
+fails or the combined budget expires, Synara reports the skipped baseline and lets the provider
+start after cancellation cleanup finishes. It never reconstructs the initial state from files the
+provider may already have changed. Diff and undo operations that require an exact initial checkpoint
+remain unavailable when that baseline is missing.
+
 ## Hubs
 
 A hub is a coordinated home for related work. You talk to one coordinator conversation, and it

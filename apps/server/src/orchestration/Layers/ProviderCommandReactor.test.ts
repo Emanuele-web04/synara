@@ -46,6 +46,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   ManagedRuntime,
   Option,
   PubSub,
@@ -313,6 +314,10 @@ describe("ProviderCommandReactor", () => {
     readonly startReactor?: boolean;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
     readonly commandEventTimeout?: Duration.Duration;
+    readonly preTurnBaselineTimeout?: Duration.Duration;
+    readonly cacheResponseTimeout?: Duration.Duration;
+    readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
+    readonly logMessages?: string[];
     readonly gatewayOperationId?: string;
     readonly gitWritingModelSelection?: ModelSelection;
     readonly omitStopRuntimeSession?: boolean;
@@ -728,11 +733,7 @@ describe("ProviderCommandReactor", () => {
             : Option.none(),
         ),
     } as unknown as (typeof ProjectAgentRepository)["Service"]);
-    const reactorLayer = makeProviderCommandReactorLive(
-      input?.commandEventTimeout === undefined
-        ? undefined
-        : { commandEventTimeout: input.commandEventTimeout },
-    );
+    const reactorLayer = makeProviderCommandReactorLive(input);
     const layer = Layer.mergeAll(reactorLayer, ProviderRuntimeIngestionLive).pipe(
       Layer.provideMerge(projectAgentLayer),
       Layer.provideMerge(projectAgentRepositoryLayer),
@@ -843,7 +844,19 @@ describe("ProviderCommandReactor", () => {
     let reactorStarted = false;
     const startReactor = async () => {
       if (reactorStarted) return;
-      await Effect.runPromise(reactor.start.pipe(Scope.provide(harnessScope)));
+      const start = reactor.start.pipe(Scope.provide(harnessScope));
+      await Effect.runPromise(
+        input?.logMessages
+          ? start.pipe(
+              Effect.provide(
+                Logger.layer(
+                  [Logger.make(({ message }) => input.logMessages!.push(String(message)))],
+                  { mergeWithExisting: false },
+                ),
+              ),
+            )
+          : start,
+      );
       reactorStarted = true;
     };
     if (input?.startReactor !== false) {
@@ -2738,6 +2751,70 @@ describe("ProviderCommandReactor", () => {
         expect(startClaudeCompaction).toHaveBeenCalledTimes(1);
       },
     );
+
+    it("settles a hung cache response under its finite deadline", async () => {
+      let cleanedUp = false;
+      const release = Deferred.makeUnsafe<void>();
+      const observation = expiredCacheObservation();
+      const startClaudeCompaction = vi.fn<
+        NonNullable<ProviderServiceShape["startClaudeCompaction"]>
+      >((input) =>
+        Deferred.await(release).pipe(
+          Effect.as(input),
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              cleanedUp = true;
+            }),
+          ),
+        ),
+      );
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+        getClaudeCacheObservation: () => Effect.succeed(observation),
+        startClaudeCompaction,
+        cacheResponseTimeout: Duration.millis(100),
+      });
+      const review = await sendHeldMessage(harness);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.claude-cache.respond",
+          commandId: CommandId.makeUnsafe("cmd-cache-response-deadline"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          reviewId: review.reviewId,
+          messageId: review.messageId,
+          decision: "compact",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      try {
+        await waitFor(() => startClaudeCompaction.mock.calls.length === 1, 500);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(cleanedUp).toBe(true);
+        await waitFor(async () =>
+          (
+            await Effect.runPromise(
+              harness.reactor.listBlockingDeliveries({
+                threadId: ThreadId.makeUnsafe("thread-1"),
+                limit: 10,
+              }),
+            )
+          ).some((delivery) => delivery.state === "uncertain"),
+        );
+        const blockers = await Effect.runPromise(
+          harness.reactor.listBlockingDeliveries({
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            limit: 10,
+          }),
+        );
+        expect(blockers).toContainEqual(expect.objectContaining({ state: "uncertain" }));
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        const settledReview = (await readHarnessThread(harness))?.claudeCacheReview;
+        expect(settledReview?.status).toBe("uncertain");
+        expect(settledReview?.error).toContain("did not respond within 100ms");
+      } finally {
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+      }
+    });
 
     it("keeps an operator retried slow cache response alive beyond the command deadline", async () => {
       const { harness, startClaudeCompaction } = await createCompactionHarness(
@@ -11356,6 +11433,68 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
+  it.each(["git", "studio"] as const)(
+    "continues after a slow %s baseline deadline only after capture cleanup",
+    async (kind) => {
+      let cleanedUp = false;
+      let captureStarted = false;
+      const release = Deferred.makeUnsafe<void>();
+      const hungCapture = Effect.sync(() => {
+        captureStarted = true;
+      }).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.onInterrupt(() =>
+          Effect.sleep("20 millis").pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                cleanedUp = true;
+              }),
+            ),
+          ),
+        ),
+      );
+      const harness = await createHarness({
+        preTurnBaselineTimeout: Duration.millis(30),
+        ...(kind === "git"
+          ? {
+              checkpointStore: {
+                isGitRepository: () => Effect.succeed(true),
+                captureCheckpoint: () => hungCapture,
+              },
+            }
+          : { studioOutputReactor: { captureBaselineBeforeTurn: () => hungCapture } }),
+      });
+      let cleanedUpAtSend = false;
+      const send = harness.sendTurn.getMockImplementation()!;
+      harness.sendTurn.mockImplementationOnce((input) => {
+        cleanedUpAtSend = cleanedUp;
+        return send(input);
+      });
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `baseline-deadline-${kind}`,
+        text: "Continue after a bounded baseline",
+        createdAt: new Date().toISOString(),
+      });
+      try {
+        await waitFor(() => captureStarted, 500);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect(cleanedUpAtSend).toBe(true);
+        expect(cleanedUp).toBe(true);
+        expect(harness.cancelPendingStudioOutputBaseline).toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.activities).toContainEqual(
+          expect.objectContaining({
+            kind: "checkpoint.baseline.skipped",
+            tone: "info",
+            payload: expect.objectContaining({ detail: expect.stringContaining("undo") }),
+          }),
+        );
+      } finally {
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+      }
+    },
+  );
+
   it("waits for the Studio output baseline before sending the provider turn", async () => {
     let releaseCapture: (() => void) | undefined;
     const captureGate = new Promise<void>((resolve) => {
@@ -12270,6 +12409,74 @@ describe("ProviderCommandReactor", () => {
       associatedWorktreeBranch: "synara/app-startup-crash",
       associatedWorktreeRef: "synara/app-startup-crash",
     });
+  });
+
+  it("shares one gateway completion wait and timeout warning per creating operation", async () => {
+    const operationId = "gateway-shared-timeout";
+    const messages: string[] = [];
+    const harness = await createHarness({
+      gatewayOperationId: operationId,
+      gatewayOperationCompletionWaitTimeout: Duration.millis(100),
+      logMessages: messages,
+    });
+    harness.generateBranchName.mockImplementation(() => Effect.succeed({ branch: "renamed" }));
+    await harness.reserveGatewayOperation(operationId);
+    await harness.markGatewayOperationDispatching(operationId);
+    const createdAt = new Date().toISOString();
+    const other = ThreadId.makeUnsafe("gateway-other-thread");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("gateway-other-create"),
+        threadId: other,
+        projectId: asProjectId("project-1"),
+        title: "Other gateway child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        creationSource: "synara_mcp",
+        gatewayOperationId: operationId,
+        gatewayOperationIndex: 1,
+        createdAt,
+      }),
+    );
+    for (const [index, threadId] of [ThreadId.makeUnsafe("thread-1"), other].entries()) {
+      const branch = index === 0 ? "synara/cb661f0d" : "synara/cb661f0e";
+      const cwd = `/tmp/provider-project/.worktrees/${branch.slice(7)}`;
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe(`gateway-other-meta-${index}`),
+          threadId,
+          envMode: "worktree",
+          branch,
+          worktreePath: cwd,
+          associatedWorktreePath: cwd,
+          associatedWorktreeBranch: branch,
+          associatedWorktreeRef: branch,
+        }),
+      );
+      await dispatchHarnessUserTurn(harness, {
+        threadId,
+        messageId: `gateway-shared-message-${index}`,
+        text: "Rename this child",
+        createdAt,
+      });
+    }
+    try {
+      await waitFor(() => harness.generateBranchName.mock.calls.length === 2, 500);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(
+        messages.filter((message) =>
+          message.includes("timed out waiting for creating gateway operation"),
+        ),
+      ).toHaveLength(1);
+      expect(harness.renameBranch).not.toHaveBeenCalled();
+    } finally {
+      await harness.completeGatewayOperation(operationId);
+    }
   });
 
   it("waits for gateway operation completion before renaming its temporary branch", async () => {

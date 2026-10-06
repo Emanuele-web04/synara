@@ -160,39 +160,27 @@ const make = Effect.gen(function* () {
     threadId,
   ) => Effect.sync(() => pendingBaselineByThread.delete(threadId)).pipe(Effect.asVoid);
 
-  const associateTurnStartBaseline = Effect.fnUntraced(function* (
+  const associateTurnStartBaseline = (
     event: Extract<ProviderRuntimeEvent, { type: "turn.started" }>,
-  ) {
-    if (event.turnId === undefined) {
-      return;
-    }
-    const key = baselineKey(event.threadId, event.turnId);
-    if (baselineByTurn.has(key)) {
-      return;
-    }
-    const prepared = pendingBaselineByThread.get(event.threadId);
-    pendingBaselineByThread.delete(event.threadId);
-    if (prepared) {
-      baselineByTurn.set(key, { ...prepared, turnId: event.turnId });
-      return;
-    }
+  ) =>
+    Effect.sync(() => {
+      if (event.turnId === undefined) {
+        return;
+      }
+      const key = baselineKey(event.threadId, event.turnId);
+      if (baselineByTurn.has(key)) {
+        return;
+      }
+      const prepared = pendingBaselineByThread.get(event.threadId);
+      pendingBaselineByThread.delete(event.threadId);
+      if (prepared) {
+        baselineByTurn.set(key, { ...prepared, turnId: event.turnId });
+        return;
+      }
 
-    // Provider-native/subagent turns can bypass ProviderCommandReactor. Preserve
-    // best-effort capture for those paths, while ordinary user turns always use
-    // the awaited pre-dispatch baseline above.
-    const workspaceRoot = yield* resolveStudioScanRoot(event.threadId);
-    if (!workspaceRoot) {
-      return;
-    }
-    const files = yield* scanWorkspaceFiles(workspaceRoot);
-    makeRoomForBaseline();
-    baselineByTurn.set(key, {
-      threadId: event.threadId,
-      turnId: event.turnId,
-      workspaceRoot,
-      files,
+      // An absent preparation may have timed out or been cancelled. Never scan
+      // at turn.started: provider edits could already be part of that baseline.
     });
-  });
 
   const persistBaselineOutputs = Effect.fnUntraced(function* (input: {
     readonly baseline: StudioTurnBaseline;
