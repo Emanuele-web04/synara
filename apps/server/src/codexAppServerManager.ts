@@ -2414,8 +2414,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       signal?.throwIfAborted();
       const launchAuthFingerprint = processLaunch.authFingerprint;
+      const lowerPriority = (await this.runPromise(providerProcessPriorityEnabled)) as boolean;
+      signal?.throwIfAborted();
       const child = this.spawnAppServer({
-        lowerPriority: (await this.runPromise(providerProcessPriorityEnabled)) as boolean,
+        lowerPriority,
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: processLaunch.env,

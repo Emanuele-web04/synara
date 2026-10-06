@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { Effect, ServiceMap } from "effect";
+import { ServerSettingsService } from "./serverSettings";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -273,9 +275,12 @@ it("reads recent and older Codex summaries through bounded JSONL frames without 
   }
 });
 
-function createSyntheticCodexManager(fake: ReturnType<typeof createSyntheticCodexAppServer>) {
+function createSyntheticCodexManager(
+  fake: ReturnType<typeof createSyntheticCodexAppServer>,
+  services?: ConstructorParameters<typeof CodexAppServerManager>[0],
+) {
   const teardownProcessTree = vi.fn(async () => ({ escalated: false, signalErrors: [] }));
-  const manager = new CodexAppServerManager(undefined, {
+  const manager = new CodexAppServerManager(services, {
     spawnAppServer: fake.spawnAppServer,
     teardownProcessTree,
   });
@@ -3915,6 +3920,55 @@ describe("thread checkpoint control", () => {
       codexOptions,
     });
     expect(discovery).toHaveBeenCalledWith("/repo", codexOptions);
+  });
+  it("does not spawn a fork runtime after cancellation during priority policy loading", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* ServerSettingsService;
+      }).pipe(Effect.provide(ServerSettingsService.layerTest())),
+    );
+    let release!: () => void;
+    let policyStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      policyStarted = resolve;
+    });
+    const services = ServiceMap.make(ServerSettingsService, {
+      ...settings,
+      getSettings: Effect.promise(() => {
+        policyStarted();
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }).pipe(Effect.andThen(settings.getSettings)),
+    });
+    const { manager } = createSyntheticCodexManager(fake, services);
+    const controller = new AbortController();
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-cancel-priority-"));
+    try {
+      const fork = manager.forkThread(
+        {
+          sourceThreadId: asThreadId("source-priority"),
+          threadId: asThreadId("target-priority"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          cwd,
+          runtimeMode: "full-access",
+          expectedCodexContinuationGeneration: SYNTHETIC_CONTINUATION_GENERATION,
+        },
+        controller.signal,
+      );
+      const failure = expect(fork).rejects.toThrow();
+      await started;
+      controller.abort();
+      release();
+      await failure;
+      expect(fake.requests).toEqual([]);
+      expect(manager.listSessions()).toEqual([]);
+    } finally {
+      release?.();
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
   it("does not spawn a fork runtime after import cancellation during version discovery", async () => {
     const { manager, sendRequest } = createThreadControlHarness();
