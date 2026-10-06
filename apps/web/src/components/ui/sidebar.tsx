@@ -4,7 +4,6 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { LayoutAlignLeftIcon, LayoutLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { DISCLOSURE_WIDTH_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -25,8 +24,6 @@ import { Schema } from "effect";
 const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
-const SIDEBAR_WIDTH_COMPACT = 64;
-type SidebarCollapsible = "offcanvas" | "icon" | "compact" | "none";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 
 /**
@@ -169,7 +166,6 @@ function SidebarProvider({
           {
             "--sidebar-width": SIDEBAR_WIDTH,
             "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
-            "--sidebar-width-compact": `${SIDEBAR_WIDTH_COMPACT}px`,
             ...style,
           } as React.CSSProperties
         }
@@ -186,7 +182,7 @@ function SidebarProvider({
 // detached content-seam rail so both agree on identical resize behavior.
 function resolveSidebarResizable(
   resizable: boolean | SidebarResizableOptions,
-  { collapsible, isMobile }: { collapsible: SidebarCollapsible; isMobile: boolean },
+  { collapsible, isMobile }: { collapsible: "offcanvas" | "icon" | "none"; isMobile: boolean },
 ): SidebarResolvedResizableOptions | null {
   if (isMobile || collapsible === "none" || !resizable) {
     return null;
@@ -214,7 +210,7 @@ function SidebarInstanceProvider({
 }: {
   side: "left" | "right";
   resizable: boolean | SidebarResizableOptions;
-  collapsible?: SidebarCollapsible;
+  collapsible?: "offcanvas" | "icon" | "none";
   children: React.ReactNode;
 }) {
   const collapsible = collapsibleProp ?? "offcanvas";
@@ -239,8 +235,6 @@ function Sidebar({
   resizable: resizableProp,
   className,
   gapClassName,
-  compactInRail = false,
-  compactAnchor,
   innerClassName,
   transparentSurface: transparentSurfaceProp,
   rail,
@@ -249,12 +243,9 @@ function Sidebar({
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right";
   variant?: "sidebar" | "floating" | "inset";
-  collapsible?: SidebarCollapsible;
+  collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
   gapClassName?: string;
-  /** Reserve no extra column; align compact rows to the shell rail's available space. */
-  compactInRail?: boolean;
-  compactAnchor?: HTMLElement | null;
   innerClassName?: string;
   transparentSurface?: boolean;
   /** Desktop rail belongs to the outer shell, outside the clipped content surface. */
@@ -266,42 +257,6 @@ function Sidebar({
   const resizable = resizableProp ?? false;
   const transparentSurface = transparentSurfaceProp ?? false;
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
-  const compactCollapsed = collapsible === "compact" && !isMobile && state === "collapsed";
-  const panelRef = React.useRef<HTMLDivElement>(null);
-  const [compactBounds, setCompactBounds] = React.useState<{
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  } | null>(null);
-  React.useLayoutEffect(() => {
-    const root = panelRef.current;
-    if (!compactCollapsed || !compactInRail || !compactAnchor || !root) return;
-    const measure = () => {
-      const bounds = compactAnchor.getBoundingClientRect();
-      const origin = root.getBoundingClientRect();
-      const next = {
-        left: bounds.left - origin.left,
-        top: bounds.top - origin.top,
-        width: bounds.width,
-        height: bounds.height,
-      };
-      setCompactBounds((previous) =>
-        previous &&
-        previous.left === next.left &&
-        previous.top === next.top &&
-        previous.width === next.width &&
-        previous.height === next.height
-          ? previous
-          : next,
-      );
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(compactAnchor);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, [compactCollapsed, compactInRail, compactAnchor]);
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(
     () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
     [collapsible, isMobile, resizable],
@@ -363,33 +318,23 @@ function Sidebar({
   return (
     <SidebarInstanceContext.Provider value={instanceContextValue}>
       <div
-        ref={panelRef}
-        className={cn(
-          "group peer hidden text-sidebar-foreground md:block",
-          collapsible === "compact" && "relative self-stretch",
-        )}
+        className="group peer hidden text-sidebar-foreground md:block"
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side={side}
         data-slot="sidebar"
         data-state={state}
         data-variant={variant}
-        data-sidebar-compact={compactCollapsed ? "true" : undefined}
-        data-sidebar-compact-rail={compactInRail ? "true" : undefined}
       >
         {/* This is what handles the sidebar gap on desktop */}
         <div
           className={cn(
             "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear motion-reduce:transition-none",
             "group-data-[collapsible=offcanvas]:w-0",
-            compactInRail
-              ? "group-data-[collapsible=compact]:w-0"
-              : "group-data-[collapsible=compact]:w-(--sidebar-width-compact)",
             "group-data-[side=right]:rotate-180",
             variant === "floating" || variant === "inset"
               ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
               : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)",
             gapClassName,
-            collapsible === "compact" && DISCLOSURE_WIDTH_MOTION_CLASS,
           )}
           data-slot="sidebar-gap"
         />
@@ -414,26 +359,9 @@ function Sidebar({
                     "group-data-[side=left]:border-r group-data-[side=right]:border-l",
                 ),
             className,
-            collapsible === "compact" &&
-              cn(
-                "absolute h-full",
-                DISCLOSURE_WIDTH_MOTION_CLASS,
-                compactCollapsed && "w-(--sidebar-width-compact)",
-              ),
           )}
           data-slot="sidebar-container"
           {...props}
-          style={
-            compactCollapsed && compactInRail
-              ? {
-                  ...props.style,
-                  left: compactBounds?.left ?? "calc(-1 * var(--app-rail-width))",
-                  top: compactBounds?.top ?? 0,
-                  width: compactBounds?.width ?? "var(--app-rail-width)",
-                  height: compactBounds?.height ?? 0,
-                }
-              : props.style
-          }
         >
           {/* The inner surface is the safe place for visual skinning. The outer shell owns
               fixed positioning, width transitions, and the resize rail hit area. */}
@@ -1185,7 +1113,6 @@ export {
   SidebarTrigger,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
   SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
-  SIDEBAR_WIDTH_COMPACT,
   useSidebar,
 };
 

@@ -11,9 +11,7 @@ import {
   createContext,
   type MouseEvent,
   type ReactNode,
-  type RefCallback,
   useContext,
-  useMemo,
 } from "react";
 import { createPortal } from "react-dom";
 
@@ -39,12 +37,6 @@ import {
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import type { SidebarActionBadge } from "./Sidebar.logic";
 import { SidebarIconButton } from "./SidebarIconButton";
-import {
-  SIDEBAR_HOVER_CARD_POPUP_PROPS,
-  SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME,
-  SIDEBAR_HOVER_CARD_TRIGGER_PROPS,
-} from "./sidebarHoverCardStyles";
-import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 
 type RailGlyph = ComponentType<{ className?: string }>;
 /** A rail button's glyph pair: outline at rest, filled while active (like Codex). */
@@ -140,10 +132,6 @@ export type AppRailItem = {
   readonly onSelect: () => void;
   readonly onMouseEnter?: (() => void) | undefined;
   readonly onFocus?: (() => void) | undefined;
-  readonly showBadgeCount?: boolean;
-  readonly badgeClassName?: string;
-  /** Interactive detail card, replacing the button's plain tooltip. */
-  readonly hoverContent?: ReactNode;
 };
 
 type AppRailProps = {
@@ -153,14 +141,10 @@ type AppRailProps = {
   /** The "…" menu trigger, after the shortcuts. */
   moreSlot?: ReactNode;
   bottomItems: ReadonlyArray<AppRailItem>;
-  /** Thread activity summaries, above usage and help. */
-  activityItems?: ReadonlyArray<AppRailItem>;
   /** Rendered above the bottom items (the usage rings, then the Help menu like Codex's rail). */
   bottomSlot?: ReactNode;
   /** Right-click on the rail (offers "Customize"). */
   onContextMenu?: ((event: MouseEvent) => void) | undefined;
-  /** Space for the existing conversation panel while it is collapsed into this rail. */
-  compactThreadSlotRef?: RefCallback<HTMLDivElement> | undefined;
 };
 
 /** Rail glyph size, shared with controls rendered into the rail slot (the Help menu). */
@@ -180,23 +164,14 @@ export function appRailButtonClassName(active: boolean): string {
 function AppRailButton({ item }: { item: AppRailItem }) {
   const label = item.badge ? `${item.label} · ${item.badge.accessibleLabel}` : item.label;
   const glyphs = item.glyphs;
-  const button = (
+  return (
     <div className="relative shrink-0">
       <SidebarIconButton
         icon={item.active ? glyphs.active : glyphs.idle}
         iconClassName={APP_RAIL_GLYPH_CLASS_NAME}
         label={label}
         size="lg"
-        {...(item.hoverContent
-          ? {
-              render: (
-                <PreviewCardTrigger
-                  {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
-                  render={<button type="button" />}
-                />
-              ),
-            }
-          : { tooltip: label })}
+        tooltip={label}
         tooltipSide="right"
         aria-current={item.active ? "page" : undefined}
         className={appRailButtonClassName(item.active)}
@@ -208,31 +183,10 @@ function AppRailButton({ item }: { item: AppRailItem }) {
       {item.badge ? (
         <span
           aria-hidden
-          className={cn(
-            "pointer-events-none absolute rounded-full",
-            item.showBadgeCount
-              ? "-top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center bg-[var(--app-rail-panel-background)] px-0.5 text-ui-xs font-medium tabular-nums ring-1 ring-[var(--app-rail-inset-border)]"
-              : "top-1 right-1 size-1.5 bg-[var(--color-text-accent)]",
-            item.badgeClassName,
-          )}
-        >
-          {item.showBadgeCount ? item.badge.text : null}
-        </span>
+          className="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-[var(--color-text-accent)]"
+        />
       ) : null}
     </div>
-  );
-  return item.hoverContent ? (
-    <PreviewCard>
-      {button}
-      <PreviewCardPopup
-        {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
-        className={SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME}
-      >
-        {item.hoverContent}
-      </PreviewCardPopup>
-    </PreviewCard>
-  ) : (
-    button
   );
 }
 
@@ -241,10 +195,8 @@ export function AppRail({
   shortcuts,
   moreSlot,
   bottomItems,
-  activityItems,
   bottomSlot,
   onContextMenu,
-  compactThreadSlotRef,
 }: AppRailProps) {
   return (
     <nav
@@ -252,12 +204,7 @@ export function AppRail({
       onContextMenu={onContextMenu}
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >
-      <div
-        className={cn(
-          "flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]",
-          compactThreadSlotRef && "max-h-[40%]",
-        )}
-      >
+      <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]">
         {items.map((item) => (
           <AppRailButton key={item.id} item={item} />
         ))}
@@ -274,20 +221,7 @@ export function AppRail({
         ) : null}
         {moreSlot}
       </div>
-      {compactThreadSlotRef ? (
-        <div
-          ref={compactThreadSlotRef}
-          data-slot="app-rail-threads"
-          className="min-h-0 w-full flex-1"
-        />
-      ) : null}
       <div className="flex shrink-0 flex-col items-center gap-1.5">
-        {activityItems?.map((item) => (
-          <AppRailButton key={item.id} item={item} />
-        ))}
-        {activityItems && activityItems.length > 0 ? (
-          <div aria-hidden className="my-0.5 h-px w-5 shrink-0 bg-[var(--app-rail-inset-border)]" />
-        ) : null}
         {bottomSlot}
         {bottomItems.map((item) => (
           <AppRailButton key={item.id} item={item} />
@@ -297,37 +231,18 @@ export function AppRail({
   );
 }
 
-const AppRailSlotContext = createContext<{
-  element: HTMLElement | null;
-  compactThreadSlotRef?: RefCallback<HTMLDivElement> | undefined;
-}>({ element: null });
+const AppRailSlotContext = createContext<HTMLElement | null>(null);
 
 /** Provided by the route shell with the element the rail renders into. */
-export function AppRailSlotProvider({
-  value,
-  compactThreadSlotRef,
-  children,
-}: {
-  value: HTMLElement | null;
-  compactThreadSlotRef?: RefCallback<HTMLDivElement> | undefined;
-  children: ReactNode;
-}) {
-  const context = useMemo(
-    () => ({ element: value, compactThreadSlotRef }),
-    [value, compactThreadSlotRef],
-  );
-  return <AppRailSlotContext.Provider value={context}>{children}</AppRailSlotContext.Provider>;
-}
+export const AppRailSlotProvider = AppRailSlotContext.Provider;
 
 /** The element the rail renders into (null until the shell mounts); anchors rail popovers. */
 export function useAppRailSlot(): HTMLElement | null {
-  return useContext(AppRailSlotContext).element;
+  return useContext(AppRailSlotContext);
 }
 
 /** Renders the rail into the shell's slot; nothing until the slot is mounted. */
 export function AppRailPortal(props: AppRailProps) {
-  const { element, compactThreadSlotRef } = useContext(AppRailSlotContext);
-  return element
-    ? createPortal(<AppRail {...props} compactThreadSlotRef={compactThreadSlotRef} />, element)
-    : null;
+  const slot = useContext(AppRailSlotContext);
+  return slot ? createPortal(<AppRail {...props} />, slot) : null;
 }
