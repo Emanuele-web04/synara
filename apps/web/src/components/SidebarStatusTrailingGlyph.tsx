@@ -6,7 +6,7 @@ import { StatusDot } from "~/components/ui/status-chip";
 import { ClockIcon, PencilIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ThreadStatusPill } from "./Sidebar.logic";
-import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
+import { ThreadBackgroundWorkSpinner, ThreadRunningSpinner } from "./ThreadRunningSpinner";
 
 export function SidebarUnreadCompletionGlyph({ className }: { className?: string }) {
   return (
@@ -40,6 +40,16 @@ export function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPil
     return (
       <span role="img" aria-label="Snooze reminder" className="inline-flex shrink-0 text-info">
         <ClockIcon className="size-3" aria-hidden />
+      </span>
+    );
+  }
+  if (status.label === "In Background") {
+    const count = status.backgroundTaskCount ?? 0;
+    const title =
+      count > 0 ? `In background · ${count} ${count === 1 ? "task" : "tasks"}` : "In background";
+    return (
+      <span role="img" aria-label={title} title={title} className="inline-flex shrink-0">
+        <ThreadBackgroundWorkSpinner />
       </span>
     );
   }

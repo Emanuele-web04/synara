@@ -378,6 +378,8 @@ export interface ThreadStatusPill {
   pulse: boolean;
   dismissible?: boolean;
   dismissalKey?: string;
+  /** Outstanding background tasks behind an "In Background" status. */
+  backgroundTaskCount?: number;
 }
 
 /**
@@ -693,6 +695,7 @@ export function resolveThreadStatusPill(input: {
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: false,
       dismissible: false,
+      backgroundTaskCount: thread.pendingBackgroundWorkCount ?? 0,
     };
   }
 
