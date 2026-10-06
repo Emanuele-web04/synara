@@ -1144,18 +1144,30 @@ const make = Effect.gen(function* () {
 
       // A later managed completion with no exact baseline can include unknown
       // overlapping edits. Refuse before reverse-patching or rewriting its refs.
-      if (
-        thread.checkpoints.some(
-          (checkpoint) =>
-            checkpoint.checkpointTurnCount > targetCheckpoint.checkpointTurnCount &&
-            checkpoint.status === "missing" &&
-            isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.payload.threadId),
+      for (const checkpoint of thread.checkpoints) {
+        if (
+          checkpoint.checkpointTurnCount <= targetCheckpoint.checkpointTurnCount ||
+          !isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.payload.threadId)
         )
-      ) {
+          continue;
+        const laterStartRef =
+          checkpointRefForThreadTurnStartInManagedFamily(
+            checkpoint.checkpointRef,
+            event.payload.threadId,
+            checkpoint.turnId,
+          ) ?? checkpointRefForThreadTurnStart(event.payload.threadId, checkpoint.turnId);
+        if (
+          yield* checkpointStore.hasCheckpointRef({
+            cwd: checkpointCwd,
+            checkpointRef: laterStartRef,
+          })
+        )
+          continue;
         yield* appendRevertFailureActivity({
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
-          detail: "File Undo is unavailable because a later turn has no exact initial checkpoint.",
+          detail:
+            "File Undo is unavailable because a later turn has no exact initial checkpoint. Revert the thread to this checkpoint instead.",
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
         return;

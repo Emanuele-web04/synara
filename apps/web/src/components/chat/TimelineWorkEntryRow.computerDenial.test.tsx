@@ -71,14 +71,16 @@ describe("TimelineWorkEntryRow computer denial wiring", () => {
   );
 });
 
-it("uses a warning icon for skipped baseline feedback rather than a success check", () => {
-  expect(
-    workEntryLeftIcon({
-      id: "baseline-skip",
-      createdAt: new Date(0).toISOString(),
-      label: "Baseline unavailable",
-      tone: "info",
-      activityKind: "checkpoint.baseline.skipped",
-    }),
-  ).toBe(CircleAlertIcon);
+describe("TimelineWorkEntryRow baseline feedback", () => {
+  it("uses a warning icon for skipped baseline feedback rather than a success check", () => {
+    expect(
+      workEntryLeftIcon({
+        id: "baseline-skip",
+        createdAt: new Date(0).toISOString(),
+        label: "Baseline unavailable",
+        tone: "info",
+        activityKind: "checkpoint.baseline.skipped",
+      }),
+    ).toBe(CircleAlertIcon);
+  });
 });

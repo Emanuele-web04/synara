@@ -699,84 +699,121 @@ describe("CheckpointReactor", () => {
     },
   );
 
-  it("refuses file Undo before reverse mutation when a later managed baseline is missing", async () => {
-    const harness = await createHarness({ seedFilesystemCheckpoints: false });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.checkpointStore.captureCheckpoint({
-        cwd: harness.cwd,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 0),
-      }),
-    );
-    fs.writeFileSync(path.join(harness.cwd, "one.txt"), "earlier change\n");
-    await Effect.runPromise(
-      harness.checkpointStore.captureCheckpoint({
-        cwd: harness.cwd,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
-      }),
-    );
-    fs.writeFileSync(path.join(harness.cwd, "README.md"), "later provider edits\n");
-    await Effect.runPromise(
-      harness.checkpointStore.captureCheckpoint({
-        cwd: harness.cwd,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 2),
-      }),
-    );
-    for (const [count, status, files] of [
-      [1, "ready", [{ path: "one.txt", kind: "added", additions: 1, deletions: 0 }]],
-      [2, "missing", []],
-    ] as const) {
+  it.each([false, true])(
+    "checks the exact later baseline before file Undo (interrupted baseline exists: %s)",
+    async (laterHasBaseline) => {
+      const harness = await createHarness({ seedFilesystemCheckpoints: false });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.checkpointStore.captureCheckpoint({
+          cwd: harness.cwd,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 0),
+        }),
+      );
+      fs.writeFileSync(path.join(harness.cwd, "one.txt"), "earlier change\n");
+      await Effect.runPromise(
+        harness.checkpointStore.captureCheckpoint({
+          cwd: harness.cwd,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        }),
+      );
+      if (laterHasBaseline) {
+        await Effect.runPromise(
+          harness.checkpointStore.captureCheckpoint({
+            cwd: harness.cwd,
+            checkpointRef: checkpointRefForThreadTurnStart(
+              threadId,
+              asTurnId("missing-later-turn-2"),
+            ),
+          }),
+        );
+      }
+      fs.writeFileSync(path.join(harness.cwd, "README.md"), "later provider edits\n");
+      await Effect.runPromise(
+        harness.checkpointStore.captureCheckpoint({
+          cwd: harness.cwd,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+        }),
+      );
+      for (const [count, status, files] of [
+        [1, "ready", [{ path: "one.txt", kind: "added", additions: 1, deletions: 0 }]],
+        [2, "missing", []],
+      ] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe(`missing-later-diff-${count}`),
+            threadId,
+            turnId: asTurnId(`missing-later-turn-${count}`),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(threadId, count),
+            status,
+            files: [...files],
+            checkpointTurnCount: count,
+            createdAt,
+          }),
+        );
+      }
+      const reverse = vi.spyOn(harness.checkpointStore, "reverseCheckpointDiff");
+      const originalRefs = [1, 2].map((count) =>
+        runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, count)]),
+      );
       await Effect.runPromise(
         harness.engine.dispatch({
-          type: "thread.turn.diff.complete",
-          commandId: CommandId.makeUnsafe(`missing-later-diff-${count}`),
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("missing-later-undo"),
           threadId,
-          turnId: asTurnId(`missing-later-turn-${count}`),
-          completedAt: createdAt,
-          checkpointRef: checkpointRefForThreadTurn(threadId, count),
-          status,
-          files: [...files],
-          checkpointTurnCount: count,
+          turnCount: 1,
+          scope: "files",
           createdAt,
         }),
       );
-    }
-    const reverse = vi.spyOn(harness.checkpointStore, "reverseCheckpointDiff");
-    const originalRefs = [1, 2].map((count) =>
-      runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, count)]),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.checkpoint.revert",
-        commandId: CommandId.makeUnsafe("missing-later-undo"),
-        threadId,
-        turnCount: 1,
-        scope: "files",
-        createdAt,
-      }),
-    );
-    await waitForThread(
-      harness.engine,
-      (thread) =>
-        thread.activities.some(
-          (activity) =>
-            activity.kind === "checkpoint.revert.failed" ||
-            activity.kind === "checkpoint.revert.succeeded",
+      const settled = await waitForThread(
+        harness.engine,
+        (thread) =>
+          thread.activities.some(
+            (activity) =>
+              activity.kind === "checkpoint.revert.failed" ||
+              activity.kind === "checkpoint.revert.succeeded",
+          ),
+        1_500,
+      );
+      if (laterHasBaseline) {
+        expect(reverse).toHaveBeenCalledTimes(1);
+        expect(
+          settled.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+        ).toBe(false);
+        expect(
+          settled.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
+        ).toBe(true);
+        expect(fs.existsSync(path.join(harness.cwd, "one.txt"))).toBe(false);
+        expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+          "later provider edits\n",
+        );
+        return;
+      }
+      const failure = settled.activities.find(
+        (activity) => activity.kind === "checkpoint.revert.failed",
+      );
+      expect(failure?.payload).toMatchObject({
+        detail: expect.stringContaining("later turn has no exact initial checkpoint"),
+      });
+      expect(
+        settled.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
+      ).toBe(false);
+      expect(reverse).not.toHaveBeenCalled();
+      expect(fs.readFileSync(path.join(harness.cwd, "one.txt"), "utf8")).toBe("earlier change\n");
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+        "later provider edits\n",
+      );
+      expect(
+        [1, 2].map((count) =>
+          runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, count)]),
         ),
-      1_500,
-    );
-    expect(reverse).not.toHaveBeenCalled();
-    expect(fs.readFileSync(path.join(harness.cwd, "one.txt"), "utf8")).toBe("earlier change\n");
-    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
-      "later provider edits\n",
-    );
-    expect(
-      [1, 2].map((count) =>
-        runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, count)]),
-      ),
-    ).toEqual(originalRefs);
-  });
+      ).toEqual(originalRefs);
+    },
+  );
 
   it("recovers a captured message baseline from a persisted running turn", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false, startReactor: false });
