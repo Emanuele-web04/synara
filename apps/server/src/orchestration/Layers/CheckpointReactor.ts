@@ -280,7 +280,7 @@ const make = Effect.gen(function* () {
   const catchNoticeFailure = <A, E, R>(notice: Effect.Effect<A, E, R>) =>
     notice.pipe(
       Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
+        Cause.hasInterrupts(cause)
           ? Effect.failCause(cause)
           : Effect.logWarning(
               "Checkpoint failure notice could not be published; durable settlement is retained",
@@ -2180,13 +2180,14 @@ const make = Effect.gen(function* () {
           : false;
       if (!proven) {
         // Ingestion acceptance is not proof of a new Git snapshot. It does
-        // prove this legacy row was handled; non-Git, undone and deliberately
+        // prove a pre-upgrade row was handled; non-Git, undone and deliberately
         // skipped turns must not acquire a fresh error merely because this
-        // consumer is new. Only a missing placeholder proves an interruption.
+        // consumer is new. Only the immutable upgrade cut qualifies: a row
+        // queued after it and lost to an ordinary restart stays uncertain.
         const interrupted = thread?.checkpoints.some(
           (checkpoint) => checkpoint.turnId === event.turnId && checkpoint.status === "missing",
         );
-        if (sequence > startupIngestionFence || interrupted) {
+        if (sequence > Math.min(runtimeAdoptionFence, startupIngestionFence) || interrupted) {
           yield* uncertain(
             "A native completion present before checkpoint startup has no immutable checkpoint outcome; the current workspace was not recaptured during recovery.",
           );

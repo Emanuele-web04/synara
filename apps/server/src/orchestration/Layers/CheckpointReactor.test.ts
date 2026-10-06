@@ -1096,23 +1096,35 @@ describe("CheckpointReactor", () => {
       providerSessionCwd: cwd,
     });
     await harness.drain();
+    // Pin the TTL clock so the cache window does not depend on test speed.
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const classify = vi.spyOn(projectImportPaths, "canonicalImportPath");
-    for (let i = 0; i < 5; i++) {
+    const startTurn = async (index: number) => {
       await Effect.runPromise(
         harness.runtimeEvents.append({
           type: "turn.started",
-          eventId: EventId.makeUnsafe(`negative-start-${i}`),
+          eventId: EventId.makeUnsafe(`negative-start-${index}`),
           provider: "codex",
           threadId: ThreadId.makeUnsafe("thread-1"),
-          turnId: asTurnId(`negative-turn-${i}`),
+          turnId: asTurnId(`negative-turn-${index}`),
           createdAt: new Date().toISOString(),
           payload: {},
         }),
       );
       await settleCheckpointWork(harness.reactor.drain);
+    };
+    try {
+      for (let index = 0; index < 5; index++) await startTurn(index);
+      expect(classify.mock.calls).toHaveLength(1);
+      // After the negative TTL a turn may have initialized Git: reclassify.
+      now += 1_001;
+      await startTurn(5);
+      expect(classify.mock.calls).toHaveLength(2);
+    } finally {
+      classify.mockRestore();
+      clock.mockRestore();
     }
-    expect(classify.mock.calls).toHaveLength(1);
-    classify.mockRestore();
   });
 
   it("batches checkpoint ACKs during a persisted text stream and flushes drain", async () => {
@@ -1163,35 +1175,39 @@ describe("CheckpointReactor", () => {
   it("retains physical workspace identity across ordinary domain outcomes", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const identities = vi.spyOn(projectImportPaths, "canonicalImportPath");
-    for (let index = 0; index < 3; index++) {
-      const createdAt = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(`cached-session-${index}`),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          session: {
+    try {
+      for (let index = 0; index < 3; index++) {
+        const createdAt = new Date().toISOString();
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`cached-session-${index}`),
             threadId: ThreadId.makeUnsafe("thread-1"),
-            status: "ready",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
-      await Effect.runPromise(
-        harness.runtimeEvents.append(
-          nativeCompletion(`cached-workspace-${index}`, ThreadId.makeUnsafe("thread-1")),
-        ),
-      );
-      await settleCheckpointWork(harness.reactor.drain);
+            session: {
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+        await Effect.runPromise(
+          harness.runtimeEvents.append(
+            nativeCompletion(`cached-workspace-${index}`, ThreadId.makeUnsafe("thread-1")),
+          ),
+        );
+        await settleCheckpointWork(harness.reactor.drain);
+      }
+      // One classification is reused; ordinary accepted checkpoint/activity rows
+      // cannot invalidate it and trigger another realpath/Git workspace scan.
+      expect(identities.mock.calls).toHaveLength(1);
+    } finally {
+      identities.mockRestore();
     }
-    // One classification is reused; ordinary accepted checkpoint/activity rows
-    // cannot invalidate it and trigger another realpath/Git workspace scan.
-    expect(identities.mock.calls).toHaveLength(1);
   });
 
   it("bounds active unavailable-workspace recovery while an independent peer advances", async () => {
@@ -2492,6 +2508,42 @@ describe("CheckpointReactor", () => {
     await Effect.runPromise(restarted.start.pipe(Scope.provide(scope)));
     return restarted;
   }
+
+  it("reports a post-upgrade native completion lost to an ordinary restart exactly once", async () => {
+    // The consumer and its immutable upgrade cut already exist. Ingestion then
+    // accepts a completion that the checkpoint lane never claims before a crash.
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    await harness.drain();
+    await Effect.runPromise(Scope.close(scope!, Exit.void));
+    scope = null;
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const row = await Effect.runPromise(
+      harness.runtimeEvents.append(nativeCompletion("post-upgrade-unclaimed", threadId)),
+    );
+    await Effect.runPromise(
+      harness.runtimeEvents.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence: row.sequence,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const capture = vi.spyOn(harness.checkpointStore, "captureCheckpoint");
+    try {
+      const restarted = await restartCheckpointReactor();
+      await settleCheckpointWork(restarted.drain);
+      const again = await restartCheckpointReactor();
+      await settleCheckpointWork(again.drain);
+      expect(capture).not.toHaveBeenCalled();
+      const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      )!;
+      expect(
+        thread.activities.filter((activity) => activity.kind === "checkpoint.capture.failed"),
+      ).toHaveLength(1);
+    } finally {
+      capture.mockRestore();
+    }
+  });
 
   it.each(["inflight", "uncertain"] as const)(
     "surfaces %s native recovery without recapturing current files",
