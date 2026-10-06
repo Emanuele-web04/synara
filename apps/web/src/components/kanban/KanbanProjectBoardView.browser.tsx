@@ -71,6 +71,7 @@ import { buildKanbanBoard, type KanbanCard, type KanbanProjectBoard } from "./ka
 import type { SidebarThreadSummary } from "../../types";
 import KanbanView from "./KanbanView";
 import { useKanbanUiStore } from "../../kanbanUiStore";
+import type { KanbanCardContextMenuController } from "./useKanbanCardContextMenu";
 
 const dispatchAsGoalMock = vi.mocked(dispatchKanbanDraftCardAsGoal);
 
@@ -396,6 +397,99 @@ describe("KanbanProjectBoardView v2 (browser)", () => {
       await unmount();
     }
   });
+
+  it.each(["classic", "v2"] as const)(
+    "offers only In Progress in the %s card menu and uses the drop dispatch",
+    async (viewMode) => {
+      dispatchAsGoalMock.mockClear();
+      const card = makeCard("menu-goal", "draft", {
+        cardId: "draft:menu-goal",
+        title: "Menu goal card",
+        draftPrompt: "Start this goal",
+      });
+      const contextMenu = vi.fn<KanbanCardContextMenuController["onCardContextMenu"]>();
+      const { unmount } = await render(
+        <KanbanProjectBoardView
+          board={{ ...board, draft: [card] }}
+          onOpenCard={vi.fn()}
+          onCardContextMenu={contextMenu}
+          onNewTask={vi.fn()}
+          prByThreadId={new Map()}
+          viewMode={viewMode}
+        />,
+      );
+      try {
+        findCardButton("Menu goal card")?.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+        expect(contextMenu).toHaveBeenCalledOnce();
+        const moves = contextMenu.mock.calls[0]?.[2];
+        expect(moves?.map((move) => move.column)).toEqual(["inProgress"]);
+        moves?.[0]?.onMove();
+        await expect.poll(() => dispatchAsGoalMock.mock.calls.length).toBe(1);
+        expect(dispatchAsGoalMock).toHaveBeenCalledWith(expect.objectContaining({ card }));
+
+        // A menu left open while another send starts must not queue a second turn.
+        useKanbanUiStore.getState().markOptimisticDispatch(card.threadId, {
+          projectId: card.projectId,
+          title: card.title,
+          provider: card.provider,
+          providerInstanceId: card.providerInstanceId ?? null,
+          baselineTurnId: null,
+          droppedAtMs: NOW_MS,
+        });
+        moves?.[0]?.onMove();
+        // Let the ready provider's asynchronous availability check finish too.
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        expect(dispatchAsGoalMock).toHaveBeenCalledOnce();
+        findCardButton("Menu goal card")?.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+        expect(contextMenu.mock.calls[1]?.[2]).toEqual([]);
+      } finally {
+        useKanbanUiStore.getState().clearOptimisticDispatch(card.threadId);
+        await unmount();
+      }
+    },
+  );
+
+  it.each([
+    ["done", { column: "done" }],
+    ["in progress", { column: "inProgress" }],
+    ["awaiting input", { column: "awaitingYou" }],
+    ["empty draft", { draftPrompt: "" }],
+    ["pending worktree", { envMode: "worktree", worktreePath: null }],
+    ["optimistic dispatch", { isOptimisticDispatch: true }],
+  ] satisfies [string, Partial<KanbanCard>][])(
+    "does not offer column moves for %s cards",
+    async (_label, overrides) => {
+      const card = makeCard("no-menu-move", "draft", {
+        title: "No move card",
+        draftPrompt: "A prompt",
+        ...overrides,
+      });
+      const contextMenu = vi.fn<KanbanCardContextMenuController["onCardContextMenu"]>();
+      const { unmount } = await render(
+        <KanbanProjectBoardView
+          board={{ ...board, draft: [], [card.column]: [card] }}
+          onOpenCard={vi.fn()}
+          onCardContextMenu={contextMenu}
+          onNewTask={vi.fn()}
+          prByThreadId={new Map()}
+          viewMode="v2"
+        />,
+      );
+      try {
+        findCardButton("No move card")?.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+        expect(contextMenu).toHaveBeenCalledOnce();
+        expect(contextMenu.mock.calls[0]?.[2]).toEqual([]);
+      } finally {
+        await unmount();
+      }
+    },
+  );
 
   it("reorders draft cards with Alt+Arrow keys", async () => {
     const reorderBoard = {
