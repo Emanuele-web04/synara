@@ -224,7 +224,7 @@ import {
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
-import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
+import { retryThreadDetailSync } from "../threadDetailSyncRetry";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import {
   DEFAULT_INTERACTION_MODE,
@@ -275,7 +275,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
-import { SynaraLogo } from "./SynaraLogo";
+import { ChatEmptyStateHero } from "./chat/ChatEmptyStateHero";
 import { ProjectImportLandingBanner } from "~/projectImport/ProjectImportLandingBanner";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
@@ -1974,11 +1974,7 @@ export default function ChatView({
   const hasPendingThreadWork =
     isWorking || (activeLatestTurnState === "running" && !latestTurnSettled);
   const handleRetryThreadDetailSync = useCallback(() => {
-    useStore.getState().clearThreadDetailSyncFailure(threadId);
-    const api = readNativeApi();
-    void api?.orchestration
-      .subscribeThread(buildThreadSubscribeInput(threadId))
-      .catch(() => undefined);
+    void retryThreadDetailSync(threadId).catch(() => undefined);
   }, [threadId]);
   const activeThreadIsSidechat = Boolean(activeThread && isSidechatThread(activeThread));
   // Stable identity: this element is forwarded to the memoized MessagesTimeline, so
@@ -3111,8 +3107,6 @@ export default function ChatView({
     activeProject,
     gitCwd,
     isGroupContainer,
-    requestTerminalFocus,
-    setTerminalOpen,
     setThreadError,
   });
   const stopActiveThreadSession = useCallback(async () => {
@@ -4723,6 +4717,15 @@ export default function ChatView({
     clearComposerDraftContent,
     scheduleComposerFocus,
   });
+
+  const handleSelectEmptyStatePrompt = useCallback(
+    (nextPrompt: string) => {
+      const currentPrompt = composerEditorRef.current?.readSnapshot()?.value ?? promptRef.current;
+      if (currentPrompt.trim()) return;
+      setComposerPromptValue(nextPrompt);
+    },
+    [composerEditorRef, promptRef, setComposerPromptValue],
+  );
 
   // A denied task offers the same visible, one-request invocation as the slash menu.
   const handleEnableComputerControlFromDenial = useCallback(() => {
@@ -6389,53 +6392,51 @@ export default function ChatView({
                   <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
                     <ProjectImportLandingBanner className="w-full max-w-[520px]" />
                   </div>
-                  <div
-                    className={cn(
-                      "flex flex-col items-center gap-4 px-6 text-center select-none",
-                      CHAT_COLUMN_FRAME_CLASS_NAME,
-                    )}
-                  >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" />
-                    <h2
-                      data-testid="empty-landing-heading"
-                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
-                    >
-                      {isEmptyChatLanding ? (
-                        "What should we work on?"
-                      ) : (
-                        <>
-                          What should we do in{" "}
-                          {showEmptyLandingProjectPicker ? (
-                            <ProjectPicker
-                              align="center"
-                              side="bottom"
-                              selectionMode="project"
-                              selectedProjectId={activeProject.id}
-                              selectedWorkspaceRoot={activeProject.cwd}
-                              showResetToHome
-                              onSelectProject={handleSelectProjectForEmptyDraft}
-                              onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-                              onResetToHome={handleResetWorkspaceToHome}
-                              renderTrigger={
-                                <button
-                                  type="button"
-                                  data-testid="empty-landing-heading-project-trigger"
-                                  className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-                                >
-                                  {activeProjectDisplayName ?? "this folder"}
-                                </button>
-                              }
-                            />
-                          ) : (
-                            <span className="text-inherit">
-                              {activeProjectDisplayName ?? "this folder"}
-                            </span>
-                          )}
-                          ?
-                        </>
-                      )}
-                    </h2>
-                  </div>
+                  <ChatEmptyStateHero
+                    className={cn("px-6", CHAT_COLUMN_FRAME_CLASS_NAME)}
+                    {...(!prompt.trim() ? { onSelectPrompt: handleSelectEmptyStatePrompt } : {})}
+                    heading={
+                      <h2
+                        data-testid="empty-landing-heading"
+                        className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                      >
+                        {isEmptyChatLanding ? (
+                          "What should we work on?"
+                        ) : (
+                          <>
+                            What should we do in{" "}
+                            {showEmptyLandingProjectPicker ? (
+                              <ProjectPicker
+                                align="center"
+                                side="bottom"
+                                selectionMode="project"
+                                selectedProjectId={activeProject.id}
+                                selectedWorkspaceRoot={activeProject.cwd}
+                                showResetToHome
+                                onSelectProject={handleSelectProjectForEmptyDraft}
+                                onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+                                onResetToHome={handleResetWorkspaceToHome}
+                                renderTrigger={
+                                  <button
+                                    type="button"
+                                    data-testid="empty-landing-heading-project-trigger"
+                                    className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                  >
+                                    {activeProjectDisplayName ?? "this folder"}
+                                  </button>
+                                }
+                              />
+                            ) : (
+                              <span className="text-inherit">
+                                {activeProjectDisplayName ?? "this folder"}
+                              </span>
+                            )}
+                            ?
+                          </>
+                        )}
+                      </h2>
+                    }
+                  />
                 </div>
                 <div className="w-full shrink-0 pb-3 sm:pb-4">
                   {composerSection}
@@ -6533,6 +6534,9 @@ export default function ChatView({
                     availableEditors={availableEditors}
                     emptyStateContent={transcriptEmptyStateContent}
                     emptyStateProjectName={activeProjectDisplayName}
+                    {...(!prompt.trim()
+                      ? { onSelectEmptyStatePrompt: handleSelectEmptyStatePrompt }
+                      : {})}
                     terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
                     onMessagesScroll={onMessagesScroll}
                     onMessagesClickCapture={onMessagesClickCapture}

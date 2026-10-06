@@ -53,6 +53,32 @@ function renderTranscriptPaneMarkup(
 }
 
 describe("ChatTranscriptPane", () => {
+  it("keeps the project copy and composer hints in a blank transcript", () => {
+    const markup = renderTranscriptPaneMarkup({
+      hasMessages: false,
+      emptyStateProjectName: "Widgets",
+    });
+
+    expect(markup).toContain("Let&#x27;s build");
+    expect(markup).toContain("Widgets");
+    expect(markup).toContain("to tag files");
+    expect(markup).toContain("for commands");
+    expect(markup).not.toContain("Plan a feature");
+  });
+
+  it("preserves a caller's custom empty state without offering starter prompts", () => {
+    const markup = renderTranscriptPaneMarkup({
+      hasMessages: false,
+      emptyStateContent: <span>Loading conversation</span>,
+      onSelectEmptyStatePrompt: () => {},
+    });
+
+    expect(markup).toContain("Loading conversation");
+    expect(markup).not.toContain("Let&#x27;s build");
+    expect(markup).not.toContain("Plan a feature");
+    expect(markup).not.toContain("to tag files");
+  });
+
   it("renders agent activity detail over the message timeline, which stays mounted", () => {
     const markup = renderTranscriptPaneMarkup({
       agentActivityDetail: {

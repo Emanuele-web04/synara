@@ -367,6 +367,9 @@ import {
   WsCompatibilityError,
 } from "./wsCompatibility";
 
+/** Retry only the affected orchestration subscription from its last applied cursor. */
+export const ORCHESTRATION_STREAM_OVERFLOW_CODE = "ORCHESTRATION_STREAM_OVERFLOW";
+
 export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
