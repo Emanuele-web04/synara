@@ -15066,7 +15066,10 @@ describe("ProviderCommandReactor", () => {
         }),
       );
 
-    const sendSecondTurn = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+    const sendSecondTurn = (
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      enableComputerControl?: boolean,
+    ) =>
       Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
@@ -15078,13 +15081,14 @@ describe("ProviderCommandReactor", () => {
             text: "continue after the handoff",
             attachments: [],
           },
+          ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: new Date().toISOString(),
         }),
       );
 
-    it("starts the target in the same thread and records the transferred context", async () => {
+    it("starts the target in the same thread and carries context through computer control activation", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
       });
@@ -15146,9 +15150,10 @@ describe("ProviderCommandReactor", () => {
       });
 
       // The next turn runs on the target and carries the prior transcript.
-      await sendSecondTurn(harness);
+      await sendSecondTurn(harness, true);
       await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-      expect(harness.startSession.mock.calls).toHaveLength(2);
+      expect(harness.startSession.mock.calls).toHaveLength(3);
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
       // The handoff divider explains the fresh session; no lost-history notice.

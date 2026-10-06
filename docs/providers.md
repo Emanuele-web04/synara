@@ -201,6 +201,10 @@ session restoration, and automatic compaction. Resuming a saved conversation res
 it does not restore an expired server-side cache. An unchanged prefix can still be reused after a
 process restart while its cache remains valid. Leaving a process open does not refresh that cache.
 
+A fresh Claude session becomes resumable only after the runtime emits conversation output.
+If a handoff session needs a settings restart before its first message, Synara starts another
+fresh session and keeps the prior transcript queued for that message.
+
 The main-conversation cache policy applies to both CLI and SDK turns. The effective lifetime depends
 on the account and Claude settings; Synara does not force a lifetime or change the selected model,
 effort, or compaction threshold to reduce usage. See Anthropic's
