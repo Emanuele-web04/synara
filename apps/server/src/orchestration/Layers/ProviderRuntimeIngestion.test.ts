@@ -4162,91 +4162,138 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("keeps a buffered turn buffered after the delivery-mode TTL elapses", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-    const turnId = asTurnId("turn-buffered-long");
-    const itemId = asItemId("item-buffered-long");
+  it.each([
+    { initialSilenceMs: 0, deltaGapMs: 40 * 60_000, completionGapMs: 0 },
+    { initialSilenceMs: 80 * 60_000, deltaGapMs: 40 * 60_000, completionGapMs: 0 },
+    { initialSilenceMs: 0, deltaGapMs: 80 * 60_000, completionGapMs: 0 },
+    { initialSilenceMs: 0, deltaGapMs: 40 * 60_000, completionGapMs: 80 * 60_000 },
+  ])(
+    "keeps full buffered text across silent gaps: %j",
+    async ({ initialSilenceMs, deltaGapMs, completionGapMs }) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
+      const turnId = asTurnId("turn-buffered-long");
+      const itemId = asItemId("item-buffered-long");
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-buffered-long"),
-        threadId: asThreadId("thread-1"),
-        message: {
-          messageId: asMessageId("message-buffered-long"),
-          role: "user",
-          text: "long buffered turn",
-          attachments: [],
-        },
-        assistantDeliveryMode: "buffered",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.drain();
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-buffered-long"),
-      provider: "codex",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId,
-    });
-    await harness.drain();
-
-    // Each delta re-arms the delivery-mode TTL, so a turn that keeps streaming
-    // past it stays buffered instead of turning live mid-message.
-    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
-    try {
-      const deltas = ["head ", "middle ", "tail"];
-      for (const [index, delta] of deltas.entries()) {
-        if (index > 0) vi.setSystemTime(Date.now() + 40 * 60_000);
-        harness.emit({
-          type: "content.delta",
-          eventId: asEventId(`evt-delta-buffered-long-${index}`),
-          provider: "codex",
-          createdAt: now,
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-turn-start-buffered-long"),
           threadId: asThreadId("thread-1"),
-          turnId,
-          itemId,
-          payload: { streamKind: "assistant_text", delta },
-        });
-        await harness.drain();
-      }
-
-      const midThread = await waitForThread(harness.engine, () => true);
-      expect(
-        midThread.messages.some(
-          (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-buffered-long",
-        ),
-      ).toBe(false);
-
+          message: {
+            messageId: asMessageId("message-buffered-long"),
+            role: "user",
+            text: "long buffered turn",
+            attachments: [],
+          },
+          assistantDeliveryMode: "buffered",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await harness.drain();
       harness.emit({
-        type: "item.completed",
-        eventId: asEventId("evt-message-completed-buffered-long"),
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-buffered-long"),
         provider: "codex",
         createdAt: now,
         threadId: asThreadId("thread-1"),
         turnId,
-        itemId,
-        payload: { itemType: "assistant_message", status: "completed" },
       });
-      const thread = await waitForThread(harness.engine, (entry) =>
-        entry.messages.some(
-          (message: ProviderRuntimeTestMessage) =>
-            message.id === "assistant:item-buffered-long" && !message.streaming,
-        ),
-      );
-      const message = thread.messages.find(
-        (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered-long",
-      );
-      expect(message?.text).toBe("head middle tail");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      await harness.drain();
+
+      // Each delta re-arms the delivery-mode TTL, so a turn that keeps streaming
+      // past it stays buffered instead of turning live mid-message.
+      vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+      try {
+        vi.setSystemTime(Date.now() + initialSilenceMs);
+        const deltas = ["head ", "middle ", "tail"];
+        for (const [index, delta] of deltas.entries()) {
+          if (index > 0) vi.setSystemTime(Date.now() + deltaGapMs);
+          harness.emit({
+            type: "content.delta",
+            eventId: asEventId(`evt-delta-buffered-long-${index}`),
+            provider: "codex",
+            createdAt: now,
+            threadId: asThreadId("thread-1"),
+            turnId,
+            itemId,
+            payload: { streamKind: "assistant_text", delta },
+          });
+          await harness.drain();
+        }
+
+        const midThread = await waitForThread(harness.engine, () => true);
+        expect(
+          midThread.messages.some(
+            (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-buffered-long",
+          ),
+        ).toBe(false);
+
+        vi.setSystemTime(Date.now() + completionGapMs);
+        harness.emit(
+          completionGapMs > 0
+            ? {
+                type: "turn.completed",
+                eventId: asEventId("evt-turn-completed-buffered-long"),
+                provider: "codex",
+                createdAt: now,
+                threadId: asThreadId("thread-1"),
+                turnId,
+                payload: { state: "completed" },
+              }
+            : {
+                type: "item.completed",
+                eventId: asEventId("evt-message-completed-buffered-long"),
+                provider: "codex",
+                createdAt: now,
+                threadId: asThreadId("thread-1"),
+                turnId,
+                itemId,
+                payload: { itemType: "assistant_message", status: "completed" },
+              },
+        );
+        const thread = await waitForThread(harness.engine, (entry) =>
+          entry.messages.some(
+            (message: ProviderRuntimeTestMessage) =>
+              message.id === "assistant:item-buffered-long" && !message.streaming,
+          ),
+        );
+        const message = thread.messages.find(
+          (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered-long",
+        );
+        expect(message?.text).toBe("head middle tail");
+        if (completionGapMs > 0) {
+          vi.setSystemTime(Date.now() + 80 * 60_000);
+          harness.emit({
+            type: "content.delta",
+            eventId: asEventId("evt-late-after-buffered-grace"),
+            provider: "codex",
+            createdAt: now,
+            threadId: asThreadId("thread-1"),
+            turnId,
+            itemId: asItemId("item-after-buffered-grace"),
+            payload: { streamKind: "assistant_text", delta: "after settled grace" },
+          });
+          const afterGrace = await waitForThread(harness.engine, (entry) =>
+            entry.messages.some(
+              (message: ProviderRuntimeTestMessage) =>
+                message.id === "assistant:item-after-buffered-grace" && message.streaming,
+            ),
+          );
+          expect(
+            afterGrace.messages.find(
+              (message: ProviderRuntimeTestMessage) =>
+                message.id === "assistant:item-after-buffered-grace",
+            )?.text,
+          ).toBe("after settled grace");
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("binds overlapping same-thread delivery modes in provider turn order", async () => {
     const harness = await createHarness();
