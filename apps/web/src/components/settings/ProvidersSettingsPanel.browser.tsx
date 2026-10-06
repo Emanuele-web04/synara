@@ -3,6 +3,7 @@ import "../../index.css";
 import {
   ThreadId,
   type ServerProviderStatus,
+  type ServerProviderUsageSnapshot,
   type TerminalEvent,
   type TerminalOpenInput,
 } from "@synara/contracts";
@@ -14,6 +15,7 @@ import { StrictMode, useState } from "react";
 
 const harness = vi.hoisted(() => ({
   statuses: [] as ServerProviderStatus[],
+  usage: [] as ServerProviderUsageSnapshot[],
   reconciled: true,
   refresh: vi.fn(),
   invalidate: vi.fn(async () => {}),
@@ -36,7 +38,13 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("@tanstack/react-query")>()),
     useQueryClient: () => queryClient,
-    useQuery: () => ({ data: { providers: harness.statuses, cwd: "/tmp" }, isPending: false }),
+    useQuery: (options: { queryKey?: readonly string[] }) => ({
+      data:
+        options.queryKey?.[1] === "allProviderUsage"
+          ? harness.usage
+          : { providers: harness.statuses, cwd: "/tmp" },
+      isPending: false,
+    }),
   };
 });
 vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
@@ -44,7 +52,11 @@ vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
   serverConfigQueryOptions: () => ({}),
   serverSettingsQueryOptions: () => ({}),
   hasReconciledServerProviderStatuses: () => harness.reconciled,
-  serverQueryKeys: { config: () => ["config"], settings: () => ["settings"] },
+  serverQueryKeys: {
+    config: () => ["config"],
+    settings: () => ["settings"],
+    allProviderUsage: () => ["server", "allProviderUsage"],
+  },
 }));
 vi.mock("~/hooks/useProviderStatusesForLocalConfig", () => ({
   useProviderStatusesForLocalConfig: () => harness.statuses,
@@ -74,6 +86,7 @@ const props = {
 };
 
 beforeEach(() => {
+  harness.usage = [];
   harness.reconciled = true;
   harness.refresh.mockReset();
   harness.api.terminal.open.mockReset().mockImplementation(async (input: TerminalOpenInput) => ({
@@ -289,6 +302,64 @@ function codexAccountRow(name: string) {
     .element()
     .closest<HTMLElement>('[role="listitem"]')!;
 }
+
+it("keeps the default account name when restoring its account defaults", async () => {
+  const { props: panelProps, updateSettings } = accountProps({
+    providerInstances: {
+      codex: { driver: "codex", displayName: "Personal", accentColor: "#16a34a", enabled: false },
+    },
+  });
+  await render(<ProvidersSettingsPanel {...panelProps} />);
+  await page.getByRole("button", { name: /Reset Personal account/ }).click();
+  expect(updateSettings).toHaveBeenLastCalledWith({
+    providerInstances: {
+      codex: { driver: "codex", displayName: "Personal" },
+    },
+  });
+});
+
+it("shows a Claude usage authentication failure beside a locally signed-in account", async () => {
+  harness.statuses = harness.statuses.map((status) =>
+    status.provider === "claudeAgent" ? { ...status, authStatus: "authenticated" } : status,
+  );
+  harness.statuses.push({
+    ...WORK_STATUS,
+    provider: "claudeAgent",
+    driver: "claudeAgent",
+    instanceId: "claude_work",
+    authStatus: "authenticated",
+    status: "ready",
+  });
+  harness.usage = [
+    {
+      provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      status: "needs-auth",
+      source: "claude-oauth-usage",
+      updatedAt: new Date().toISOString(),
+      limits: [],
+      usageLines: [],
+      detail: "Claude usage credentials were rejected. Sign in again.",
+    },
+  ];
+  const { props: panelProps } = accountProps({
+    providerInstances: { claude_work: { driver: "claudeAgent", displayName: "Work", config: {} } },
+  });
+  await render(<ProvidersSettingsPanel {...panelProps} providerTarget="claudeAgent" />);
+  const editor = page.getByRole("group", { name: "Claude account", exact: true });
+  await expect.element(editor.getByText("Usage needs attention", { exact: true })).toBeVisible();
+  await expect
+    .element(editor.getByText("Claude usage credentials were rejected. Sign in again."))
+    .toBeVisible();
+  await page.getByRole("button", { name: "Select Work", exact: true }).click();
+  await expect
+    .element(
+      page
+        .getByRole("group", { name: "Work account", exact: true })
+        .getByText("Signed in locally", { exact: true }),
+    )
+    .toBeVisible();
+});
 
 it("lists every account of a provider, default included, with a status title and a switch", async () => {
   harness.statuses = [...harness.statuses, WORK_STATUS];
