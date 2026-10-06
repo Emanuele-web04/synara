@@ -166,6 +166,7 @@ const PlanSidebar = function PlanSidebar({
                     text={displayedPlanMarkdown ?? ""}
                     cwd={markdownCwd}
                     isStreaming={false}
+                    className="text-ui leading-relaxed"
                   />
                 </div>
               ) : null}

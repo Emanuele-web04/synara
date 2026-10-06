@@ -1104,6 +1104,7 @@ describe("resolveThreadStatusPill", () => {
       label: "In Background",
       pulse: false,
       colorClass: "text-sky-600 dark:text-sky-300/80",
+      backgroundTaskCount: 2,
     });
   });
 

@@ -139,9 +139,7 @@ const PROVIDER_RUNTIME_REPLAY_PAGE_SIZE = 128;
 const PROVIDER_RUNTIME_REPLAY_POLL_MIN_MS = 250;
 const PROVIDER_RUNTIME_REPLAY_POLL_MAX_MS = 5_000;
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 2_048;
-const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(60);
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 1_024;
-const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(60);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 1_024;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(60);
 const BUFFERED_TOOL_OUTPUT_BY_KEY_CACHE_CAPACITY = 2_048;
@@ -798,11 +796,37 @@ const make = Effect.gen(function* () {
     else queues.set(threadId, values.slice(1));
     return value;
   };
-  const assistantDeliveryModeByTurnKey = yield* Cache.make<string, AssistantDeliveryMode>({
+  // Active policies belong to their exact turn, not to its last text delta.
+  // Settled policies retain the existing bounded grace period for late events.
+  const assistantDeliveryModeByTurnKey = yield* Cache.makeWith<
+    string,
+    { readonly mode: AssistantDeliveryMode; readonly settled: boolean }
+  >({
     capacity: ASSISTANT_DELIVERY_MODE_BY_TURN_CACHE_CAPACITY,
-    timeToLive: ASSISTANT_DELIVERY_MODE_BY_TURN_TTL,
-    lookup: () => Effect.succeed(DEFAULT_ASSISTANT_DELIVERY_MODE),
+    timeToLive: (exit) =>
+      exit._tag === "Success" && !exit.value.settled
+        ? Duration.infinity
+        : ASSISTANT_DELIVERY_MODE_BY_TURN_TTL,
+    lookup: () => Effect.succeed({ mode: DEFAULT_ASSISTANT_DELIVERY_MODE, settled: true }),
   });
+  const bindAssistantDeliveryMode = (key: string, mode: AssistantDeliveryMode, settled = false) =>
+    Cache.set(assistantDeliveryModeByTurnKey, key, { mode, settled });
+  const settleAssistantDeliveryModes = (threadId: ThreadId, turnId?: TurnId) =>
+    Effect.gen(function* () {
+      if (turnId) {
+        const key = providerTurnKey(threadId, turnId);
+        const binding = yield* Cache.getOption(assistantDeliveryModeByTurnKey, key);
+        if (Option.isSome(binding) && !binding.value.settled) {
+          yield* bindAssistantDeliveryMode(key, binding.value.mode, true);
+        }
+        return;
+      }
+      for (const [key, binding] of yield* Cache.entries(assistantDeliveryModeByTurnKey)) {
+        if (key.startsWith(`${threadId}:`) && !binding.settled) {
+          yield* bindAssistantDeliveryMode(key, binding.mode, true);
+        }
+      }
+    });
 
   const matchAssistantDeliveryModeRequest = (threadId: ThreadId, mode: AssistantDeliveryMode) =>
     Effect.gen(function* () {
@@ -832,11 +856,7 @@ const make = Effect.gen(function* () {
         return [unmatchedTurnId, nextState] as const;
       });
       if (matchedTurnId) {
-        yield* Cache.set(
-          assistantDeliveryModeByTurnKey,
-          providerTurnKey(threadId, matchedTurnId),
-          mode,
-        );
+        yield* bindAssistantDeliveryMode(providerTurnKey(threadId, matchedTurnId), mode);
       }
       return matchedTurnId;
     });
@@ -890,14 +910,16 @@ const make = Effect.gen(function* () {
         return [pendingMode, nextState] as const;
       });
       if (mode) {
-        yield* Cache.set(assistantDeliveryModeByTurnKey, key, mode);
+        yield* bindAssistantDeliveryMode(key, mode, options.recordUnmatched === false);
       }
     });
 
   const getAssistantDeliveryMode = (threadId: ThreadId, turnId: TurnId | undefined) =>
     turnId
       ? Cache.getOption(assistantDeliveryModeByTurnKey, providerTurnKey(threadId, turnId)).pipe(
-          Effect.map(Option.getOrElse(() => DEFAULT_ASSISTANT_DELIVERY_MODE)),
+          Effect.map((binding) =>
+            Option.isSome(binding) ? binding.value.mode : DEFAULT_ASSISTANT_DELIVERY_MODE,
+          ),
         )
       : Effect.succeed(DEFAULT_ASSISTANT_DELIVERY_MODE);
 
@@ -919,13 +941,16 @@ const make = Effect.gen(function* () {
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
-    timeToLive: TURN_MESSAGE_IDS_BY_TURN_TTL,
+    // Finalization/revert/session cleanup owns these associations. A silent
+    // active turn must not lose the ids needed to flush its buffered text.
+    timeToLive: Duration.infinity,
     lookup: () => Effect.succeed(new Set<MessageId>()),
   });
 
   const bufferedAssistantTextByMessageId = yield* Cache.make<MessageId, string>({
     capacity: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY,
-    timeToLive: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL,
+    // Size/spill and entry-count limits remain; completion owns text lifetime.
+    timeToLive: Duration.infinity,
     lookup: () => Effect.succeed(""),
   });
 
@@ -3253,6 +3278,13 @@ const make = Effect.gen(function* () {
       // bounded TTL: providers may send late item/delta events after settlement.
       // Unbound request/turn state is safe to clear when a session ends before
       // the two sides can be matched.
+      if (isTerminalTurnEvent && eventTurnId) {
+        yield* settleAssistantDeliveryModes(thread.id, eventTurnId);
+      } else if (event.type === "session.exited") {
+        yield* settleAssistantDeliveryModes(thread.id);
+      } else if (event.type === "runtime.error") {
+        yield* settleAssistantDeliveryModes(thread.id, eventTurnId ?? activeTurnId ?? undefined);
+      }
       if (event.type === "session.exited" || event.type === "runtime.error") {
         yield* clearAssistantDeliveryModeBindingsForThread(thread.id);
       }
@@ -3263,6 +3295,8 @@ const make = Effect.gen(function* () {
       if (event.type === "thread.reverted" || event.type === "thread.conversation-rolled-back") {
         yield* clearActivityUpdateFingerprints(event.payload.threadId);
         yield* clearAssistantDeliveryModeBindingsForThread(event.payload.threadId);
+        yield* clearTurnStateForSession(event.payload.threadId);
+        yield* settleAssistantDeliveryModes(event.payload.threadId);
         yield* clearOutstandingTurns(event.payload.threadId);
         return;
       }
@@ -3292,8 +3326,7 @@ const make = Effect.gen(function* () {
           return;
         }
         deliveryTurnId = activeTurnId;
-        yield* Cache.set(
-          assistantDeliveryModeByTurnKey,
+        yield* bindAssistantDeliveryMode(
           providerTurnKey(event.payload.threadId, activeTurnId),
           nextAssistantDeliveryMode,
         );
@@ -3642,8 +3675,7 @@ const make = Effect.gen(function* () {
     const streamingReceipt = yield* commandReceipts.getByCommandId({
       commandId: providerCommandId(event, "assistant-delta", messageId),
     });
-    yield* Cache.set(
-      assistantDeliveryModeByTurnKey,
+    yield* bindAssistantDeliveryMode(
       providerTurnKey(event.threadId, turnId),
       Option.isSome(streamingReceipt) ? "streaming" : "buffered",
     );

@@ -224,7 +224,7 @@ import {
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
-import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
+import { retryThreadDetailSync } from "../threadDetailSyncRetry";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import {
   DEFAULT_INTERACTION_MODE,
@@ -1974,11 +1974,7 @@ export default function ChatView({
   const hasPendingThreadWork =
     isWorking || (activeLatestTurnState === "running" && !latestTurnSettled);
   const handleRetryThreadDetailSync = useCallback(() => {
-    useStore.getState().clearThreadDetailSyncFailure(threadId);
-    const api = readNativeApi();
-    void api?.orchestration
-      .subscribeThread(buildThreadSubscribeInput(threadId))
-      .catch(() => undefined);
+    void retryThreadDetailSync(threadId).catch(() => undefined);
   }, [threadId]);
   const activeThreadIsSidechat = Boolean(activeThread && isSidechatThread(activeThread));
   // Stable identity: this element is forwarded to the memoized MessagesTimeline, so
@@ -3111,8 +3107,6 @@ export default function ChatView({
     activeProject,
     gitCwd,
     isGroupContainer,
-    requestTerminalFocus,
-    setTerminalOpen,
     setThreadError,
   });
   const stopActiveThreadSession = useCallback(async () => {
