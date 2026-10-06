@@ -2,6 +2,7 @@ import { assert, describe, it } from "vitest";
 
 import {
   areSidebarSearchThreadListsEqual,
+  buildSidebarSearchServerThreadMatches,
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
@@ -295,6 +296,64 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(result[0]?.thread.id, "thread-alpha-compose-prompt");
     assert.equal(result[0]?.matchKind, "title");
     assert.equal(result[0]?.messageMatchCount, 2);
+  });
+
+  it("uses server hits for threads whose messages are not loaded", () => {
+    const unloaded = threads.map((thread) => ({ ...thread, messages: [] }));
+    const serverMatches = new Map([
+      [
+        "thread-beta-settings",
+        { excerpt: "Settings page should expose desktop notification toggles.", matchCount: 3 },
+      ],
+    ]);
+
+    assert.deepEqual(matchSidebarSearchThreads(unloaded, "desktop notification"), []);
+    const result = matchSidebarSearchThreads(unloaded, "desktop notification", 8, serverMatches);
+
+    assert.equal(result[0]?.thread.id, "thread-beta-settings");
+    assert.equal(result[0]?.matchKind, "message");
+    assert.equal(result[0]?.messageMatchCount, 3);
+    assert.include(result[0]?.snippet ?? "", "desktop notification toggles");
+  });
+
+  it("keeps a server hit whose excerpt misses some query tokens", () => {
+    const unloaded = threads.map((thread) => ({ ...thread, messages: [] }));
+    const serverMatches = new Map([
+      ["thread-beta-settings", { excerpt: "...expose desktop toggles", matchCount: 1 }],
+    ]);
+
+    const result = matchSidebarSearchThreads(unloaded, "desktop rollout", 8, serverMatches);
+
+    assert.equal(result[0]?.thread.id, "thread-beta-settings");
+    assert.equal(result[0]?.matchKind, "message");
+  });
+});
+
+describe("buildSidebarSearchServerThreadMatches", () => {
+  const result = {
+    query: "desk",
+    matches: [
+      { threadId: "thread-a", excerpt: "desktop notifications", matchCount: 1 },
+      { threadId: "thread-b", excerpt: "standing desk", matchCount: 2 },
+    ],
+  };
+
+  it("keeps every hit for the current query", () => {
+    assert.deepEqual(
+      [...buildSidebarSearchServerThreadMatches(result, " Desk ").keys()],
+      ["thread-a", "thread-b"],
+    );
+  });
+
+  it("keeps only hits whose excerpt matches a newer query", () => {
+    assert.deepEqual(
+      [...buildSidebarSearchServerThreadMatches(result, "desktop").keys()],
+      ["thread-a"],
+    );
+  });
+
+  it("returns an empty map without a response", () => {
+    assert.equal(buildSidebarSearchServerThreadMatches(undefined, "desk").size, 0);
   });
 });
 

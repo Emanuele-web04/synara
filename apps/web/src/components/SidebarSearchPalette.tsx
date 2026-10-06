@@ -23,6 +23,8 @@ import {
 } from "~/lib/icons";
 import {
   type FilesystemBrowseResult,
+  ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT,
+  ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH,
   type ProjectImportProvider,
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceId,
@@ -32,6 +34,7 @@ import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomple
 import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { readNativeApi } from "~/nativeApi";
@@ -55,6 +58,7 @@ import {
   type SidebarSearchProject,
   type SidebarSearchTheme,
   type SidebarSearchThread,
+  buildSidebarSearchServerThreadMatches,
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
@@ -175,6 +179,8 @@ const ACTION_ICONS: Record<string, IconComponent> = {
 };
 
 const BROWSE_STALE_TIME_MS = 10_000;
+const THREAD_SEARCH_DEBOUNCE_MS = 150;
+const THREAD_SEARCH_STALE_TIME_MS = 10_000;
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
@@ -497,13 +503,46 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     query.trim().length > 0 &&
     (themeCommandItems.length > 0 || matchedCurrentThemes.length > 0);
   const matchedProjects = isBrowsing ? [] : matchSidebarSearchProjects(props.projects, query);
+  // Message bodies are only loaded for recently opened threads, so message
+  // matches for the rest come from the server's persisted history.
+  const [debouncedThreadQuery] = useDebouncedValue(trimmedQuery, {
+    wait: THREAD_SEARCH_DEBOUNCE_MS,
+  });
+  const { data: serverThreadSearch } = useQuery({
+    queryKey: ["sidebar-palette-thread-search", debouncedThreadQuery],
+    queryFn: async () => {
+      const api = readNativeApi();
+      if (!api) return null;
+      const result = await api.orchestration.searchThreads({
+        query: debouncedThreadQuery,
+        limit: ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT,
+      });
+      return { query: debouncedThreadQuery, matches: result.matches };
+    },
+    enabled:
+      props.open &&
+      !isBrowsing &&
+      debouncedThreadQuery.length >= ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH,
+    staleTime: THREAD_SEARCH_STALE_TIME_MS,
+    placeholderData: (previous) => previous,
+  });
+  const serverThreadMatches = useMemo(
+    () =>
+      trimmedQuery.length >= ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH
+        ? buildSidebarSearchServerThreadMatches(serverThreadSearch, trimmedQuery)
+        : undefined,
+    [serverThreadSearch, trimmedQuery],
+  );
   const matchedSettings = isBrowsing ? [] : rankSettingsSearchEntries(query, 12);
   // Scoring normalizes and scans every message of every thread; keep it keyed
   // on the thread set and query so highlight/keyboard/state re-renders and
   // unrelated store flushes do not rescore the whole workspace.
   const matchedThreads = useMemo(
-    () => (isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query)),
-    [isBrowsing, props.threads, query],
+    () =>
+      isBrowsing
+        ? []
+        : matchSidebarSearchThreads(props.threads, query, undefined, serverThreadMatches),
+    [isBrowsing, props.threads, query, serverThreadMatches],
   );
   const hasSearchResults =
     matchedActions.length > 0 ||
