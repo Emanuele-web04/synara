@@ -934,6 +934,7 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
             <DockTerminalPane
+              paneId={pane.id}
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
@@ -1211,6 +1212,7 @@ export function SingleChatSurface(props: {
               void closeTerminalSurface(
                 dockTerminalThreadId(props.threadId),
                 appSettings.confirmTerminalTabClose,
+                paneId,
               )
                 .then((closed) => {
                   if (closed) closePane(props.threadId, paneId);

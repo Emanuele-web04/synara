@@ -71,10 +71,18 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
   };
 }
 
-export async function closeTerminalSurface(threadId: ThreadId, confirmationEnabled: boolean) {
+export async function closeTerminalSurface(
+  threadId: ThreadId,
+  confirmationEnabled: boolean,
+  paneId?: string,
+) {
   const store = useTerminalStateStore.getState();
   const terminalState = selectThreadTerminalState(store.terminalStateByThreadId, threadId);
-  const terminalId = terminalState.activeTerminalId;
+  const terminalId =
+    paneId && terminalState.dockTerminalIdsByPaneId
+      ? terminalState.dockTerminalIdsByPaneId[paneId]
+      : terminalState.activeTerminalId;
+  if (!terminalId) return true;
   const api = readNativeApi();
   const confirmed = await confirmTerminalTabClose({
     api,

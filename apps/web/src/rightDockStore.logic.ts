@@ -58,9 +58,8 @@ export interface RightDockThreadState {
   activePaneId: string | null;
 }
 
-// File previews are the only multi-instance dock kind. Side chats share one
-// destination and switch the embedded thread inside it.
-const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(["file"]);
+// Terminals and file previews have independent tabs. Side chats share one destination.
+const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(["file", "terminal"]);
 
 // Kinds that can only ever have one instance per host thread, derived as
 // "every kind that is not multi-instance" so the two sets can never drift.
