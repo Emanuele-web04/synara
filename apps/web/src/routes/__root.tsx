@@ -1502,7 +1502,11 @@ function EventRouter() {
     // cursor first would vouch for events that never landed — a later cursor
     // resume would then skip them forever. When the thread is missing, drop
     // the resume bookkeeping and re-snapshot through the projection instead.
-    const applyFencedThreadEvent = (threadId: ThreadId, event: OrchestrationEvent): boolean => {
+    const applyFencedThreadEvent = (
+      threadId: ThreadId,
+      event: OrchestrationEvent,
+      source: "stream" | "replay",
+    ): boolean => {
       const state = useStore.getState();
       if (!getThreadFromState(state, threadId)) {
         threadSnapshotSequenceById.delete(threadId);
@@ -1516,7 +1520,9 @@ function EventRouter() {
       threadSnapshotSequenceById.set(threadId, event.sequence);
       advanceThreadDetailResumeCursor(threadId, event.sequence);
       queueDomainEvent(event);
-      if (state.threadDetailSyncById?.[threadId] === "failed") {
+      // Catch-up replay can advance a dead stream's cursor; only that stream's
+      // own delivery proves recovery and can dismiss its exhausted failure.
+      if (source === "stream" && state.threadDetailSyncById?.[threadId] === "failed") {
         useStore.getState().clearThreadDetailSyncFailure(threadId);
         toastManager.close(threadOverflowToastId(threadId));
       }
@@ -1538,7 +1544,7 @@ function EventRouter() {
       for (const event of pendingEvents.toSorted((left, right) => left.sequence - right.sequence)) {
         if (event.sequence > latestThreadSequence) {
           latestThreadSequence = event.sequence;
-          if (!applyFencedThreadEvent(threadId, event)) {
+          if (!applyFencedThreadEvent(threadId, event, "stream")) {
             return;
           }
         }
@@ -1628,7 +1634,7 @@ function EventRouter() {
             return;
           useStore.getState().markThreadDetailSyncFailed(threadId);
           toastManager.add({
-            id: threadOverflowToastId(threadId),
+            id: `stream-overflow:retry-failed:${threadId}`,
             type: "error",
             title: "Unable to resume thread updates",
             description: "Try again when the server responds.",
@@ -1992,7 +1998,7 @@ function EventRouter() {
             if (event.sequence <= latestThreadSequence) {
               continue;
             }
-            if (!applyFencedThreadEvent(threadId, event)) {
+            if (!applyFencedThreadEvent(threadId, event, "replay")) {
               break;
             }
             appliedEventCount += 1;
@@ -2300,7 +2306,7 @@ function EventRouter() {
       if (item.event.sequence <= latestThreadSequence) {
         return;
       }
-      if (!applyFencedThreadEvent(threadId, item.event)) {
+      if (!applyFencedThreadEvent(threadId, item.event, "stream")) {
         return;
       }
       if (
@@ -2343,6 +2349,7 @@ function EventRouter() {
             void api.orchestration.subscribeShell().catch(() => {
               if (disposed || shellSubscriptionGeneration !== generation) return;
               toastManager.add({
+                id: "stream-overflow:shell:retry-failed",
                 type: "error",
                 title: "Unable to resume workspace updates",
                 description: "Try again when the server responds.",

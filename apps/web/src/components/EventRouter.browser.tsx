@@ -80,7 +80,6 @@ import {
 } from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
 import {
-  advanceThreadDetailResumeCursor,
   buildThreadSubscribeInput,
   resetThreadDetailResumeCursorsForTests,
 } from "../threadDetailResumeCursors";
@@ -808,6 +807,51 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
+  it.each(["thread", "shell"])(
+    "surfaces one %s retry rejection even while the paused notice exits",
+    async (scope) => {
+      const mounted = await mountApp();
+      const api = createWsNativeApi();
+      const subscribe = vi
+        .spyOn(api.orchestration, scope === "thread" ? "subscribeThread" : "subscribeShell")
+        .mockRejectedValue(new Error("Server is still unavailable"));
+      const title =
+        scope === "thread"
+          ? "Unable to resume thread updates"
+          : "Unable to resume workspace updates";
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (scope === "thread") {
+            for (const listener of threadSnapshotFailureListeners)
+              listener({
+                threadId: THREAD_ID,
+                code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+                error: new Error("overflow exhausted"),
+              });
+          } else {
+            for (const listener of shellStreamFailureListeners)
+              listener({
+                code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+                error: new Error("overflow exhausted"),
+              });
+          }
+          await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+          await expect.element(page.getByText(title, { exact: true })).toBeVisible();
+          await vi.waitFor(() =>
+            expect(
+              [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+                (element) => element.textContent === title,
+              ),
+            ).toHaveLength(1),
+          );
+        }
+      } finally {
+        subscribe.mockRestore();
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("ignores a retry rejection after the thread consumer is disposed", async () => {
     const mounted = await mountApp();
     let rejectRetry: (error: Error) => void = () => undefined;
@@ -1334,105 +1378,125 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   }, 60_000);
 
-  it("polls a subscribed running thread to recover missed detail events", async () => {
-    const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
-    fixture = {
-      ...fixture,
-      snapshot: createSnapshot({
-        latestTurn: {
-          turnId: runningTurnId,
-          state: "running",
-          requestedAt: "2026-03-04T12:00:04.000Z",
-          startedAt: "2026-03-04T12:00:04.500Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-        session: {
-          threadId: THREAD_ID,
-          status: "running",
-          providerName: "opencode",
-          runtimeMode: "full-access",
-          activeTurnId: runningTurnId,
-          lastError: null,
+  it.each(["healthy", "exhausted"])(
+    "polls a running thread with a %s stream without hiding an exhausted stream failure",
+    async (streamState) => {
+      const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
+      fixture = {
+        ...fixture,
+        snapshot: createSnapshot({
+          latestTurn: {
+            turnId: runningTurnId,
+            state: "running",
+            requestedAt: "2026-03-04T12:00:04.000Z",
+            startedAt: "2026-03-04T12:00:04.500Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: runningTurnId,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:04.500Z",
+          },
           updatedAt: "2026-03-04T12:00:04.500Z",
-        },
-        updatedAt: "2026-03-04T12:00:04.500Z",
-      }),
-    };
+        }),
+      };
 
-    const assistantMessage = {
-      sequence: 2,
-      eventId: EventId.makeUnsafe("event-catchup-assistant"),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      occurredAt: "2026-03-04T12:00:05.000Z",
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "thread.message-sent",
-      payload: {
-        threadId: THREAD_ID,
-        messageId: MessageId.makeUnsafe("msg-catchup-assistant"),
-        role: "assistant",
-        text: "Recovered by periodic catch-up",
-        turnId: runningTurnId,
-        source: "native",
-        streaming: false,
-        createdAt: "2026-03-04T12:00:05.000Z",
-        updatedAt: "2026-03-04T12:00:05.000Z",
-      },
-    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-    const sessionReady = {
-      sequence: 3,
-      eventId: EventId.makeUnsafe("event-catchup-session-ready"),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      occurredAt: "2026-03-04T12:00:06.000Z",
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "thread.session-set",
-      payload: {
-        threadId: THREAD_ID,
-        session: {
+      const assistantMessage = {
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-catchup-assistant"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
           threadId: THREAD_ID,
-          status: "ready",
-          providerName: "opencode",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-03-04T12:00:06.000Z",
+          messageId: MessageId.makeUnsafe("msg-catchup-assistant"),
+          role: "assistant",
+          text: "Recovered by periodic catch-up",
+          turnId: runningTurnId,
+          source: "native",
+          streaming: false,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
         },
-      },
-    } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
-    replayEvents = [assistantMessage, sessionReady];
-
-    const mounted = await mountApp();
-
-    try {
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          expect(
-            thread?.messages.some(
-              (message) =>
-                message.id === MessageId.makeUnsafe("msg-catchup-assistant") &&
-                message.text === "Recovered by periodic catch-up" &&
-                message.streaming === false,
-            ),
-          ).toBe(true);
-          expect(thread?.session?.orchestrationStatus).toBe("ready");
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const sessionReady = {
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-catchup-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:06.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:06.000Z",
+          },
         },
-        { timeout: 5_000, interval: 16 },
-      );
-      expect(replayRequestCursors).toContain(1);
-    } finally {
-      fixture = buildFixture();
-      await mounted.cleanup();
-    }
-  });
+      } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+      const mounted = await mountApp();
+
+      try {
+        if (streamState === "exhausted") {
+          for (const listener of threadSnapshotFailureListeners)
+            listener({
+              threadId: THREAD_ID,
+              code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+              error: new Error("overflow exhausted"),
+            });
+          expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+        }
+        replayEvents = [assistantMessage, sessionReady];
+        await vi.waitFor(
+          () => {
+            const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+            expect(
+              thread?.messages.some(
+                (message) =>
+                  message.id === MessageId.makeUnsafe("msg-catchup-assistant") &&
+                  message.text === "Recovered by periodic catch-up" &&
+                  message.streaming === false,
+              ),
+            ).toBe(true);
+            expect(thread?.session?.orchestrationStatus).toBe("ready");
+          },
+          { timeout: 5_000, interval: 16 },
+        );
+        expect(replayRequestCursors).toContain(1);
+        if (streamState === "exhausted") {
+          expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+          await expect
+            .element(page.getByText("Thread updates paused", { exact: true }))
+            .toBeVisible();
+          await expect
+            .element(page.getByRole("button", { name: "Retry updates", exact: true }))
+            .toBeVisible();
+        }
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("limits skipped projection reconciles to 72 seconds since the last snapshot", async () => {
     const turnId = TurnId.makeUnsafe("turn-reconcile-deadline");

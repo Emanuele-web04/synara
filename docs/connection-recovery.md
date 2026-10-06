@@ -40,8 +40,10 @@ cached messages remain visible. **Retry updates** reopens only the affected stre
 thread retries retain their cursor and event fence and run through the same
 subscription queue as other thread synchronization operations. Shell retries reset
 the shell snapshot fence. Thread notices have stable identities and route-scoped
-thread context; retry closes the notice, and an applied event after recovery clears
-the failed state. Exhaustion does not clear thread cursors or reconnect the whole
-transport. The server owns its
-bounded event buffers and resume/snapshot policy; this client change does not edit
-server handlers or their buffering hooks.
+thread context; retry closes the notice, and an applied event from the recovered
+subscription clears the failed state. A catch-up poll can recover missing events
+without reviving an exhausted stream, so replay alone keeps the failed state and
+retry notice visible. Retry rejections use separate stable notice identities.
+Exhaustion does not clear thread cursors or reconnect the whole transport. The
+server owns its bounded event buffers and resume/snapshot policy; this client
+change does not edit server handlers or their buffering hooks.
