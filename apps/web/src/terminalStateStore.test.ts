@@ -369,3 +369,40 @@ describe("terminalStateStore actions", () => {
     ).toBe(false);
   });
 });
+
+describe("dock terminal sessions", () => {
+  it("adopts the existing session once, persists independent pane sessions, and closes only the target", () => {
+    useTerminalStateStore.setState({ terminalStateByThreadId: {} });
+    const scopeId = ThreadId.makeUnsafe("dock-terminal:host");
+    const store = useTerminalStateStore.getState();
+    store.newTerminal(scopeId, "legacy-session");
+    store.ensureDockTerminal(scopeId, "pane-a");
+    store.ensureDockTerminal(scopeId, "pane-b");
+    const state = () => useTerminalStateStore.getState().terminalStateByThreadId[scopeId]!;
+    const first = state().dockTerminalIdsByPaneId!["pane-a"]!;
+    const second = state().dockTerminalIdsByPaneId!["pane-b"]!;
+    expect(first).toBe("legacy-session");
+    expect(second).not.toBe(first);
+    store.setTerminalActivity(scopeId, first, { hasRunningSubprocess: true, agentState: null });
+    store.setTerminalTitleOverride(scopeId, second, "Server");
+    store.ensureDockTerminal(scopeId, "pane-a");
+    expect(state().terminalIds).toEqual([first, second]);
+    expect(state().runningTerminalIds).toEqual([first]);
+
+    useTerminalStateStore.setState({
+      terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(
+        useTerminalStateStore.getState().terminalStateByThreadId,
+      ),
+    });
+    expect(state().dockTerminalIdsByPaneId).toEqual({ "pane-a": first, "pane-b": second });
+    expect(state().terminalTitleOverridesById[second]).toBe("Server");
+    expect(state().retiredTerminalIds ?? []).toEqual([]);
+    store.closeTerminal(scopeId, first);
+    expect(state().terminalIds).toEqual([second]);
+    expect(state().dockTerminalIdsByPaneId).toEqual({ "pane-b": second });
+    expect(state().terminalOpen).toBe(true);
+    expect(store.closeExitedTerminal(scopeId, first)).toBe("ignored");
+    expect(store.closeExitedTerminal(scopeId, second)).toBe("final");
+    expect(state().terminalOpen).toBe(false);
+  });
+});

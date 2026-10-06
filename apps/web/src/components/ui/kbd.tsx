@@ -70,6 +70,10 @@ function ShortcutKbd({
 }
 
 /** The "submit this dialog" chord, spelled for the host platform. */
+export function getSubmitShortcutKeyShortcuts(): string {
+  return isMacNavigatorPlatform() ? "Meta+Enter" : "Control+Enter";
+}
+
 function SubmitShortcutKbd({ className }: { className?: string }) {
   return (
     <ShortcutKbd

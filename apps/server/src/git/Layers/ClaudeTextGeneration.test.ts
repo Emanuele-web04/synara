@@ -263,13 +263,23 @@ describe("ClaudeTextGenerationServiceLive", () => {
       Effect.provide(
         mockSpawnerLayer((_args, _command, env) => {
           assert.ok(env?.HOME);
+          const accountRoot =
+            process.platform === "darwin" ? path.dirname(env.CLAUDE_CONFIG_DIR!) : env.HOME;
           assert.strictEqual(
-            path.basename(env.HOME),
+            path.basename(accountRoot),
             `instance-${Buffer.from("claude_work", "utf8").toString("hex")}`,
           );
-          assert.strictEqual(path.basename(path.dirname(env.HOME)), "claude");
-          assert.strictEqual(path.basename(path.dirname(path.dirname(env.HOME))), "provider-homes");
-          assert.strictEqual(env.CLAUDE_CONFIG_DIR, undefined);
+          assert.strictEqual(path.basename(path.dirname(accountRoot)), "claude");
+          assert.strictEqual(
+            path.basename(path.dirname(path.dirname(accountRoot))),
+            "provider-homes",
+          );
+          if (process.platform === "darwin") {
+            assert.notEqual(env.HOME, accountRoot);
+            assert.strictEqual(env.CLAUDE_SECURESTORAGE_CONFIG_DIR, env.CLAUDE_CONFIG_DIR);
+          } else {
+            assert.strictEqual(env.CLAUDE_CONFIG_DIR, undefined);
+          }
           assert.strictEqual(env.ANTHROPIC_AUTH_TOKEN, "work-token");
           return {
             stdout: '{"structured_output":{"title":"Provider instances"}}\n',
