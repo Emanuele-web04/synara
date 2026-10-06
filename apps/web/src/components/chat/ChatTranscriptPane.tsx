@@ -54,6 +54,7 @@ interface ChatTranscriptPaneProps {
   chatFontSizePx: number;
   emptyStateContent?: ReactNode;
   emptyStateProjectName: string | undefined;
+  onSelectEmptyStatePrompt?: (prompt: string) => void;
   expandedWorkGroups?: Record<string, boolean>;
   hasMessages: boolean;
   isRevertingCheckpoint: boolean;
@@ -150,6 +151,7 @@ export function ChatTranscriptPane({
   chatFontSizePx,
   emptyStateContent,
   emptyStateProjectName,
+  onSelectEmptyStatePrompt,
   expandedWorkGroups,
   hasMessages,
   isRevertingCheckpoint,
@@ -403,7 +405,15 @@ export function ChatTranscriptPane({
             findHighlight={findHighlight}
             emptyStateContent={
               emptyStateContent === undefined ? (
-                <ChatEmptyStateHero projectName={emptyStateProjectName} />
+                <ChatEmptyStateHero
+                  heading={
+                    <h1 className="text-2xl font-semibold text-foreground/90">Let's build</h1>
+                  }
+                  description={emptyStateProjectName}
+                  {...(onSelectEmptyStatePrompt
+                    ? { onSelectPrompt: onSelectEmptyStatePrompt }
+                    : {})}
+                />
               ) : (
                 emptyStateContent
               )
