@@ -3227,13 +3227,10 @@ const make = Effect.gen(function* () {
           ? (completedReasoning?.sequence ?? runtimeSequence)
           : runtimeSequence,
       );
-      if (
-        rebuildAcceptedProgress &&
-        (snapshotKey !== undefined || event.type === "task.progress")
-      ) {
-        // Restore snapshot dedupe without dispatching already-accepted rows.
-        // Historical task rows may have been accepted under the old coalescing
-        // policy without activity receipts; never resurrect those phases here.
+      if (rebuildAcceptedProgress && snapshotKey !== undefined) {
+        // Restore replaceable tool snapshot fingerprints without dispatching
+        // intermediate snapshots. Task phases and reasoning sections replay
+        // through stable command receipts, repairing missing activity dispatches.
         if (snapshotKey !== undefined)
           yield* Effect.forEach(activities, (activity) => {
             const key = providerActivityUpdateDedupeKey(activityEvent, thread.id, activity);
@@ -3661,8 +3658,8 @@ const make = Effect.gen(function* () {
   // recoverable without deleting user data.
   const rebuildAcceptedOpenTurnStateForEvent = (event: ProviderRuntimeEvent, sequence: number) =>
     prepareAcceptedRuntimeEventReplay(event).pipe(
-      // Accepted progress rows already contributed their durable snapshots.
-      // Rebuild caches without resurrecting intermediate coalesced updates.
+      // Accepted tool snapshots restore fingerprints without intermediate
+      // dispatches; other activities retain receipt-based replay and repair.
       Effect.andThen(processRuntimeEvent(event, sequence, false, true)),
       Effect.as({ replayed: true } as const),
       Effect.catchCause((cause) =>

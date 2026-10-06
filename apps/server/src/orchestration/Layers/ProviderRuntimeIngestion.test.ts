@@ -962,54 +962,114 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual(["terminal-progress-4", "terminal-progress-complete"]);
   });
 
-  it("does not resurrect coalesced accepted progress while rebuilding open-turn state", async () => {
+  it("does not resurrect coalesced accepted tool snapshots while rebuilding open-turn state", async () => {
     const harness = await createHarness({ startIngestion: false });
-    let lastSequence = 0;
+    let last: PersistedProviderRuntimeEvent | undefined;
     for (let index = 0; index < 5; index += 1) {
-      const row = await Effect.runPromise(
+      last = await Effect.runPromise(
         harness.runtimeEventRepository.append({
-          type: "task.progress",
+          type: "tool.progress",
           eventId: asEventId(`accepted-progress-${index}`),
-          provider: "codex",
+          provider: "claudeAgent",
           createdAt: "2026-10-06T12:00:00.000Z",
           threadId: asThreadId("thread-1"),
           turnId: asTurnId("turn-accepted-progress"),
-          payload: { taskId: "accepted-task", description: `Progress ${index}` },
-        } as ProviderRuntimeEvent),
+          payload: { toolUseId: "accepted-tool", summary: `Progress ${index}` },
+        }),
       );
-      lastSequence = row.sequence;
     }
+    const activity = projectProviderRuntimeActivities(last!.event, last!.sequence)[0]!;
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.activity.append",
         commandId: CommandId.makeUnsafe("accepted-progress-snapshot"),
         threadId: asThreadId("thread-1"),
-        createdAt: "2026-10-06T12:00:00.000Z",
-        activity: {
-          id: asEventId("accepted-progress-4"),
-          kind: "task.progress",
-          tone: "info",
-          summary: "Task progress",
-          payload: { taskId: "accepted-task", detail: "Progress 4" },
-          createdAt: "2026-10-06T12:00:00.000Z",
-          turnId: asTurnId("turn-accepted-progress"),
-        },
+        createdAt: activity.createdAt,
+        activity,
       }),
     );
     await Effect.runPromise(
       harness.runtimeEventRepository.advanceConsumerCursorThrough({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
-        throughSequence: lastSequence,
-        updatedAt: "2026-10-06T12:00:00.000Z",
+        throughSequence: last!.sequence,
+        updatedAt: activity.createdAt,
       }),
     );
     await harness.startIngestion();
     const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!;
     expect(
-      thread.activities
-        .filter((activity) => activity.kind === "task.progress")
-        .map((activity) => activity.id),
+      thread.activities.filter((entry) => entry.kind === "tool.updated").map((entry) => entry.id),
     ).toEqual(["accepted-progress-4"]);
+  });
+
+  it("repairs a failed accepted task activity on restart without duplicating committed receipts", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "task.progress",
+            eventId: asEventId(`accepted-task-${index}`),
+            provider: "codex",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("accepted-task-turn"),
+            payload: { taskId: "accepted-task", description: `Distinct section ${index}` },
+          }),
+        ),
+      );
+    }
+    const committed = projectProviderRuntimeActivities(rows[0]!.event, rows[0]!.sequence)[0]!;
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(
+          `provider:accepted-task-0:thread-activity-append:thread-1:${committed.kind}:${committed.id}`,
+        ),
+        threadId: asThreadId("thread-1"),
+        activity: committed,
+        createdAt: committed.createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence: rows[1]!.sequence,
+        updatedAt: committed.createdAt,
+      }),
+    );
+    const dispatch = harness.engine.dispatch;
+    const failingDispatch = vi
+      .spyOn(harness.engine, "dispatch")
+      .mockImplementation((command) =>
+        command.type === "thread.activity.append" && command.activity.id === "accepted-task-1"
+          ? Effect.die(new Error("temporary activity persistence failure"))
+          : dispatch(command),
+      );
+    try {
+      await harness.startIngestion();
+    } finally {
+      failingDispatch.mockRestore();
+    }
+    expect(
+      (await harness.readProjectedThread())!.activities
+        .filter((entry) => entry.kind === "task.progress")
+        .map((entry) => entry.id),
+    ).toEqual(["accepted-task-0"]);
+    await Effect.runPromise(Scope.close(scope!, Exit.void));
+    const drain = await harness.restartIngestion();
+    await drain();
+    expect(
+      (await harness.readProjectedThread())!.activities
+        .filter((entry) => entry.kind === "task.progress")
+        .map((entry) => entry.id),
+    ).toEqual(["accepted-task-0", "accepted-task-1"]);
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(rows[1]!.sequence);
   });
 
   it.each([
