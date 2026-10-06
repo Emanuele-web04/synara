@@ -265,7 +265,7 @@ export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-b
 /** Compact bordered action pill for inline composer chrome (Review changes, hint
  *  actions). One token so every trailing action in a composer strip reads alike. */
 export const COMPOSER_INLINE_ACTION_PILL_CLASS_NAME =
-  "shrink-0 rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground";
+  "shrink-0 rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background";
 
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";

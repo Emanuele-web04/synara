@@ -14,6 +14,7 @@ import { SnoozeUntilDialog } from "../SnoozeUntilDialog";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
+import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
 
 const ACTION_CLASS_NAME = cn(COMPOSER_INLINE_ACTION_PILL_CLASS_NAME, "text-ui-sm");
 
@@ -32,7 +33,10 @@ export function ComposerSnoozeNotice({
       role="status"
       data-testid="composer-snooze-notice"
       // Same corners as the banner frame so the tint never pokes past its rounded top.
-      className="squircle flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[inherit] bg-info/8 px-5 py-3 sm:px-6"
+      className={cn(
+        COMPOSER_NOTICE_CONTENT_CLASS_NAME,
+        "squircle flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[inherit] bg-info/8",
+      )}
     >
       <ClockIcon className="size-3.5 shrink-0 text-info" aria-hidden />
       <span className="min-w-0 flex-1 text-ui-sm text-muted-foreground">
