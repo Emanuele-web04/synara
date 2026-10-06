@@ -132,8 +132,7 @@ export interface OrchestrationEngineShape {
    * Dispatch preserves FIFO within each thread/project/space aggregate and
    * bounds concurrency across independent aggregates. Receipts deduplicate
    * retries. Success follows the atomic event/receipt/hot-projection commit and
-   * ordered publication; deferred shell projections may still be catching up.
-   * Use `drain` when accepted deferred work must also have settled.
+   * ordered publication. `drain` waits for admitted command work to settle.
    */
   readonly dispatch: (
     command: OrchestrationCommand,

@@ -11,6 +11,8 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@synara/contracts";
+import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
+import type { DrainableWorkerStatus } from "@synara/shared/DrainableWorker";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Cause, Effect, Fiber, Layer, ManagedRuntime, Option, PubSub, Stream } from "effect";
@@ -50,6 +52,11 @@ const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshot
  * synchronous defect raised while the worker builds a command's pipeline.
  */
 const fingerprintPoison = vi.hoisted(() => new Set<string>());
+
+vi.mock("@synara/shared/KeyedDrainableWorker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synara/shared/KeyedDrainableWorker")>();
+  return { ...actual, makeKeyedDrainableWorker: vi.fn(actual.makeKeyedDrainableWorker) };
+});
 
 vi.mock("effect", async (importOriginal) => {
   const actual = await importOriginal<typeof import("effect")>();
@@ -227,7 +234,42 @@ describe("OrchestrationEngine", () => {
     }
   });
 
-  it("reserves lifecycle admission across active and queued aggregate commands", async () => {
+  it("reserves lifecycle admission while a worker is finishing its released engine reservation", async () => {
+    let releaseFinishing!: () => void;
+    let finishingEntered!: () => void;
+    const finishingGate = new Promise<void>((resolve) => {
+      releaseFinishing = resolve;
+    });
+    const finishingStarted = new Promise<void>((resolve) => {
+      finishingEntered = resolve;
+    });
+    let workerStatus: Effect.Effect<DrainableWorkerStatus> | undefined;
+    const workerFactory = vi.mocked(makeKeyedDrainableWorker);
+    const originalWorkerFactory = workerFactory.getMockImplementation()!;
+    workerFactory.mockImplementation((process, options) =>
+      originalWorkerFactory(
+        (item) =>
+          process(item).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                (item as { command: OrchestrationCommand }).command.commandId ===
+                "reserve-actual-normal-0"
+                  ? Effect.sync(finishingEntered).pipe(
+                      Effect.andThen(Effect.promise(() => finishingGate)),
+                    )
+                  : Effect.void,
+              ),
+            ),
+          ),
+        options,
+      ).pipe(
+        Effect.tap((worker) =>
+          Effect.sync(() => {
+            workerStatus = worker.status;
+          }),
+        ),
+      ),
+    );
     const system = await createOrchestrationSystem();
     const projectId = asProjectId("reserve-actual-project");
     const threadId = ThreadId.makeUnsafe("reserve-actual-thread");
@@ -329,8 +371,34 @@ describe("OrchestrationEngine", () => {
         ),
       ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "overloaded" });
       release();
+      await finishingStarted;
+      pending.push(
+        system.run(
+          Effect.exit(
+            system.engine.dispatch({
+              type: "thread.session.stop",
+              commandId: CommandId.makeUnsafe("reserve-actual-control-refill"),
+              threadId,
+              createdAt,
+            }),
+          ),
+        ),
+      );
+      // The engine released one reservation, but the real worker is still closing it.
+      await vi.waitFor(async () => expect((await system.run(workerStatus!)).outstanding).toBe(257));
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.session.stop",
+            commandId: CommandId.makeUnsafe("reserve-actual-control-refill-overflow"),
+            threadId,
+            createdAt,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "overloaded" });
+      releaseFinishing();
       const outcomes = await Promise.all(pending);
-      expect(outcomes).toHaveLength(256);
+      expect(outcomes).toHaveLength(257);
       for (const outcome of outcomes) {
         if (outcome._tag === "Failure") {
           const error = Cause.findErrorOption(outcome.cause);
@@ -339,10 +407,12 @@ describe("OrchestrationEngine", () => {
         }
       }
     } finally {
+      releaseFinishing();
       release();
       await Promise.allSettled(pending);
       append?.mockRestore();
       await system.dispose();
+      workerFactory.mockImplementation(originalWorkerFactory);
     }
   });
 

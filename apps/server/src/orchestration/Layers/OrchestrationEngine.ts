@@ -92,7 +92,8 @@ import {
 } from "../Services/OrchestrationEngine.ts";
 
 const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
-const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
+const ORCHESTRATION_COMMAND_CONCURRENCY = 4;
+const PROJECTION_RECOVERY_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
 /** Coalesce/skip full projection rebuilds when large state DBs make repair multi-minute. */
 const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
@@ -439,8 +440,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         const failure = Cause.pretty(outcome.cause);
         yield* Ref.set(projectionLastFailure, failure);
         const retryDelayMs =
-          DEFERRED_PROJECTION_RETRY_DELAYS_MS[
-            Math.min(retryAttempts - 1, DEFERRED_PROJECTION_RETRY_DELAYS_MS.length - 1)
+          PROJECTION_RECOVERY_RETRY_DELAYS_MS[
+            Math.min(retryAttempts - 1, PROJECTION_RECOVERY_RETRY_DELAYS_MS.length - 1)
           ] ?? 30_000;
         yield* Effect.logWarning("orchestration projection catch-up failed; retrying").pipe(
           Effect.annotateLogs({
@@ -1559,8 +1560,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const aggregate = commandToAggregateRef(envelope.command);
       return `${aggregate.aggregateKind}:${aggregate.aggregateId}`;
     },
-    concurrency: 4,
-    capacity: ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
+    concurrency: ORCHESTRATION_COMMAND_CONCURRENCY,
+    // Released engine reservations can overlap the closing worker finalizers.
+    // Admission is owned solely by engineAdmissionState, including its reserve.
+    capacity: ORCHESTRATION_COMMAND_QUEUE_CAPACITY + ORCHESTRATION_COMMAND_CONCURRENCY,
     priority: commandPriority,
   });
 
