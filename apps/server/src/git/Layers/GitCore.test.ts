@@ -1149,7 +1149,7 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("refresh fetch is scoped to the checked out branch upstream refspec", () =>
+    it.effect("refreshes only the checked out upstream without changing FETCH_HEAD", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();
         const source = yield* makeTmpDir();
@@ -1170,12 +1170,21 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(source, ["push", "-u", "origin", featureBranch]);
         yield* git(source, ["checkout", defaultBranch]);
 
+        yield* git(source, ["fetch", "origin", defaultBranch]);
+        const userFetchHead = yield* git(source, ["rev-parse", "FETCH_HEAD"]);
         const realGitCore = yield* GitCore;
         let fetchArgs: readonly string[] | null = null;
+        let refreshCompleted = false;
         const core = yield* makeIsolatedGitCore((input) => {
           if (input.args[0] === "fetch") {
             fetchArgs = [...input.args];
-            return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+            return realGitCore.execute(input).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  refreshCompleted = true;
+                }),
+              ),
+            );
           }
           return realGitCore.execute(input);
         });
@@ -1183,14 +1192,17 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* Effect.promise(() =>
           vi.waitFor(() => {
             expect(fetchArgs).not.toBeNull();
+            expect(refreshCompleted).toBe(true);
           }),
         );
 
         expect(yield* git(source, ["branch", "--show-current"])).toBe(featureBranch);
+        expect(yield* git(source, ["rev-parse", "FETCH_HEAD"])).toBe(userFetchHead);
         expect(fetchArgs).toEqual([
           "fetch",
           "--quiet",
           "--no-tags",
+          "--no-write-fetch-head",
           "origin",
           `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
         ]);
@@ -2218,6 +2230,57 @@ it.layer(TestLayer)("git integration", (it) => {
   });
 
   describe("fetchPullRequestCommit", () => {
+    it.effect(
+      "preserves the user PR FETCH_HEAD when a background status fetch finishes before resolve",
+      () =>
+        Effect.gen(function* () {
+          const remote = yield* makeTmpDir();
+          const source = yield* makeTmpDir();
+          yield* git(remote, ["init", "--bare"]);
+          const { initialBranch: rawBranch } = yield* initRepoWithCommit(source);
+          const branch = rawBranch.trim();
+          yield* git(source, ["remote", "add", "origin", remote]);
+          yield* git(source, ["push", "-u", "origin", branch]);
+          yield* git(source, ["checkout", "-b", "pr-fetch-head"]);
+          yield* writeTextFile(path.join(source, "pr.txt"), "pull request change\n");
+          yield* git(source, ["add", "pr.txt"]);
+          yield* git(source, ["commit", "-m", "PR commit"]);
+          const prOid = yield* git(source, ["rev-parse", "HEAD"]);
+          yield* git(source, ["push", "origin", "HEAD:refs/pull/55/head"]);
+          yield* git(source, ["checkout", branch]);
+          const realCore = yield* GitCore;
+          let backgroundCompleted = false;
+          let backgroundArgs: ReadonlyArray<string> = [];
+          let userArgs: ReadonlyArray<string> = [];
+          const core: GitCoreShape = yield* makeIsolatedGitCore((input) =>
+            Effect.gen(function* () {
+              if (input.operation === "GitCore.fetchPullRequestCommit.resolve") {
+                // Interleave at the real fetch->resolve boundary while the user's
+                // whole operation holds its mutation lease. Only status fetch runs.
+                yield* core.status({ cwd: source });
+                yield* Effect.promise(() =>
+                  vi.waitFor(() => expect(backgroundCompleted).toBe(true), { timeout: 2000 }),
+                );
+              }
+              if (input.operation === "GitCore.fetchPullRequestCommit") userArgs = input.args;
+              const result = yield* realCore.execute(input);
+              if (input.operation === "GitCore.fetchUpstreamRefForStatus") {
+                backgroundArgs = input.args;
+                backgroundCompleted = true;
+              }
+              return result;
+            }),
+          );
+          const fetched = yield* core.withMutation(
+            source,
+            core.fetchPullRequestCommit({ cwd: source, prNumber: 55 }),
+          );
+          expect(fetched).toBe(prOid);
+          expect(backgroundArgs).toContain("--no-write-fetch-head");
+          expect(userArgs).not.toContain("--no-write-fetch-head");
+        }),
+    );
+
     it.effect("rejects a pull-request URL for a repository other than the fetch remote", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -3111,7 +3174,7 @@ it.layer(TestLayer)("git integration", (it) => {
     );
 
     it.effect(
-      "refreshes upstream before statusDetails so behind count reflects remote updates",
+      "refreshes upstream in background so later statusDetails reflects remote updates",
       () =>
         Effect.gen(function* () {
           const remote = yield* makeTmpDir();
@@ -3142,6 +3205,28 @@ it.layer(TestLayer)("git integration", (it) => {
           yield* git(clone, ["push", "origin", initialBranch]);
 
           const core = yield* GitCore;
+          const first = yield* core.statusDetails(source);
+          expect(first.branch).toBe(initialBranch);
+          // The first status read uses local refs. Observe the background fetch's
+          // actual ref update before asserting the subsequent local status.
+          const updatedOid = (yield* git(clone, ["rev-parse", "HEAD"])).trim();
+          yield* Effect.promise(() =>
+            vi.waitFor(
+              async () => {
+                const remoteOid = (
+                  await Effect.runPromise(
+                    core.execute({
+                      operation: "GitCore.test.waitForBackgroundRef",
+                      cwd: source,
+                      args: ["rev-parse", `origin/${initialBranch}`],
+                    }),
+                  )
+                ).stdout.trim();
+                expect(remoteOid).toBe(updatedOid);
+              },
+              { timeout: 5000 },
+            ),
+          );
           const details = yield* core.statusDetails(source);
           expect(details.branch).toBe(initialBranch);
           expect(details.aheadCount).toBe(0);
@@ -3166,6 +3251,8 @@ it.layer(TestLayer)("git integration", (it) => {
           let fetches = 0;
           let recovered = false;
           const core = yield* makeIsolatedGitCore((input) => {
+            if (input.operation === "GitCore.resolveCurrentUpstream")
+              return Effect.succeed({ code: 0, stdout: `origin/${branch}\n`, stderr: "" });
             if (input.args[0] !== "fetch") return realCore.execute(input);
             fetches += 1;
             return Effect.succeed({
