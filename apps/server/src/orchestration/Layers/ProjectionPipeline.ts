@@ -1847,8 +1847,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               }
               nextRow = {
                 ...existingRow.value,
-                status: "uncertain",
-                resolvedAt: null,
+                status: "confirmed",
+                resolvedAt: activity.createdAt,
               };
             } else {
               if (existingRow.value.status !== "responding") {
@@ -1864,12 +1864,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               if (existingRow.value.responseCommandId !== responseCommandId) {
                 return;
               }
-              const nextStatus =
-                extractApprovalFailureSettlementStatus(activity.payload) ?? "uncertain";
+              const isStale = createStalePendingInteractionMatcher([activity])(existingRow.value);
+              const nextStatus = isStale
+                ? "confirmed"
+                : (extractApprovalFailureSettlementStatus(activity.payload) ?? "uncertain");
               nextRow = {
                 ...existingRow.value,
                 status: nextStatus,
-                resolvedAt: null,
+                resolvedAt: isStale ? activity.createdAt : null,
               };
             }
           } else {
