@@ -14,7 +14,7 @@
   "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "synara-profiles-trial" }],
   "vars": {
     "PROFILES_PUBLIC_ORIGIN": "https://trysynara.com",
-    "PROFILES_ASSET_PREFIX": "https://trysynara.com/profiles-assets",
+    "PROFILES_ASSET_PREFIX": "https://www.trysynara.com/profiles-assets",
     // Replace with the verified account service, or pass --var at deploy.
     // Never silently read Dylan's account service in a new deployment.
     "ACCOUNT_API_URL": "https://account-api.invalid",

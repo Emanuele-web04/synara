@@ -35,7 +35,7 @@ public. The app does not need persistent R2/DO caching for this read path.
 | `ACCOUNT_API_URL`        | Verified account API origin. The historical deployment defaults to `https://api.synara.vrbty.dev`; the isolated trial deliberately uses a non-routable placeholder until configured.                        |
 | `PROFILES_PUBLIC_ORIGIN` | Public origin used for absolute social preview URLs. The trial uses `https://trysynara.com`, served through the marketing proxy.                                                                            |
 | `PROFILE_PROXY_SECRET`   | Optional shared secret matching the account API; allows per-visitor rate limiting. Set as a Worker secret, never in source.                                                                                 |
-| `PROFILES_ASSET_PREFIX`  | Asset prefix for proxied deployments, set at build time for Next.js bundles and at runtime for the favicon. The trial uses `https://trysynara.com/profiles-assets`; leave unset for standalone deployments. |
+| `PROFILES_ASSET_PREFIX`  | Asset prefix for proxied deployments, set at build time for Next.js bundles and at runtime for the favicon. The trial uses `https://www.trysynara.com/profiles-assets`; leave unset for standalone deployments. |
 | `MARKETING_ORIGIN`       | Optional origin for non-profile routes in the historical single-domain deployment. Unset on the trial.                                                                                                      |
 
 ## Local development and verification
@@ -50,7 +50,7 @@ Point `ACCOUNT_API_URL` at an isolated local API. From `apps/profiles`, build
 and dry-run the trial without publishing:
 
 ```sh
-PROFILES_ASSET_PREFIX=https://trysynara.com/profiles-assets bunx opennextjs-cloudflare build --config wrangler.trial.jsonc
+PROFILES_ASSET_PREFIX=https://www.trysynara.com/profiles-assets bunx opennextjs-cloudflare build --config wrangler.trial.jsonc
 bunx wrangler deploy --config wrangler.trial.jsonc --dry-run
 ```
 
@@ -58,7 +58,7 @@ If this machine cannot run Turbopack's local build process, the supported
 Webpack build can be packaged separately:
 
 ```sh
-PROFILES_ASSET_PREFIX=https://trysynara.com/profiles-assets NEXT_PRIVATE_STANDALONE=true bunx next build --webpack
+PROFILES_ASSET_PREFIX=https://www.trysynara.com/profiles-assets NEXT_PRIVATE_STANDALONE=true bunx next build --webpack
 bunx opennextjs-cloudflare build --skipNextBuild --config wrangler.trial.jsonc
 ```
 
@@ -73,7 +73,7 @@ matching account service. Then, from `apps/profiles`:
 ```sh
 bunx wrangler whoami
 bunx wrangler secret put PROFILE_PROXY_SECRET --config wrangler.trial.jsonc
-PROFILES_ASSET_PREFIX=https://trysynara.com/profiles-assets bunx opennextjs-cloudflare build --config wrangler.trial.jsonc
+PROFILES_ASSET_PREFIX=https://www.trysynara.com/profiles-assets bunx opennextjs-cloudflare build --config wrangler.trial.jsonc
 bunx opennextjs-cloudflare deploy --config wrangler.trial.jsonc
 ```
 
