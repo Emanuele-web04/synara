@@ -31,6 +31,7 @@ const reactHarness = vi.hoisted(() => {
       cursor = 0;
     },
     reset() {
+      for (const slot of slots) slot.cleanup?.();
       slots = [];
       cursor = 0;
     },
@@ -160,13 +161,14 @@ vi.mock("../terminal/terminalIds", () => ({
 }));
 
 import { useChatTerminalController } from "./useChatTerminalController";
+import { openWorkspaceTerminal } from "../../lib/hosts/workspaceCommands";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-a");
 
 describe("useChatTerminalController", () => {
   const onDeletePlaceholderThread = vi.fn();
 
-  const render = () => {
+  const render = (isFocusedPane = false) => {
     reactHarness.beginRender();
     return useChatTerminalController({
       threadId: THREAD_ID,
@@ -180,7 +182,7 @@ describe("useChatTerminalController", () => {
         proposedPlans: [],
       },
       activeProjectPresent: true,
-      isFocusedPane: false,
+      isFocusedPane,
       isServerThread: true,
       confirmTerminalClose: true,
       onDeletePlaceholderThread,
@@ -209,6 +211,22 @@ describe("useChatTerminalController", () => {
     );
     expect(terminalHarness.actions.setTerminalOpen).toHaveBeenCalledWith(THREAD_ID, true);
     expect(terminalHarness.actions.newTerminal).not.toHaveBeenCalled();
+  });
+
+  it("delivers controller terminal actions only to the focused execution pane", () => {
+    render(true);
+    openWorkspaceTerminal();
+    const result = render(true);
+    expect(result.terminalFocusRequestId).toBe(1);
+    expect(terminalHarness.actions.setTerminalOpen).toHaveBeenCalledWith(THREAD_ID, true);
+    expect(terminalHarness.actions.setTerminalWorkspaceTab).toHaveBeenCalledWith(
+      THREAD_ID,
+      "terminal",
+    );
+
+    render(false);
+    expect(() => openWorkspaceTerminal()).toThrow("Open a chat");
+    expect(terminalHarness.actions.setTerminalOpen).toHaveBeenCalledTimes(1);
   });
 
   it("honors close confirmation before deleting a final placeholder terminal thread", async () => {

@@ -318,10 +318,12 @@ function Sidebar({
     );
   }
 
+  // The mobile branch already follows the controller viewport. CSS breakpoints here
+  // would hide a desktop dock when its embedded workspace is narrower than the window.
   return (
     <SidebarInstanceContext.Provider value={instanceContextValue}>
       <div
-        className="group peer hidden text-sidebar-foreground md:block"
+        className="group peer text-sidebar-foreground"
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side={side}
         data-slot="sidebar"
@@ -348,7 +350,7 @@ function Sidebar({
             // (layout): a fixed panel relayouts its whole subtree per frame otherwise,
             // which read as a janky close on heavy sidebar content. The gap still
             // animates width — reserving layout is its job — but its subtree is empty.
-            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width,translate] duration-200 ease-linear motion-reduce:transition-none md:flex",
+            "fixed inset-y-0 z-0 flex h-svh w-(--sidebar-width) transition-[left,right,width,translate] duration-200 ease-linear motion-reduce:transition-none",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
               : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",

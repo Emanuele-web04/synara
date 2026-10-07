@@ -1,8 +1,10 @@
 import type {
+  DesktopCustomTitleBarState,
   ExecutionEnvironmentDescriptor,
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   ProjectId,
+  ResolvedKeybindingsConfig,
   ThreadId,
 } from "@synara/contracts";
 import type { ShortcutMatchContext } from "../../keybindings";
@@ -32,6 +34,8 @@ export interface WorkspaceNavigation {
   readonly sidebar?: WorkspaceSidebarActions;
   navigate(path: string): void;
   newChat(projectId?: string): Promise<string>;
+  createChat(command: WorkspaceChatCreationCommand): Promise<void>;
+  openTerminal(): void;
   browseFolders(input: FilesystemBrowseInput): Promise<FilesystemBrowseResult>;
   createProject(input: {
     name: string;
@@ -39,8 +43,18 @@ export interface WorkspaceNavigation {
     createIfMissing: boolean;
   }): Promise<string>;
   openProject(projectId: string): Promise<string>;
-  recover(): void;
+  recover(): void | (() => void);
 }
+
+export type WorkspaceChatCreationCommand =
+  | "chat.new"
+  | "chat.newLatestProject"
+  | "chat.newChat"
+  | "chat.newLocal"
+  | "chat.newTerminal"
+  | "chat.newClaude"
+  | "chat.newCodex"
+  | "chat.newCursor";
 
 /** Sidebar operations execute through the existing controller in the owning frame. */
 export interface WorkspaceSidebarActions {
@@ -60,6 +74,15 @@ export interface WorkspaceFrameBinding {
   readonly host: ActiveHost;
   readonly controller: {
     readonly desktop?: boolean;
+    readonly presentation?: {
+      readZoomFactor(): number;
+      subscribeZoomFactor(listener: (zoomFactor: number) => void): () => void;
+      readCustomTitleBarState(): Promise<DesktopCustomTitleBarState> | undefined;
+    };
+    readonly keybindings?: {
+      read(): ResolvedKeybindingsConfig | undefined;
+      subscribe(listener: () => void): () => void;
+    };
     readonly environment: ExecutionEnvironmentDescriptor;
     readonly sidebar: {
       read(): SidebarContextProps;

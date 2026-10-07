@@ -550,3 +550,23 @@ Il percorso CLI `auth --device-code` restituisce una verification URI `/link`, m
 - Verification: desktop formatting/lint/typecheck, four RemoteControls browser tests, and two UI typography tests pass. A desktop-generated invitation was parsed by the actual Swift parser; expired, duplicate-field, plaintext-authority, embedded-credential, and bad-fingerprint variants were rejected. Signed iPhone and simulator builds succeeded. Simulator deep-link delivery opened the new account screen with the invitation retained. Camera optics, physical-phone login, approval, and remote chat read/write are still unverified for this new flow.
 
 - The final signed build was installed on the USB iPhone without deleting its data. Apple Vision decoded the actual desktop-rendered QR, and its validated link was delivered to the iPhone with `devicectl --payload-url`; launch succeeded. This proves QR readability and OS delivery, not completed phone authentication or host approval.
+
+## Remote workspace consistency follow-up — 2026-10-07
+
+- Outer-sidebar creation shortcuts, palette New chat, and native New Terminal Tab now dispatch
+  to the selected execution owner. Unavailable owners refuse the action without local fallback.
+- Remote panes inherit controller app keybindings, zoom, and actual title-bar state through
+  bounded callbacks. Project-script shortcuts stay execution-owned. Remote Keybindings opens
+  controller settings and retains a usable action when Back reveals the persistent frame.
+- Desktop docks remain visible when the remote pane is narrower than the controller window.
+- External editor launchers respect remote capability restrictions; local failures report an
+  error without changing the preferred editor. The favorite-editor shortcut shares this path.
+- Disconnect/Forget recover editor drafts before closing backend access, resume autosave if
+  the backend close fails, and remove in-memory workspaces even when session persistence fails.
+- Validation: formatting, lint (928 warnings, zero errors), and all 12 typecheck tasks pass.
+  Full repository tests: 16,265 passed, 251 skipped, all 11 tasks passed. Focused Chromium
+  checks: 39 passed, including real shell/sidebar entry-point dispatch and local draft behavior.
+  Isolated baseline checks reproduce the repaired failures, including autosave rollback.
+- Limits: native MacBook/Windows/Linux acceptance was not rerun for this follow-up. The routing
+  browser fixture logs a router preload warning during the run; assertions pass. No new live
+  provider turn, pairing change, backend deployment, or database operation was performed.

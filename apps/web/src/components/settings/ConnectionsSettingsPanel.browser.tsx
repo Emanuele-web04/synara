@@ -18,6 +18,7 @@ const fixture = vi.hoisted(() => {
     approved: false,
     codeFailuresRemaining: 0,
     revoked: [] as string[],
+    connected: false,
   };
   const hostState = () => ({
     kind: "host-state" as const,
@@ -66,6 +67,9 @@ const fixture = vi.hoisted(() => {
     state,
     navigate: vi.fn(),
     confirm: vi.fn(async () => true),
+    disconnect: vi.fn(async () => {}),
+    recover: vi.fn(),
+    toast: vi.fn(),
     request: vi.fn(async (request: { operation: string; [key: string]: unknown }) => {
       switch (request.operation) {
         case "create-code":
@@ -116,6 +120,7 @@ vi.mock("~/nativeApi", async (importOriginal) => {
     ensureNativeApi: () => api,
   };
 });
+vi.mock("~/components/ui/toast", () => ({ toastManager: { add: fixture.toast } }));
 vi.mock("~/lib/hosts/api", async (original) => ({
   ...(await original<typeof import("~/lib/hosts/api")>()),
   readHostsApi: () => ({ remoteAccess: fixture.request }),
@@ -169,7 +174,9 @@ vi.mock("~/hooks/useHosts", () => {
     useHostSessions: () => ({ sessionsQuery: query, sessions: [], endSession: idle }),
     useHostConnections: () => ({
       connectionsQuery: query,
-      connections: [],
+      connections: fixture.state.connected
+        ? [{ hostId: "11111111-1111-4111-8111-111111111111", transport: "cloudflare" }]
+        : [],
       pairedHosts: [
         {
           hostId: "11111111-1111-4111-8111-111111111111",
@@ -179,12 +186,18 @@ vi.mock("~/hooks/useHosts", () => {
         },
       ],
       connect: idle,
-      disconnect: idle,
+      disconnect: { isPending: false, mutateAsync: fixture.disconnect },
     }),
   };
 });
 
 import { ConnectionsSettingsPanel } from "./ConnectionsSettingsPanel";
+import {
+  addWorkspaceSession,
+  readWorkspaceSessions,
+  removeWorkspaceSession,
+  updateWorkspaceSession,
+} from "~/lib/hosts/workspaceSessions";
 
 const keepAwake = {
   state: { enabled: false, active: false, onBattery: false } as DesktopKeepAwakeState,
@@ -216,19 +229,114 @@ beforeEach(() => {
   fixture.state.approved = false;
   fixture.state.codeFailuresRemaining = 0;
   fixture.state.revoked = [];
+  fixture.state.connected = false;
   fixture.request.mockClear();
   fixture.confirm.mockClear();
+  fixture.disconnect.mockClear();
+  fixture.recover.mockReset();
+  fixture.toast.mockClear();
   keepAwake.state = { enabled: false, active: false, onBattery: false };
   keepAwake.setEnabled.mockClear();
   keepAwake.setRemoteAccessAllowed.mockClear();
   (window as { desktopBridge?: unknown }).desktopBridge = { keepAwake };
 });
 afterEach(() => {
+  vi.restoreAllMocks();
+  fixture.recover.mockReset();
+  for (const session of readWorkspaceSessions()) removeWorkspaceSession(session.host.hostId);
   delete (window as { desktopBridge?: unknown }).desktopBridge;
   document.documentElement.classList.remove("dark");
 });
 
 describe("Connections settings", () => {
+  function registerConnectedWorkspace() {
+    fixture.state.connected = true;
+    const session = addWorkspaceSession({
+      hostId: "11111111-1111-4111-8111-111111111111",
+      hostName: "Studio Mac mini",
+      wsPath: "/ws/remote/11111111-1111-4111-8111-111111111111",
+      executionScope: {
+        environmentId: "env_studio",
+        accountAuthority: "https://account.example.test/api/v1",
+        userId: "user-1",
+        organizationId: "org-1",
+        channel: "dev",
+      },
+    });
+    updateWorkspaceSession(session.host.executionScope.environmentId, {
+      navigation: {
+        browseFolders: vi.fn(),
+        createProject: vi.fn(),
+        newChat: vi.fn(),
+        createChat: vi.fn(),
+        openTerminal: vi.fn(),
+        openProject: vi.fn(),
+        navigate: vi.fn(),
+        recover: fixture.recover,
+      },
+    });
+  }
+
+  async function chooseHostAction(action: "Disconnect" | "Forget pairing") {
+    await renderPanel();
+    await page.getByRole("radio", { name: "Control other devices" }).click();
+    await page.getByRole("button", { name: "More actions for Studio Mac mini" }).click();
+    await page.getByRole("menuitem", { name: action, exact: true }).click();
+  }
+
+  it.each(["Disconnect", "Forget pairing"] as const)(
+    "keeps backend access available when draft recovery fails before %s",
+    async (action) => {
+      registerConnectedWorkspace();
+      fixture.recover.mockImplementation(() => {
+        throw new Error("Recovery storage is full.");
+      });
+      await chooseHostAction(action);
+      await vi.waitFor(() =>
+        expect(fixture.toast).toHaveBeenCalledWith({
+          type: "error",
+          title: "Could not preserve editor drafts",
+          description: "Copy or export unsaved text before disconnecting this computer.",
+        }),
+      );
+      expect(fixture.disconnect).not.toHaveBeenCalled();
+      expect(fixture.request).not.toHaveBeenCalledWith({
+        operation: "forget-host",
+        environmentId: "env_studio",
+      });
+      expect(readWorkspaceSessions()).toHaveLength(1);
+    },
+  );
+
+  it.each(["Disconnect", "Forget pairing"] as const)(
+    "removes the workspace after %s even when its saved list cannot be written",
+    async (action) => {
+      registerConnectedWorkspace();
+      const recovery = fixture.recover;
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new Error("Session storage is full.");
+      });
+      await chooseHostAction(action);
+      await vi.waitFor(() => expect(readWorkspaceSessions()).toHaveLength(0));
+      expect(recovery).toHaveBeenCalledOnce();
+      const backendOrder =
+        action === "Disconnect"
+          ? fixture.disconnect.mock.invocationCallOrder[0]
+          : fixture.request.mock.invocationCallOrder[
+              fixture.request.mock.calls.findIndex(
+                ([request]) => request.operation === "forget-host",
+              )
+            ];
+      expect(recovery.mock.invocationCallOrder[0]).toBeLessThan(backendOrder!);
+      expect(fixture.toast).toHaveBeenCalledWith({
+        type: "warning",
+        title: "Connection closed",
+        description: "This window could not update its saved computer list.",
+      });
+      expect(sessionStorage.getItem("synara:workspace-connections:v1:controller")).toBeNull();
+    },
+  );
+
   it("lists trusted devices with their last connection and switches tabs", async () => {
     await renderPanel();
     await expect.element(page.getByText("iOS 27.0.1 iPhone")).toBeVisible();

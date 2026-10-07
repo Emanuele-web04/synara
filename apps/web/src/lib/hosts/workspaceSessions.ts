@@ -155,13 +155,54 @@ export function updateWorkspaceSession(
   );
 }
 
-export function removeWorkspaceSession(hostId: string): void {
+/** Preserve editor drafts before closing backend access; completion must not retry recovery. */
+export function prepareWorkspaceSessionRemoval(hostId: string) {
   const removed = sessions.filter((session) => session.host.hostId === hostId);
-  for (const session of removed) session.navigation?.recover();
-  publish(
-    sessions.filter((session) => session.host.hostId !== hostId),
-    true,
-  );
+  const resumptions: (() => void)[] = [];
+  const resume = () => {
+    for (const restore of resumptions) restore();
+  };
+  try {
+    for (const session of removed) {
+      const restore = session.navigation?.recover();
+      if (restore) resumptions.push(restore);
+    }
+  } catch (error) {
+    resume();
+    throw error;
+  }
+  const complete = () => {
+    const next = sessions.filter((session) => session.host.hostId !== hostId);
+    publish(next);
+    try {
+      sessionStorage.setItem(storageKey(), JSON.stringify(next.map(({ host }) => host)));
+      return true;
+    } catch {
+      // An old saved frame must not reconnect a host that the user just disconnected.
+      try {
+        sessionStorage.removeItem(storageKey());
+      } catch {
+        /* The visible session is still removed when browser storage is unavailable. */
+      }
+      return false;
+    }
+  };
+  return {
+    complete,
+    async close(closeConnection: () => Promise<unknown>): Promise<boolean> {
+      try {
+        await closeConnection();
+      } catch (error) {
+        resume();
+        throw error;
+      }
+      return complete();
+    },
+  };
+}
+
+export function removeWorkspaceSession(hostId: string): boolean {
+  return prepareWorkspaceSessionRemoval(hostId).complete();
 }
 
 /** Sign-out removes visible remote data; identity-scoped drafts remain recoverable. */

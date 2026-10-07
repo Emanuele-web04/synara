@@ -1,4 +1,10 @@
-import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
+import { readWorkspaceFrame, type WorkspaceChatCreationCommand } from "../lib/hosts/workspaceFrame";
+import {
+  dispatchSelectedWorkspaceChatCreation,
+  dispatchSelectedWorkspaceTerminalCreation,
+  isWorkspaceChatCreationCommand,
+  registerWorkspaceChatCreation,
+} from "../lib/hosts/workspaceCommands";
 import {
   WorkspacePanels,
   WorkspaceFrameNavigation,
@@ -202,6 +208,7 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
+  const href = useLocation({ select: (location) => location.href });
   const isGroupsRoute = useLocation({
     select: (location) =>
       location.pathname.startsWith("/hubs") ||
@@ -346,6 +353,70 @@ function ChatRouteGlobalShortcuts() {
     }
   }, [clearLatestProjectId, latestProjectId, persistedLatestProjectStillExists, threadsHydrated]);
 
+  const createChat = useCallback(
+    async (command: WorkspaceChatCreationCommand, isAvailable?: () => boolean) => {
+      if (isAvailable && !isAvailable())
+        throw new Error("Reconnect this computer before creating a chat.");
+      if (command === "chat.newChat" || command === "chat.newLocal") {
+        const result = await handleNewChatForActiveSurface();
+        if (!result.ok) throw new Error(result.error);
+        return;
+      }
+      if (command === "chat.newLatestProject") {
+        if (latestUsableProjectId) await handleNewThread(latestUsableProjectId);
+        return;
+      }
+      const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+      if (!target) return;
+      if (command === "chat.newTerminal") {
+        await handleNewThread(target.projectId, {
+          ...(target.inheritContext
+            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+            : {}),
+          entryPoint: "terminal",
+        });
+        return;
+      }
+      if (
+        command === "chat.newClaude" ||
+        command === "chat.newCodex" ||
+        command === "chat.newCursor"
+      ) {
+        const provider =
+          command === "chat.newClaude"
+            ? "claudeAgent"
+            : command === "chat.newCodex"
+              ? "codex"
+              : "cursor";
+        const providerInstanceId = resolveSelectableProviderInstanceId(settings, provider);
+        const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
+          provider,
+          instanceId: providerInstanceId,
+          statuses: providerStatuses,
+          refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+        });
+        if (isAvailable && !isAvailable())
+          throw new Error("Reconnect this computer before creating a chat.");
+        if (!providerAvailability.usable) throw new Error(providerAvailability.unavailableReason);
+        await handleNewThread(target.projectId, { provider });
+        return;
+      }
+      await handleNewThread(target.projectId);
+    },
+    [
+      activeDraftThread,
+      activeThread,
+      currentProjectId,
+      handleNewChatForActiveSurface,
+      handleNewThread,
+      latestUsableProjectId,
+      providerStatuses,
+      refreshProviderStatuses,
+      settings,
+    ],
+  );
+  useEffect(() => registerWorkspaceChatCreation(createChat), [createChat]);
+
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       // The shortcut recorder owns the keyboard while it is open, including the fixed
@@ -427,78 +498,18 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (command === "chat.newChat" || command === "chat.newLocal") {
-        event.preventDefault();
-        event.stopPropagation();
-        void handleNewChatForActiveSurface();
-        return;
-      }
-
-      if (command === "chat.newLatestProject") {
-        if (!latestUsableProjectId) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void handleNewThread(latestUsableProjectId);
-        return;
-      }
-
-      if (command === "chat.newTerminal") {
-        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
-        if (!target) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void handleNewThread(target.projectId, {
-          ...(target.inheritContext
-            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-            : {}),
-          entryPoint: "terminal",
-        });
-        return;
-      }
-
-      if (
-        command === "chat.newClaude" ||
-        command === "chat.newCodex" ||
-        command === "chat.newCursor"
-      ) {
-        const provider =
-          command === "chat.newClaude"
-            ? "claudeAgent"
-            : command === "chat.newCodex"
-              ? "codex"
-              : "cursor";
-        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
-        if (!target) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void (async () => {
-          const providerInstanceId = resolveSelectableProviderInstanceId(settings, provider);
-          const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
-            provider,
-            instanceId: providerInstanceId,
-            statuses: providerStatuses,
-            refreshStatuses: () => refreshProviderStatuses({ silent: true }),
-          });
-          if (!providerAvailability.usable) {
-            toastManager.add({
-              type: "error",
-              title: providerAvailability.unavailableReason,
-            });
-            return;
-          }
-          await handleNewThread(target.projectId, { provider });
-        })();
-        return;
-      }
-
-      if (command !== "chat.new") return;
-      // Fall back to the most recent project when none is focused and let the
-      // shared bootstrap apply that project's preferred environment.
-      const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
-      if (!target) return;
+      if (!isWorkspaceChatCreationCommand(command)) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(target.projectId);
+      void dispatchSelectedWorkspaceChatCreation(command, href)
+        .then((handled) => (handled ? undefined : createChat(command)))
+        .catch((error: unknown) =>
+          toastManager.add({
+            type: "error",
+            title: "Could not create chat",
+            description: error instanceof Error ? error.message : "Try again.",
+          }),
+        );
     };
 
     const onWindowKeyUp = (event: KeyboardEvent) =>
@@ -514,23 +525,16 @@ function ChatRouteGlobalShortcuts() {
       window.removeEventListener("keyup", onWindowKeyUp, { capture: true });
     };
   }, [
-    activeDraftThread,
-    activeThread,
     cancelRecentSwitcher,
+    createChat,
+    href,
     clearSelection,
     commitRecentSwitcherSelection,
-    currentProjectId,
-    handleNewChatForActiveSurface,
-    handleNewThread,
     keybindings,
-    latestUsableProjectId,
     openOrAdvanceRecentSwitcher,
     platform,
-    providerStatuses,
-    refreshProviderStatuses,
     recentSwitcherState,
     selectedThreadIdsSize,
-    settings,
     terminalOpen,
     terminalWorkspaceOpen,
     toggleSidebar,
@@ -543,6 +547,18 @@ function ChatRouteGlobalShortcuts() {
     }
 
     const unsubscribe = onMenuAction((action) => {
+      if (action === "new-terminal-tab") {
+        try {
+          dispatchSelectedWorkspaceTerminalCreation(href);
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not open terminal",
+            description: error instanceof Error ? error.message : "Try again.",
+          });
+        }
+        return;
+      }
       if (action === "toggle-sidebar") {
         toggleSidebar();
         return;
@@ -554,7 +570,7 @@ function ChatRouteGlobalShortcuts() {
     return () => {
       unsubscribe?.();
     };
-  }, [navigate, toggleSidebar]);
+  }, [href, navigate, toggleSidebar]);
 
   return (
     <>

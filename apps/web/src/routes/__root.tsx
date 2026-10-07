@@ -1,4 +1,5 @@
 import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
+import { subscribeWorkspaceKeybindings } from "../lib/hosts/workspaceKeybindings";
 import { onControllerStateChange } from "../lib/hosts/connectionClients";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
@@ -2415,6 +2416,10 @@ function EventRouter() {
     // onServerConfigUpdated replays the latest cached value synchronously
     // during subscribe. Skip the toast for that replay so effect re-runs
     // don't produce duplicate toasts.
+    const unsubWorkspaceKeybindings = subscribeWorkspaceKeybindings(
+      queryClient,
+      serverQueryKeys.config(),
+    );
     let subscribed = false;
     const unsubServerConfigUpdated = onServerConfigUpdated((payload) => {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
@@ -2641,6 +2646,7 @@ function EventRouter() {
       unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
+      unsubWorkspaceKeybindings?.();
       unsubProviderStatusesUpdated();
       unsubWsTransportState();
       unsubControllerState();

@@ -286,8 +286,7 @@ function OpenInPickerMenuPopup({
   additionalMenuItems: ReactNode;
   menuEditorOrder: ReadonlyArray<EditorId> | undefined;
 }) {
-  const { options, preferredEditor, openFavoriteShortcutLabel, setDefaultEditor, openInEditor } =
-    launchers;
+  const { options, preferredEditor, openFavoriteShortcutLabel, openInEditor } = launchers;
   const displayedOptions = readExecutionContext()?.remote
     ? []
     : menuEditorOrder
@@ -302,10 +301,7 @@ function OpenInPickerMenuPopup({
   return (
     <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
       {displayedOptions.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
-      <MenuRadioGroup
-        value={preferredEditor ?? ""}
-        onValueChange={(value) => setDefaultEditor(value as EditorId)}
-      >
+      <MenuRadioGroup value={preferredEditor ?? ""}>
         {displayedOptions.map(({ label, Icon, value }) => (
           <MenuRadioItem
             key={value}

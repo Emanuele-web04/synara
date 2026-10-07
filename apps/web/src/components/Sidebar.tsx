@@ -1,4 +1,5 @@
 import { openWorkspacePath } from "./hosts/WorkspacePanels";
+import { dispatchSelectedWorkspaceChatCreation } from "../lib/hosts/workspaceCommands";
 import {
   OPEN_CREATE_PROJECT_EVENT,
   type WorkspaceSidebarKeyboardEvent,
@@ -4893,6 +4894,26 @@ export default function Sidebar() {
     [activeRouteProject, groupProjects, handleNewGroupChat, navigate],
   );
 
+  const handleCreatePaletteChat = useCallback(async () => {
+    try {
+      if (
+        await dispatchSelectedWorkspaceChatCreation(
+          "chat.newChat",
+          `${pathname}${activeWorkspaceSearch}`,
+        )
+      )
+        return;
+      if (isOnGroups) await handleCreateGroupChat();
+      else await handleCreateHomeChat();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not create chat",
+        description: error instanceof Error ? error.message : "Try again.",
+      });
+    }
+  }, [pathname, activeWorkspaceSearch, isOnGroups, handleCreateGroupChat, handleCreateHomeChat]);
+
   const sidebarThreadSortOrder = appSettings.sidebarThreadSortOrder;
   const groupScopedSortedSidebarThreadsByProjectId = useMemo(() => {
     if (!isOnGroups) {
@@ -8481,11 +8502,7 @@ export default function Sidebar() {
           actions={searchPaletteActions}
           projects={searchPaletteProjects}
           projectById={projectById}
-          onCreateChat={() =>
-            // Segment-aware, matching the sidebar's + action: "New chat" from the palette while
-            // on the Groups segment opens a group chat, not a home draft.
-            void (isOnGroups ? handleCreateGroupChat() : handleCreateHomeChat())
-          }
+          onCreateChat={() => void handleCreatePaletteChat()}
           onCreateThread={handlePrimaryNewThread}
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}

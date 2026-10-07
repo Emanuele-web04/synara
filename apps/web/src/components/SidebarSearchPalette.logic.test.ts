@@ -341,6 +341,8 @@ describe("workspaceSidebarSearch", () => {
     navigation: {
       navigate() {},
       newChat: async () => "",
+      createChat: async () => {},
+      openTerminal() {},
       browseFolders: async () => ({ parentPath: "/", entries: [] }),
       createProject: async () => "",
       openProject: async () => "",

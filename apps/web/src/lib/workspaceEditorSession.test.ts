@@ -1,6 +1,10 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectReadFileResult, ProjectWriteFileResult } from "@synara/contracts";
+import type {
+  ExecutionEnvironmentDescriptor,
+  ProjectReadFileResult,
+  ProjectWriteFileResult,
+} from "@synara/contracts";
 
 const { api, refreshGit } = vi.hoisted(() => ({
   api: { projects: { writeFile: vi.fn(), readFile: vi.fn() } },
@@ -12,8 +16,16 @@ import {
   flushWorkspaceEditors,
   getWorkspaceEditorSession,
   hasUnsavedWorkspaceEditors,
+  recoverWorkspaceEditors,
 } from "./workspaceEditorSession";
 import { projectQueryKeys } from "./projectReactQuery";
+import { initializeExecutionContext } from "./hosts/executionContext";
+import {
+  addWorkspaceSession,
+  prepareWorkspaceSessionRemoval,
+  readWorkspaceSessions,
+  updateWorkspaceSession,
+} from "./hosts/workspaceSessions";
 
 const source = (contents = "original", version = "sha256:initial"): ProjectReadFileResult => ({
   relativePath: "src/file.ts",
@@ -54,9 +66,72 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("workspace editor autosave", () => {
+  it("preserves the draft and resumes autosave when closing the backend connection fails", async () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("sessionStorage", storage);
+    const descriptor = {
+      environmentId: "controller",
+      capabilities: { remoteConnections: true },
+    } as ExecutionEnvironmentDescriptor;
+    initializeExecutionContext({ controller: descriptor, execution: descriptor, remote: null });
+    const { client, session } = setup("/remote-repo");
+    const workspace = addWorkspaceSession({
+      hostId: "remote-host",
+      hostName: "Remote",
+      wsPath: "/ws/remote/remote-host",
+      executionScope: {
+        environmentId: "remote",
+        accountAuthority: "https://account.example",
+        userId: "user",
+        organizationId: "org",
+        channel: "dev",
+      },
+    });
+    updateWorkspaceSession(workspace.host.executionScope.environmentId, {
+      navigation: {
+        browseFolders: vi.fn(),
+        createProject: vi.fn(),
+        newChat: vi.fn(),
+        createChat: vi.fn(),
+        openTerminal: vi.fn(),
+        openProject: vi.fn(),
+        navigate: vi.fn(),
+        recover: () => recoverWorkspaceEditors(client),
+      },
+    });
+    session.change("draft before closing");
+    const removal = prepareWorkspaceSessionRemoval("remote-host");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.projects.writeFile).not.toHaveBeenCalled();
+    const recovery = [...values].find(([key]) => key.includes(":editor-recovery:"));
+    expect(JSON.parse(recovery![1])[0].snapshot.value).toBe("draft before closing");
+    await expect(
+      removal.close(() => Promise.reject(new Error("The connection could not be closed."))),
+    ).rejects.toThrow("The connection could not be closed.");
+    expect(readWorkspaceSessions()).toHaveLength(1);
+    session.change("continued after failure");
+    await vi.advanceTimersByTimeAsync(400);
+    expect(api.projects.writeFile).toHaveBeenCalledExactlyOnceWith({
+      cwd: "/remote-repo",
+      relativePath: "src/file.ts",
+      contents: "continued after failure",
+      expectedVersion: "sha256:initial",
+      encoding: "utf8-bom",
+      lineEnding: "crlf",
+    });
+    expect(session.dirty).toBe(false);
+  });
+
   it("debounces typing and refreshes Git only after the guarded write succeeds", async () => {
     const { session } = setup();
     session.change("first");

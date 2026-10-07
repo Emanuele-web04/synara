@@ -15,7 +15,7 @@ import { readHostsApi } from "~/lib/hosts/api";
 import { HostsUnsupportedError } from "~/lib/hosts/queries";
 import type { HostReachability } from "~/lib/hosts/reachability";
 import { callRemoteAccess } from "~/lib/hosts/remoteAccess";
-import { removeWorkspaceSession } from "~/lib/hosts/workspaceSessions";
+import { prepareWorkspaceSessionRemoval } from "~/lib/hosts/workspaceSessions";
 import { AddPlusIcon, RotateCcwIcon } from "~/lib/icons";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { HostConnectionControl } from "../hosts/HostConnectionControl";
@@ -82,28 +82,46 @@ export function ConnectionsOtherComputers() {
     }
   };
 
-  const disconnectFromHost = async (hostId: string) => {
+  const closeHost = async (hostId: string, close: () => Promise<unknown>, failure: string) => {
+    let removal: ReturnType<typeof prepareWorkspaceSessionRemoval>;
     try {
-      await connections.disconnect.mutateAsync({ hostId });
+      removal = prepareWorkspaceSessionRemoval(hostId);
     } catch (cause) {
-      fail("Could not disconnect", cause);
+      fail(
+        "Could not preserve editor drafts",
+        cause,
+        "Copy or export unsaved text before disconnecting this computer.",
+      );
       return;
     }
-    removeWorkspaceSession(hostId);
+    try {
+      const persisted = await removal.close(close);
+      if (!persisted)
+        toastManager.add({
+          type: "warning",
+          title: "Connection closed",
+          description: "This window could not update its saved computer list.",
+        });
+    } catch (cause) {
+      fail(failure, cause);
+      return;
+    }
+    refresh();
   };
+
+  const disconnectFromHost = (hostId: string) =>
+    closeHost(hostId, () => connections.disconnect.mutateAsync({ hostId }), "Could not disconnect");
 
   const forgetHost = async (host: AccountHost) => {
     const confirmed = await (readNativeApi() ?? ensureNativeApi()).dialogs.confirm(
       `Forget the pairing with ${host.name}? Active connections close, and you need a new code from it to connect again.`,
     );
     if (!confirmed) return;
-    try {
-      await callRemoteAccess({ operation: "forget-host", environmentId: host.environmentId });
-      removeWorkspaceSession(host.id);
-      refresh();
-    } catch (cause) {
-      fail(`Could not forget ${host.name}`, cause);
-    }
+    await closeHost(
+      host.id,
+      () => callRemoteAccess({ operation: "forget-host", environmentId: host.environmentId }),
+      `Could not forget ${host.name}`,
+    );
   };
 
   const hostsError = remote.hostsQuery.error ?? connections.connectionsQuery.error;

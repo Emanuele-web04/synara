@@ -123,6 +123,8 @@ describe("workspace ownership", () => {
         browseFolders: vi.fn(),
         createProject: vi.fn(),
         newChat: vi.fn(),
+        createChat: vi.fn(),
+        openTerminal: vi.fn(),
         openProject: vi.fn(),
         navigate: vi.fn(),
         recover: vi.fn(),
@@ -155,6 +157,8 @@ describe("workspace ownership", () => {
       browseFolders: vi.fn(),
       createProject: vi.fn(),
       newChat: vi.fn(),
+      createChat: vi.fn(),
+      openTerminal: vi.fn(),
       openProject: vi.fn(),
       navigate: vi.fn(),
       recover: vi.fn(),
@@ -163,6 +167,8 @@ describe("workspace ownership", () => {
       browseFolders: vi.fn(),
       createProject: vi.fn(),
       newChat: vi.fn(),
+      createChat: vi.fn(),
+      openTerminal: vi.fn(),
       openProject: vi.fn(),
       navigate: vi.fn(),
       recover: vi.fn(),
@@ -207,6 +213,8 @@ describe("workspace ownership", () => {
         browseFolders: vi.fn(),
         createProject: vi.fn(),
         newChat: vi.fn(),
+        createChat: vi.fn(),
+        openTerminal: vi.fn(),
         openProject: vi.fn(),
         navigate: vi.fn(),
         recover: () => {
@@ -217,4 +225,40 @@ describe("workspace ownership", () => {
     api.reconcileWorkspaceAccount({ state: "signed-out" } as AccountStatus);
     expect(api.readWorkspaceSessions()).toEqual([]);
   });
+});
+
+describe("selected workspace commands", () => {
+  const navigation = () => ({
+    browseFolders: vi.fn(),
+    createProject: vi.fn(),
+    newChat: vi.fn(),
+    createChat: vi.fn().mockResolvedValue(undefined),
+    openTerminal: vi.fn(),
+    openProject: vi.fn(),
+    navigate: vi.fn(),
+    recover: vi.fn(),
+  });
+  const summary = { state: "open" as const, path: "/thread", projects: [], threads: [] };
+
+  it.each(["loading", "offline", "removed"] as const)(
+    "refuses creation while the selected owner is %s instead of falling back locally",
+    async (state) => {
+      const api = await registry();
+      const commands = await import("./workspaceCommands");
+      api.addWorkspaceSession(host("one"));
+      const remote = navigation();
+      if (state !== "loading") api.updateWorkspaceSession("one", { navigation: remote, summary });
+      if (state === "offline")
+        api.updateWorkspaceSession("one", { summary: { ...summary, state: "closed" } });
+      if (state === "removed") api.removeWorkspaceSession("host-one");
+      await expect(
+        commands.dispatchSelectedWorkspaceChatCreation("chat.newChat", "/remote?environment=one"),
+      ).rejects.toThrow("Reconnect this computer");
+      expect(() =>
+        commands.dispatchSelectedWorkspaceTerminalCreation("/remote?environment=one"),
+      ).toThrow("Reconnect this computer");
+      expect(remote.createChat).not.toHaveBeenCalled();
+      expect(remote.openTerminal).not.toHaveBeenCalled();
+    },
+  );
 });

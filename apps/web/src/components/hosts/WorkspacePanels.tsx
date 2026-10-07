@@ -44,6 +44,8 @@ import { newCommandId } from "../../lib/utils";
 import { useStore } from "../../store";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { rawSocketUrl } from "../../wsTransport";
+import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "../../lib/desktopZoom";
+import { createWorkspaceChat, openWorkspaceTerminal } from "../../lib/hosts/workspaceCommands";
 import { addWsTransportStateListener, type WsTransportState } from "../../wsTransportEvents";
 import {
   OPEN_CREATE_PROJECT_EVENT,
@@ -108,6 +110,22 @@ function WorkspacePanel({
   });
   const keybindingsRef = useRef(keybindingsQuery.data);
   keybindingsRef.current = keybindingsQuery.data;
+  const keybindingsListeners = useRef(new Set<() => void>());
+  const keybindingsBridge = useMemo(
+    () => ({
+      read: () => keybindingsRef.current,
+      subscribe: (listener: () => void) => {
+        keybindingsListeners.current.add(listener);
+        return () => {
+          keybindingsListeners.current.delete(listener);
+        };
+      },
+    }),
+    [],
+  );
+  useLayoutEffect(() => {
+    for (const listener of keybindingsListeners.current) listener();
+  }, [keybindingsQuery.data]);
   const sidebar = useSidebar();
   const sidebarRef = useRef(sidebar);
   const sidebarListeners = useRef(new Set<() => void>());
@@ -139,6 +157,12 @@ function WorkspacePanel({
         host,
         controller: {
           desktop: isElectron,
+          presentation: {
+            readZoomFactor: readDesktopZoomFactor,
+            subscribeZoomFactor: subscribeDesktopZoomFactor,
+            readCustomTitleBarState: () => window.desktopBridge?.customTitleBar?.getState(),
+          },
+          keybindings: keybindingsBridge,
           environment: readExecutionContext()!.controller,
           sidebar: sidebarBridge,
           sessions: readWorkspaceSessions,
@@ -238,7 +262,7 @@ function WorkspacePanel({
       if (url.protocol === "http:" || url.protocol === "https:") url.pathname = "/";
       frame.src = url.toString();
     },
-    [environmentId, host, newLocalChat, sidebarBridge],
+    [environmentId, host, keybindingsBridge, newLocalChat, sidebarBridge],
   );
 
   const navigate = session.navigation?.navigate;
@@ -524,6 +548,14 @@ export function WorkspaceFrameNavigation() {
         const id = await newChatRef.current(ProjectId.makeUnsafe(projectId));
         if (!id) throw new Error("The project is not ready to create a chat.");
         return `/${id}`;
+      },
+      createChat: (command) => {
+        actions();
+        return createWorkspaceChat(command, available);
+      },
+      openTerminal: () => {
+        actions();
+        openWorkspaceTerminal();
       },
       openProject: async (projectId) => {
         const store = useStore.getState();

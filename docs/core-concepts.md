@@ -88,6 +88,12 @@ its computer; opening it changes the selected chat without switching the whole a
 folders stay in the project picker until they have a chat, are pinned, or are the active new project.
 Projects with the same name or path on different computers remain separate physical folders.
 
+The selected computer also owns chat creation from keyboard shortcuts and search, and terminal
+creation from the desktop menu. If that connection is unavailable, these actions ask you to
+reconnect instead of creating work locally. Window appearance, zoom, and app keybindings belong
+to the controlling app; project-script shortcuts stay with the project on its computer. Opening
+Keybindings from a remote chat takes you to the controlling app's settings.
+
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
 that folder visible with its path.
