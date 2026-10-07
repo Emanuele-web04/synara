@@ -1,5 +1,52 @@
 # Remote connections — punto di ripartenza
 
+## MVP backend e simulatori — 7 ottobre 2026
+
+Checkpoint verificato sul desktop `b85257f6e`, iPhone `ee91d12` e iPad `8e8d1d1`.
+Sostituisce le vecchie note che indicavano Inbox cloud non pubblicata.
+
+- Supabase: applicate le migrazioni API 0016–0017, con hash/timestamp originali
+  nel journal Drizzle. `inbox_recaps` appartiene al ruolo account dedicato,
+  RLS attiva, nessun SELECT per `anon`/`authenticated`; tabelle sponsor intatte.
+- API Cloudflare: Worker `b5c6be3a-1d49-48f6-9fc6-41bb58e38cf7`, immagine
+  `synara-account-api-trial:mvp-20261007`, digest registry
+  `sha256:2fe75916125ebd4adf20a7ab92c124cff2913865922c053378688a9d245d85f1`.
+  Health/instance 200, Inbox senza sessione 401 (prima 404), profilo API/pagina 200.
+  Binding e segreti precedenti conservati. Il rollback del container è il digest
+  precedente `sha256:cc29bdc4ac33d31dc64b5f093d13b6a1de0f8e9fb6775d8fda5ea3fdffe079d4`;
+  le migrazioni additive possono restare, senza cancellare lo storico.
+- Salvataggio automatico verificato: tre recap reali del Mini, 5–7 ottobre,
+  arrivati senza premere Save now. Letti da entrambi i simulatori; iPad appena
+  autenticato li recupera senza una connessione attiva al Mac. Nessun seed
+  manuale o accesso diretto al database dal client.
+- Migrazione desktop: conservata la 131 ProjectSourceFolders già rilasciata,
+  spostate le cinque migrazioni private a 132–136. Riconosciuta esplicitamente
+  la vecchia sequenza privata 131–135, usando backup e recovery esistenti.
+  Test verificano watermark, identità, pairing, revoche e connessioni disabilitate.
+- Container: installer Bun eseguito nativamente su Apple Silicon; dipendenze
+  limitate al runtime API (40 pacchetti). Layer node_modules da circa 3,21 GB
+  a 85 MB. Avvio arm64 contro PostgreSQL usa la stessa ricetta e passa;
+  amd64 verificato su Cloudflare, poiché Bun sotto QEMU locale va in SIGSEGV.
+
+Verifiche: fmt/lint/typecheck passati (928 warning lint, zero errori); lineage
+compatibile con 96 tag rilasciati. Suite workspace finale a concorrenza 2:
+**16.462 passati, 39 saltati, 11 package riusciti**, con PostgreSQL isolato.
+La prima suite e un rerun CUA hanno mostrato errori sensibili al timing;
+nessuna assertion rimossa, rerun completo verde. Restano warning Swift 6/header
+nelle build Debug iPhone e iPad, entrambe avviate su iOS/iPadOS 27.
+
+Performance preliminari: 15 campioni a riposo nel simulatore iPhone Debug,
+RSS 222,6–224,8 MiB, CPU media 0,98%, picco 7,3%. Cinque richieste calde per
+endpoint dal Mini: mediana health 128 ms, instance 125,8 ms, rifiuto Inbox senza
+sessione 122,9 ms. Questi numeri non misurano query Inbox autenticata, cold start,
+FPS, batteria o prestazioni di un iPhone reale.
+
+Limiti: telefono fisico mai usato. Nessuna prova 5G/reinstallazione reale,
+nuovo pairing iPad o revoca live in questo checkpoint. Il vecchio pairing iPad
+richiede ancora approvazione; la cronologia cloud è indipendente. Login reale
+email-code e ripristino sessione iPhone verificati, ma WorkOS resta Staging.
+Nessun passaggio a produzione WorkOS, pagamento, merge o TestFlight.
+
 ## Analytics in this monorepo — 5 October 2026
 
 Dashboard, Worker, D1 migrations, legacy forwarder and tests now live in

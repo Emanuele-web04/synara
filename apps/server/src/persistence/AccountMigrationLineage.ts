@@ -2,6 +2,17 @@ import { createHash } from "node:crypto";
 
 /** Private account builds; these are whole lineages, not interchangeable aliases. */
 export const ACCOUNT_MIGRATION_LINEAGES = [
+  {
+    // Remote trial builds before released ProjectSourceFolders occupied 131–135.
+    prefix: 130,
+    tail: [
+      "AccountUsageSync",
+      "AccountUsageSyncIdentity",
+      "RemoteDeviceTrust",
+      "RemoteConnectionPreferences",
+      "RemoteAccessControls",
+    ],
+  },
   { prefix: 89, tail: ["AccountUsageSync"] },
   { prefix: 90, tail: ["AccountUsageSync"] },
   { prefix: 90, tail: ["AccountUsageSync", "AccountUsageSyncIdentity"] },

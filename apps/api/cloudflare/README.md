@@ -22,6 +22,9 @@ and concurrent startup migrations. Containers has separate runtime charges.
    selected by the operator. Account migrations 0000–0015 were bootstrapped
    through MCP on 2026-09-28, with the Drizzle journal preserved. The existing
    advertising tables and Data API configuration must remain intact.
+   Inbox migrations 0016–0017 were applied on 2026-10-07 with their original
+   Drizzle hashes/timestamps and the same dedicated owner. RLS stays enabled
+   with no grants to `anon` or `authenticated`.
    Verify the project's direct or session-pooler
    connection URL using the [database instructions](../README.md#supabase-postgresql-with-workos).
    Do not use a transaction pooler for startup migrations. Keep verified TLS.
@@ -85,7 +88,10 @@ bun run --cwd apps/api test cloudflare/worker.test.ts
 
 With Docker running, `bun run --cwd apps/api cf:deploy` builds the existing
 Dockerfile for Cloudflare and deploys the Worker and Container. The build context
-is the repository root. Account migrations execute before the API listens;
+is the repository root. The dependency stage runs on the builder’s native
+architecture, installs only the API’s production dependency graph, and selects
+optional packages for the target CPU. The final image remains Linux amd64 on
+Cloudflare. Account migrations execute before the API listens;
 review pending migrations and the target database before the first deployment.
 
 Alternatively, use the manual **Verify and deploy account API to Cloudflare**

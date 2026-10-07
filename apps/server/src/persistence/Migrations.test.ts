@@ -1,8 +1,9 @@
-import RemoteDeviceTrustMigration from "./Migrations/133_RemoteDeviceTrust.ts";
-import RemoteConnectionPreferencesMigration from "./Migrations/134_RemoteConnectionPreferences.ts";
+import RemoteAccessControlsMigration from "./Migrations/136_RemoteAccessControls.ts";
+import RemoteDeviceTrustMigration from "./Migrations/134_RemoteDeviceTrust.ts";
+import RemoteConnectionPreferencesMigration from "./Migrations/135_RemoteConnectionPreferences.ts";
 import historicalAccountLineages from "./fixtures/historicalAccountLineages.json";
-import AccountUsageSyncMigration from "./Migrations/131_AccountUsageSync.ts";
-import AccountUsageSyncIdentityMigration from "./Migrations/132_AccountUsageSyncIdentity.ts";
+import AccountUsageSyncMigration from "./Migrations/132_AccountUsageSync.ts";
+import AccountUsageSyncIdentityMigration from "./Migrations/133_AccountUsageSyncIdentity.ts";
 import { inspectMigrationBackupPlan } from "./MigrationBackup.ts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
@@ -635,11 +636,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [128, "HubWork"],
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
-        [131, "AccountUsageSync"],
-        [132, "AccountUsageSyncIdentity"],
-        [133, "RemoteDeviceTrust"],
-        [134, "RemoteConnectionPreferences"],
-        [135, "RemoteAccessControls"],
+        [131, "ProjectSourceFolders"],
+        [132, "AccountUsageSync"],
+        [133, "AccountUsageSyncIdentity"],
+        [134, "RemoteDeviceTrust"],
+        [135, "RemoteConnectionPreferences"],
+        [136, "RemoteAccessControls"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -722,11 +724,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 128, name: "HubWork" },
           { migration_id: 129, name: "ProjectionThreadsSnooze" },
           { migration_id: 130, name: "PullRequestAutoFix" },
-          { migration_id: 131, name: "AccountUsageSync" },
-          { migration_id: 132, name: "AccountUsageSyncIdentity" },
-          { migration_id: 133, name: "RemoteDeviceTrust" },
-          { migration_id: 134, name: "RemoteConnectionPreferences" },
-          { migration_id: 135, name: "RemoteAccessControls" },
+          { migration_id: 131, name: "ProjectSourceFolders" },
+          { migration_id: 132, name: "AccountUsageSync" },
+          { migration_id: 133, name: "AccountUsageSyncIdentity" },
+          { migration_id: 134, name: "RemoteDeviceTrust" },
+          { migration_id: 135, name: "RemoteConnectionPreferences" },
+          { migration_id: 136, name: "RemoteAccessControls" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -889,11 +892,12 @@ agentGatewayRetentionLegacyLayer(
           [128, "HubWork"],
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
-          [131, "AccountUsageSync"],
-          [132, "AccountUsageSyncIdentity"],
-          [133, "RemoteDeviceTrust"],
-          [134, "RemoteConnectionPreferences"],
-          [135, "RemoteAccessControls"],
+          [131, "ProjectSourceFolders"],
+          [132, "AccountUsageSync"],
+          [133, "AccountUsageSyncIdentity"],
+          [134, "RemoteDeviceTrust"],
+          [135, "RemoteConnectionPreferences"],
+          [136, "RemoteAccessControls"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1019,11 +1023,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [128, "HubWork"],
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
-        [131, "AccountUsageSync"],
-        [132, "AccountUsageSyncIdentity"],
-        [133, "RemoteDeviceTrust"],
-        [134, "RemoteConnectionPreferences"],
-        [135, "RemoteAccessControls"],
+        [131, "ProjectSourceFolders"],
+        [132, "AccountUsageSync"],
+        [133, "AccountUsageSyncIdentity"],
+        [134, "RemoteDeviceTrust"],
+        [135, "RemoteConnectionPreferences"],
+        [136, "RemoteAccessControls"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1090,11 +1095,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [128, "HubWork"],
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
-          [131, "AccountUsageSync"],
-          [132, "AccountUsageSyncIdentity"],
-          [133, "RemoteDeviceTrust"],
-          [134, "RemoteConnectionPreferences"],
-          [135, "RemoteAccessControls"],
+          [131, "ProjectSourceFolders"],
+          [132, "AccountUsageSync"],
+          [133, "AccountUsageSyncIdentity"],
+          [134, "RemoteDeviceTrust"],
+          [135, "RemoteConnectionPreferences"],
+          [136, "RemoteAccessControls"],
         ],
       );
 
@@ -1215,11 +1221,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [128, "HubWork"],
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
-        [131, "AccountUsageSync"],
-        [132, "AccountUsageSyncIdentity"],
-        [133, "RemoteDeviceTrust"],
-        [134, "RemoteConnectionPreferences"],
-        [135, "RemoteAccessControls"],
+        [131, "ProjectSourceFolders"],
+        [132, "AccountUsageSync"],
+        [133, "AccountUsageSyncIdentity"],
+        [134, "RemoteDeviceTrust"],
+        [135, "RemoteConnectionPreferences"],
+        [136, "RemoteAccessControls"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1282,11 +1289,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [128, "HubWork"],
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
-          [131, "AccountUsageSync"],
-          [132, "AccountUsageSyncIdentity"],
-          [133, "RemoteDeviceTrust"],
-          [134, "RemoteConnectionPreferences"],
-          [135, "RemoteAccessControls"],
+          [131, "ProjectSourceFolders"],
+          [132, "AccountUsageSync"],
+          [133, "AccountUsageSyncIdentity"],
+          [134, "RemoteDeviceTrust"],
+          [135, "RemoteConnectionPreferences"],
+          [136, "RemoteAccessControls"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -1586,6 +1594,11 @@ layer("historical account upgrades", (it) => {
             session_id, subject, role, method, issued_at, expires_at, revoked_at
           ) VALUES ('session-sentinel', 'user', 'client', 'bearer-session-token',
             '2026-09-30', '2026-10-30', '2026-10-01')`;
+          if (lineage.tail.some(([, name]) => name === "RemoteAccessControls")) {
+            yield* RemoteAccessControlsMigration;
+            yield* sql`UPDATE remote_access_state SET allow_connections = 0`;
+            yield* sql`UPDATE remote_device_trust SET enrolled_via = 'qr', last_connected_at = '2026-10-06'`;
+          }
           const account = yield* sql`SELECT * FROM account_usage_sync`;
           const hosts = yield* sql`SELECT * FROM remote_host_trust`;
           const devices = yield* sql`SELECT * FROM remote_device_trust`;
@@ -1608,11 +1621,11 @@ layer("historical account upgrades", (it) => {
           // RemoteAccessControls only adds columns with defaults that keep today's behaviour.
           assert.deepStrictEqual(
             yield* sql`SELECT * FROM remote_device_trust`,
-            devices.map((row) => ({ ...row, enrolled_via: "approval", last_connected_at: null })),
+            devices.map((row) => ({ enrolled_via: "approval", last_connected_at: null, ...row })),
           );
           assert.deepStrictEqual(
             yield* sql`SELECT * FROM remote_access_state`,
-            access.map((row) => ({ ...row, allow_connections: 1 })),
+            access.map((row) => ({ allow_connections: 1, ...row })),
           );
           assert.deepStrictEqual(yield* sql`SELECT * FROM auth_pairing_links`, pairing);
           assert.deepStrictEqual(yield* sql`SELECT * FROM auth_sessions`, sessions);
@@ -1651,6 +1664,7 @@ layer("historical account upgrades", (it) => {
             yield* AccountUsageSyncIdentityMigration;
             yield* sql`UPDATE account_usage_sync SET watermark_minute = '2026-01-01T00:00:00Z', last_failure_at = 'sentinel', account_identity = 'authority#account'`;
             for (const entry of lineage.tail.slice(0, tailLength)) {
+              if (entry[1] === "RemoteAccessControls") yield* RemoteAccessControlsMigration;
               if (entry[1] === "RemoteDeviceTrust") yield* RemoteDeviceTrustMigration;
               if (entry[1] === "RemoteConnectionPreferences")
                 yield* RemoteConnectionPreferencesMigration;

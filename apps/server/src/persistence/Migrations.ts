@@ -1,14 +1,15 @@
-import Migration0135 from "./Migrations/135_RemoteAccessControls.ts";
-import Migration0134 from "./Migrations/134_RemoteConnectionPreferences.ts";
-import Migration0133 from "./Migrations/133_RemoteDeviceTrust.ts";
+import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
+import Migration0136 from "./Migrations/136_RemoteAccessControls.ts";
+import Migration0135 from "./Migrations/135_RemoteConnectionPreferences.ts";
+import Migration0134 from "./Migrations/134_RemoteDeviceTrust.ts";
 import {
   classifyAccountMigrationLineage,
   migrationTrackerFingerprint,
   validateAccountMigrationSchema,
   type MigrationIdentity,
 } from "./AccountMigrationLineage.ts";
-import Migration0131 from "./Migrations/131_AccountUsageSync.ts";
-import Migration0132 from "./Migrations/132_AccountUsageSyncIdentity.ts";
+import Migration0132 from "./Migrations/132_AccountUsageSync.ts";
+import Migration0133 from "./Migrations/133_AccountUsageSyncIdentity.ts";
 /**
  * MigrationsLive - Migration runner with inline loader
  *
@@ -303,11 +304,12 @@ export const migrationEntries = [
   [128, "HubWork", Migration0128],
   [129, "ProjectionThreadsSnooze", Migration0129],
   [130, "PullRequestAutoFix", Migration0130],
-  [131, "AccountUsageSync", Migration0131],
-  [132, "AccountUsageSyncIdentity", Migration0132],
-  [133, "RemoteDeviceTrust", Migration0133],
-  [134, "RemoteConnectionPreferences", Migration0134],
-  [135, "RemoteAccessControls", Migration0135],
+  [131, "ProjectSourceFolders", Migration0131],
+  [132, "AccountUsageSync", Migration0132],
+  [133, "AccountUsageSyncIdentity", Migration0133],
+  [134, "RemoteDeviceTrust", Migration0134],
+  [135, "RemoteConnectionPreferences", Migration0135],
+  [136, "RemoteAccessControls", Migration0136],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

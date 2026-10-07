@@ -2,7 +2,8 @@
 # Synara account API. Build context is the repository root so the Bun
 # workspace graph (root package.json + bun.lock + workspace packages) resolves;
 # point the builder at this file with dockerfilePath=apps/api/Dockerfile.
-FROM oven/bun:1.4.2-slim AS deps
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2-slim AS deps
+ARG TARGETARCH
 WORKDIR /app
 
 # Workspace manifests only, so dependency installation caches independently of
@@ -16,7 +17,11 @@ WORKDIR /app
 COPY package.json bun.lock turbo.json ./
 COPY patches patches
 COPY --parents apps/*/package.json packages/*/package.json scripts/package.json ./
-RUN bun install --frozen-lockfile --ignore-scripts
+# Run Bun natively when cross-building on Apple Silicon; QEMU cannot reliably
+# execute its installer. Optional native packages still target the runtime CPU.
+RUN case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; *) exit 1 ;; esac \
+    && bun install --frozen-lockfile --ignore-scripts --production \
+       --filter @synara/api --os=linux --cpu="$cpu"
 
 FROM oven/bun:1.4.2-slim
 WORKDIR /app
@@ -27,10 +32,8 @@ COPY --from=deps /app/node_modules node_modules
 # the root copy alone leaves runtime imports (e.g. @hono/node-server) unresolved.
 COPY --from=deps /app/apps/api/node_modules apps/api/node_modules
 COPY --from=deps /app/packages/contracts/node_modules packages/contracts/node_modules
-COPY --from=deps /app/packages/shared/node_modules packages/shared/node_modules
 COPY package.json bun.lock ./
 COPY packages/contracts packages/contracts
-COPY packages/shared packages/shared
 COPY apps/api apps/api
 
 USER bun
