@@ -10921,6 +10921,7 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       const prompt = "Keep the first message on screen";
       const draftCreatedAt = useComposerDraftStore.getState().getDraftThread(THREAD_ID)?.createdAt;
+      expect(draftCreatedAt).toBeDefined();
       useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
       const sendButton = await waitForSendButton();
       expect(sendButton.disabled).toBe(false);
