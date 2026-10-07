@@ -5,6 +5,7 @@ import { groupModelUsage } from "./modelUsage";
 import { formatStreakShort, joinedAgo } from "./profileFormat";
 import { isShareFormat, linePath, posterSentence, shareCardData } from "./shareCards";
 import { isDrawableAvatarType } from "./imageAvatar";
+import { parseFontFaces } from "./imageFonts";
 import { profileAccentStyle, resolveProfileAccent } from "./profileAccent";
 
 describe("resolveProfileAccent", () => {
@@ -248,5 +249,26 @@ describe("isDrawableAvatarType", () => {
     expect(isDrawableAvatarType("image/png; charset=binary")).toBe(true);
     expect(isDrawableAvatarType("image/webp")).toBe(false);
     expect(isDrawableAvatarType(null)).toBe(false);
+  });
+});
+
+describe("parseFontFaces", () => {
+  it("pairs each weight with its TTF source", () => {
+    const css = `/* latin */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/jetbrainsmono/v24/a.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 700;
+  src: url(https://fonts.gstatic.com/s/jetbrainsmono/v24/b.ttf) format('truetype');
+}
+@font-face { font-weight: 400; src: url(https://evil.example/x.ttf); }`;
+    expect(parseFontFaces(css)).toEqual([
+      { weight: 400, url: "https://fonts.gstatic.com/s/jetbrainsmono/v24/a.ttf" },
+      { weight: 700, url: "https://fonts.gstatic.com/s/jetbrainsmono/v24/b.ttf" },
+    ]);
   });
 });

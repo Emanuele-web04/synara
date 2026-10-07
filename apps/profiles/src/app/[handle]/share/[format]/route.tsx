@@ -9,6 +9,7 @@ import { ImageResponse } from "next/og";
 import { SYNARA_LOGO_PATHS } from "@synara/profile-ui/logo";
 import { handleFromParam } from "../../../../lib/handleParam";
 import { drawableAvatar } from "../../../../lib/imageAvatar";
+import { imageFonts } from "../../../../lib/imageFonts";
 import { fetchPublicProfile, type PublicProfile } from "../../../../lib/publicProfile";
 import {
   isShareFormat,
@@ -36,7 +37,17 @@ export async function GET(_request: Request, { params }: Params) {
   const profile = await fetchPublicProfile(handle).catch(() => null);
   if (!profile) return new Response("Not found", { status: 404 });
   const data = shareCardData(profile);
-  const avatar = await drawableAvatar(profile.avatarUrl);
+  const [avatar, fonts] = await Promise.all([
+    drawableAvatar(profile.avatarUrl),
+    imageFonts(
+      format === "poster"
+        ? [
+            { family: "Instrument Serif", weights: [400] },
+            { family: "Geist", weights: [400, 600] },
+          ]
+        : [{ family: "JetBrains Mono", weights: [400, 700] }],
+    ),
+  ]);
   return new ImageResponse(
     format === "poster" ? (
       <Poster profile={profile} data={data} avatar={avatar} />
@@ -45,6 +56,7 @@ export async function GET(_request: Request, { params }: Params) {
     ),
     {
       ...SHARE_SIZES[format],
+      fonts,
       headers: {
         // Publication can be revoked at any time, like the page and its preview.
         "Cache-Control": "private, no-store",
@@ -135,6 +147,7 @@ function Poster({
         padding: "88px 96px",
         backgroundColor: PAPER,
         color: INK,
+        fontFamily: "Geist",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 26 }}>
@@ -144,11 +157,25 @@ function Poster({
 
       <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
         <span style={{ fontSize: 26, color: MUTED }}>Tokens written with agents</span>
-        <span style={{ fontSize: 280, lineHeight: 0.86, letterSpacing: "-0.05em" }}>
+        <span
+          style={{
+            fontFamily: "Instrument Serif",
+            fontSize: 300,
+            lineHeight: 0.8,
+            letterSpacing: "-0.03em",
+          }}
+        >
           {data.totalTokens}
         </span>
         <span
-          style={{ marginTop: 16, maxWidth: 820, fontSize: 44, lineHeight: 1.2, color: "#3b3934" }}
+          style={{
+            marginTop: 16,
+            maxWidth: 820,
+            fontFamily: "Instrument Serif",
+            fontSize: 48,
+            lineHeight: 1.15,
+            color: "#3b3934",
+          }}
         >
           {posterSentence(data)}
         </span>
@@ -221,6 +248,7 @@ function Receipt({ profile, data }: { profile: PublicProfile; data: ShareCardDat
         justifyContent: "center",
         backgroundColor: "#e3e1dc",
         color: "#1c1c1a",
+        fontFamily: "JetBrains Mono",
       }}
     >
       <div
@@ -237,7 +265,7 @@ function Receipt({ profile, data }: { profile: PublicProfile; data: ShareCardDat
       >
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
           <SynaraMark edge={44} color="#1c1c1a" />
-          <span style={{ fontSize: 28, letterSpacing: "0.16em" }}>SYNARA</span>
+          <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: "0.14em" }}>SYNARA</span>
           <span style={{ color: "#7a7a75" }}>@{profile.handle}</span>
         </div>
 
@@ -327,6 +355,7 @@ function Receipt({ profile, data }: { profile: PublicProfile; data: ShareCardDat
             borderTop: "2px solid #1c1c1a",
             borderBottom: "2px solid #1c1c1a",
             fontSize: 30,
+            fontWeight: 700,
           }}
         >
           <span>TOTAL</span>
