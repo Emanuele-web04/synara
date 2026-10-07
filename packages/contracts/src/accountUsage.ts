@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { AccountProfileThemeAccent } from "./account";
+import { AccountProfileSocialLinks, AccountProfileThemeAccent } from "./account";
 
 import { boundedTrimmedNonEmptyString, EnvironmentId, NonNegativeInt } from "./baseSchemas";
 
@@ -156,6 +156,8 @@ export const PublicProfile = Schema.Struct({
    * Optional for wire compat with pre-accent servers; absent means null.
    */
   themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
+  /** Optional published social usernames; absent is compatible with older servers. */
+  socialLinks: Schema.optional(Schema.NullOr(AccountProfileSocialLinks)),
   /**
    * The avatar image URL, or null when the owner chose a placeholder (or has
    * an sso avatar the service has not seen yet). Always resolvable without an

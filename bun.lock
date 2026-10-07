@@ -41,6 +41,7 @@
       "dependencies": {
         "@hono/node-server": "^1.14.0",
         "@synara/contracts": "workspace:*",
+        "@synara/shared": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "effect": "catalog:",
         "hono": "^4.7.0",

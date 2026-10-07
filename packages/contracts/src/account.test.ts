@@ -221,3 +221,26 @@ describe("profile theme accent", () => {
     expect(() => decode({ ...base, themeAccent })).toThrow();
   });
 });
+
+// Usernames only on the wire: a URL is normalized by the client or the API before decoding.
+describe("profile social links", () => {
+  const base = { handle: "ada", displayName: "Ada", avatarColor: "#22c55e" };
+  const decode = Schema.decodeUnknownSync(UpdateProfileRequest);
+  it.each([undefined, null, {}, { x: "ada_l", github: "ada-l", youtube: null }])(
+    "accepts the links value %j",
+    (socialLinks) => {
+      expect(
+        decode({ ...base, ...(socialLinks !== undefined ? { socialLinks } : {}) }).socialLinks,
+      ).toEqual(socialLinks);
+    },
+  );
+  it.each([
+    { x: "https://x.com/ada" },
+    { github: "-ada" },
+    { linkedin: "ab" },
+    { threads: "a/b" },
+    { x: 42 },
+  ])("rejects invalid links %j", (socialLinks) => {
+    expect(() => decode({ ...base, socialLinks })).toThrow();
+  });
+});

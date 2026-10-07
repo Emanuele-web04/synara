@@ -113,6 +113,30 @@ export const AccountProfileThemeAccent = Schema.Struct({
 export type AccountProfileThemeAccent = typeof AccountProfileThemeAccent.Type;
 
 /**
+ * Published social usernames (never URLs; the page builds each canonical link). The
+ * patterns mirror packages/shared/src/socialLinks.ts, which also normalizes pasted URLs.
+ * On update an object replaces the whole set, so an omitted or null platform is removed.
+ */
+export const AccountProfileSocialLinks = Schema.Struct({
+  x: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_]{1,15}$/)))),
+  linkedin: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9-]{2,99}$/))),
+  ),
+  github: Schema.optional(
+    Schema.NullOr(
+      Schema.String.check(Schema.isPattern(/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/)),
+    ),
+  ),
+  threads: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._]{1,30}$/))),
+  ),
+  youtube: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{3,30}$/))),
+  ),
+});
+export type AccountProfileSocialLinks = typeof AccountProfileSocialLinks.Type;
+
+/**
  * Where a profile's avatar image comes from:
  *
  *   sso         — mirror the identity provider's picture (the default).
@@ -145,6 +169,8 @@ export const AccountProfile = Schema.Struct({
    * Optional for wire compat with pre-accent servers; absent means null.
    */
   themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
+  /** The owner's published social usernames; absent (older servers) means none. */
+  socialLinks: Schema.optional(Schema.NullOr(AccountProfileSocialLinks)),
   /**
    * Whether the profile is served publicly at trysynara.com/@handle.
    * Optional-with-default rather than required so a client built before
@@ -196,6 +222,8 @@ export const UpdateProfileRequest = Schema.Struct({
    * PUT, while null clears them.
    */
   themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
+  /** Absent preserves stored links; null clears all; an object replaces the set. */
+  socialLinks: Schema.optional(Schema.NullOr(AccountProfileSocialLinks)),
   /** Optional so pre-visibility clients keep writing profiles unchanged. */
   public: Schema.optional(Schema.Boolean),
   /**

@@ -34,6 +34,8 @@ COPY --from=deps /app/apps/api/node_modules apps/api/node_modules
 COPY --from=deps /app/packages/contracts/node_modules packages/contracts/node_modules
 COPY package.json bun.lock ./
 COPY packages/contracts packages/contracts
+# Dependency-free subpaths only (e.g. @synara/shared/socialLinks); no node_modules needed.
+COPY packages/shared packages/shared
 COPY apps/api apps/api
 
 USER bun

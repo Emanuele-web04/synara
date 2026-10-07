@@ -16,6 +16,7 @@ import { useProfileAvatarColor } from "./useProfileAvatarColor";
 import { useProfileAvatarImage } from "./useProfileAvatarImage";
 import { useProfileHandle } from "./useProfileHandle";
 import { useProfileName } from "./useProfileName";
+import type { SocialLinks } from "@synara/shared/socialLinks";
 
 export interface ProfileIdentityDraft {
   readonly name: string;
@@ -31,6 +32,11 @@ export interface ProfileIdentityDraft {
    * which is the only path that can claim it.
    */
   readonly avatarSource?: UpdatableAvatarSource;
+  /**
+   * The published social usernames, replacing the whole set (empty clears it).
+   * Only meaningful when signed in; absent leaves the stored links alone.
+   */
+  readonly socialLinks?: SocialLinks;
 }
 
 export function useProfileIdentity(defaults: { name: string; handle: string }) {
@@ -87,6 +93,7 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
         avatarColor: next.avatarColor,
         ...(next.isPublic !== undefined ? { public: next.isPublic } : {}),
         ...(next.avatarSource !== undefined ? { avatarSource: next.avatarSource } : {}),
+        ...(next.socialLinks !== undefined ? { socialLinks: next.socialLinks } : {}),
         // Every save refreshes the stored offset so the PUBLIC profile
         // buckets days/hours in the owner's current timezone.
         utcOffsetMinutes: -new Date().getTimezoneOffset(),

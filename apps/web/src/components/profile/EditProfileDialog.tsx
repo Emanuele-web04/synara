@@ -1,6 +1,6 @@
 // FILE: EditProfileDialog.tsx
-// Purpose: "Edit profile" modal — edits the display name, @handle, avatar, and accent
-// color. Drafts are held locally and only committed on Save, with one exception: a photo
+// Purpose: "Edit profile" modal — edits the display name, @handle, avatar, accent color,
+// and (signed in) the optional social accounts shown on the public profile. Drafts are held locally and only committed on Save, with one exception: a photo
 // upload while signed in writes through the account immediately (the bytes have to land
 // somewhere), and only the source *selection* stays a draft.
 // Layer: web profile feature. Signed out, changes persist to localStorage via the parent
@@ -10,7 +10,7 @@
 // and uploads go through account.uploadAvatar.
 
 import { type ReactNode, useRef, useState } from "react";
-import type { AccountProfileAvatarSource } from "@synara/contracts";
+import type { AccountProfileAvatarSource, AccountProfileSocialLinks } from "@synara/contracts";
 import { Dialog, DialogClose, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import {
@@ -27,6 +27,14 @@ import { normalizeHandle } from "@synara/profile-ui/formatting";
 import { PROFILE_AVATAR_COLORS } from "./useProfileAvatarColor";
 import { AvatarImageError, compressAvatarImage } from "./avatarImage";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
+import { SOCIAL_GLYPHS } from "@synara/profile-ui/social-icon";
+import {
+  SOCIAL_LINK_PLATFORMS,
+  type SocialLinkPlatform,
+  type SocialLinks,
+  socialLinkLabel,
+} from "@synara/shared/socialLinks";
+import { parseSocialLinkDrafts, seedSocialLinkDrafts } from "./socialLinkDrafts";
 
 // Inputs and footer buttons share one fixed height + radius so every control in
 // the dialog reads as the same size. The visible border keeps the fields legible
@@ -59,6 +67,7 @@ interface EditProfileDialogProps {
     readonly public?: boolean | undefined;
     readonly avatarSource?: AccountProfileAvatarSource | undefined;
     readonly avatarUrl?: string | null | undefined;
+    readonly socialLinks?: AccountProfileSocialLinks | null | undefined;
   } | null;
   /**
    * Uploads a compressed photo (a `compressAvatarImage` data URL) to the
@@ -76,6 +85,7 @@ interface EditProfileDialogProps {
     avatarImage: string | null;
     isPublic?: boolean;
     avatarSource?: "sso" | "placeholder";
+    socialLinks?: SocialLinks;
   }) => Promise<void>;
 }
 
@@ -141,6 +151,11 @@ function EditProfileDialogContent({
   const [draftSource, setDraftSource] = useState<AccountProfileAvatarSource>(
     accountProfile?.avatarSource ?? "sso",
   );
+  // Raw field text per platform; normalized (pasted URLs → usernames) on Save.
+  const [draftLinks, setDraftLinks] = useState<Record<SocialLinkPlatform, string>>(() =>
+    seedSocialLinkDrafts(accountProfile?.socialLinks),
+  );
+  const [invalidLinks, setInvalidLinks] = useState<readonly SocialLinkPlatform[]>([]);
   const [showEditor, setShowEditor] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -219,6 +234,15 @@ function EditProfileDialogContent({
   };
 
   const handleSave = () => {
+    const links = accountProfile ? parseSocialLinkDrafts(draftLinks) : null;
+    if (links && links.invalid.length > 0) {
+      setInvalidLinks(links.invalid);
+      setError(
+        `That ${socialLinkLabel(links.invalid[0]!)} profile doesn’t look right. Use your username or a link to your profile.`,
+      );
+      return Promise.resolve();
+    }
+    setInvalidLinks([]);
     setSaving(true);
     setError(null);
     return onSave({
@@ -230,6 +254,7 @@ function EditProfileDialogContent({
       // "uploaded" is never sent: the upload already claimed it server-side,
       // and PUT /profile deliberately refuses to.
       ...(accountProfile && draftSource !== "uploaded" ? { avatarSource: draftSource } : {}),
+      ...(links ? { socialLinks: links.usernames } : {}),
     })
       .then(() => {
         onOpenChange(false);
@@ -366,6 +391,31 @@ function EditProfileDialogContent({
             </Field>
           )}
         </div>
+
+        {accountProfile && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-3 px-1">
+              <span className="text-ui-sm text-muted-foreground">Links</span>
+              <span className="text-ui-xs text-muted-foreground/80">
+                Optional · shown on your public profile
+              </span>
+            </div>
+            <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
+              {SOCIAL_LINK_PLATFORMS.map((platform) => (
+                <SocialLinkField
+                  key={platform}
+                  platform={platform}
+                  value={draftLinks[platform]}
+                  invalid={invalidLinks.includes(platform)}
+                  onChange={(value) => {
+                    setDraftLinks((current) => ({ ...current, [platform]: value }));
+                    setInvalidLinks((current) => current.filter((entry) => entry !== platform));
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col-reverse gap-2 px-4 pb-4 pt-4 sm:flex-row sm:justify-end">
@@ -600,6 +650,45 @@ function Field({
         <div className="w-56 shrink-0">{children}</div>
       </div>
       {hint && <p className="text-ui-xs leading-snug text-muted-foreground/80">{hint}</p>}
+    </div>
+  );
+}
+
+function SocialLinkField({
+  platform,
+  value,
+  invalid,
+  onChange,
+}: {
+  platform: SocialLinkPlatform;
+  value: string;
+  invalid: boolean;
+  onChange: (value: string) => void;
+}) {
+  const Glyph = SOCIAL_GLYPHS[platform];
+  const label = socialLinkLabel(platform);
+  return (
+    <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+      <span className="flex shrink-0 items-center gap-2 text-ui-sm text-muted-foreground">
+        <Glyph aria-hidden className="size-4" />
+        {label}
+      </span>
+      <div className="w-56 shrink-0">
+        <InputGroup className={fieldControlClassName}>
+          <InputGroupInput
+            value={value}
+            aria-label={`${label} username`}
+            aria-invalid={invalid || undefined}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={
+              platform === "linkedin" || platform === "github" ? "username" : "@username"
+            }
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+        </InputGroup>
+      </div>
     </div>
   );
 }

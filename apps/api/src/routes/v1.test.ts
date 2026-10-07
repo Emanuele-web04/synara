@@ -1140,6 +1140,47 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await clearedMe.json()).toMatchObject({ profile: { themeAccent: null } });
     });
 
+    it("stores social usernames from pasted URLs, replaces the set, clears null, and rejects other hosts", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const base = profileBody({ public: true });
+      const put = (extra: Record<string, unknown>) =>
+        app.request("/api/v1/profile", {
+          method: "PUT",
+          headers: authHeaders(token),
+          body: JSON.stringify({ ...base, ...extra }),
+        });
+      const readPublic = async () =>
+        (await (await app.request(`/api/v1/profiles/${base.handle}`)).json()) as {
+          socialLinks?: unknown;
+        };
+
+      const created = await put({
+        socialLinks: { x: "https://x.com/ada?s=21", github: "@ada-l", youtube: null },
+      });
+      expect(created.status).toBe(200);
+      expect(await created.json()).toMatchObject({
+        profile: { socialLinks: { x: "ada", github: "ada-l" } },
+      });
+      expect((await readPublic()).socialLinks).toEqual({ x: "ada", github: "ada-l" });
+
+      // Omitted keeps the stored set; an object replaces it whole.
+      await put({});
+      expect((await readPublic()).socialLinks).toEqual({ x: "ada", github: "ada-l" });
+      await put({ socialLinks: { threads: "threads.net/@ada.l" } });
+      expect((await readPublic()).socialLinks).toEqual({ threads: "ada.l" });
+
+      const rejected = await put({ socialLinks: { x: "https://evil.example/ada" } });
+      expect(rejected.status).toBe(400);
+      expect((await readPublic()).socialLinks).toEqual({ threads: "ada.l" });
+
+      await put({ socialLinks: {} });
+      expect((await readPublic()).socialLinks).toBeNull();
+      await put({ socialLinks: { x: "ada" } });
+      await put({ socialLinks: null });
+      expect((await readPublic()).socialLinks).toBeNull();
+    });
+
     it("creates a profile and reports it from /me", async () => {
       const { app } = buildApp();
       const { token } = await signIn();

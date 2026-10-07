@@ -1,3 +1,4 @@
+import type { SocialLinks } from "@synara/shared/socialLinks";
 import type {
   DevicePublicKeyJwk,
   HostPublicKeyJwk,
@@ -322,6 +323,8 @@ export const profiles = pgTable("profiles", {
   // Published together; NULL keeps profiles from pre-accent clients compatible.
   themeAccentLight: text("theme_accent_light"),
   themeAccentDark: text("theme_accent_dark"),
+  // Validated usernames only; NULL means no published social accounts.
+  socialLinks: jsonb("social_links").$type<SocialLinks>(),
   // Opt-in, default private: a profile is served at trysynara.com/@handle
   // exactly when its owner flipped this on.
   public: boolean("public").notNull().default(false),

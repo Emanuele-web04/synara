@@ -1,3 +1,9 @@
+import {
+  SOCIAL_LINK_PLATFORMS,
+  normalizeSocialUsername,
+  sanitizeSocialLinks,
+  type SocialLinks,
+} from "@synara/shared/socialLinks";
 import { createPairingRendezvous } from "../remote/pairing";
 import { RemotePairingBundle, RedeemRemotePairingCode } from "@synara/contracts";
 import type { TunnelCoordinator } from "../remote/tunnels";
@@ -249,6 +255,28 @@ function profileThemeAccent(row: ProfileRow): AccountProfile["themeAccent"] {
     : null;
 }
 
+/** Valid usernames only, or null when none: what the column stores and every read returns. */
+function storedSocialLinks(value: unknown): SocialLinks | null {
+  const links = sanitizeSocialLinks(value);
+  return Object.keys(links).length > 0 ? links : null;
+}
+
+/** Normalize pasted profile URLs before the username-only wire contract validates them. */
+function normalizeProfileSocialLinks(json: unknown): unknown {
+  if (typeof json !== "object" || json === null || !("socialLinks" in json)) return json;
+  const value = json.socialLinks;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return json;
+  const links = { ...value } as Record<string, unknown>;
+  for (const platform of SOCIAL_LINK_PLATFORMS) {
+    const input = links[platform];
+    if (input === undefined || input === null) continue;
+    const username = typeof input === "string" ? normalizeSocialUsername(platform, input) : null;
+    if (username === null) throw new Error(`Invalid ${platform} social username`);
+    links[platform] = username;
+  }
+  return { ...json, socialLinks: links };
+}
+
 /**
  * Widens a stored row to the contract. The two branded strings are asserted
  * rather than re-validated: the route validates on the way in, so a row that
@@ -261,6 +289,7 @@ function toAccountProfile(row: ProfileRow, avatarUrl: string | null): AccountPro
     displayName: row.displayName,
     avatarColor: row.avatarColor as AccountProfileAvatarColor,
     themeAccent: profileThemeAccent(row),
+    socialLinks: storedSocialLinks(row.socialLinks),
     public: row.public,
     avatarUrl,
     avatarSource: row.avatarSource,
@@ -958,7 +987,7 @@ export function createV1Routes(deps: {
 
     let parsed: UpdateProfileRequest;
     try {
-      parsed = Schema.decodeUnknownSync(UpdateProfileRequest)(json);
+      parsed = Schema.decodeUnknownSync(UpdateProfileRequest)(normalizeProfileSocialLinks(json));
     } catch (error) {
       return errorResponse(
         c,
@@ -988,6 +1017,11 @@ export function createV1Routes(deps: {
             themeAccentLight: parsed.themeAccent?.light ?? null,
             themeAccentDark: parsed.themeAccent?.dark ?? null,
           }
+        : {};
+    // An object replaces the entire set; empty or null clears the column.
+    const socialLinksColumns =
+      parsed.socialLinks !== undefined
+        ? { socialLinks: storedSocialLinks(parsed.socialLinks) }
         : {};
     let displacedAvatarKey: string | null = null;
     try {
@@ -1026,6 +1060,7 @@ export function createV1Routes(deps: {
             displayName: parsed.displayName,
             avatarColor: parsed.avatarColor,
             ...themeAccentColumns,
+            ...socialLinksColumns,
             // Absent means "leave visibility alone" on update and "private" on
             // first write — the safe default either way.
             ...(parsed.public !== undefined ? { public: parsed.public } : {}),
@@ -1044,6 +1079,7 @@ export function createV1Routes(deps: {
               displayName: parsed.displayName,
               avatarColor: parsed.avatarColor,
               ...themeAccentColumns,
+              ...socialLinksColumns,
               ...(parsed.public !== undefined ? { public: parsed.public } : {}),
               ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
               ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
@@ -2744,6 +2780,7 @@ export function createV1Routes(deps: {
       displayName: row.displayName,
       avatarColor: row.avatarColor,
       themeAccent: profileThemeAccent(row),
+      socialLinks: storedSocialLinks(row.socialLinks),
       // Provider-free by construction: an sso avatar is served from the URL
       // cached at the owner's /me reads, never from a live provider call.
       avatarUrl: resolvedAvatarUrl(row, row.avatarSsoUrl),

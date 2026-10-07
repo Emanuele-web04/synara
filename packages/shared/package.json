@@ -36,6 +36,10 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./socialLinks": {
+      "types": "./src/socialLinks.ts",
+      "import": "./src/socialLinks.ts"
+    },
     "./modelName": {
       "types": "./src/modelName.ts",
       "import": "./src/modelName.ts"
