@@ -13,6 +13,7 @@ import { SYNARA_LOGO_PATHS } from "@synara/profile-ui/logo";
 import { buildHeatmapCells } from "../../lib/heatmapCells";
 import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile";
 import { handleFromParam } from "../../lib/handleParam";
+import { drawableAvatar } from "../../lib/imageAvatar";
 
 export const alt = "Synara profile";
 export const size = { width: 1200, height: 630 };
@@ -119,6 +120,7 @@ export default async function OgImage({ params }: Params) {
   const profile = await fetchPublicProfile(handle).catch(() => null);
   if (!profile) return genericCard();
 
+  const avatar = await drawableAvatar(profile.avatarUrl);
   const columns = heatmapColumns(profile);
   const topModel = [...profile.models].sort((a, b) => b.tokens - a.tokens)[0]?.model ?? "—";
   const stats = [
@@ -152,9 +154,9 @@ export default async function OgImage({ params }: Params) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 24, minWidth: 0 }}>
-          {profile.avatarUrl ? (
+          {avatar ? (
             <img
-              src={profile.avatarUrl}
+              src={avatar}
               width={88}
               height={88}
               style={{ borderRadius: 9999, objectFit: "cover" }}

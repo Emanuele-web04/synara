@@ -8,6 +8,7 @@
 import { ImageResponse } from "next/og";
 import { SYNARA_LOGO_PATHS } from "@synara/profile-ui/logo";
 import { handleFromParam } from "../../../../lib/handleParam";
+import { drawableAvatar } from "../../../../lib/imageAvatar";
 import { fetchPublicProfile, type PublicProfile } from "../../../../lib/publicProfile";
 import {
   isShareFormat,
@@ -35,9 +36,10 @@ export async function GET(_request: Request, { params }: Params) {
   const profile = await fetchPublicProfile(handle).catch(() => null);
   if (!profile) return new Response("Not found", { status: 404 });
   const data = shareCardData(profile);
+  const avatar = await drawableAvatar(profile.avatarUrl);
   return new ImageResponse(
     format === "poster" ? (
-      <Poster profile={profile} data={data} />
+      <Poster profile={profile} data={data} avatar={avatar} />
     ) : (
       <Receipt profile={profile} data={data} />
     ),
@@ -64,17 +66,20 @@ function SynaraMark({ edge, color }: { edge: number; color: string }) {
 
 function Avatar({
   profile,
+  avatar,
   edge,
   accent,
 }: {
   profile: PublicProfile;
+  /** A drawable data URL from drawableAvatar, or null for the initial. */
+  avatar: string | null;
   edge: number;
   accent: string;
 }) {
-  if (profile.avatarUrl) {
+  if (avatar) {
     return (
       <img
-        src={profile.avatarUrl}
+        src={avatar}
         width={edge}
         height={edge}
         style={{ borderRadius: 9999, objectFit: "cover" }}
@@ -104,7 +109,15 @@ function Avatar({
 
 const POSTER_CHART = { width: 888, height: 170 };
 
-function Poster({ profile, data }: { profile: PublicProfile; data: ShareCardData }) {
+function Poster({
+  profile,
+  data,
+  avatar,
+}: {
+  profile: PublicProfile;
+  data: ShareCardData;
+  avatar: string | null;
+}) {
   const line = linePath(
     data.month.map((point) => point.tokens),
     POSTER_CHART.width,
@@ -125,7 +138,7 @@ function Poster({ profile, data }: { profile: PublicProfile; data: ShareCardData
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 26 }}>
-        <Avatar profile={profile} edge={52} accent={data.accent} />
+        <Avatar profile={profile} avatar={avatar} edge={52} accent={data.accent} />
         <span style={{ display: "flex" }}>@{profile.handle}</span>
       </div>
 

@@ -4,6 +4,7 @@ import { buildCalendarYearCells, buildHeatmapCells, weeklyTotals } from "./heatm
 import { groupModelUsage } from "./modelUsage";
 import { formatStreakShort, joinedAgo } from "./profileFormat";
 import { isShareFormat, linePath, posterSentence, shareCardData } from "./shareCards";
+import { isDrawableAvatarType } from "./imageAvatar";
 import { profileAccentStyle, resolveProfileAccent } from "./profileAccent";
 
 describe("resolveProfileAccent", () => {
@@ -238,5 +239,14 @@ describe("share cards", () => {
     expect(isShareFormat("story")).toBe(true);
     expect(isShareFormat("receipt")).toBe(false);
     expect(linePath([0, 10], 100, 50)).toBe("M0.0,50.0 L100.0,4.0");
+  });
+});
+
+describe("isDrawableAvatarType", () => {
+  it("accepts what next/og decodes and nothing else", () => {
+    expect(isDrawableAvatarType("image/jpeg")).toBe(true);
+    expect(isDrawableAvatarType("image/png; charset=binary")).toBe(true);
+    expect(isDrawableAvatarType("image/webp")).toBe(false);
+    expect(isDrawableAvatarType(null)).toBe(false);
   });
 });
