@@ -1,6 +1,6 @@
 import "../index.css";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { cdp, page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -11,6 +11,7 @@ import {
   SidebarLeadingControlsSlot,
 } from "./SidebarHeaderNavigationControls";
 import { RouteSurfaceHeader } from "./RouteSurface";
+import { SurfaceContentTabs } from "./chat/SurfaceContentTabs";
 import { SidebarProvider, useSidebar } from "./ui/sidebar";
 
 vi.mock("~/env", () => ({ isElectron: true }));
@@ -56,7 +57,7 @@ function Shell({ vertical = false }: { vertical?: boolean }) {
   );
 }
 
-function RailShell() {
+function RailShell({ threadTabs }: { threadTabs?: ReactNode }) {
   const [rail, setRail] = useState<HTMLDivElement | null>(null);
   const [route, setRoute] = useState<HTMLElement | null>(null);
   const { open, isMobile } = useSidebar();
@@ -86,11 +87,11 @@ function RailShell() {
           <SidebarLeadingControlsSlot />
         </header>
       ) : null}
-      <main ref={setRoute} className="chat-content-card relative flex-1">
+      <main ref={setRoute} className="chat-content-card relative min-w-0 flex-1">
         <RouteSurfaceHeader
           className={isMobile || !open ? "desktop-top-bar-traffic-light-gutter" : undefined}
         >
-          <span>Inbox</span>
+          {threadTabs ?? <span>Inbox</span>}
         </RouteSurfaceHeader>
       </main>
     </SidebarLeadingControlsDock>
@@ -107,6 +108,102 @@ async function renderShell(vertical = false) {
 }
 
 describe("sidebar leading controls dock", () => {
+  it("keeps clipped thread tabs from excluding the chrome beside their scroll viewport", async () => {
+    await page.viewport(1280, 800);
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const screen = await render(
+      <SidebarProvider defaultOpen={false} data-sidebar-layout="rail">
+        <RailShell
+          threadTabs={
+            <SurfaceContentTabs
+              ariaLabel="Open threads"
+              activeKey="0"
+              onMove={vi.fn()}
+              tabs={Array.from({ length: 18 }, (_, index) => ({
+                key: String(index),
+                title: `Thread ${index + 1}`,
+                icon: <span>T</span>,
+                onSelect,
+                onClose,
+              }))}
+            />
+          }
+        />
+      </SidebarProvider>,
+    );
+    try {
+      const strip = screen.container.querySelector<HTMLElement>(".scroll-fade-x")!;
+      expect(strip.scrollWidth).toBeGreaterThan(strip.clientWidth);
+      for (const position of [1, 0, 0.5]) {
+        strip.scrollLeft = position * (strip.scrollWidth - strip.clientWidth);
+        await expect
+          .poll(() => {
+            const rect = strip.getBoundingClientRect();
+            const y = rect.top + rect.height / 2;
+            return [
+              nativeDragRegionAt(screen.container, rect.left - 6, y),
+              nativeDragRegionAt(screen.container, rect.right + 6, y),
+            ];
+          })
+          .toEqual(["drag", "drag"]);
+      }
+      const rect = strip.getBoundingClientRect();
+      const visibleTab = Array.from(strip.querySelectorAll<HTMLElement>("[data-surface-tab]")).find(
+        (tab) => {
+          const bounds = tab.getBoundingClientRect();
+          return bounds.left >= rect.left && bounds.right <= rect.right;
+        },
+      )!;
+      const bounds = visibleTab.getBoundingClientRect();
+      expect(
+        nativeDragRegionAt(
+          screen.container,
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2,
+        ),
+      ).toBe("no-drag");
+      await userEvent.click(visibleTab.querySelector("button")!);
+      expect(onSelect).toHaveBeenCalledOnce();
+      await userEvent.click(visibleTab.querySelectorAll("button")[1]!);
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it.each([1, 3])("keeps unused header space draggable with %s thread tabs", async (count) => {
+    await page.viewport(1280, 800);
+    const screen = await render(
+      <SidebarProvider defaultOpen={false} data-sidebar-layout="rail">
+        <RailShell
+          threadTabs={
+            <SurfaceContentTabs
+              ariaLabel="Open threads"
+              activeKey="0"
+              tabs={Array.from({ length: count }, (_, index) => ({
+                key: String(index),
+                title: `Thread ${index + 1}`,
+                icon: <span>T</span>,
+                onSelect: () => {},
+              }))}
+            />
+          }
+        />
+      </SidebarProvider>,
+    );
+    try {
+      const last = screen.container.querySelector<HTMLElement>("[data-surface-tab]:last-child")!;
+      const rect = last.getBoundingClientRect();
+      expect(rect.width).toBeCloseTo(Number.parseFloat(getComputedStyle(last).flexBasis), 0);
+      expect(nativeDragRegionAt(screen.container, rect.right + 8, rect.top + rect.height / 2)).toBe(
+        "drag",
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("excludes the docked toggle from the host header's native drag region", async () => {
     await page.viewport(1280, 800);
     const screen = await render(
