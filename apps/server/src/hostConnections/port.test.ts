@@ -54,6 +54,7 @@ it.each(["disconnect", "account", "stop"])(
       setDesired: async (_id, desired) => {
         writes.push(desired);
       },
+      listPaired: async () => [],
       listDesired: async () => [],
       readTrust: async () => {
         trustReads++;
@@ -99,6 +100,7 @@ it("orders durable disconnect after an already-started desired-state write and s
       rootFingerprint: "fixture",
       executionScope: scope,
     }),
+    listPaired: async () => [],
     listDesired: async () => [],
     setDesired: async (_id, desired) => {
       if (desired) {

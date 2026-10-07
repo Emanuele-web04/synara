@@ -1,5 +1,24 @@
 # Remote connections — punto di ripartenza
 
+## Directory e computer abbinati — 7 ottobre 2026
+
+La lista “Computers you can control” usava l'intera directory account: vecchie
+installazioni con lo stesso hostname comparivano come duplicati e proponevano
+Connect senza pairing locale. Il MacBook corrente era già escluso; l'altra
+riga era una vecchia installazione. Ora `hosts.listConnections` espone gli ID
+dei pairing confermati nello scope controller/account/workspace, separati
+dalle connessioni attive e da quelle da riconnettere automaticamente. La UI
+incrocia host ID e environment ID, esclude il controller e conserva i pairing
+disconnessi. Nessuna fusione per hostname, cancellazione account o migrazione.
+Client nuovi con server precedenti chiedono l'aggiornamento invece di mostrare
+la directory come se fosse già abbinata. Add continua a usare il codice.
+
+Verifica iniziale: regressione browser riprodotta prima del fix (due righe
+Mini), poi 7 test browser e 13 test server passati; fmt/lint/typecheck passati
+(928 warning lint preesistenti, zero errori). Il test SQLite verifica tutti i
+confini dello scope, pending/revoked, disconnect e forget. Prova desktop e
+suite completa vengono annotate dopo la loro conclusione.
+
 ## Account nella rail — 7 ottobre 2026
 
 Ripristinato `AccountFooterControl`, rimasto importato ma non montato dopo il

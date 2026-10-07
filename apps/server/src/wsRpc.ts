@@ -1216,6 +1216,13 @@ const makeWsRpcHandlersLayer = () =>
           const binding = await readRemoteAccountBinding();
           if (binding) await Effect.runPromise(hostTrust.setDesired(binding, hostId, desired));
         },
+        listPaired: async () => {
+          const binding = await readRemoteAccountBinding();
+          if (!binding) return [];
+          return (await Effect.runPromise(hostTrust.listPaired(binding))).map(
+            ({ hostId, environmentId }) => ({ hostId, environmentId }),
+          );
+        },
         listDesired: async () => {
           const binding = await readRemoteAccountBinding();
           if (!binding) return [];

@@ -1,6 +1,6 @@
 // FILE: ConnectionsOtherComputers.tsx
-// Purpose: "Control other devices" — the computers on this account that this one
-//          can connect to, the window's current destination, and adding a computer.
+// Purpose: "Control other devices" — confirmed pairings on this controller,
+//          the window's current destination, and adding a computer.
 // Layer: Settings UI components
 // Exports: ConnectionsOtherComputers
 
@@ -10,6 +10,7 @@ import { useCallback, useState } from "react";
 import { useHostConnections, useHosts } from "~/hooks/useHosts";
 import { accountErrorMessage } from "~/lib/accountLogic";
 import { activateHost, deactivateHost, readActiveHost } from "~/lib/hosts/activeHost";
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 import { readHostsApi } from "~/lib/hosts/api";
 import { HostsUnsupportedError } from "~/lib/hosts/queries";
 import type { HostReachability } from "~/lib/hosts/reachability";
@@ -38,6 +39,7 @@ export function ConnectionsOtherComputers() {
 
   const refresh = () => {
     void remote.hostsQuery.refetch();
+    void remote.enrollmentQuery.refetch();
     void connections.connectionsQuery.refetch();
   };
 
@@ -104,9 +106,20 @@ export function ConnectionsOtherComputers() {
     }
   };
 
-  const hostsError = remote.hostsQuery.error;
+  const hostsError = remote.hostsQuery.error ?? connections.connectionsQuery.error;
   const localHostId = remote.enrollment?.host?.id;
-  const hosts = remote.hosts.filter((host) => host.id !== localHostId);
+  const localEnvironmentId = readExecutionContext()?.controller.environmentId;
+  // Account registration is not pairing. Only show identities trusted by this
+  // controller; never collapse independent installations by their display name.
+  const pairedHosts = connections.pairedHosts;
+  const hosts = remote.hosts.filter(
+    (host) =>
+      host.id !== localHostId &&
+      host.environmentId !== localEnvironmentId &&
+      pairedHosts?.some(
+        (paired) => paired.hostId === host.id && paired.environmentId === host.environmentId,
+      ),
+  );
 
   return (
     <>
@@ -125,7 +138,7 @@ export function ConnectionsOtherComputers() {
         }
       >
         <SettingsCard>
-          {remote.hostsQuery.isPending ? (
+          {remote.hostsQuery.isPending || connections.connectionsQuery.isPending ? (
             <SettingsListRow title={<Muted>Loading computers…</Muted>} />
           ) : hostsError ? (
             <SettingsListRow
@@ -138,10 +151,15 @@ export function ConnectionsOtherComputers() {
                 </span>
               }
             />
+          ) : pairedHosts === undefined ? (
+            <SettingsListRow
+              title="Update Synara on this computer"
+              description="Update and restart the app to list your paired computers."
+            />
           ) : hosts.length === 0 ? (
             <SettingsListRow
               title={<Muted>No other computers yet</Muted>}
-              description="Sign in to Synara on another computer, then click Add."
+              description="Click Add and enter a pairing code from the other computer."
             />
           ) : (
             hosts.map((host) => {

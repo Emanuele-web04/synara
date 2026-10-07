@@ -23,6 +23,9 @@ export interface RemoteHostTrustRepositoryShape {
     hostId: string,
     desired: boolean,
   ) => Effect.Effect<void, PersistenceSqlError>;
+  readonly listPaired: (
+    binding: RemoteAccountBinding,
+  ) => Effect.Effect<readonly RemoteHostTrustRecord[], PersistenceSqlError>;
   readonly listDesired: (
     binding: RemoteAccountBinding,
   ) => Effect.Effect<readonly RemoteHostTrustRecord[], PersistenceSqlError>;

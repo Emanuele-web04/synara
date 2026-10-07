@@ -11,6 +11,7 @@ import type {
   AccountHost,
   AccountHostPlatform,
   HostConnection,
+  ListHostConnectionsResponse,
   HostSession,
   ConfirmSyncKeyPairingRequest,
   SyncKeyPairingCode,
@@ -87,7 +88,7 @@ export interface HostsApi {
    */
   connect: (input: { readonly hostId: string }) => Promise<HostConnection>;
   disconnect: (input: { readonly hostId: string }) => Promise<void>;
-  listConnections: () => Promise<{ readonly connections: readonly HostConnection[] }>;
+  listConnections: () => Promise<ListHostConnectionsResponse>;
   /**
    * Runs the transport race against one host and answers what it found.
    *

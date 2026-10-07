@@ -11,6 +11,7 @@ import type {
   HostConnection,
   RemoteExecutionScope,
   DesiredHostConnection,
+  PairedHost,
 } from "@synara/contracts";
 
 import type { RemoteTlsAnchor } from "../remoteTransport/certificates";
@@ -25,6 +26,7 @@ export interface HostConnectionsPort {
   disconnect(input: { readonly hostId: string }): Promise<void>;
   list(): Promise<{
     readonly connections: readonly HostConnection[];
+    readonly pairedHosts?: readonly PairedHost[];
     readonly desiredHosts?: readonly DesiredHostConnection[];
   }>;
 }
@@ -33,6 +35,7 @@ export interface HostConnectionsPortDeps {
   readonly accountSession: Pick<HostsAccountSession, "listHosts" | "requestGrant" | "dialIdentity">;
   readonly registry: HostConnectionRegistry;
   readonly setDesired: (hostId: string, desired: boolean) => Promise<void>;
+  readonly listPaired: () => Promise<readonly PairedHost[]>;
   readonly listDesired: () => Promise<readonly DesiredHostConnection[]>;
   readonly readTrust: (
     host: AccountHost,
@@ -193,6 +196,7 @@ export function makeHostConnectionsPort(deps: HostConnectionsPortDeps): HostConn
     async list() {
       return {
         connections: deps.registry.list(),
+        pairedHosts: await deps.listPaired(),
         desiredHosts: (await deps.listDesired()).map((host) => ({
           ...host,
           ...deps.registry.status(host.hostId),

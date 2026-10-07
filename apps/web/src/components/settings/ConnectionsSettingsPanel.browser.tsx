@@ -149,7 +149,12 @@ vi.mock("~/hooks/useHosts", () => {
           createdAt: "2026-08-13T10:00:00.000Z",
           lastSeenAt: "2026-08-13T10:00:00.000Z",
         },
-      ],
+      ].flatMap((host) => [
+        host,
+        { ...host, id: "old-mini", environmentId: "old-mini" },
+        { ...host, id: "old-macbook", environmentId: "old-macbook", name: "MacBook" },
+        { ...host, id: "this-macbook", environmentId: "controller", name: "This MacBook" },
+      ]),
       enrollment: null,
       canManageHost: () => true,
       setDiscoverable: idle,
@@ -160,6 +165,14 @@ vi.mock("~/hooks/useHosts", () => {
     useHostConnections: () => ({
       connectionsQuery: query,
       connections: [],
+      pairedHosts: [
+        {
+          hostId: "11111111-1111-4111-8111-111111111111",
+          environmentId: "env_studio",
+          label: "Studio Mac mini",
+          channel: "dev",
+        },
+      ],
       connect: idle,
       disconnect: idle,
     }),
@@ -223,7 +236,10 @@ describe("Connections settings", () => {
     });
 
     await page.getByRole("radio", { name: "Control other devices" }).click();
-    await expect.element(page.getByText("Studio Mac mini")).toBeVisible();
+    await expect.element(page.getByText("Studio Mac mini", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("MacBook", { exact: true })).not.toBeInTheDocument();
+    await expect.element(page.getByText("This MacBook", { exact: true })).not.toBeInTheDocument();
+    expect(page.getByRole("button", { name: "Connect", exact: true }).elements()).toHaveLength(1);
     await expect.element(page.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
     await page.screenshot({ path: "./__screenshots__/connections-others.png" });
 

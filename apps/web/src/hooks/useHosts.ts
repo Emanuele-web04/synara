@@ -138,7 +138,8 @@ export function useHostConnections(input: { enabled: boolean }) {
 
   return {
     connectionsQuery,
-    connections: connectionsQuery.data ?? [],
+    connections: connectionsQuery.data?.connections ?? [],
+    pairedHosts: connectionsQuery.data?.pairedHosts,
     connect,
     disconnect,
   } as const;

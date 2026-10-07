@@ -18,6 +18,13 @@ export const RemoteHostTrustRepositoryLive = Layer.effect(
       AND account_authority = ${binding.accountAuthority} AND user_id = ${binding.userId} AND organization_id = ${binding.organizationId}
       AND host_id = ${hostId} AND paired_at IS NOT NULL AND revoked_at IS NULL
   `.pipe(Effect.asVoid, Effect.mapError(toPersistenceSqlError("RemoteHostTrust.setDesired")));
+    const listPaired: RemoteHostTrustRepositoryShape["listPaired"] = (binding) =>
+      sql<RemoteHostTrustRecord>`
+    SELECT environment_id AS "environmentId", root_certificate AS "rootCertificate", root_fingerprint AS "rootFingerprint", channel, host_id AS "hostId", label, paired_at AS "pairedAt"
+    FROM remote_host_trust WHERE controller_environment_id = ${binding.controllerEnvironmentId}
+      AND account_authority = ${binding.accountAuthority} AND user_id = ${binding.userId} AND organization_id = ${binding.organizationId}
+      AND paired_at IS NOT NULL AND revoked_at IS NULL
+  `.pipe(Effect.mapError(toPersistenceSqlError("RemoteHostTrust.listPaired")));
     const listDesired: RemoteHostTrustRepositoryShape["listDesired"] = (binding) =>
       sql<RemoteHostTrustRecord>`
     SELECT environment_id AS "environmentId", root_certificate AS "rootCertificate", root_fingerprint AS "rootFingerprint", channel, host_id AS "hostId", label, paired_at AS "pairedAt"
@@ -106,6 +113,7 @@ export const RemoteHostTrustRepositoryLive = Layer.effect(
       forget,
       setDesired,
       listDesired,
+      listPaired,
     } satisfies RemoteHostTrustRepositoryShape;
   }),
 );
