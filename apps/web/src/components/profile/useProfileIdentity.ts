@@ -55,12 +55,15 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
   const avatarColor = accountProfile?.avatarColor ?? localColor;
   // Signed in, every avatar render uses the account's resolved URL (uploaded
   // object, cached sso picture, or null for the placeholder); the localStorage
-  // photo is only ever the signed-out avatar.
-  const avatarImage = accountProfile
-    ? (accountProfile.avatarUrl ?? null)
-    : me
-      ? (me.image ?? null)
-      : localImage;
+  // photo is only ever the signed-out avatar. Read from the signed-in account
+  // itself, not the capability-gated `me`: the sidebar shows this same picture
+  // ungated, and the two must never disagree about who is signed in.
+  const signedInMe = account.me;
+  const avatarImage = signedInMe
+    ? signedInMe.profile
+      ? (signedInMe.profile.avatarUrl ?? null)
+      : (signedInMe.image ?? null)
+    : localImage;
   /** The identity provider's picture, offered as an avatar choice when set. */
   const ssoImage = me?.image ?? null;
 

@@ -69,13 +69,18 @@ describe("profile identity source", () => {
 
   it("keeps local identity when signed out or account profiles are unavailable", () => {
     account.profileSyncEnabled = false;
+    expect(readIdentity().name).toBe("Local Name");
+    account.profileSyncEnabled = true;
+    account.me = null;
     expect(readIdentity()).toMatchObject({
       name: "Local Name",
       avatarImage: "data:image/png;base64,local",
     });
-    account.profileSyncEnabled = true;
-    account.me = null;
-    expect(readIdentity().name).toBe("Local Name");
+  });
+
+  it("shows the signed-in account's picture even when account profiles are unavailable", () => {
+    account.profileSyncEnabled = false;
+    expect(readIdentity().avatarImage).toBe("https://example.test/login.png");
   });
 
   it("does not silently save authenticated pre-onboarding edits into local identity", async () => {
