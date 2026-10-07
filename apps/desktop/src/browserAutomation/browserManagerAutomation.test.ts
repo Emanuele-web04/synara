@@ -80,6 +80,69 @@ class FakeWebContents extends EventEmitter {
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it.each([false, true])(
+    "captures a full-size page behind an overlay without reloading (automation-owned: %s)",
+    async (automationOwned) => {
+      const contents = new FakeWebContents(122);
+      const image = {
+        isEmpty: () => false,
+        getSize: () => ({ width: 1280, height: 800 }),
+        resize: vi.fn(),
+        toJPEG: vi.fn(() => Buffer.from("full-size page")),
+      };
+      const capturePage = vi.fn(async () => image);
+      Object.assign(contents, { capturePage });
+      const view = {
+        webContents: contents,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+      };
+      webContentsViewConstructor.mockReturnValueOnce(view);
+      const manager = new DesktopBrowserManager();
+      const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
+      manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
+      try {
+        const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+        const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
+        const bounds = { x: 0, y: 50, width: 900, height: 650 };
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        if (automationOwned) await manager.getAutomationRuntime(input, { restore: false });
+        const loads = contents.loadURL.mock.calls.length;
+        expect(await manager.capturePreview(input)).toBeNull();
+        manager.setPanelBounds({
+          threadId: THREAD_ID,
+          surface: "native",
+          bounds: null,
+          occluded: true,
+        });
+        if (automationOwned)
+          expect(view.setBounds).toHaveBeenLastCalledWith({ ...bounds, x: 0, y: 0 });
+        expect(await manager.capturePreview(input)).toBe(
+          `data:image/jpeg;base64,${Buffer.from("full-size page").toString("base64")}`,
+        );
+        expect(image.resize).not.toHaveBeenCalled();
+        expect(capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true, stayAwake: true });
+        const pendingFrame = manager.capturePreview(input);
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        expect(await pendingFrame).toBeNull();
+        expect(manager.getVisibleAutomationRuntime(input).webContents).toBe(contents);
+        expect(contents.loadURL).toHaveBeenCalledTimes(loads);
+        manager.setPanelBounds({
+          threadId: THREAD_ID,
+          surface: "native",
+          bounds: null,
+          occluded: true,
+        });
+        manager.hide({ threadId: THREAD_ID });
+        expect(await manager.capturePreview(input)).toBeNull();
+        if (automationOwned)
+          expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1280, height: 800 });
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
   it("parks native previews outside hit testing, captures bounded frames and restores the same page", async () => {
     const contents = new FakeWebContents(121);
     const thumbnail = { toJPEG: vi.fn(() => Buffer.from("thumbnail")) };

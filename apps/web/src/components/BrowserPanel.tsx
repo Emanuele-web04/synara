@@ -648,6 +648,7 @@ export function BrowserPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
   const [browserActionsMenuOpen, setBrowserActionsMenuOpen] = useState(false);
+  const [isBrowserSurfaceOccluded, setIsBrowserSurfaceOccluded] = useState(false);
   const [previewFrame, setPreviewFrame] = useState<{ tabId: string; src: string } | null>(null);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
@@ -1146,6 +1147,7 @@ export function BrowserPanel({
               showBrowserAddressSuggestions || hasNativeBrowserObscuringOverlay(element),
           }));
       lastOverlayObscuredRef.current = obscuredByOverlay;
+      setIsBrowserSurfaceOccluded(usesNativeRuntime && obscuredByOverlay);
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const webview = browserWebviewRef.current;
       const stage = browserWebviewStageRef.current;
@@ -1323,9 +1325,11 @@ export function BrowserPanel({
       !api ||
       !isLiveRuntime ||
       !workspaceReady ||
-      !isFloatingMode ||
+      (!isFloatingMode && !isBrowserSurfaceOccluded) ||
       !usesNativeRuntime ||
-      !activeTabId
+      !activeTabId ||
+      showLocalServersHome ||
+      browserPageError !== null
     )
       return;
     let cancelled = false;
@@ -1353,9 +1357,12 @@ export function BrowserPanel({
     isLiveRuntime,
     workspaceReady,
     isFloatingMode,
+    isBrowserSurfaceOccluded,
     usesNativeRuntime,
     activeTabId,
     threadId,
+    showLocalServersHome,
+    browserPageError,
   ]);
 
   const onSubmitAddress = useCallback(() => {
@@ -2011,7 +2018,11 @@ export function BrowserPanel({
             {isLiveRuntime && browserPageError ? (
               <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
             ) : null}
-            {isFloatingMode && usesNativeRuntime && previewFrame?.tabId === activeTabId ? (
+            {(isFloatingMode || isBrowserSurfaceOccluded) &&
+            usesNativeRuntime &&
+            !showLocalServersHome &&
+            !browserPageError &&
+            previewFrame?.tabId === activeTabId ? (
               <img
                 src={previewFrame.src}
                 alt="Browser preview"

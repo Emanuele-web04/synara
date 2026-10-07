@@ -466,6 +466,7 @@ export class DesktopBrowserManager {
   // the panel and torn down cleanly without leaking native windows.
   private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
   private readonly previewThreadIds = new Set<ThreadId>();
+  private readonly occludedThreadIds = new Set<ThreadId>();
   private readonly sessionPolicy: BrowserSessionPolicy;
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
@@ -1268,6 +1269,7 @@ export class DesktopBrowserManager {
     this.copyLinkListeners.clear();
     this.states.clear();
     this.previewThreadIds.clear();
+    this.occludedThreadIds.clear();
     this.threadVersionById.clear();
     this.snapshotCacheByThreadId.clear();
     this.lastEmittedVersionByThreadId.clear();
@@ -1626,6 +1628,7 @@ export class DesktopBrowserManager {
   }
 
   close(input: BrowserThreadInput): ThreadBrowserState {
+    this.occludedThreadIds.delete(input.threadId);
     this.markHumanControl(input.threadId);
     this.clearSuspendTimer(input.threadId);
     this.resetRuntimePageZoomForThread(input.threadId);
@@ -1657,6 +1660,7 @@ export class DesktopBrowserManager {
   }
 
   hide(input: BrowserThreadInput): void {
+    const wasOccluded = this.occludedThreadIds.delete(input.threadId);
     const state = this.states.get(input.threadId);
     const activeTab = state ? this.getActiveTab(state) : null;
     const keepsAgentRuntimeAlive = Boolean(
@@ -1671,6 +1675,11 @@ export class DesktopBrowserManager {
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
+    } else if (wasOccluded && activeTab) {
+      // Occlusion already detached the visible panel; restore ordinary
+      // background sizing when the user subsequently hides it.
+      const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, activeTab.id));
+      if (runtime) this.setRuntimeViewHidden(runtime, true);
     }
 
     if (!state?.open) {
@@ -1687,6 +1696,8 @@ export class DesktopBrowserManager {
 
   setPanelBounds(input: BrowserSetPanelBoundsInput): void {
     this.perfCounters.setPanelBoundsCalls += 1;
+    if (input.occluded) this.occludedThreadIds.add(input.threadId);
+    else this.occludedThreadIds.delete(input.threadId);
     const previewChanged = this.previewThreadIds.has(input.threadId) !== (input.preview === true);
     if (input.preview) this.previewThreadIds.add(input.threadId);
     else this.previewThreadIds.delete(input.threadId);
@@ -1743,7 +1754,7 @@ export class DesktopBrowserManager {
     if (!state.open || nextBounds === null) {
       this.resetRuntimePageZoomForThread(input.threadId);
       if (this.activeThreadId === input.threadId) {
-        this.detachAttachedRuntime();
+        this.detachAttachedRuntime(input.occluded ? (previousBounds ?? undefined) : undefined);
         this.activeThreadId = null;
         if (state.open && input.occluded === true) {
           // A menu is not a hidden chat. Keep the page's DOM and history alive
@@ -2184,7 +2195,7 @@ export class DesktopBrowserManager {
     const state = this.states.get(input.threadId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
     if (
-      !this.previewThreadIds.has(input.threadId) ||
+      (!this.previewThreadIds.has(input.threadId) && !this.occludedThreadIds.has(input.threadId)) ||
       !state?.open ||
       state.activeTabId !== input.tabId ||
       !runtime ||
@@ -2196,13 +2207,18 @@ export class DesktopBrowserManager {
       .catch(() => null);
     if (
       this.runtimes.get(runtime.key) !== runtime ||
-      !this.previewThreadIds.has(input.threadId) ||
+      (!this.previewThreadIds.has(input.threadId) && !this.occludedThreadIds.has(input.threadId)) ||
       state.activeTabId !== input.tabId ||
       !image ||
       image.isEmpty()
     )
       return null;
-    const thumbnail = image.getSize().width > 640 ? image.resize({ width: 640 }) : image;
+    // Toolbar overlays need a full-size replacement for the obscured page;
+    // floating cards keep their existing bounded thumbnail cost.
+    const thumbnail =
+      this.previewThreadIds.has(input.threadId) && image.getSize().width > 640
+        ? image.resize({ width: 640 })
+        : image;
     return `data:image/jpeg;base64,${thumbnail.toJPEG(70).toString("base64")}`;
   }
 
@@ -2764,7 +2780,7 @@ export class DesktopBrowserManager {
     window.contentView.addChildView(runtime.view);
   }
 
-  private detachAttachedRuntime(): void {
+  private detachAttachedRuntime(occludedBounds?: BrowserPanelBounds): void {
     if (!this.window || this.window.isDestroyed() || !this.attachedRuntimeKey) {
       this.attachedRuntimeKey = null;
       this.attachedBoundsSignature = null;
@@ -2773,7 +2789,7 @@ export class DesktopBrowserManager {
 
     const runtime = this.runtimes.get(this.attachedRuntimeKey);
     if (runtime?.view) {
-      this.setRuntimeViewHidden(runtime, true);
+      this.setRuntimeViewHidden(runtime, true, occludedBounds);
       if (!this.automationRuntimeKeys.has(runtime.key)) {
         this.window.contentView.removeChildView(runtime.view);
       }
@@ -2782,13 +2798,19 @@ export class DesktopBrowserManager {
     this.attachedBoundsSignature = null;
   }
 
-  private setRuntimeViewHidden(runtime: LiveTabRuntime, hidden: boolean): void {
+  private setRuntimeViewHidden(
+    runtime: LiveTabRuntime,
+    hidden: boolean,
+    occludedBounds?: BrowserPanelBounds,
+  ): void {
     if (!runtime.view || runtime.webContents.isDestroyed()) {
       return;
     }
     const keepRenderingInBackground = hidden && this.automationRuntimeKeys.has(runtime.key);
     if (keepRenderingInBackground) {
-      this.parkHiddenRuntime(runtime, BACKGROUND_AUTOMATION_BOUNDS);
+      // An overlay needs the panel's framing; ordinary background automation
+      // still uses its standard viewport.
+      this.parkHiddenRuntime(runtime, occludedBounds ?? BACKGROUND_AUTOMATION_BOUNDS);
       return;
     }
     const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
