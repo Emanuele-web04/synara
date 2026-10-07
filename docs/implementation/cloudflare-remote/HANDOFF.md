@@ -20,6 +20,13 @@ controlli della sidebar e traslucenza. Le nuove regressioni falliscono usando
 il contenitore remoto precedente e il rilevamento limitato al singolo frame.
 fmt/lint/typecheck passati (928 warning lint preesistenti, zero errori).
 
+MacBook: app Dev ricostruita e riaperta nella stessa home. Confronto visivo
+locale/remoto sulla chat già completata `RUN ON MINI OK`: cornice, margini e
+fascia superiore coerenti; sidebar remota chiusa e riaperta correttamente,
+poi ripristinata allo stato iniziale. Mini ancora connesso e presente in Run on.
+Nessun nuovo turno provider necessario per questa verifica grafica. Il test
+non qualifica ogni dimensione della finestra o lo zoom personalizzato.
+
 ## Run on dopo il riavvio — 7 ottobre 2026
 
 Riprodotto nell'app nativa MacBook: Settings mostrava il Mini connesso su
