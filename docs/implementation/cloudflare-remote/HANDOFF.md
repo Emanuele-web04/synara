@@ -1,5 +1,31 @@
 # Remote connections — punto di ripartenza
 
+## Verifica live aggiuntiva — 7 ottobre 2026
+
+- Mini: l'app Dev corrente conserva la home `.synara/phone-playground/dev`;
+  Connections mostra una sessione iOS attiva via Cloudflare. Non è la vecchia
+  istanza temporanea sulla porta 4775.
+- Un nuovo turno reale Codex nella chat demo restituisce `MINI MVP CHECK OK`;
+  il simulatore iPhone legge la stessa risposta e aggiorna il recap a 3 prompt.
+  Nessun telefono fisico usato. La cartella demo vuota è stata inizializzata come
+  repository Git indipendente: prima i checkpoint risalivano alla repo Synara
+  esterna e fallivano sul percorso ignorato `.synara`. Il nuovo turno non produce
+  quell'errore. È una correzione dell'ambiente demo, non del codice distribuito.
+- MacBook: vecchio checkout e home `/private/tmp/synara-remote-macbook-20260929`
+  assenti; nessun listener su 4776. I vecchi endpoint restituiscono 530 e non
+  rappresentano il Mini corrente. Stable e Canary lasciate intatte.
+- Ricreato un checkout isolato sul MacBook al commit `89b261503`, con home
+  persistente dedicata e server Node 24 su 4778. Build web/CLI/contratti riuscita
+  in 52 secondi. Configurata l'API trial esistente dopo aver rilevato che il
+  default puntava al vecchio servizio account. Login Google e lettura directory
+  riusciti; sessione conservata dopo riavvio del server isolato. Il Mini corrente
+  risponde 200 con TLS verificato e DNS normale. Checkout MacBook:
+  `/Users/emanueledipietro/.codex/worktrees/remote-macbook-mvp-20261007/synara`;
+  home `/Users/emanueledipietro/.local/share/synara-tests/remote-macbook-mvp-20261007`.
+- **Non ancora qualificato:** nuovo pairing MacBook, turno remoto bidirezionale,
+  revoca live e recupero dopo interruzione. La nuova home ha un'identità nuova:
+  non ereditare né dichiarare valide le approvazioni del vecchio test.
+
 ## MVP backend e simulatori — 7 ottobre 2026
 
 Checkpoint verificato sul desktop `b85257f6e`, iPhone `ee91d12` e iPad `8e8d1d1`.
