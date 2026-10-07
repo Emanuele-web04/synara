@@ -1270,6 +1270,32 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await res.json()).toMatchObject({ error: "handle_taken" });
     });
 
+    it("reserves a private handle atomically when two accounts claim it together", async () => {
+      const { app, db } = buildApp();
+      const users = await Promise.all([signIn(), signIn()]);
+      const body = { ...profileBody(), public: false };
+      const results = await Promise.all(
+        users.map(({ token }, index) =>
+          app.request("/api/v1/profile", {
+            method: "PUT",
+            headers: authHeaders(token),
+            body: JSON.stringify({ ...body, displayName: `Owner ${index}` }),
+          }),
+        ),
+      );
+      expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+      const loser = results.find((result) => result.status === 409)!;
+      expect(await loser.json()).toMatchObject({ error: "handle_taken" });
+      const winnerIndex = results.findIndex((result) => result.status === 200);
+      const rows = await db.select().from(profiles).where(eq(profiles.handle, body.handle));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        userId: users[winnerIndex]!.userId,
+        displayName: `Owner ${winnerIndex}`,
+        public: false,
+      });
+    });
+
     it.each([
       ["uppercase", "Ada"],
       ["trailing hyphen", "ada-"],

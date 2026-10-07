@@ -59,12 +59,18 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
   const [avatarColor, setAvatarColor] = useState(PROFILE_AVATAR_COLORS[0] ?? "#22c55e");
   const [handleTouched, setHandleTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [takenHandle, setTakenHandle] = useState<string | null>(null);
   // Stable ids linking the handle input to its help/error text and the save
   // failure to the form, for assistive tech.
   const handleHelpId = useId();
   const saveErrorId = useId();
 
-  const formatError = handleTouched ? handleFormatError(handle) : null;
+  const formatError =
+    handle === takenHandle
+      ? "That handle is already taken — pick another."
+      : handleTouched
+        ? handleFormatError(handle)
+        : null;
   const saving = account.updateProfile.isPending;
 
   const handleFinish = async () => {
@@ -90,11 +96,11 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
       });
       onFinished();
     } catch (cause) {
-      setError(
-        readAccountErrorCode(cause) === "handle_taken"
-          ? "That handle is already taken — pick another."
-          : accountErrorMessage(cause, "Could not save your profile. Try again."),
-      );
+      if (readAccountErrorCode(cause) === "handle_taken") {
+        setTakenHandle(handle);
+      } else {
+        setError(accountErrorMessage(cause, "Could not save your profile. Try again."));
+      }
     }
   };
 

@@ -138,7 +138,7 @@ export function accountFirstName(me: AccountMe): string {
   return display.trim().split(/\s+/)[0] ?? display;
 }
 
-/** Override at build time for an isolated profiles trial. */
+/** Override at build time for another public profile deployment. */
 export function publicProfileUrl(handle: string): string {
   return new URL(
     `/@${encodeURIComponent(handle)}`,

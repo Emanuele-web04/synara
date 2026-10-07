@@ -91,7 +91,33 @@ The existing `deploy` script still targets that configuration; use it only
 when ownership and that destination are confirmed. Do not remove existing
 Durable Object migrations or data as part of the trial.
 
-## Final marketing routing
+## Public links from the apps
+
+Desktop exposes **View public profile** in the account menu and **Open profile**
+in Settings → Profile. They share `publicProfileUrl`, also used by Copy/Share;
+`VITE_PROFILES_PUBLIC_ORIGIN` overrides the default `https://trysynara.com`.
+Only explicitly public account profiles expose an opening/sharing action.
+The account API reserves lowercase handles through its existing PostgreSQL
+unique constraint, including concurrent claims and private profiles. A
+`409 handle_taken` is shown against the onboarding handle field; a private
+profile's public 404 does not mean its handle is available.
+
+## Current branded routing
+
+As of 2026-10-07, the live marketing project is **dpcode-website** on Vercel,
+not this checkout's `apps/marketing`. Its project-level route **Synara public
+profile links** (ID `afea1383-b1c5-4103-9a73-e02827960732`) redirects only
+`trysynara.com` / `www.trysynara.com` profile paths to the Cloudflare trial.
+The route is a temporary 307, so the address bar ends on the Worker domain.
+The site root, docs, assets and other domains served by that project are not
+matched. Rollback: disable that named project-level route in Vercel CDN →
+Routing Rules and publish the change. No DNS or security-policy change is needed.
+
+A same-origin proxy is a separate cutover: it needs the document, asset and
+social-preview rewrites below, in the actual marketing project. Do not proxy
+profile HTML alone or repoint the website's DNS just to enable profile links.
+
+## Optional same-origin marketing routing
 
 The marketing Vercel configuration currently points to the former profiles
 Vercel origin; it has **not** yet been switched to the new Worker. After the

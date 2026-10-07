@@ -56,6 +56,9 @@ import {
   toDisplayName,
 } from "@synara/profile-ui/formatting";
 import { SettingsSegmentedControl } from "./SettingControls";
+import { profileShareUrl } from "~/lib/accountLogic";
+import { openExternalLink } from "~/lib/linkChips";
+import { ExternalLinkIcon } from "~/lib/icons";
 
 type StatsScope = "device" | "account";
 
@@ -155,6 +158,7 @@ function ProfileContent({
     name: defaultName,
     handle: stats.identity.defaultHandle,
   });
+  const publicUrl = profileShareUrl(accountProfile);
 
   return (
     <div className="flex min-w-0 flex-col gap-7">
@@ -175,6 +179,12 @@ function ProfileContent({
           />
         ) : null}
         <div className="flex items-center gap-2">
+          {publicUrl ? (
+            <Button variant="outline" size="sm" onClick={() => openExternalLink(publicUrl)}>
+              <ExternalLinkIcon />
+              Open profile
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
