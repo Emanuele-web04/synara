@@ -426,6 +426,8 @@ interface MessagesTimelineProps {
   /** Resolve the in-flight worktree preparation (cancel the send or fall back to the local checkout). */
   onResolveWorktreeSetup?: (action: WorktreeSetupResolutionAction) => void;
   followLiveOutput?: boolean;
+  /** Normal sends ease into their anchor independently of end-follow ownership. */
+  animateTailAnchorSlide?: boolean;
   emptyStateContent?: ReactNode;
   historyHeader?: ReactElement | undefined;
   listRef?: RefObject<LegendListRef | null>;
@@ -552,6 +554,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   worktreeSetupPendingAction: worktreeSetupPendingActionProp,
   onResolveWorktreeSetup,
   followLiveOutput: followLiveOutputProp,
+  animateTailAnchorSlide,
   listRef,
   controllerRef,
   pinnedMessageIds,
@@ -788,7 +791,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
     messageChangeSignal: messageChangeSignalProp ?? timelineEntries,
-    animateAnchorSlide: !followLiveOutput,
+    animateAnchorSlide: animateTailAnchorSlide ?? !followLiveOutput,
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
