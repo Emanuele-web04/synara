@@ -1,5 +1,36 @@
 # Remote connections — punto di ripartenza
 
+## Run on dopo il riavvio — 7 ottobre 2026
+
+Riprodotto nell'app nativa MacBook: Settings mostrava il Mini connesso su
+Cloudflare e le RPC autenticate funzionavano, ma Run on elencava solo This
+computer. Il selettore leggeva le sessioni renderer, ripristinate soltanto da
+sessionStorage; le connessioni persistenti del backend non le ripopolavano in
+una nuova finestra. Aprire prima il Mini da Settings mascherava il difetto.
+
+WorkspacePanels ora riusa le query account/connessioni per recuperare i frame
+mancanti dalle connessioni verificate, incluse quelle idle. Servono pairing
+confermato per host/environment e corrispondenza di account, organizzazione e
+authority. Il controller locale e gli stati terminali vengono esclusi. Nessuna
+fusione per hostname, attivazione automatica di una chat o sostituzione dei
+frame esistenti durante il polling; una risposta di un account precedente non
+può riaggiungere workspace. Il recupero riusa il registro condiviso da Run on,
+progetti e sidebar, senza introdurre un secondo elenco di computer.
+
+Verifica reale nella stessa app/home del MacBook dopo quit e avvio a freddo,
+senza aprire Settings o una chat remota: Mini presente una sola volta e
+selezionabile in Run on. La selezione crea la bozza remota
+`a9728f98-c7a2-47b4-a387-80256d891fe6`; risposta provider reale `RUN ON MINI OK`,
+proprietario e turno completato confermati da RPC autenticata. Bozza locale,
+modello, account e pairing preservati. Build nativa e controlli locali riusciti.
+Le regressioni del registro verificano recupero a finestra vuota, polling senza
+duplicati e rifiuto delle identità non verificate/di un altro account; fallivano
+senza il recupero. Revoca, cambio account e offline non sono stati riprovati
+live in questa specifica verifica; non è una qualificazione del pacchetto firmato.
+
+Verifiche del delta: fmt/lint/typecheck e 9 test del registro passati; suite
+completa con 16.255 test passati, 251 saltati e 11/11 task riusciti (7m34s).
+
 ## New thread sul computer remoto — 7 ottobre 2026
 
 Riprodotto nell'app MacBook: il pulsante globale New thread apriva Create project

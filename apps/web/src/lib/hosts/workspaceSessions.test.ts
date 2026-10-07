@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AccountStatus, ExecutionEnvironmentDescriptor } from "@synara/contracts";
+import type {
+  AccountStatus,
+  ExecutionEnvironmentDescriptor,
+  ListHostConnectionsResponse,
+} from "@synara/contracts";
 
 const descriptor = {
   environmentId: "local",
@@ -17,6 +21,25 @@ const host = (environmentId: string) => ({
     organizationId: "org",
     channel: "dev" as const,
   },
+});
+const signedIn = {
+  state: "signed-in",
+  accountAuthority: "https://account.example",
+  me: { id: "alice", organization: { id: "org" } },
+} as AccountStatus;
+const connections = (...environments: string[]): ListHostConnectionsResponse => ({
+  pairedHosts: environments.map((environmentId) => ({
+    hostId: `host-${environmentId}`,
+    environmentId,
+  })),
+  connections: environments.map((environmentId) =>
+    Object.assign(host(environmentId), {
+      state: "idle" as const,
+      transport: "cloudflare" as const,
+      startedAt: "2026-10-07T10:00:00.000Z",
+      credentialExpiresAt: "2026-10-07T10:10:00.000Z",
+    }),
+  ),
 });
 
 beforeEach(() => {
@@ -36,8 +59,59 @@ async function registry() {
     execution: descriptor,
     remote: null,
   });
+  (await import("./controlQueryScope")).adoptControlAccountScope(signedIn);
   return import("./workspaceSessions");
 }
+
+describe("connected workspace recovery", () => {
+  it("restores idle paired computers in an empty window without replacing frames on polling", async () => {
+    const api = await registry();
+    api.restoreWorkspaceSessions();
+    expect(api.readWorkspaceSessions()).toEqual([]);
+    api.restoreConnectedWorkspaces(connections("one", "two"), signedIn);
+    expect(api.readWorkspaceSessions().map((session) => session.host.hostId)).toEqual([
+      "host-one",
+      "host-two",
+    ]);
+    const restored = api.readWorkspaceSessions();
+    api.restoreConnectedWorkspaces(connections("one", "two"), signedIn);
+    expect(api.readWorkspaceSessions()).toBe(restored);
+    api.restoreConnectedWorkspaces({ connections: [] }, signedIn);
+    expect(api.readWorkspaceSessions()).toBe(restored);
+  });
+
+  it("only restores verified, usable remote identities for the current account", async () => {
+    const api = await registry();
+    const response = connections("local", "valid", "unpaired", "foreign", "revoked", "unsigned");
+    api.restoreConnectedWorkspaces(
+      {
+        ...response,
+        pairedHosts: response.pairedHosts!.filter((pair) => pair.hostId !== "host-unpaired"),
+        connections: response.connections.map((connection) => {
+          if (connection.hostId === "host-foreign")
+            return Object.assign(connection, {
+              executionScope: { ...connection.executionScope!, userId: "bob" },
+            });
+          if (connection.hostId === "host-revoked")
+            return Object.assign(connection, { state: "revoked" as const });
+          if (connection.hostId === "host-unsigned")
+            return Object.assign(connection, { executionScope: undefined });
+          return connection;
+        }),
+      },
+      signedIn,
+    );
+    expect(api.readWorkspaceSessions().map((session) => session.host.hostId)).toEqual([
+      "host-valid",
+    ]);
+    api.restoreConnectedWorkspaces(connections("late"), { state: "signed-out" } as AccountStatus);
+    (await import("./controlQueryScope")).adoptControlAccountScope({
+      state: "signed-out",
+    } as AccountStatus);
+    api.restoreConnectedWorkspaces(connections("stale"), signedIn);
+    expect(api.readWorkspaceSessions()).toHaveLength(1);
+  });
+});
 
 describe("workspace ownership", () => {
   it.each(["offline", "removed", "frame replaced", "host replaced"])(

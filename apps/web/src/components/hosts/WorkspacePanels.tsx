@@ -14,6 +14,8 @@ import {
 } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { serverConfigQueryOptions } from "../../lib/serverReactQuery";
+import { accountStatusQueryOptions } from "../../lib/accountReactQuery";
+import { connectionsQueryOptions } from "../../lib/hosts/queries";
 import {
   resolveShortcutCommand,
   spaceJumpIndexFromCommand,
@@ -53,6 +55,7 @@ import {
 } from "../../lib/hosts/workspaceFrame";
 import {
   readWorkspaceSessions,
+  restoreConnectedWorkspaces,
   readAvailableWorkspaceNavigation,
   subscribeWorkspaceSessions,
   removeWorkspaceSession,
@@ -276,6 +279,18 @@ export function useWorkspaceSidebarControls() {
 /** Each connected execution owns a permanent realm: async callbacks cannot change destinations. */
 export function WorkspacePanels() {
   const sessions = useWorkspaceSessions();
+  const controller =
+    !readWorkspaceFrame() &&
+    readExecutionContext()?.controller.capabilities.remoteConnections === true;
+  const account = useQuery({ ...accountStatusQueryOptions(), enabled: controller });
+  const connections = useQuery({
+    ...connectionsQueryOptions(),
+    enabled: controller && account.data?.state === "signed-in",
+  });
+  useEffect(() => {
+    if (controller && account.data && connections.data)
+      restoreConnectedWorkspaces(connections.data, account.data);
+  }, [controller, account.data, connections.data]);
   const { handleNewChat } = useHandleNewChat();
   const localChatRef = useRef(handleNewChat);
   localChatRef.current = handleNewChat;

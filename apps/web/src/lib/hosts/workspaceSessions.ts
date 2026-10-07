@@ -1,9 +1,14 @@
 import { useSyncExternalStore } from "react";
-import type { AccountStatus, RemoteExecutionScope } from "@synara/contracts";
+import type {
+  AccountStatus,
+  ListHostConnectionsResponse,
+  RemoteExecutionScope,
+} from "@synara/contracts";
 import { Schema } from "effect";
 import { RemoteExecutionScope as RemoteScopeSchema } from "@synara/contracts";
 import type { ActiveHost } from "./activeHost";
 import { readExecutionContext } from "./executionContext";
+import { accountStatusScope, controlAccountScope } from "./controlQueryScope";
 import type { WorkspaceNavigation, WorkspaceSummary } from "./workspaceFrame";
 
 export interface WorkspaceSession {
@@ -69,6 +74,49 @@ export function restoreWorkspaceSessions(): void {
   } catch {
     // Corrupt or unavailable storage does not prevent using the local computer.
   }
+}
+
+/** Recover verified backend connections when a new window has no saved workspace frames. */
+export function restoreConnectedWorkspaces(
+  response: ListHostConnectionsResponse,
+  status: AccountStatus,
+): void {
+  const context = readExecutionContext();
+  if (
+    !context ||
+    context.remote ||
+    !context.controller.capabilities.remoteConnections ||
+    status.state !== "signed-in" ||
+    accountStatusScope(status) !== controlAccountScope()
+  )
+    return;
+  const seen = new Set(sessions.map((session) => session.host.executionScope.environmentId));
+  seen.add(context.controller.environmentId);
+  const recovered: WorkspaceSession[] = [];
+  for (const connection of response.connections) {
+    if (
+      connection.state &&
+      ["stopped", "revoked", "needs-sign-in", "incompatible"].includes(connection.state)
+    )
+      continue;
+    const host = parseWorkspaceHost(connection);
+    if (!host || seen.has(host.executionScope.environmentId)) continue;
+    const scope = host.executionScope;
+    if (
+      scope.userId !== status.me.id ||
+      scope.organizationId !== status.me.organization.id ||
+      scope.accountAuthority !== status.accountAuthority ||
+      !response.pairedHosts?.some(
+        (pair) => pair.hostId === host.hostId && pair.environmentId === scope.environmentId,
+      )
+    )
+      continue;
+    seen.add(scope.environmentId);
+    recovered.push({ host });
+  }
+  // Backend desired connections are already durable. Polling must not replace live frames,
+  // activate a remote route, or depend on sessionStorage being writable.
+  if (recovered.length) publish([...sessions, ...recovered]);
 }
 
 export function addWorkspaceSession(value: ActiveHost): WorkspaceSession {
