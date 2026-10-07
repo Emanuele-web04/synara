@@ -4277,6 +4277,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForServerConfigToApply();
       return {
         commands,
+        setViewport: mounted.setViewport,
         cleanup: async () => {
           if (previousNativeApi)
             Object.defineProperty(window, "nativeApi", {
@@ -4306,6 +4307,142 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.element(page.getByText("Continue in this thread")).toBeVisible();
       await expect.element(page.getByText("Continue in a new thread")).toBeVisible();
     }
+
+    it.each([
+      {
+        provider: "claudeAgent" as const,
+        model: "claude-opus-4-6",
+        sessionStatus: "ready" as const,
+      },
+      {
+        provider: "codex" as const,
+        model: "gpt-5.3-codex",
+        sessionStatus: "ready" as const,
+      },
+      {
+        provider: "claudeAgent" as const,
+        model: "claude-opus-4-6",
+        sessionStatus: "running" as const,
+      },
+      {
+        provider: "codex" as const,
+        model: "gpt-5.3-codex",
+        sessionStatus: "running" as const,
+      },
+    ])(
+      "shows a dismissible pre-send tip above the composer when leaving Claude for $provider ($sessionStatus)",
+      async ({ provider, model, sessionStatus }) => {
+        const snapshot = createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("msg-claude-model-switch"),
+          targetText: "Continue the task",
+          sessionStatus,
+        });
+        const thread = snapshot.threads[0]!;
+        const claudeSnapshot: OrchestrationReadModel = {
+          ...snapshot,
+          threads: [
+            {
+              ...thread,
+              modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+              session: { ...thread.session!, providerName: "claudeAgent" },
+            },
+          ],
+        };
+        const mounted = await mountWithCapturedCommands(
+          claudeSnapshot,
+          respondToHandoff("completed"),
+        );
+        try {
+          await waitForServerConfigToApply();
+          const note = page.getByTestId("composer-claude-model-switch-note");
+          await expect.element(note).not.toBeInTheDocument();
+          const surface = document.querySelector<HTMLElement>(".chat-composer-surface")!;
+          const originalHeight = surface.getBoundingClientRect().height;
+          useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
+          await vi.waitFor(() => expect(note.query()).not.toBeNull(), { timeout: 3_000 });
+          await expect.element(note).toBeVisible();
+          expect(surface.contains(note.element())).toBe(false);
+          // Stacked panels share the composer's top border by one pixel.
+          expect(note.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+            surface.getBoundingClientRect().top + 1,
+          );
+          expect(surface.getBoundingClientRect().height).toBeCloseTo(originalHeight, 0);
+          await expect
+            .element(note)
+            .toHaveTextContent(provider === "claudeAgent" ? "Next reply" : "new provider");
+          expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+          expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, "Continue the task");
+          if (sessionStatus === "ready") {
+            await expect
+              .element(page.getByRole("button", { name: "Send message", exact: true }))
+              .toBeEnabled();
+          } else {
+            await expect
+              .element(page.getByRole("button", { name: "Stop generation", exact: true }))
+              .toBeVisible();
+          }
+          const screenshotName =
+            provider === "claudeAgent"
+              ? "claude-model-switch-note"
+              : "claude-provider-handoff-note";
+          await page.screenshot({
+            path: `../../../../output/playwright/${screenshotName}.png`,
+          });
+          await mounted.setViewport({ name: "narrow", width: 480, height: 640 });
+          await expect.element(note).toBeVisible();
+          expect(surface.contains(note.element())).toBe(false);
+          await page.screenshot({
+            path: `../../../../output/playwright/${screenshotName}-narrow.png`,
+          });
+          await note.getByRole("button", { name: "Dismiss tip" }).click();
+          await expect.element(note).not.toBeInTheDocument();
+
+          useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-6",
+            options: { effort: "high" },
+          });
+          await expect.element(note).not.toBeInTheDocument();
+          useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
+          await expect.element(note).toBeVisible();
+          document
+            .querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]')!
+            .requestSubmit();
+          const handoffBlocked = sessionStatus === "running" && provider !== "claudeAgent";
+          if (handoffBlocked) {
+            await vi.waitFor(() =>
+              expect(document.body.textContent).toContain("Cannot switch to Codex yet"),
+            );
+            expect(mounted.commands).toHaveLength(0);
+            expect(
+              useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns,
+            ).toHaveLength(0);
+            await expect.element(note).toBeVisible();
+          } else if (sessionStatus === "running") {
+            await vi.waitFor(() => {
+              expect(
+                useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns[0],
+              ).toMatchObject({ kind: "chat", modelSelection: { provider, model } });
+              expect(document.querySelector('[data-testid="queued-follow-up-row"]')).not.toBeNull();
+            });
+            expect(fixture.snapshot.threads[0]?.modelSelection.provider).toBe("claudeAgent");
+            expect(fixture.snapshot.threads[0]?.session?.status).toBe("running");
+          } else {
+            await vi.waitFor(() =>
+              expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+                true,
+              ),
+            );
+          }
+          if (!handoffBlocked) {
+            await expect.element(note).not.toBeInTheDocument();
+          }
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+    );
 
     it("continues in the same thread by rebinding its provider", async () => {
       const mounted = await mountWithCapturedCommands();
@@ -4374,7 +4511,9 @@ describe("ChatView transcript geometry (full app)", () => {
         >[0],
       ) => {
         if (command.type !== "thread.meta.update" || command.providerHandoff !== true) return;
-        const { commandId } = command;
+        const { commandId, modelSelection } = command;
+        const targetProvider = modelSelection?.provider ?? "claudeAgent";
+        const targetModel = modelSelection?.model ?? "claude-sonnet-4-6";
         fixture.snapshot = {
           ...fixture.snapshot,
           snapshotSequence: fixture.snapshot.snapshotSequence + 1,
@@ -4386,14 +4525,14 @@ describe("ChatView transcript geometry (full app)", () => {
                   ...(outcome === "completed"
                     ? {
                         modelSelection: {
-                          provider: "claudeAgent" as const,
-                          model: "claude-sonnet-4-6",
+                          provider: targetProvider,
+                          model: targetModel,
                         },
                         session: {
                           threadId: THREAD_ID,
                           status: "ready" as const,
-                          providerName: "claudeAgent",
-                          providerInstanceId: "claudeAgent",
+                          providerName: targetProvider,
+                          providerInstanceId: targetProvider,
                           runtimeMode: "full-access" as const,
                           activeTurnId: null,
                           lastError: null,
@@ -4419,8 +4558,8 @@ describe("ChatView transcript geometry (full app)", () => {
                       payload: {
                         sourceProvider: thread.modelSelection.provider,
                         sourceModel: thread.modelSelection.model,
-                        targetProvider: "claudeAgent",
-                        targetModel: "claude-sonnet-4-6",
+                        targetProvider,
+                        targetModel,
                         ...(outcome === "failed" ? { detail: "Claude CLI is not signed in." } : {}),
                       },
                     },

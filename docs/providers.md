@@ -282,6 +282,13 @@ Creating a hold and marking its session ready is one atomic operation: a stop, a
 or rollback recorded after the original request prevents a delayed cache check from restoring it.
 
 This check also covers long pauses in an existing process and model changes on the next send.
+Selecting a different model or provider from an existing Claude conversation shows a dismissible
+tip above the composer, using the same strip as Auto-fix CI. It appears only for a pending
+selection before sending, including follow-ups during an active turn. It disappears once the
+composer accepts the message for sending or queues it, or when switching back. A blocked
+handoff keeps it available for a later send. The wording distinguishes Claude model changes
+from context transferred to another provider; it does not predict a percentage of the
+subscription allowance or require confirmation. A pending large-context review takes precedence.
 A warm observation for the previous model cannot bypass the review for a different requested model;
 checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
 Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
