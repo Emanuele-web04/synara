@@ -499,6 +499,33 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
+  it("reads a chat back from snooze at its reminder with Mark all as read and Done", async () => {
+    // Its last reply was read before the reminder fired.
+    const returned = makeThread(104, {
+      lastVisitedAt: "2026-08-02T11:00:00.000Z",
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-02T12:01:00.000Z",
+    });
+    const onMarkThreadRead = vi.fn();
+    const mounted = await render(renderActivity({ threads: [returned], onMarkThreadRead }));
+    try {
+      await page.getByRole("button", { name: "Activity options" }).click();
+      await page.getByRole("menuitem", { name: "Mark all as read" }).click();
+      page
+        .getByTestId(`activity-thread-${returned.id}`)
+        .element()
+        .parentElement?.querySelector<HTMLButtonElement>('button[aria-label="Done"]')
+        ?.click();
+
+      expect(onMarkThreadRead.mock.calls).toEqual([
+        [returned.id, returned.snoozeReminderAt],
+        [returned.id, returned.snoozeReminderAt],
+      ]);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("opens settled rows through the shared thread activation path", async () => {
     const settled = makeThread(103, {
       branch: "feature/finished",
