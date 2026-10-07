@@ -40,19 +40,21 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
   const { color: localColor, setColor } = useProfileAvatarColor();
   const { image: localImage, setImage } = useProfileAvatarImage();
 
-  // Login identity is the fallback until onboarding creates a custom profile.
-  // Keep account-profile presentation behind the existing feature capability.
-  const me = account.profileSyncEnabled ? account.me : null;
-  const accountProfile: AccountProfile | null = me?.profile ?? null;
-  const name = accountProfile?.displayName ?? me?.name ?? localName;
+  // Presentation follows the signed-in identity, just like the sidebar. The
+  // capability controls editing, never a second machine-local identity.
+  const me = account.me;
+  const savedProfile = me?.profile ?? null;
+  const accountProfile: AccountProfile | null = account.profileSyncEnabled ? savedProfile : null;
+  const canEdit = me === null || account.profileSyncEnabled;
+  const name = savedProfile?.displayName ?? me?.name ?? localName;
   // Placeholder-avatar initials from the RESOLVED name — the account display
   // name may differ from the machine-local default, and initials derived from
   // the home-dir identity would not match it. deriveInitials is the canonical
   // algorithm (shared with the server and the public page), so the local-only
   // case yields the same glyphs as stats.identity.initials.
   const initials = deriveInitials(name);
-  const handle = accountProfile ? `@${accountProfile.handle}` : localHandle;
-  const avatarColor = accountProfile?.avatarColor ?? localColor;
+  const handle = savedProfile ? `@${savedProfile.handle}` : localHandle;
+  const avatarColor = savedProfile?.avatarColor ?? localColor;
   // Signed in, every avatar render uses the account's resolved URL (uploaded
   // object, cached sso picture, or null for the placeholder); the localStorage
   // photo is only ever the signed-out avatar. Read from the signed-in account
@@ -75,6 +77,11 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
    * when the account write fails, leaving the local cache untouched.
    */
   const save = async (next: ProfileIdentityDraft): Promise<void> => {
+    if (!canEdit) {
+      throw new Error(
+        "Profile editing is unavailable on this computer. Enable account profile sync first.",
+      );
+    }
     if (me && !accountProfile) {
       throw new Error("Finish setting up your account profile before editing it.");
     }
@@ -128,6 +135,7 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
     ssoImage,
     /** Non-null exactly when the identity is account-backed. */
     accountProfile,
+    canEdit,
     save,
     uploadAvatarPhoto,
     removeUploadedAvatar,

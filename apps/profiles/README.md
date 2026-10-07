@@ -10,7 +10,9 @@ separate database or authentication system.
 The account profile flow is a controlled Beta/development trial. Start the
 Synara server with `SYNARA_ACCOUNT_PROFILE_SYNC=1` to enable it. Stable rejects
 it even when this variable is set. Without it, the local profile remains
-available and account profile RPCs and usage reporting stay disabled. The web
+available and account profile RPCs and usage reporting stay disabled. Signed-in
+Settings and the sidebar still display the same account identity; editing is
+disabled rather than silently saving a photo to the signed-out local profile. The web
 UI reads the server's `accountProfileSync` capability; old servers default off.
 
 Opting in starts the existing reporter for signed-in accounts, including the
@@ -111,6 +113,12 @@ The 2026-10-07 profile update is deployed on Synara Orgs: account API version
 profiles. A normal desktop profile save and theme changes publish the accent
 pair. Older desktop server bundles must be rebuilt to carry the new field.
 Profiles without a saved pair retain the avatar-color fallback.
+
+The follow-up profiles version `aea37178-a6df-47d0-b858-9df1d6dca5d6` adds
+immediate heatmap tooltips using the shared activity grid and chart tooltip.
+Cells expose token counts and dates on pointer entry, tap or keyboard focus;
+Escape dismisses the readout. Dates use the charts' English/UTC formatting to
+avoid server/browser locale mismatches.
 
 Live verification covered desktop save → public API → light/dark page colors,
 same-origin JavaScript assets, and value/date hover readouts for daily tokens,
