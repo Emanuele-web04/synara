@@ -60,6 +60,9 @@
   --border: --alpha(var(--color-black) / 5%);
   --info: var(--color-blue-500);
   --info-foreground: #526fff;
+  /* iOS grouped surfaces: borderless gray tiles and the hairline between list rows. */
+  --tile: color-mix(in srgb, var(--color-black) 4%, var(--background));
+  --hairline: --alpha(var(--color-black) / 7%);
 }
 
 .dark {
@@ -75,6 +78,18 @@
   --border: --alpha(var(--color-white) / 4%);
   --info: var(--color-blue-500);
   --info-foreground: #6073cc;
+  --tile: color-mix(in srgb, var(--color-white) 6%, var(--background));
+  --hairline: --alpha(var(--color-white) / 7%);
+}
+
+/* The owner's theme accent (set inline on the profile root by profileAccentStyle):
+   every accent surface — heatmap, charts, bars — reads `--info`. */
+.profile-accent {
+  --info: var(--profile-accent-light, var(--color-blue-500));
+}
+.dark .profile-accent,
+.dark.profile-accent {
+  --info: var(--profile-accent-dark, var(--color-blue-500));
 }
 
 @layer base {

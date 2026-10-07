@@ -51,7 +51,7 @@ export function PageShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-dvh flex-col">
       <SiteNav />
-      <main className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-10 px-6 pb-16 pt-8 sm:px-0">
+      <main className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-3 px-4 pb-16 pt-6 sm:px-0">
         {children}
       </main>
       <SiteFooter />

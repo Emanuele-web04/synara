@@ -56,6 +56,7 @@ function utcMsOf(day: string): number {
 export function buildHeatmapCells(
   days: readonly PublicProfileHeatmapDay[],
   localToday?: string,
+  windowDays: number = WINDOW_DAYS,
 ): HeatmapCell[] {
   const tokensByDay = new Map(days.map((entry) => [entry.day, entry.tokens]));
   const now = new Date();
@@ -64,7 +65,7 @@ export function buildHeatmapCells(
     : Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const newestBucketMs = days.reduce((max, entry) => Math.max(max, utcMsOf(entry.day)), 0);
   const endMs = Math.max(todayMs, newestBucketMs);
-  const startMs = endMs - (WINDOW_DAYS - 1) * DAY_MS;
+  const startMs = endMs - (windowDays - 1) * DAY_MS;
 
   const activeCounts = days
     .filter((entry) => entry.tokens > 0 && utcMsOf(entry.day) >= startMs)

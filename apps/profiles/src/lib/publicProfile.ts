@@ -37,6 +37,11 @@ export type PublicProfile = {
   displayName: string;
   avatarColor: string;
   /**
+   * The owner's light/dark theme accents, or null when not published.
+   * Optional so the page keeps rendering against a pre-accent API.
+   */
+  themeAccent?: { light: string; dark: string } | null;
+  /**
    * The resolved avatar image URL (uploaded object or cached sso picture),
    * or null when the owner chose the initials placeholder. Optional so the
    * page keeps rendering against a pre-avatar API.
