@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
-import { ActivityHeatmap, APP_HEATMAP_INTENSITY_CLASSES } from "@synara/profile-ui/heatmap";
+import { APP_HEATMAP_INTENSITY_CLASSES } from "@synara/profile-ui/heatmap";
 import {
   deriveInitials,
   formatCompact,
@@ -15,7 +15,12 @@ import {
 } from "@synara/profile-ui/provider-icon";
 import { PageShell } from "../../components/chrome";
 import { ListRow, ProfileSection, StatCard } from "../../components/ProfileCard";
-import { DailyAreaChart, DailyBarChart, HourBars } from "../../components/ProfileCharts";
+import {
+  DailyAreaChart,
+  DailyBarChart,
+  HourBars,
+  ProfileHeatmap,
+} from "../../components/ProfileCharts";
 import { activeDayCount, buildDailySeries, tokensInYear } from "../../lib/dailySeries";
 import { buildHeatmapCells } from "../../lib/heatmapCells";
 import { groupModelUsage } from "../../lib/modelUsage";
@@ -142,9 +147,6 @@ export default async function ProfilePage({ params }: Params) {
 // ── Activity ───────────────────────────────────────────────────────────
 
 function ActivityCard({ profile }: { profile: PublicProfile }) {
-  // No renderTooltip: ActivityHeatmap falls back to a native `title`, keeping the
-  // page free of client JS. Fill mode with the app's window length, so the grid
-  // renders exactly like the in-app Activity section — no horizontal scroll.
   const cells = buildHeatmapCells(profile.heatmap, profile.localToday);
   // A phone fits about four months of legible cells; the full window would shrink them
   // to dots and collide the month labels.
@@ -155,24 +157,8 @@ function ActivityCard({ profile }: { profile: PublicProfile }) {
       title="Activity"
       detail={`${formatCompact(tokensInYear(profile.heatmap, year))} tokens in ${year}`}
     >
-      <ActivityHeatmap
-        cells={cells}
-        fill
-        radius={4}
-        gap={3}
-        showMonths
-        monthsPosition="bottom"
-        className="hidden sm:flex"
-      />
-      <ActivityHeatmap
-        cells={recentCells}
-        fill
-        radius={4}
-        gap={3}
-        showMonths
-        monthsPosition="bottom"
-        className="sm:hidden"
-      />
+      <ProfileHeatmap cells={cells} className="hidden sm:flex" />
+      <ProfileHeatmap cells={recentCells} className="sm:hidden" />
       <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
         <span>Less</span>
         {APP_HEATMAP_INTENSITY_CLASSES.map((className) => (
