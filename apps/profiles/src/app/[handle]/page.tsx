@@ -18,6 +18,7 @@ import { ListRow, ProfileSection, StatCard } from "../../components/ProfileCard"
 import { DailyAreaChart, DailyBarChart, HourBars } from "../../components/ProfileCharts";
 import { activeDayCount, buildDailySeries, tokensInYear } from "../../lib/dailySeries";
 import { buildHeatmapCells } from "../../lib/heatmapCells";
+import { groupModelUsage } from "../../lib/modelUsage";
 import { profileAccentStyle, resolveProfileAccent } from "../../lib/profileAccent";
 import { formatStreak, memberSince } from "../../lib/profileFormat";
 import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile";
@@ -203,47 +204,45 @@ function TopModelsCard({
   models: PublicProfile["models"];
   lifetimeTokens: number;
 }) {
-  if (models.length === 0) return null;
+  const groups = groupModelUsage(models);
+  if (groups.length === 0) return null;
   const total = Math.max(1, lifetimeTokens);
-  const ranked = models.toSorted((left, right) => right.tokens - left.tokens);
-  const podium = ranked.slice(0, 3);
+  const percentOf = (tokens: number) => Math.round((tokens / total) * 100);
 
   return (
-    <ProfileSection title="Models" detail={`${models.length} used`}>
+    <ProfileSection title="Models" detail={`${groups.length} used`}>
       <ol className="m-0 grid list-none grid-cols-1 gap-2.5 p-0 sm:grid-cols-3">
-        {podium.map((row, index) => (
+        {groups.slice(0, 3).map((group, index) => (
           <li
-            key={`${row.provider}/${row.model}/${row.reasoning ?? ""}`}
+            key={`${group.provider}/${group.model}`}
             className="relative flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--tile)] px-4 py-3.5"
           >
             <span className="absolute right-3 top-2.5 text-[11px] tabular-nums text-muted-foreground">
               {index + 1}
             </span>
-            <ProviderGlyph provider={row.provider} className="size-5" />
-            <span className="truncate text-[15px] font-medium">{row.model}</span>
+            <ProviderGlyph provider={group.provider} className="size-5" />
+            <span className="truncate text-[15px] font-medium">{group.displayName}</span>
             <span className="truncate text-xs tabular-nums text-muted-foreground">
-              {formatCompact(row.tokens)} · {Math.round((row.tokens / total) * 100)}%
+              {formatCompact(group.tokens)} · {percentOf(group.tokens)}%
             </span>
           </li>
         ))}
       </ol>
       <ul className="m-0 flex list-none flex-col gap-3 p-0">
-        {ranked.map((row) => {
-          const percent = Math.round((row.tokens / total) * 100);
+        {groups.map((group) => {
+          const percent = percentOf(group.tokens);
+          const reasoning = group.reasoning.map(capitalize).join(", ");
           return (
-            <li
-              key={`${row.provider}/${row.model}/${row.reasoning ?? ""}`}
-              className="flex flex-col gap-1.5"
-            >
+            <li key={`${group.provider}/${group.model}`} className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="flex min-w-0 items-center gap-2">
-                  <ProviderGlyph provider={row.provider} className="size-3.5" />
+                  <ProviderGlyph provider={group.provider} className="size-3.5" />
                   <span className="truncate">
-                    {row.model}
+                    {group.displayName}
                     <span className="text-muted-foreground">
                       {" · "}
-                      {providerLabel(row.provider)}
-                      {row.reasoning ? ` · ${row.reasoning}` : ""}
+                      {providerLabel(group.provider)}
+                      {reasoning ? ` · ${reasoning}` : ""}
                     </span>
                   </span>
                 </span>

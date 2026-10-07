@@ -36,6 +36,10 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./modelName": {
+      "types": "./src/modelName.ts",
+      "import": "./src/modelName.ts"
+    },
     "./runtimeMode": {
       "types": "./src/runtimeMode.ts",
       "import": "./src/runtimeMode.ts"

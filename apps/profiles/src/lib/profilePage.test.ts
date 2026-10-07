@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeDayCount, buildDailySeries, tokensInYear } from "./dailySeries";
+import { groupModelUsage } from "./modelUsage";
 import { profileAccentStyle, resolveProfileAccent } from "./profileAccent";
 
 describe("resolveProfileAccent", () => {
@@ -53,5 +54,46 @@ describe("buildDailySeries", () => {
   it("sums a calendar year", () => {
     expect(tokensInYear(days, "2026")).toBe(400);
     expect(tokensInYear(days, "2025")).toBe(9);
+  });
+});
+
+describe("groupModelUsage", () => {
+  it("merges reasoning levels into one named model, most used first", () => {
+    const groups = groupModelUsage([
+      {
+        provider: "codex",
+        model: "gpt-6-astra",
+        reasoning: "low",
+        tokens: 400,
+        turns: 4,
+        prompts: 4,
+      },
+      {
+        provider: "codex",
+        model: "gpt-6-astra",
+        reasoning: null,
+        tokens: 200,
+        turns: 2,
+        prompts: 2,
+      },
+      {
+        provider: "codex",
+        model: "gpt-6-astra",
+        reasoning: "high",
+        tokens: 70,
+        turns: 1,
+        prompts: 1,
+      },
+      {
+        provider: "claudeAgent",
+        model: "claude-sonnet-5-5",
+        reasoning: null,
+        tokens: 120,
+        turns: 3,
+        prompts: 3,
+      },
+    ]);
+    expect(groups.map((group) => group.displayName)).toEqual(["GPT-6 Astra", "Claude Sonnet 5.5"]);
+    expect(groups[0]).toMatchObject({ tokens: 670, turns: 7, reasoning: ["low", "high"] });
   });
 });
