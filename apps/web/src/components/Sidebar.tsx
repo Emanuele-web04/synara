@@ -2897,6 +2897,32 @@ export default function Sidebar() {
   }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
   const handlePrimaryNewThread = useCallback(() => {
+    if (pathname === "/remote") {
+      const environmentId = new URLSearchParams(activeWorkspaceSearch).get("environment");
+      const session = workspaceSessions.find(
+        (entry) => entry.host.executionScope.environmentId === environmentId,
+      );
+      const navigation = session && readAvailableWorkspaceNavigation(session);
+      if (!session || !navigation) {
+        toastManager.add({
+          type: "error",
+          title: "Could not create chat",
+          description: "Reconnect this computer before creating a chat.",
+        });
+        return;
+      }
+      void navigation
+        .newChat(session.summary?.activeProjectId)
+        .then((path) => openWorkspacePath(session, path))
+        .catch((error: unknown) =>
+          toastManager.add({
+            type: "error",
+            title: "Could not create chat",
+            description: error instanceof Error ? error.message : "Try again.",
+          }),
+        );
+      return;
+    }
     if (primaryNewThreadTarget) {
       prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
       void handleNewThread(primaryNewThreadTarget.projectId);
@@ -2910,6 +2936,9 @@ export default function Sidebar() {
     }
     handleStartAddProject();
   }, [
+    pathname,
+    activeWorkspaceSearch,
+    workspaceSessions,
     handleNewThread,
     handleStartAddProject,
     prefetchModelsForProjectNewThread,
