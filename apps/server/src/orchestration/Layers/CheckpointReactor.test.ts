@@ -3855,6 +3855,118 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
   });
 
+  it("uses the durable workspace marker when completion follows a reactor restart", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-restart-plain-"));
+    tempDirs.push(workspace);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      providerName: "claudeAgent",
+      projectWorkspaceRoot: workspace,
+      threadWorktreePath: workspace,
+      providerSessionCwd: workspace,
+      simulateProviderBaseline: false,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-restart-plain");
+    const messageId = MessageId.makeUnsafe("restart-plain-message");
+    const createdAt = new Date().toISOString();
+
+    // The domain start is persisted while the workspace is still a plain
+    // folder. No provider turn.started event is sent, which leaves a fresh
+    // reactor with only the projection marker to consult at completion.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("restart-plain-start"),
+        threadId,
+        message: { messageId, role: "user", text: "initialize", attachments: [] },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    const markerBeforeTurn = await runtime!.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        return yield* sql<{ started_without_git_workspace: number }>`
+          SELECT started_without_git_workspace
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NULL
+            AND pending_message_id = ${messageId}
+        `;
+      }),
+    );
+    expect(markerBeforeTurn[0]?.started_without_git_workspace).toBe(1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("restart-plain-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    // A live diff placeholder is a full-row upsert that used to be able to
+    // erase the durable marker before the terminal completion arrived.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("restart-plain-placeholder"),
+        threadId,
+        turnId,
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "missing",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    runGit(workspace, ["init", "--initial-branch=main"]);
+    runGit(workspace, ["config", "user.email", "test@example.com"]);
+    runGit(workspace, ["config", "user.name", "Test User"]);
+    fs.writeFileSync(path.join(workspace, "package.json"), "{}\n", "utf8");
+    runGit(workspace, ["add", "."]);
+    runGit(workspace, ["commit", "-m", "Initial"]);
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-restart-plain"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.activities.some((activity) => activity.kind === "checkpoint.captured"),
+    );
+    expect(thread.checkpoints[0]?.status).toBe("missing");
+    expect(
+      thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toBe(false);
+  });
+
   it("derives a live turn-diff placeholder from git for claude file edits mid-turn", async () => {
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
