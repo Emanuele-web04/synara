@@ -117,7 +117,7 @@ export default async function ProfilePage({ params }: Params) {
         <TopModelsCard models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
 
         <ProfileSection title="Tokens" detail={`Last ${CHART_WINDOW_DAYS} days`}>
-          <span className="-mt-2 text-[26px] font-semibold leading-tight tracking-tight tabular-nums">
+          <span className="-mt-2 text-xl leading-tight tracking-tight tabular-nums">
             {formatCompact(windowTokens)} tokens
           </span>
           <DailyAreaChart points={series} />
@@ -127,7 +127,7 @@ export default async function ProfilePage({ params }: Params) {
           title="Prompts"
           detail={`Active ${activeDayCount(series)} of ${CHART_WINDOW_DAYS} days`}
         >
-          <span className="-mt-2 text-[26px] font-semibold leading-tight tracking-tight tabular-nums">
+          <span className="-mt-2 text-xl leading-tight tracking-tight tabular-nums">
             {formatCompact(windowPrompts)} prompts
           </span>
           <DailyBarChart points={series} />
