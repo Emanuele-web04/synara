@@ -7,6 +7,9 @@ export function generateMetadata(): Metadata {
     metadataBase: new URL(process.env.PROFILES_PUBLIC_ORIGIN ?? "https://trysynara.com"),
     title: "Synara",
     description: "Public Synara profiles",
+    icons: {
+      icon: `${process.env.PROFILES_ASSET_PREFIX ?? ""}/favicon.ico`,
+    },
   };
 }
 

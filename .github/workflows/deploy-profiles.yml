@@ -58,6 +58,8 @@ jobs:
           bunx opennextjs-cloudflare deploy --config wrangler.trial.jsonc --var "ACCOUNT_API_URL:$ACCOUNT_API_URL"
         env:
           ACCOUNT_API_URL: ${{ inputs.account_api_url }}
+          PROFILES_PUBLIC_ORIGIN: https://trysynara.com
+          PROFILES_ASSET_PREFIX: https://trysynara.com/profiles-assets
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 56e5b3e566be2fc8ade9b7d0eadf5e35
           PROFILE_PROXY_SECRET: ${{ secrets.SYNARA_PROFILE_PROXY_SECRET }}
