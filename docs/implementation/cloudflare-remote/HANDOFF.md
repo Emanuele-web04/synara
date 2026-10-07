@@ -1,5 +1,28 @@
 # Remote connections — punto di ripartenza
 
+## New thread sul computer remoto — 7 ottobre 2026
+
+Riprodotto nell'app MacBook: il pulsante globale New thread apriva Create project
+mentre era selezionata una chat del Mini. Il suo handler cercava soltanto nei
+progetti locali; il pulsante del progetto remoto e la scorciatoia nel frame
+usavano invece il proprietario corretto.
+
+`6142e4817` instrada l'azione globale, compresi Activity e palette, alla sessione
+remota selezionata e al suo progetto attivo, riusando `navigation.newChat` e
+`openWorkspacePath`. Se il computer è offline mostra un errore e non crea una
+chat locale per ripiego. Il comportamento locale rimane invariato. Passano 36
+test esistenti su ownership, scelta progetto e conservazione delle bozze,
+fmt/lint/typecheck. La regressione del pulsante è riprodotta nell'app reale;
+questi test unitari da soli non coprono il wiring completo della sidebar.
+
+Verifica dopo il fix nella vera app MacBook ricostruita: New thread globale
+apre la bozza in Demo iPhone sul Mini senza Create project, conserva il modello
+selezionato e avvia una nuova chat distinta (`d9f696bf-8fa4-4f79-9b94-c7a37d546041`).
+Ricevuta la risposta reale `GLOBAL CHAT OK`. La precedente prova tramite il
+pulsante del progetto aveva già ricevuto `CHAT START OK` in un’altra chat.
+Account, pairing e bozze conservati; nessun file del progetto modificato dai
+turni di prova. Il normale caso locale senza progetti conserva Create project.
+
 ## Codice rifiutato alla creazione — 7 ottobre 2026
 
 Sul MacBook la normale creazione del codice falliva prima di mostrare il QR,
@@ -22,6 +45,10 @@ arriva a “Connected to Macmini-di-Emanuele”; il server conferma l'abbinament
 della chiave del simulatore già autorizzata. Nessun telefono fisico usato.
 La prova copre creazione, riscatto e pairing; non è una prova di scansione
 ottica della fotocamera o di un nuovo turno provider.
+
+MacBook aggiornato: Add mostra QR e codice nella normale UI, Cancel revoca
+solo l’invito di prova e non restano inviti inutilizzati. I 20 test mirati e
+i controlli di build/formato/lint/tipi passano anche sul MacBook.
 
 ## Directory e computer abbinati — 7 ottobre 2026
 
