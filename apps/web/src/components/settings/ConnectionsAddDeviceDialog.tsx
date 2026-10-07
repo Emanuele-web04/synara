@@ -283,14 +283,14 @@ function AddDeviceDialogContent({
           </Button>
         ) : (
           <>
-            {invitation && !remaining ? (
+            {(!invitation && error) || (invitation && !remaining) ? (
               <Button
                 shape="capsule"
                 variant="subtle"
                 disabled={busy}
                 onClick={() => void newCode()}
               >
-                New code
+                {invitation ? "New code" : "Try again"}
               </Button>
             ) : null}
             <Button shape="capsule" variant="subtle" onClick={() => void cancel()}>

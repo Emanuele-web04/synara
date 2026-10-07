@@ -65,6 +65,25 @@ async function device(): Promise<RemotePairingDevice> {
 }
 
 describe("remote pairing through the durable auth control plane", () => {
+  it("leaves publication headroom when the account API clock is 30 seconds behind", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const control = yield* AuthControlPlane;
+        const apiNow = Date.now() - 30_000;
+        const invite = yield* control.remotePairing.create(scope);
+        // The account API rejects any expiry more than ten minutes ahead of its clock.
+        expect(Date.parse(invite.expiresAt)).toBeLessThanOrEqual(apiNow + 600_000);
+        expect(Date.parse(invite.expiresAt)).toBeGreaterThan(Date.now());
+        const verified = yield* control.remotePairing.verifyInvitation(
+          scope,
+          invite.inviteId,
+          invite.secret,
+        );
+        expect(verified.expiresAt).toBe(invite.expiresAt);
+      }).pipe(Effect.provide(layers())),
+    );
+  });
+
   it("an explicit identity reset revokes old devices and even unused invitations", async () => {
     const peer = await device();
     await Effect.runPromise(

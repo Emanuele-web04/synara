@@ -31,7 +31,8 @@ export function makeRemotePairingControlPlane(
         const createdAt = yield* now;
         const secret = randomBytes(32).toString("base64url");
         const inviteId = randomUUID();
-        const expiresAt = new Date(Date.parse(createdAt) + 10 * 60_000).toISOString();
+        // Leave clock-skew headroom below the account API's ten-minute publication limit.
+        const expiresAt = new Date(Date.parse(createdAt) + 9 * 60_000).toISOString();
         yield* repository.create({
           id: inviteId,
           credentialHash: createHash("sha256").update(secret).digest("hex"),

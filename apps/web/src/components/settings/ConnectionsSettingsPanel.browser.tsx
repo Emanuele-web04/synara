@@ -16,6 +16,7 @@ const fixture = vi.hoisted(() => {
   const state = {
     allowConnections: true as boolean | undefined,
     approved: false,
+    codeFailuresRemaining: 0,
     revoked: [] as string[],
   };
   const hostState = () => ({
@@ -68,6 +69,10 @@ const fixture = vi.hoisted(() => {
     request: vi.fn(async (request: { operation: string; [key: string]: unknown }) => {
       switch (request.operation) {
         case "create-code":
+          if (state.codeFailuresRemaining > 0) {
+            state.codeFailuresRemaining -= 1;
+            throw new Error("Could not create a pairing code.");
+          }
           return {
             kind: "pairing-code",
             code: "ABCD-2345",
@@ -209,6 +214,7 @@ async function renderPanel(strictMode = false) {
 beforeEach(() => {
   fixture.state.allowConnections = true;
   fixture.state.approved = false;
+  fixture.state.codeFailuresRemaining = 0;
   fixture.state.revoked = [];
   fixture.request.mockClear();
   fixture.confirm.mockClear();
@@ -321,6 +327,23 @@ describe("Connections settings", () => {
       .not.toBeInTheDocument();
     await page.getByRole("button", { name: "Add", exact: true }).click();
     await expect.element(page.getByText("ABCD-2345", { exact: true })).toBeVisible();
+    expect(
+      fixture.request.mock.calls.filter(([request]) => request.operation === "create-code"),
+    ).toHaveLength(2);
+  });
+
+  it("can retry failed code creation without closing the dialog", async () => {
+    fixture.state.codeFailuresRemaining = 1;
+    await renderPanel(true);
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect.element(page.getByRole("alert")).toBeVisible();
+    expect(page.getByRole("button", { name: "Try again", exact: true }).elements()).toHaveLength(1);
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect.element(page.getByText("ABCD-2345", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByRole("img", { name: "Scan to connect to this computer" }))
+      .toBeVisible();
+    await expect.element(page.getByRole("alert")).not.toBeInTheDocument();
     expect(
       fixture.request.mock.calls.filter(([request]) => request.operation === "create-code"),
     ).toHaveLength(2);
