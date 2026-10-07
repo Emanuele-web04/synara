@@ -2798,6 +2798,14 @@ export const OrchestrationThreadStreamItem = Schema.Union([
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
   }),
+  // The whole cursor-resume gap in one item, sent only when the subscriber
+  // opted in with `batchReplay`. Clients apply it as one store update, so a
+  // stale cached turn jumps straight to its current state instead of
+  // rendering every intermediate step of the catch-up.
+  Schema.Struct({
+    kind: Schema.Literal("replay"),
+    events: Schema.Array(OrchestrationEvent),
+  }),
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
 
@@ -3014,6 +3022,10 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
   // skips the full-history snapshot. Optional so older clients keep the
   // snapshot-first behavior unchanged.
   afterSequence: Schema.optional(NonNegativeInt),
+  // Asks the server to deliver a cursor-resume gap as one `replay` stream item
+  // instead of one `event` item per event. Opt-in so older clients, which do
+  // not know the `replay` item, keep per-event replay.
+  batchReplay: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
