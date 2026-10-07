@@ -42,6 +42,12 @@ export type PublicProfile = {
    */
   themeAccent?: { light: string; dark: string } | null;
   /**
+   * Published social usernames by platform (never URLs), or null when none.
+   * Optional so the page keeps rendering against a pre-links API; the page
+   * re-validates each with @synara/shared/socialLinks before linking it.
+   */
+  socialLinks?: Partial<Record<"x" | "linkedin" | "github" | "threads" | "youtube", string>> | null;
+  /**
    * The resolved avatar image URL (uploaded object or cached sso picture),
    * or null when the owner chose the initials placeholder. Optional so the
    * page keeps rendering against a pre-avatar API.

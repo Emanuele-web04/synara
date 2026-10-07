@@ -27,10 +27,12 @@ export function SiteNav() {
   );
 }
 
-export function SiteFooter() {
+export function SiteFooter({ width = "max-w-[720px]" }: { width?: string }) {
   return (
     <footer className="border-t">
-      <div className="mx-auto flex w-full max-w-[720px] items-center justify-between gap-4 px-6 py-6 sm:px-0">
+      <div
+        className={`mx-auto flex w-full ${width} items-center justify-between gap-4 px-6 py-6 sm:px-0`}
+      >
         <p className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground/80">
           <SynaraLogo className="h-3.5 w-auto shrink-0 opacity-60" />
           <span className="truncate">Built with Synara — the open workspace for coding agents</span>

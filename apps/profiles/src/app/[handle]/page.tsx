@@ -2,31 +2,42 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
 import { ActivityHeatmap, APP_HEATMAP_INTENSITY_CLASSES } from "@synara/profile-ui/heatmap";
+import { deriveInitials, formatCompact } from "@synara/profile-ui/formatting";
+import { PROVIDER_GLYPHS, providerIconToneClassName } from "@synara/profile-ui/provider-icon";
+import { SOCIAL_GLYPHS } from "@synara/profile-ui/social-icon";
 import {
-  deriveInitials,
-  formatCompact,
-  formatHourLabel,
-  formatShortDate,
-} from "@synara/profile-ui/formatting";
+  SOCIAL_LINK_PLATFORMS,
+  type SocialLinkPlatform,
+  sanitizeSocialLinks,
+  socialLinkLabel,
+  socialProfileUrl,
+} from "@synara/shared/socialLinks";
+import { SiteFooter, SiteNav } from "../../components/chrome";
+import { ProfileSection, Stat } from "../../components/ProfileCard";
 import {
-  PROVIDER_GLYPHS,
-  providerIconToneClassName,
-  providerLabel,
-} from "@synara/profile-ui/provider-icon";
-import { PageShell } from "../../components/chrome";
-import { ListRow, ProfileSection, StatCard } from "../../components/ProfileCard";
-import { DailyAreaChart, DailyBarChart, HourBars } from "../../components/ProfileCharts";
+  DailyAreaChart,
+  DailyBarChart,
+  HourArc,
+  type ModelShare,
+  ModelShareRing,
+  WeekCapsules,
+} from "../../components/ProfileCharts";
+import { ShareProfileButton } from "../../components/ShareProfileButton";
 import { activeDayCount, buildDailySeries, tokensInYear } from "../../lib/dailySeries";
-import { buildHeatmapCells } from "../../lib/heatmapCells";
-import { groupModelUsage } from "../../lib/modelUsage";
+import { buildHeatmapCells, weeklyTotals } from "../../lib/heatmapCells";
+import { groupModelUsage, type ModelUsageGroup } from "../../lib/modelUsage";
 import { profileAccentStyle, resolveProfileAccent } from "../../lib/profileAccent";
-import { formatStreak, memberSince } from "../../lib/profileFormat";
+import { formatStreakShort, joinedAgo } from "../../lib/profileFormat";
 import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile";
 
 /** Days the Tokens and Prompts charts span. */
 const CHART_WINDOW_DAYS = 30;
 /** The phone heatmap's window: about four months of weeks. */
 const MOBILE_HEATMAP_DAYS = 119;
+/** Models the ring names before folding the rest into "Other models". */
+const RING_MODELS = 3;
+/** The page's content width; nav and footer line up with it. */
+const CONTENT_WIDTH = "max-w-[1040px]";
 
 type Params = { params: Promise<{ handle: string }> };
 
@@ -67,85 +78,196 @@ export default async function ProfilePage({ params }: Params) {
   const profile = await fetchPublicProfile(handle);
   if (!profile) notFound();
 
-  const since = memberSince(profile.createdAt);
   const series = buildDailySeries(profile.heatmap, CHART_WINDOW_DAYS, profile.localToday);
   const windowTokens = series.reduce((sum, point) => sum + point.tokens, 0);
   const windowPrompts = series.reduce((sum, point) => sum + point.prompts, 0);
+  const cells = buildHeatmapCells(profile.heatmap, profile.localToday);
+  const weeks = weeklyTotals(cells);
+  const groups = groupModelUsage(profile.models);
+  const activeToday =
+    profile.localToday !== undefined &&
+    profile.heatmap.some((day) => day.day === profile.localToday && day.tokens > 0);
 
   return (
-    <div className="profile-accent" style={profileAccentStyle(resolveProfileAccent(profile))}>
-      <PageShell>
-        {/* Identity */}
-        <header className="flex flex-col items-center gap-3 text-center">
-          <ProfileAvatar
-            initials={deriveInitials(profile.displayName)}
-            color={profile.avatarColor}
-            image={profile.avatarUrl ?? null}
-            className="size-24 ring-4 ring-[color-mix(in_srgb,var(--info)_22%,transparent)]"
-            textClassName="text-3xl"
-          />
-          <div className="min-w-0">
-            <h1 className="truncate text-[30px] font-semibold leading-tight tracking-tight">
-              {profile.displayName}
-            </h1>
-            <p className="mt-1 truncate text-[15px] text-muted-foreground">@{profile.handle}</p>
+    <div
+      className="profile-accent flex min-h-dvh flex-col"
+      style={profileAccentStyle(resolveProfileAccent(profile))}
+    >
+      <SiteNav />
+      <main
+        className={`mx-auto flex w-full ${CONTENT_WIDTH} flex-1 gap-12 px-5 pb-28 pt-10 sm:px-6 sm:pt-16`}
+      >
+        {/* The left rail: when they joined and where else to find them. Phones get the
+            same facts as a row under the name instead. */}
+        <aside className="hidden w-[180px] shrink-0 flex-col gap-6 pt-[92px] lg:flex">
+          <JoinedLine profile={profile} />
+          <SocialLinkList links={profile.socialLinks} />
+        </aside>
+
+        <div className="flex min-w-0 flex-1 flex-col gap-11">
+          <header className="flex flex-col gap-5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3.5">
+                <div className="relative shrink-0">
+                  <ProfileAvatar
+                    initials={deriveInitials(profile.displayName)}
+                    color={profile.avatarColor}
+                    image={profile.avatarUrl ?? null}
+                    className="size-12 rounded-[15px]"
+                    textClassName="text-lg"
+                  />
+                  {activeToday ? (
+                    <span
+                      role="img"
+                      aria-label="Active today"
+                      className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-[var(--info)] ring-[3px] ring-background"
+                    />
+                  ) : null}
+                </div>
+                <div className="flex min-w-0 flex-col">
+                  <h1 className="truncate text-xl font-semibold leading-tight tracking-tight">
+                    {profile.displayName}
+                  </h1>
+                  <p className="truncate text-[13px] text-muted-foreground">@{profile.handle}</p>
+                </div>
+              </div>
+              <ShareProfileButton title={`${profile.displayName} on Synara`} />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 lg:hidden">
+              <JoinedLine profile={profile} />
+              <SocialLinkList links={profile.socialLinks} compact />
+            </div>
+          </header>
+
+          <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-4">
+            <Stat label="Tokens" value={formatCompact(profile.lifetimeTokens)} />
+            <Stat label="Prompts" value={formatCompact(profile.lifetimePrompts)} />
+            <Stat label="Longest streak" value={formatStreakShort(profile.longestStreakDays)} />
+            <Stat label="Current streak" value={formatStreakShort(profile.currentStreakDays)} />
           </div>
-          {since ? (
-            <span className="rounded-full bg-[var(--tile)] px-3 py-1 text-xs text-muted-foreground">
-              On Synara since {since}
-            </span>
+
+          <ActivitySection profile={profile} cells={cells} />
+          <TopModels groups={groups} lifetimeTokens={profile.lifetimeTokens} />
+
+          {groups.length > 0 || profile.hours.some((entry) => entry.prompts > 0) ? (
+            <div className="grid grid-cols-1 gap-11 sm:grid-cols-2 sm:gap-8">
+              {groups.length > 0 ? (
+                <ProfileSection title="Share of tokens">
+                  <ModelShareRing
+                    shares={ringShares(groups)}
+                    total={groups.reduce((sum, group) => sum + group.tokens, 0)}
+                  />
+                </ProfileSection>
+              ) : null}
+              <ProfileSection title="Prompts by hour">
+                <HourArc hours={profile.hours} />
+              </ProfileSection>
+            </div>
           ) : null}
-        </header>
 
-        {/* Headline numbers */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <StatCard label="Lifetime tokens" value={formatCompact(profile.lifetimeTokens)} />
-          <StatCard label="Prompts" value={formatCompact(profile.lifetimePrompts)} />
-          <StatCard label="Turns" value={formatCompact(profile.lifetimeTurns)} />
-          <StatCard
-            label="Peak day"
-            value={profile.peakDay ? formatCompact(profile.peakDay.tokens) : "—"}
-            {...(profile.peakDay
-              ? { note: formatShortDate(profile.peakDay.day) ?? profile.peakDay.day }
-              : {})}
-          />
-          <StatCard label="Current streak" value={formatStreak(profile.currentStreakDays)} />
-          <StatCard label="Longest streak" value={formatStreak(profile.longestStreakDays)} />
+          <ProfileSection title="Weeks">
+            <span className="text-xl leading-tight tabular-nums">
+              {weeks.filter((week) => week.tokens > 0).length} active weeks
+            </span>
+            <div className="mt-3">
+              <WeekCapsules weeks={weeks} />
+            </div>
+          </ProfileSection>
+
+          <ProfileSection title="Tokens" detail={`Last ${CHART_WINDOW_DAYS} days`}>
+            <span className="text-xl leading-tight tabular-nums">
+              {formatCompact(windowTokens)} tokens
+            </span>
+            <div className="mt-6">
+              <DailyAreaChart points={series} />
+            </div>
+          </ProfileSection>
+
+          <ProfileSection
+            title="Prompts"
+            detail={`Active ${activeDayCount(series)} of ${CHART_WINDOW_DAYS} days`}
+          >
+            <span className="text-xl leading-tight tabular-nums">
+              {formatCompact(windowPrompts)} prompts
+            </span>
+            <div className="mt-6">
+              <DailyBarChart points={series} />
+            </div>
+          </ProfileSection>
         </div>
-
-        <ActivityCard profile={profile} />
-        <TopModelsCard models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
-
-        <ProfileSection title="Tokens" detail={`Last ${CHART_WINDOW_DAYS} days`}>
-          <span className="-mt-2 text-xl leading-tight tracking-tight tabular-nums">
-            {formatCompact(windowTokens)} tokens
-          </span>
-          <DailyAreaChart points={series} />
-        </ProfileSection>
-
-        <ProfileSection
-          title="Prompts"
-          detail={`Active ${activeDayCount(series)} of ${CHART_WINDOW_DAYS} days`}
-        >
-          <span className="-mt-2 text-xl leading-tight tracking-tight tabular-nums">
-            {formatCompact(windowPrompts)} prompts
-          </span>
-          <DailyBarChart points={series} />
-        </ProfileSection>
-
-        <RhythmCard profile={profile} />
-      </PageShell>
+      </main>
+      <SiteFooter width={CONTENT_WIDTH} />
     </div>
+  );
+}
+
+// ── Identity ───────────────────────────────────────────────────────────
+
+function JoinedLine({ profile }: { profile: PublicProfile }) {
+  const joined = joinedAgo(profile.createdAt, profile.localToday);
+  return joined ? <span className="text-xs text-muted-foreground">{joined}</span> : null;
+}
+
+/** How each platform's username reads next to its icon. */
+function socialHandleLabel(platform: SocialLinkPlatform, username: string): string {
+  return platform === "github" || platform === "linkedin" ? username : `@${username}`;
+}
+
+/**
+ * The owner's published accounts in a fixed order, each linking to its canonical profile
+ * URL built from the validated username. `compact` (phones) shows the icons alone.
+ */
+function SocialLinkList({
+  links,
+  compact = false,
+}: {
+  links: PublicProfile["socialLinks"];
+  compact?: boolean;
+}) {
+  const usernames = sanitizeSocialLinks(links);
+  const platforms = SOCIAL_LINK_PLATFORMS.filter((platform) => usernames[platform]);
+  if (platforms.length === 0) return null;
+  return (
+    <ul className={`m-0 flex list-none p-0 ${compact ? "items-center gap-1" : "flex-col gap-2.5"}`}>
+      {platforms.map((platform) => {
+        const username = usernames[platform]!;
+        const Glyph = SOCIAL_GLYPHS[platform];
+        return (
+          <li key={platform} className="min-w-0">
+            <a
+              href={socialProfileUrl(platform, username)}
+              target="_blank"
+              rel="me noopener noreferrer"
+              aria-label={compact ? `${socialLinkLabel(platform)}: ${username}` : undefined}
+              className={
+                compact
+                  ? "flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-[var(--tile)] hover:text-foreground"
+                  : "flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              }
+            >
+              <Glyph aria-hidden className="size-4 shrink-0" />
+              {compact ? null : (
+                <span className="truncate">{socialHandleLabel(platform, username)}</span>
+              )}
+            </a>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
 // ── Activity ───────────────────────────────────────────────────────────
 
-function ActivityCard({ profile }: { profile: PublicProfile }) {
-  // No renderTooltip: ActivityHeatmap falls back to a native `title`, keeping the
-  // page free of client JS. Fill mode with the app's window length, so the grid
-  // renders exactly like the in-app Activity section — no horizontal scroll.
-  const cells = buildHeatmapCells(profile.heatmap, profile.localToday);
+function ActivitySection({
+  profile,
+  cells,
+}: {
+  profile: PublicProfile;
+  cells: ReturnType<typeof buildHeatmapCells>;
+}) {
+  // No renderTooltip: ActivityHeatmap falls back to a native `title`. Fill mode with the
+  // app's window length, so the grid renders exactly like the in-app Activity section.
   // A phone fits about four months of legible cells; the full window would shrink them
   // to dots and collide the month labels.
   const recentCells = buildHeatmapCells(profile.heatmap, profile.localToday, MOBILE_HEATMAP_DAYS);
@@ -158,19 +280,17 @@ function ActivityCard({ profile }: { profile: PublicProfile }) {
       <ActivityHeatmap
         cells={cells}
         fill
-        radius={4}
+        radius={3}
         gap={3}
         showMonths
-        monthsPosition="bottom"
         className="hidden sm:flex"
       />
       <ActivityHeatmap
         cells={recentCells}
         fill
-        radius={4}
+        radius={3}
         gap={3}
         showMonths
-        monthsPosition="bottom"
         className="sm:hidden"
       />
       <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
@@ -197,126 +317,50 @@ function ProviderGlyph({ provider, className }: { provider: string; className: s
   );
 }
 
-function TopModelsCard({
-  models,
+/** The three most used models side by side, ranked, each with its share of tokens. */
+function TopModels({
+  groups,
   lifetimeTokens,
 }: {
-  models: PublicProfile["models"];
+  groups: readonly ModelUsageGroup[];
   lifetimeTokens: number;
 }) {
-  const groups = groupModelUsage(models);
   if (groups.length === 0) return null;
   const total = Math.max(1, lifetimeTokens);
-  const percentOf = (tokens: number) => Math.round((tokens / total) * 100);
-
   return (
-    <ProfileSection title="Models" detail={`${groups.length} used`}>
-      <ol className="m-0 grid list-none grid-cols-1 gap-2.5 p-0 sm:grid-cols-3">
+    <ProfileSection title="Models">
+      <ol className="m-0 grid list-none grid-cols-1 gap-5 p-0 sm:grid-cols-3 sm:gap-4">
         {groups.slice(0, 3).map((group, index) => (
           <li
             key={`${group.provider}/${group.model}`}
-            className="relative flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--tile)] px-4 py-3.5"
+            className="flex min-w-0 items-start justify-between gap-3"
           >
-            <span className="absolute right-3 top-2.5 text-[11px] tabular-nums text-muted-foreground">
-              {index + 1}
-            </span>
-            <ProviderGlyph provider={group.provider} className="size-5" />
-            <span className="truncate text-[15px] font-medium">{group.displayName}</span>
-            <span className="truncate text-xs tabular-nums text-muted-foreground">
-              {formatCompact(group.tokens)} · {percentOf(group.tokens)}%
-            </span>
+            <div className="flex min-w-0 items-center gap-2.5">
+              <ProviderGlyph provider={group.provider} className="size-4" />
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-[15px] leading-snug">{group.displayName}</span>
+                <span className="truncate text-xs tabular-nums text-muted-foreground">
+                  {Math.round((group.tokens / total) * 100)}% · {formatCompact(group.tokens)}
+                </span>
+              </div>
+            </div>
+            <span className="text-[11px] tabular-nums text-muted-foreground">{index + 1}</span>
           </li>
         ))}
       </ol>
-      <ul className="m-0 flex list-none flex-col gap-3 p-0">
-        {groups.map((group) => {
-          const percent = percentOf(group.tokens);
-          const reasoning = group.reasoning.map(capitalize).join(", ");
-          return (
-            <li key={`${group.provider}/${group.model}`} className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="flex min-w-0 items-center gap-2">
-                  <ProviderGlyph provider={group.provider} className="size-3.5" />
-                  <span className="truncate">
-                    {group.displayName}
-                    <span className="text-muted-foreground">
-                      {" · "}
-                      {providerLabel(group.provider)}
-                      {reasoning ? ` · ${reasoning}` : ""}
-                    </span>
-                  </span>
-                </span>
-                <span className="shrink-0 tabular-nums text-muted-foreground">{percent}%</span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-[var(--info)]"
-                  style={{ width: `${Math.min(100, Math.max(2, percent))}%` }}
-                />
-              </div>
-            </li>
-          );
-        })}
-      </ul>
     </ProfileSection>
   );
 }
 
-// ── Rhythm ─────────────────────────────────────────────────────────────
-
-function RhythmCard({ profile }: { profile: PublicProfile }) {
-  const byProvider = new Map<string, number>();
-  const byReasoning = new Map<string, number>();
-  for (const row of profile.models) {
-    byProvider.set(row.provider, (byProvider.get(row.provider) ?? 0) + row.tokens);
-    if (row.reasoning) {
-      byReasoning.set(row.reasoning, (byReasoning.get(row.reasoning) ?? 0) + row.turns);
-    }
-  }
-  const totalTokens = Math.max(1, profile.lifetimeTokens);
-  const totalTurns = Math.max(
-    1,
-    profile.models.reduce((sum, row) => sum + row.turns, 0),
-  );
-  const top = (entries: Map<string, number>) =>
-    [...entries.entries()].toSorted((a, b) => b[1] - a[1])[0];
-  const topProvider = top(byProvider);
-  const topReasoning = top(byReasoning);
-  const topHour = profile.hours.reduce<{ hour: number; prompts: number } | null>(
-    (best, entry) =>
-      entry.prompts > 0 && (best === null || entry.prompts > best.prompts) ? entry : best,
-    null,
-  );
-
-  return (
-    <ProfileSection
-      title="Rhythm"
-      detail={topHour ? `Most active at ${formatHourLabel(topHour.hour)}` : undefined}
-    >
-      <HourBars hours={profile.hours} />
-      <dl className="m-0 flex flex-col">
-        <ListRow
-          label="Most used provider"
-          value={
-            topProvider
-              ? `${providerLabel(topProvider[0])} · ${Math.round((topProvider[1] / totalTokens) * 100)}%`
-              : "—"
-          }
-        />
-        <ListRow
-          label="Most used reasoning"
-          value={
-            topReasoning
-              ? `${capitalize(topReasoning[0])} · ${Math.round((topReasoning[1] / totalTurns) * 100)}%`
-              : "—"
-          }
-        />
-        <ListRow label="Most active hour" value={topHour ? formatHourLabel(topHour.hour) : "—"} />
-      </dl>
-    </ProfileSection>
-  );
-}
-
-function capitalize(value: string): string {
-  return value.length > 0 ? value[0]!.toUpperCase() + value.slice(1) : value;
+/** The ring's slices: the top models by name, everything after folded into one. */
+function ringShares(groups: readonly ModelUsageGroup[]): ModelShare[] {
+  const named: ModelShare[] = groups.slice(0, RING_MODELS).map((group) => ({
+    key: `${group.provider}/${group.model}`,
+    label: group.displayName,
+    tokens: group.tokens,
+  }));
+  const restTokens = groups.slice(RING_MODELS).reduce((sum, group) => sum + group.tokens, 0);
+  return restTokens > 0
+    ? [...named, { key: "rest", label: "Other models", tokens: restTokens, rest: true }]
+    : named;
 }

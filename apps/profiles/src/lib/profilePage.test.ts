@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { activeDayCount, buildDailySeries, tokensInYear } from "./dailySeries";
+import { buildHeatmapCells, weeklyTotals } from "./heatmapCells";
 import { groupModelUsage } from "./modelUsage";
+import { formatStreakShort, joinedAgo } from "./profileFormat";
 import { profileAccentStyle, resolveProfileAccent } from "./profileAccent";
 
 describe("resolveProfileAccent", () => {
@@ -116,5 +118,37 @@ describe("groupModelUsage", () => {
     ]);
     expect(groups[2]).toMatchObject({ tokens: 9, turns: 2 });
     expect(groups[0]).toMatchObject({ tokens: 670, turns: 7, reasoning: ["low", "high"] });
+  });
+});
+
+describe("weeklyTotals", () => {
+  it("folds the window into Sunday-first weeks, a partial first week included", () => {
+    const cells = buildHeatmapCells(
+      [
+        { day: "2026-09-29", tokens: 10, prompts: 1 },
+        { day: "2026-10-04", tokens: 5, prompts: 1 },
+        { day: "2026-10-07", tokens: 7, prompts: 1 },
+      ],
+      "2026-10-07",
+      10,
+    );
+    expect(weeklyTotals(cells)).toEqual([
+      { start: "2026-09-27", tokens: 10 },
+      { start: "2026-10-04", tokens: 12 },
+    ]);
+  });
+});
+
+describe("joinedAgo", () => {
+  it("counts whole days to the owner's today", () => {
+    expect(joinedAgo("2026-09-07T22:10:00Z", "2026-10-07")).toBe("Joined 30 days ago");
+    expect(joinedAgo("2026-10-06T08:00:00Z", "2026-10-07")).toBe("Joined yesterday");
+    expect(joinedAgo("2026-10-07T08:00:00Z", "2026-10-07")).toBe("Joined today");
+    expect(joinedAgo("not a date", "2026-10-07")).toBeNull();
+  });
+
+  it("writes streaks compactly", () => {
+    expect(formatStreakShort(0)).toBe("—");
+    expect(formatStreakShort(199)).toBe("199d");
   });
 });

@@ -1,16 +1,24 @@
-// The few display helpers @synara/profile-ui/formatting doesn't cover — all specific
-// to the public page's copy (member-since spelling, avatar grapheme, streak em dash).
+// The few display helpers @synara/profile-ui/formatting doesn't cover, specific to the
+// public page's copy: the "joined" line and the compact streak.
 
-import { formatDays } from "@synara/profile-ui/formatting";
-
-/** "2026-08-11T…" → "August 2026" — the "on Synara since" spelling. */
-export function memberSince(createdAt: string): string {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+/** "Joined 30 days ago" from the account's creation instant and the owner's today. */
+export function joinedAgo(createdAt: string, localToday?: string): string | null {
+  const created = new Date(createdAt);
+  if (Number.isNaN(created.getTime())) return null;
+  const today = localToday ? new Date(`${localToday}T00:00:00Z`) : new Date();
+  const createdDay = Date.UTC(
+    created.getUTCFullYear(),
+    created.getUTCMonth(),
+    created.getUTCDate(),
+  );
+  const todayDay = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const days = Math.max(0, Math.round((todayDay - createdDay) / 86_400_000));
+  if (days === 0) return "Joined today";
+  if (days === 1) return "Joined yesterday";
+  return `Joined ${days.toLocaleString("en-US")} days ago`;
 }
 
-/** "12 days" / "1 day" via profile-ui's formatDays; em dash before any activity. */
-export function formatStreak(days: number): string {
-  return days <= 0 ? "—" : formatDays(days);
+/** A streak as the compact "12d", or an em dash before any activity. */
+export function formatStreakShort(days: number): string {
+  return days <= 0 ? "—" : `${days.toLocaleString("en-US")}d`;
 }

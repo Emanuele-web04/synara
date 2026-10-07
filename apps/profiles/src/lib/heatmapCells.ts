@@ -86,3 +86,18 @@ export function buildHeatmapCells(
   }
   return cells;
 }
+
+/** The heatmap window folded into weeks (Sunday first), oldest first: each week's first day and tokens. */
+export function weeklyTotals(cells: readonly HeatmapCell[]): { start: string; tokens: number }[] {
+  const weeks: { start: string; tokens: number }[] = [];
+  for (const cell of cells) {
+    const last = weeks.at(-1);
+    if (last === undefined || cell.weekday === 0) {
+      const start = new Date(utcMsOf(cell.day) - cell.weekday * DAY_MS).toISOString().slice(0, 10);
+      weeks.push({ start, tokens: cell.count });
+    } else {
+      last.tokens += cell.count;
+    }
+  }
+  return weeks;
+}
