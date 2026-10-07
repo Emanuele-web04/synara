@@ -1,36 +1,31 @@
-// The public profile's building blocks, in the iOS grouped style: borderless rounded
-// tiles on a quiet gray fill, a small muted caption above each value, and the owner's
-// accent kept for data marks only.
+// The public profile's building blocks: borderless rounded tiles on a quiet gray fill for
+// the headline numbers, chart sections laid straight on the page, a small muted caption
+// above each value, and the owner's accent kept for data marks only.
 
 import type { ReactNode } from "react";
 
-/** A rounded tile with an optional caption row (title left, detail right). */
-export function ProfileCard({
+/**
+ * A chart section laid straight on the page, no tile around it: a small muted caption row
+ * (title left, detail right) over the content, with room above to separate it from the
+ * section before.
+ */
+export function ProfileSection({
   title,
   detail,
   children,
-  className,
 }: {
-  title?: string;
+  title: string;
   detail?: ReactNode;
   children: ReactNode;
-  className?: string;
 }) {
   return (
-    <section
-      aria-label={title}
-      className={`flex min-w-0 flex-col gap-4 rounded-[22px] bg-[var(--tile)] p-5 ${className ?? ""}`}
-    >
-      {title ? (
-        <header className="flex items-baseline justify-between gap-3">
-          <h2 className="text-[13px] font-medium text-muted-foreground">{title}</h2>
-          {detail ? (
-            <span className="truncate text-[13px] tabular-nums text-muted-foreground">
-              {detail}
-            </span>
-          ) : null}
-        </header>
-      ) : null}
+    <section aria-label={title} className="flex min-w-0 flex-col gap-4 pt-9">
+      <header className="flex items-baseline justify-between gap-3">
+        <h2 className="text-[13px] font-medium text-muted-foreground">{title}</h2>
+        {detail ? (
+          <span className="truncate text-[13px] tabular-nums text-muted-foreground">{detail}</span>
+        ) : null}
+      </header>
       {children}
     </section>
   );

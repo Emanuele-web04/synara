@@ -14,7 +14,7 @@ import {
   providerLabel,
 } from "@synara/profile-ui/provider-icon";
 import { PageShell } from "../../components/chrome";
-import { ListRow, ProfileCard, StatCard } from "../../components/ProfileCard";
+import { ListRow, ProfileSection, StatCard } from "../../components/ProfileCard";
 import { DailyAreaChart, DailyBarChart, HourBars } from "../../components/ProfileCharts";
 import { activeDayCount, buildDailySeries, tokensInYear } from "../../lib/dailySeries";
 import { buildHeatmapCells } from "../../lib/heatmapCells";
@@ -115,14 +115,14 @@ export default async function ProfilePage({ params }: Params) {
         <ActivityCard profile={profile} />
         <TopModelsCard models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
 
-        <ProfileCard title="Tokens" detail={`Last ${CHART_WINDOW_DAYS} days`}>
+        <ProfileSection title="Tokens" detail={`Last ${CHART_WINDOW_DAYS} days`}>
           <span className="-mt-2 text-[26px] font-semibold leading-tight tracking-tight tabular-nums">
             {formatCompact(windowTokens)} tokens
           </span>
           <DailyAreaChart points={series} />
-        </ProfileCard>
+        </ProfileSection>
 
-        <ProfileCard
+        <ProfileSection
           title="Prompts"
           detail={`Active ${activeDayCount(series)} of ${CHART_WINDOW_DAYS} days`}
         >
@@ -130,7 +130,7 @@ export default async function ProfilePage({ params }: Params) {
             {formatCompact(windowPrompts)} prompts
           </span>
           <DailyBarChart points={series} />
-        </ProfileCard>
+        </ProfileSection>
 
         <RhythmCard profile={profile} />
       </PageShell>
@@ -150,7 +150,7 @@ function ActivityCard({ profile }: { profile: PublicProfile }) {
   const recentCells = buildHeatmapCells(profile.heatmap, profile.localToday, MOBILE_HEATMAP_DAYS);
   const year = (profile.localToday ?? new Date().toISOString()).slice(0, 4);
   return (
-    <ProfileCard
+    <ProfileSection
       title="Activity"
       detail={`${formatCompact(tokensInYear(profile.heatmap, year))} tokens in ${year}`}
     >
@@ -179,7 +179,7 @@ function ActivityCard({ profile }: { profile: PublicProfile }) {
         ))}
         <span>More</span>
       </div>
-    </ProfileCard>
+    </ProfileSection>
   );
 }
 
@@ -209,12 +209,12 @@ function TopModelsCard({
   const podium = ranked.slice(0, 3);
 
   return (
-    <ProfileCard title="Models" detail={`${models.length} used`}>
+    <ProfileSection title="Models" detail={`${models.length} used`}>
       <ol className="m-0 grid list-none grid-cols-1 gap-2.5 p-0 sm:grid-cols-3">
         {podium.map((row, index) => (
           <li
             key={`${row.provider}/${row.model}/${row.reasoning ?? ""}`}
-            className="relative flex min-w-0 flex-col gap-2 rounded-2xl bg-background/70 px-4 py-3.5 dark:bg-white/[0.04]"
+            className="relative flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--tile)] px-4 py-3.5"
           >
             <span className="absolute right-3 top-2.5 text-[11px] tabular-nums text-muted-foreground">
               {index + 1}
@@ -259,7 +259,7 @@ function TopModelsCard({
           );
         })}
       </ul>
-    </ProfileCard>
+    </ProfileSection>
   );
 }
 
@@ -290,7 +290,7 @@ function RhythmCard({ profile }: { profile: PublicProfile }) {
   );
 
   return (
-    <ProfileCard
+    <ProfileSection
       title="Rhythm"
       detail={topHour ? `Most active at ${formatHourLabel(topHour.hour)}` : undefined}
     >
@@ -314,7 +314,7 @@ function RhythmCard({ profile }: { profile: PublicProfile }) {
         />
         <ListRow label="Most active hour" value={topHour ? formatHourLabel(topHour.hour) : "—"} />
       </dl>
-    </ProfileCard>
+    </ProfileSection>
   );
 }
 
