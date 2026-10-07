@@ -88,12 +88,8 @@
           "name": "device_account_sessions_device_id_devices_id_fk",
           "tableFrom": "device_account_sessions",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -176,12 +172,8 @@
           "name": "device_revocation_deliveries_device_id_devices_id_fk",
           "tableFrom": "device_revocation_deliveries",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -971,9 +963,7 @@
         "profiles_handle_unique": {
           "name": "profiles_handle_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "handle"
-          ]
+          "columns": ["handle"]
         }
       },
       "policies": {},

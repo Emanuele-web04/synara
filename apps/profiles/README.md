@@ -106,6 +106,31 @@ profile's public 404 does not mean its handle is available.
 
 ## Current branded routing
 
+The 2026-10-08 layout/social-links update is live on Synara Orgs: account API
+`32df5e8e-42f7-40de-8a8d-2cf33d9f8146` and profiles
+`a96a0193-b61c-4ff3-bfb7-bba8d05b9271`, built from `19d2595`.
+Drizzle migration `0019_profile_social_links` adds a nullable JSONB column;
+the matching SQL-file hash and journal timestamp are registered once in the
+Drizzle ledger. Existing profiles retain their avatar, theme and usage. The
+API returns `socialLinks: null` until the owner saves links in an updated app.
+
+The live page includes the left rail, share control, model-share ring,
+hourly arc and weekly chart. Verification covered the canonical URL,
+heatmap count/date readouts and Escape dismissal, no console errors, and
+390px mobile layout without horizontal overflow. Social-link writes were
+verified by API integration tests against a disposable Postgres database;
+the owner's personal links were not changed for deployment verification.
+
+For subsequent deployments to this same verified destination, retain the
+existing proxy secret and explicitly override the trial API placeholder.
+From `apps/profiles` after the API and schema are ready:
+
+```sh
+PROFILES_ASSET_PREFIX=https://www.trysynara.com/profiles-assets NEXT_PRIVATE_STANDALONE=true bunx next build --webpack
+bunx opennextjs-cloudflare build --skipNextBuild --config wrangler.trial.jsonc
+bunx wrangler deploy --config wrangler.trial.jsonc --var ACCOUNT_API_URL:https://synara-account-api-trial.synara-orgs.workers.dev
+```
+
 The 2026-10-07 profile update is deployed on Synara Orgs: account API version
 `55d349a9-48ad-47ea-923e-a5980d07c425` and profiles version
 `877cee19-6383-4306-8781-7db26d27a295`. API startup applied Drizzle migration
