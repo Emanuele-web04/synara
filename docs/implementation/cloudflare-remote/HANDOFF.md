@@ -16,8 +16,18 @@ la directory come se fosse già abbinata. Add continua a usare il codice.
 Verifica iniziale: regressione browser riprodotta prima del fix (due righe
 Mini), poi 7 test browser e 13 test server passati; fmt/lint/typecheck passati
 (928 warning lint preesistenti, zero errori). Il test SQLite verifica tutti i
-confini dello scope, pending/revoked, disconnect e forget. Prova desktop e
-suite completa vengono annotate dopo la loro conclusione.
+confini dello scope, pending/revoked, disconnect e forget. Suite completa:
+16.252 test passati, 251 saltati, 11/11 task riusciti. Build CLI/web/contratti
+riuscita su entrambi i Mac.
+
+MacBook: patch applicata alla vera Synara (Dev), account e pairing conservati;
+RPC espone solo il Mini corrente e la UI mostra una sola riga anche offline.
+La riapertura delle chat resta **non verificata in questa prova**: durante
+l'auto-rebuild del desktop Mini il suo backend si è fermato, il tunnel risponde
+530 e la Dev non ha riavviato il backend. Il controllo UI del Mini è bloccato
+dallo schermo locked; richiesto sblocco all'utente per ispezionare l'avvio.
+Nessuna revoca o ricreazione del pairing. Screenshot MacBook nel percorso
+`~/.local/share/synara-tests/remote-macbook-mvp-20261007/operator/paired-hosts-list-offline.jpg`.
 
 ## Account nella rail — 7 ottobre 2026
 
