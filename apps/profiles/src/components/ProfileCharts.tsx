@@ -24,9 +24,11 @@ function heatmapLabel(cell: HeatmapCell): string {
 export function ProfileHeatmap({
   cells,
   className,
+  today,
 }: {
   cells: readonly HeatmapCell[];
   className?: string;
+  today?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState<{ cell: HeatmapCell; position: number } | null>(null);
@@ -48,30 +50,36 @@ export function ProfileHeatmap({
       <ActivityHeatmap
         cells={cells}
         fill
-        radius={3}
-        gap={3}
+        radius={999}
+        gap={2}
         showMonths
-        renderTooltip={(cell, node) => (
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label={heatmapLabel(cell)}
-            className="rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--info)]"
-            onPointerEnter={(event) => show(cell, event.currentTarget)}
-            onClick={(event) => show(cell, event.currentTarget)}
-            onFocus={(event) => show(cell, event.currentTarget)}
-            onBlur={() => setActive(null)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setActive(null);
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                show(cell, event.currentTarget);
-              }
-            }}
-          >
-            {node}
-          </div>
-        )}
+        renderTooltip={(cell, node) =>
+          today && cell.day > today ? (
+            <div aria-hidden className="opacity-25">
+              {node}
+            </div>
+          ) : (
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label={heatmapLabel(cell)}
+              className="rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--info)]"
+              onPointerEnter={(event) => show(cell, event.currentTarget)}
+              onClick={(event) => show(cell, event.currentTarget)}
+              onFocus={(event) => show(cell, event.currentTarget)}
+              onBlur={() => setActive(null)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setActive(null);
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  show(cell, event.currentTarget);
+                }
+              }}
+            >
+              {node}
+            </div>
+          )
+        }
       />
       {active ? (
         <ChartTooltip position={active.position}>{heatmapLabel(active.cell)}</ChartTooltip>

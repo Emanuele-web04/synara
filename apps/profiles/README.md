@@ -121,6 +121,17 @@ heatmap count/date readouts and Escape dismissal, no console errors, and
 verified by API integration tests against a disposable Postgres database;
 the owner's personal links were not changed for deployment verification.
 
+The follow-up profiles version `65a263de-99b6-40d7-ad25-24b3667eb69d` uses
+the shared avatar's circular crop and displays January–December activity as
+round dots. Future dates remain empty, dimmed and noninteractive. Mobile keeps
+the dots legible in a horizontal scroll region; desktop fits the full year.
+The region reserves space for tooltips so scrolling does not clip them. The
+footer wraps its copy on narrow screens and aligns with the main content.
+Live verification at 390px covered horizontal scrolling (0–290px), tap and
+keyboard count/date readouts, future-day masking and no page overflow. The
+desktop calendar fits without scrolling. Build, formatting, lint, workspace
+typecheck and all 17 profiles tests passed; lint retains existing warnings.
+
 For subsequent deployments to this same verified destination, retain the
 existing proxy secret and explicitly override the trial API placeholder.
 From `apps/profiles` after the API and schema are ready:

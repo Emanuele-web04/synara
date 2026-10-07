@@ -87,6 +87,21 @@ export function buildHeatmapCells(
   return cells;
 }
 
+/** The owner's calendar year, with future dates empty and earlier years excluded. */
+export function buildCalendarYearCells(
+  days: readonly PublicProfileHeatmapDay[],
+  today: string,
+): HeatmapCell[] {
+  const year = Number(today.slice(0, 4));
+  const start = `${year}-01-01`;
+  const length = (Date.UTC(year + 1, 0, 1) - Date.UTC(year, 0, 1)) / DAY_MS;
+  return buildHeatmapCells(
+    days.filter((entry) => entry.day >= start && entry.day <= today),
+    `${year}-12-31`,
+    length,
+  );
+}
+
 /** The heatmap window folded into weeks (Sunday first), oldest first: each week's first day and tokens. */
 export function weeklyTotals(cells: readonly HeatmapCell[]): { start: string; tokens: number }[] {
   const weeks: { start: string; tokens: number }[] = [];

@@ -31,11 +31,11 @@ export function SiteFooter({ width = "max-w-[720px]" }: { width?: string }) {
   return (
     <footer className="border-t">
       <div
-        className={`mx-auto flex w-full ${width} items-center justify-between gap-4 px-6 py-6 sm:px-0`}
+        className={`mx-auto flex w-full ${width} flex-col items-start justify-between gap-3 px-5 py-6 sm:flex-row sm:items-center sm:gap-4 sm:px-6`}
       >
-        <p className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground/80">
+        <p className="flex min-w-0 items-center gap-2 text-xs leading-relaxed text-muted-foreground/80">
           <SynaraLogo className="h-3.5 w-auto shrink-0 opacity-60" />
-          <span className="truncate">Built with Synara — the open workspace for coding agents</span>
+          <span>Built with Synara — the open workspace for coding agents</span>
         </p>
         <a
           href="https://trysynara.com"

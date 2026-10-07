@@ -25,7 +25,7 @@ import {
 } from "../../components/ProfileCharts";
 import { ShareProfileButton } from "../../components/ShareProfileButton";
 import { activeDayCount, buildDailySeries, tokensInYear } from "../../lib/dailySeries";
-import { buildHeatmapCells, weeklyTotals } from "../../lib/heatmapCells";
+import { buildCalendarYearCells, buildHeatmapCells, weeklyTotals } from "../../lib/heatmapCells";
 import { groupModelUsage, type ModelUsageGroup } from "../../lib/modelUsage";
 import { profileAccentStyle, resolveProfileAccent } from "../../lib/profileAccent";
 import { formatStreakShort, joinedAgo } from "../../lib/profileFormat";
@@ -33,8 +33,6 @@ import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile"
 
 /** Days the Tokens and Prompts charts span. */
 const CHART_WINDOW_DAYS = 30;
-/** The phone heatmap's window: about four months of weeks. */
-const MOBILE_HEATMAP_DAYS = 119;
 /** Models the ring names before folding the rest into "Other models". */
 const RING_MODELS = 3;
 /** The page's content width; nav and footer line up with it. */
@@ -96,7 +94,7 @@ export default async function ProfilePage({ params }: Params) {
     >
       <SiteNav />
       <main
-        className={`mx-auto flex w-full ${CONTENT_WIDTH} flex-1 gap-12 px-5 pb-28 pt-10 sm:px-6 sm:pt-16`}
+        className={`mx-auto flex w-full ${CONTENT_WIDTH} flex-1 gap-12 px-5 pb-16 pt-10 sm:px-6 sm:pt-16`}
       >
         {/* The left rail: when they joined and where else to find them. Phones get the
             same facts as a row under the name instead. */}
@@ -114,7 +112,7 @@ export default async function ProfilePage({ params }: Params) {
                     initials={deriveInitials(profile.displayName)}
                     color={profile.avatarColor}
                     image={profile.avatarUrl ?? null}
-                    className="size-12 rounded-[15px]"
+                    className="size-12"
                     textClassName="text-lg"
                   />
                   {activeToday ? (
@@ -147,7 +145,7 @@ export default async function ProfilePage({ params }: Params) {
             <Stat label="Current streak" value={formatStreakShort(profile.currentStreakDays)} />
           </div>
 
-          <ActivitySection profile={profile} cells={cells} />
+          <ActivitySection profile={profile} />
           <TopModels groups={groups} lifetimeTokens={profile.lifetimeTokens} />
 
           {groups.length > 0 || profile.hours.some((entry) => entry.prompts > 0) ? (
@@ -260,28 +258,27 @@ function SocialLinkList({
 
 // ── Activity ───────────────────────────────────────────────────────────
 
-function ActivitySection({
-  profile,
-  cells,
-}: {
-  profile: PublicProfile;
-  cells: ReturnType<typeof buildHeatmapCells>;
-}) {
-  // A phone fits about four months of legible cells; the full window would shrink them
-  // to dots and collide the month labels.
-  const recentCells = buildHeatmapCells(profile.heatmap, profile.localToday, MOBILE_HEATMAP_DAYS);
-  const year = (profile.localToday ?? new Date().toISOString()).slice(0, 4);
+function ActivitySection({ profile }: { profile: PublicProfile }) {
+  const today = profile.localToday ?? new Date().toISOString().slice(0, 10);
+  const year = today.slice(0, 4);
+  const cells = buildCalendarYearCells(profile.heatmap, today);
   return (
     <ProfileSection
       title="Activity"
       detail={`${formatCompact(tokensInYear(profile.heatmap, year))} tokens in ${year}`}
     >
-      <ProfileHeatmap cells={cells} className="hidden sm:flex" />
-      <ProfileHeatmap cells={recentCells} className="sm:hidden" />
+      <div
+        className="-mx-5 -mt-8 overflow-x-auto overscroll-x-contain px-5 pt-8 sm:mx-0 sm:mt-0 sm:overflow-visible sm:px-0 sm:pt-0"
+        role="group"
+        aria-label="Activity calendar, scroll to see the full year"
+        tabIndex={0}
+      >
+        <ProfileHeatmap cells={cells} today={today} className="min-w-[640px] sm:min-w-0" />
+      </div>
       <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
         <span>Less</span>
         {APP_HEATMAP_INTENSITY_CLASSES.map((className) => (
-          <span key={className} aria-hidden className={`size-2.5 rounded-[3px] ${className}`} />
+          <span key={className} aria-hidden className={`size-2.5 rounded-full ${className}`} />
         ))}
         <span>More</span>
       </div>

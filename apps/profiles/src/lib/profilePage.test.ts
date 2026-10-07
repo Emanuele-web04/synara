@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeDayCount, buildDailySeries, tokensInYear } from "./dailySeries";
-import { buildHeatmapCells, weeklyTotals } from "./heatmapCells";
+import { buildCalendarYearCells, buildHeatmapCells, weeklyTotals } from "./heatmapCells";
 import { groupModelUsage } from "./modelUsage";
 import { formatStreakShort, joinedAgo } from "./profileFormat";
 import { profileAccentStyle, resolveProfileAccent } from "./profileAccent";
@@ -118,6 +118,27 @@ describe("groupModelUsage", () => {
     ]);
     expect(groups[2]).toMatchObject({ tokens: 9, turns: 2 });
     expect(groups[0]).toMatchObject({ tokens: 670, turns: 7, reasoning: ["low", "high"] });
+  });
+});
+
+describe("calendar-year activity", () => {
+  it.each([
+    [2026, 365],
+    [2024, 366],
+  ])("shows all of %i and leaves future days empty", (year, length) => {
+    const cells = buildCalendarYearCells(
+      [
+        { day: `${year - 1}-12-31`, tokens: 900, prompts: 1 },
+        { day: `${year}-01-01`, tokens: 10, prompts: 1 },
+        { day: `${year}-10-08`, tokens: 20, prompts: 1 },
+        { day: `${year}-12-31`, tokens: 800, prompts: 1 },
+      ],
+      `${year}-10-08`,
+    );
+    expect(cells).toHaveLength(length);
+    expect(cells[0]).toMatchObject({ day: `${year}-01-01`, count: 10 });
+    expect(cells.at(-1)).toMatchObject({ day: `${year}-12-31`, count: 0, intensity: 0 });
+    expect(cells.reduce((sum, cell) => sum + cell.count, 0)).toBe(30);
   });
 });
 
