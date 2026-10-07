@@ -275,6 +275,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords:
       "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background. alerts toast",
   },
+  {
+    id: "notifications:wait-for-subagents",
+    section: "notifications",
+    title: "Wait for subagents",
+    keywords:
+      "Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops. alerts notification",
+  },
 
   // ── AppSnap ───────────────────────────────────────────────────────────────────
   {
@@ -383,6 +390,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "behavior",
     title: "Assistant output",
     keywords: "Show token-by-token output while a response is in progress. streaming",
+  },
+  {
+    id: "behavior:fold-finished-turns",
+    section: "behavior",
+    title: "Fold finished turns",
+    keywords:
+      "Hide a finished turn's tool calls and intermediate messages behind a single Worked for line. A turn stays open while it runs or while its background subagents are still working. collapse steps transcript",
   },
   {
     id: "behavior:effort-slider",
