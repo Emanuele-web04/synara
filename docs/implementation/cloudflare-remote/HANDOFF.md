@@ -22,12 +22,20 @@ riuscita su entrambi i Mac.
 
 MacBook: patch applicata alla vera Synara (Dev), account e pairing conservati;
 RPC espone solo il Mini corrente e la UI mostra una sola riga anche offline.
-La riapertura delle chat resta **non verificata in questa prova**: durante
-l'auto-rebuild del desktop Mini il suo backend si è fermato, il tunnel risponde
-530 e la Dev non ha riavviato il backend. Il controllo UI del Mini è bloccato
-dallo schermo locked; richiesto sblocco all'utente per ispezionare l'avvio.
-Nessuna revoca o ricreazione del pairing. Screenshot MacBook nel percorso
-`~/.local/share/synara-tests/remote-macbook-mvp-20261007/operator/paired-hosts-list-offline.jpg`.
+Durante l'auto-rebuild del desktop Mini il backend si era fermato e il tunnel
+rispondeva 530. Dopo lo sblocco, l'avviso ha identificato un digest delle
+migrazioni incorporato dal vecchio watcher non allineato al checkout: il
+controllo ha fermato l'avvio **prima di aprire il database**. Arrestato il vecchio
+runner, eseguito `bun run build:desktop` (4/4 task riusciti) e riavviato
+`bun run dev:desktop --home-dir ./.synara/phone-playground`, dopo dry-run e
+verifica delle porte. Home, account e pairing conservati, nessun bypass o reset.
+
+Verifica conclusa nelle app native: Mini startupReady con proiezioni sane;
+MacBook health remoto 200, un solo Mini connesso via Cloudflare e Open apre
+la chat demo con la risposta storica `MACBOOK TO MINI OK`. Nessun nuovo turno
+provider né login. App lasciate aperte. Screenshot MacBook nella cartella
+`~/.local/share/synara-tests/remote-macbook-mvp-20261007/operator/`:
+`paired-hosts-list-offline.jpg` e `paired-hosts-list-connected.jpg`.
 
 ## Account nella rail — 7 ottobre 2026
 
