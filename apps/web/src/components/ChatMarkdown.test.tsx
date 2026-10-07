@@ -85,6 +85,40 @@ describe("ChatMarkdown", () => {
     expect(markup).toMatch(/<p>Done\.<\/p><\/div>$/);
   });
 
+  it("keeps raw HTML escaped unless an authored preview opts in", async () => {
+    const escaped = await renderMarkdown("<details><summary>More</summary>text</details>");
+    expect(escaped).toContain("&lt;details&gt;");
+
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text="<details><summary>More</summary>text</details>"
+        cwd={undefined}
+        isStreaming={false}
+        parseHtml
+      />,
+    );
+    expect(rendered).toContain("<details>");
+    expect(rendered).toContain("<summary>More</summary>");
+    expect(rendered).not.toContain("&lt;details&gt;");
+  });
+
+  it("sanitizes dangerous HTML in authored previews", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text={'<script>alert("xss")</script><a href="javascript:alert(1)">safe label</a>'}
+        cwd={undefined}
+        isStreaming={false}
+        parseHtml
+      />,
+    );
+    expect(rendered).not.toContain("<script");
+    expect(rendered).not.toContain('alert("xss")');
+    expect(rendered).not.toContain("javascript:");
+    expect(rendered).toContain("safe label");
+  });
+
   it("leaves blockquotes with inline text after the marker as plain quotes", async () => {
     const markup = await renderMarkdown("> [!NOTE] not an alert");
 
