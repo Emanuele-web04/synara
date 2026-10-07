@@ -19,6 +19,7 @@ import {
 } from "./BrowserPanel.logic";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useHorizontalWheelScroll } from "./chat/chatHeaderControls";
 
 export interface BrowserTabStripProps {
   tabs: readonly BrowserTabState[];
@@ -35,6 +36,7 @@ export interface BrowserTabStripProps {
 export function BrowserTabStrip(props: BrowserTabStripProps) {
   const { activeTabId, onCloseTab, onCreateTab, onSelectTab } = props;
   const stripRef = useRef<HTMLDivElement>(null);
+  useHorizontalWheelScroll(stripRef);
 
   // A tab created/selected past the visible edge ("New tab" appends at the end) must come
   // into view or the action looks like it did nothing.
@@ -56,7 +58,11 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
         props.dragRegion && "drag-region",
       )}
     >
-      <div ref={stripRef} className="flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div
+        ref={stripRef}
+        data-testid="browser-tab-strip"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto"
+      >
         {props.tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const tabIsBlank = isBlankBrowserTabUrl(tab);

@@ -46,6 +46,38 @@ describe("browser tab mouse actions", () => {
     await mounted.unmount();
   });
 
+  it("scrolls an overflowing tab strip sideways with a vertical wheel", async () => {
+    const crowdedTabs = Array.from({ length: 8 }, (_, index) => ({
+      ...tabs[index % tabs.length]!,
+      id: `crowded-tab-${index}`,
+      title: `Browser page ${index}`,
+    }));
+    const mounted = await render(
+      <div style={{ width: 240 }}>
+        <BrowserTabStrip
+          tabs={crowdedTabs}
+          activeTabId={crowdedTabs[0]!.id}
+          status={null}
+          dragRegion={false}
+          onCloseTab={() => {}}
+          onSelectTab={() => {}}
+          onCreateTab={() => {}}
+        />
+      </div>,
+    );
+    try {
+      const strip = page.getByTestId("browser-tab-strip").element() as HTMLElement;
+      expect(strip.scrollWidth).toBeGreaterThan(strip.clientWidth);
+      strip.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+      expect(strip.scrollLeft).toBeGreaterThan(0);
+      const beforeZoomWheel = strip.scrollLeft;
+      strip.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: 120, bubbles: true }));
+      expect(strip.scrollLeft).toBe(beforeZoomWheel);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("closes once from the favicon, close button, and tab padding without native middle-click defaults", async () => {
     const onCloseTab = vi.fn();
     const onSelectTab = vi.fn();
