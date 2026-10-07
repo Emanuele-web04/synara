@@ -7020,6 +7020,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(createThreadCommand).toMatchObject({
             type: "thread.create",
             threadId: THREAD_ID,
+            createdAt: expect.any(String),
             envMode: "worktree",
             branch: "feature/draft-automation",
             worktreePath: "/repo/worktrees/draft-automation",
@@ -7036,6 +7037,7 @@ describe("ChatView transcript geometry (full app)", () => {
             runtimeMode: "full-access",
             interactionMode: "default",
           });
+          expect(createThreadCommand?.createdAt).not.toBe(NOW_ISO);
 
           expect(wsRequests[automationCreateIndex]).toMatchObject({
             _tag: WS_METHODS.automationCreate,
@@ -10918,6 +10920,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       const prompt = "Keep the first message on screen";
+      const draftCreatedAt = useComposerDraftStore.getState().getDraftThread(THREAD_ID)?.createdAt;
       useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
       const sendButton = await waitForSendButton();
       expect(sendButton.disabled).toBe(false);
@@ -10929,6 +10932,11 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(command).toBeDefined();
         return command!;
       });
+      const createCommand = wsRequests
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === "thread.create");
+      expect(createCommand?.createdAt).toBe(startCommand.createdAt);
+      expect(createCommand?.createdAt).not.toBe(draftCreatedAt);
       const message = startCommand.message as { messageId: MessageId; text: string };
       const messageSelector = `[data-message-id="${message.messageId}"][data-message-role="user"]`;
       const expectTranscript = async () => {
