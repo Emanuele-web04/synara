@@ -6,12 +6,79 @@
 // owner's accent (`--info`). A client component only for the hover state; the data is
 // computed on the server.
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { ActivityHeatmap, type HeatmapCell } from "@synara/profile-ui/heatmap";
 import { formatCompact, formatHourLabel } from "@synara/profile-ui/formatting";
 import type { DailyPoint } from "../lib/dailySeries";
 
 const AREA_WIDTH = 640;
 const AREA_HEIGHT = 120;
+
+// Use the charts' fixed English/UTC date label so hydration never changes the label.
+function heatmapLabel(cell: HeatmapCell): string {
+  const count = cell.count > 0 ? formatCompact(cell.count) : "No";
+  return `${count} ${cell.count === 1 ? "token" : "tokens"} on ${dayLabel(cell.day)}`;
+}
+
+/** Reuses the shared grid and chart tooltip for pointer, touch and keyboard input. */
+export function ProfileHeatmap({
+  cells,
+  className,
+}: {
+  cells: readonly HeatmapCell[];
+  className?: string;
+}) {
+  const container = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState<{ cell: HeatmapCell; position: number } | null>(null);
+  const show = (cell: HeatmapCell, target: HTMLDivElement) => {
+    const bounds = container.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const mark = target.getBoundingClientRect();
+    setActive({
+      cell,
+      position: (mark.left + mark.width / 2 - bounds.left) / Math.max(1, bounds.width),
+    });
+  };
+  return (
+    <div
+      ref={container}
+      className={`relative ${className ?? ""}`}
+      onPointerLeave={() => setActive(null)}
+    >
+      <ActivityHeatmap
+        cells={cells}
+        fill
+        radius={3}
+        gap={3}
+        showMonths
+        renderTooltip={(cell, node) => (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={heatmapLabel(cell)}
+            className="rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--info)]"
+            onPointerEnter={(event) => show(cell, event.currentTarget)}
+            onClick={(event) => show(cell, event.currentTarget)}
+            onFocus={(event) => show(cell, event.currentTarget)}
+            onBlur={() => setActive(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setActive(null);
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                show(cell, event.currentTarget);
+              }
+            }}
+          >
+            {node}
+          </div>
+        )}
+      />
+      {active ? (
+        <ChartTooltip position={active.position}>{heatmapLabel(active.cell)}</ChartTooltip>
+      ) : null}
+    </div>
+  );
+}
 
 // Fixed English, UTC: the page copy is English, and the server render and the visitor's
 // browser must print the same label (a locale-default formatter would differ by visitor).

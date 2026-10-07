@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
-import { ActivityHeatmap, APP_HEATMAP_INTENSITY_CLASSES } from "@synara/profile-ui/heatmap";
+import { APP_HEATMAP_INTENSITY_CLASSES } from "@synara/profile-ui/heatmap";
 import { deriveInitials, formatCompact } from "@synara/profile-ui/formatting";
 import { PROVIDER_GLYPHS, providerIconToneClassName } from "@synara/profile-ui/provider-icon";
 import { SOCIAL_GLYPHS } from "@synara/profile-ui/social-icon";
@@ -20,6 +20,7 @@ import {
   HourArc,
   type ModelShare,
   ModelShareRing,
+  ProfileHeatmap,
   WeekCapsules,
 } from "../../components/ProfileCharts";
 import { ShareProfileButton } from "../../components/ShareProfileButton";
@@ -266,8 +267,6 @@ function ActivitySection({
   profile: PublicProfile;
   cells: ReturnType<typeof buildHeatmapCells>;
 }) {
-  // No renderTooltip: ActivityHeatmap falls back to a native `title`. Fill mode with the
-  // app's window length, so the grid renders exactly like the in-app Activity section.
   // A phone fits about four months of legible cells; the full window would shrink them
   // to dots and collide the month labels.
   const recentCells = buildHeatmapCells(profile.heatmap, profile.localToday, MOBILE_HEATMAP_DAYS);
@@ -277,22 +276,8 @@ function ActivitySection({
       title="Activity"
       detail={`${formatCompact(tokensInYear(profile.heatmap, year))} tokens in ${year}`}
     >
-      <ActivityHeatmap
-        cells={cells}
-        fill
-        radius={3}
-        gap={3}
-        showMonths
-        className="hidden sm:flex"
-      />
-      <ActivityHeatmap
-        cells={recentCells}
-        fill
-        radius={3}
-        gap={3}
-        showMonths
-        className="sm:hidden"
-      />
+      <ProfileHeatmap cells={cells} className="hidden sm:flex" />
+      <ProfileHeatmap cells={recentCells} className="sm:hidden" />
       <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
         <span>Less</span>
         {APP_HEATMAP_INTENSITY_CLASSES.map((className) => (

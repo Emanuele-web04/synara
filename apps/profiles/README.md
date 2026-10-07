@@ -10,7 +10,9 @@ separate database or authentication system.
 The account profile flow is a controlled Beta/development trial. Start the
 Synara server with `SYNARA_ACCOUNT_PROFILE_SYNC=1` to enable it. Stable rejects
 it even when this variable is set. Without it, the local profile remains
-available and account profile RPCs and usage reporting stay disabled. The web
+available and account profile RPCs and usage reporting stay disabled. Signed-in
+Settings and the sidebar still display the same account identity; editing is
+disabled rather than silently saving a photo to the signed-out local profile. The web
 UI reads the server's `accountProfileSync` capability; old servers default off.
 
 Opting in starts the existing reporter for signed-in accounts, including the
@@ -30,13 +32,13 @@ public. The app does not need persistent R2/DO caching for this read path.
 
 ## Configuration
 
-| Variable                 | Purpose                                                                                                                                                                                                     |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ACCOUNT_API_URL`        | Verified account API origin. The historical deployment defaults to `https://api.synara.vrbty.dev`; the isolated trial deliberately uses a non-routable placeholder until configured.                        |
-| `PROFILES_PUBLIC_ORIGIN` | Public origin used for absolute social preview URLs. The trial uses `https://trysynara.com`, served through the marketing proxy.                                                                            |
-| `PROFILE_PROXY_SECRET`   | Optional shared secret matching the account API; allows per-visitor rate limiting. Set as a Worker secret, never in source.                                                                                 |
+| Variable                 | Purpose                                                                                                                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ACCOUNT_API_URL`        | Verified account API origin. The historical deployment defaults to `https://api.synara.vrbty.dev`; the isolated trial deliberately uses a non-routable placeholder until configured.                            |
+| `PROFILES_PUBLIC_ORIGIN` | Public origin used for absolute social preview URLs. The trial uses `https://trysynara.com`, served through the marketing proxy.                                                                                |
+| `PROFILE_PROXY_SECRET`   | Optional shared secret matching the account API; allows per-visitor rate limiting. Set as a Worker secret, never in source.                                                                                     |
 | `PROFILES_ASSET_PREFIX`  | Asset prefix for proxied deployments, set at build time for Next.js bundles and at runtime for the favicon. The trial uses `https://www.trysynara.com/profiles-assets`; leave unset for standalone deployments. |
-| `MARKETING_ORIGIN`       | Optional origin for non-profile routes in the historical single-domain deployment. Unset on the trial.                                                                                                      |
+| `MARKETING_ORIGIN`       | Optional origin for non-profile routes in the historical single-domain deployment. Unset on the trial.                                                                                                          |
 
 ## Local development and verification
 
@@ -103,6 +105,24 @@ unique constraint, including concurrent claims and private profiles. A
 profile's public 404 does not mean its handle is available.
 
 ## Current branded routing
+
+The 2026-10-07 profile update is deployed on Synara Orgs: account API version
+`55d349a9-48ad-47ea-923e-a5980d07c425` and profiles version
+`877cee19-6383-4306-8781-7db26d27a295`. API startup applied Drizzle migration
+`0018_profile_theme_accent`; its nullable light/dark columns preserve existing
+profiles. A normal desktop profile save and theme changes publish the accent
+pair. Older desktop server bundles must be rebuilt to carry the new field.
+Profiles without a saved pair retain the avatar-color fallback.
+
+The follow-up profiles version `aea37178-a6df-47d0-b858-9df1d6dca5d6` adds
+immediate heatmap tooltips using the shared activity grid and chart tooltip.
+Cells expose token counts and dates on pointer entry, tap or keyboard focus;
+Escape dismisses the readout. Dates use the charts' English/UTC formatting to
+avoid server/browser locale mismatches.
+
+Live verification covered desktop save → public API → light/dark page colors,
+same-origin JavaScript assets, and value/date hover readouts for daily tokens,
+daily prompts and hourly prompts. The public profile remains opt-in.
 
 As of 2026-10-07, the live marketing project is **dpcode-website** on Vercel,
 not this checkout's `apps/marketing`. Two project-level rewrites serve profiles

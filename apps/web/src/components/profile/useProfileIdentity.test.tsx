@@ -67,9 +67,9 @@ describe("profile identity source", () => {
     },
   );
 
-  it("keeps local identity when signed out or account profiles are unavailable", () => {
+  it("keeps the signed-in identity when profile editing is unavailable, and local identity when signed out", () => {
     account.profileSyncEnabled = false;
-    expect(readIdentity().name).toBe("Local Name");
+    expect(readIdentity().name).toBe("Login Name");
     account.profileSyncEnabled = true;
     account.me = null;
     expect(readIdentity()).toMatchObject({
@@ -93,6 +93,22 @@ describe("profile identity source", () => {
       }),
     ).rejects.toThrow("Finish setting up");
     expect(getLocalStorageItem("synara:profile:name:v1", Schema.String)).toBe("Local Name");
+    expect(account.updateProfile.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("refuses a local-only avatar save while signed in without profile sync", async () => {
+    account.profileSyncEnabled = false;
+    await expect(
+      readIdentity().save({
+        name: "New Name",
+        handle: "new",
+        avatarColor: "#22c55e",
+        avatarImage: "data:image/png;base64,new",
+      }),
+    ).rejects.toThrow("Profile editing is unavailable");
+    expect(getLocalStorageItem("synara:profile:avatarImage:v1", Schema.String)).toBe(
+      "data:image/png;base64,local",
+    );
     expect(account.updateProfile.mutateAsync).not.toHaveBeenCalled();
   });
 });

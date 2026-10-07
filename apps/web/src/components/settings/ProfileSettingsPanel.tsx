@@ -151,6 +151,7 @@ function ProfileContent({
     avatarImage,
     ssoImage,
     accountProfile,
+    canEdit,
     save,
     uploadAvatarPhoto,
     removeUploadedAvatar,
@@ -194,12 +195,18 @@ function ProfileContent({
             <CentralIcon name="share-os" />
             Share
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+          <Button variant="outline" size="sm" disabled={!canEdit} onClick={() => setEditOpen(true)}>
             <CentralIcon name="pencil" />
             Edit
           </Button>
         </div>
       </div>
+
+      {!canEdit ? (
+        <p className="text-ui-sm text-muted-foreground">
+          Profile editing is unavailable on this computer. Your account photo and name are shown.
+        </p>
+      ) : null}
 
       {/* Centered identity header */}
       <header className="flex flex-col items-center gap-3 text-center">
