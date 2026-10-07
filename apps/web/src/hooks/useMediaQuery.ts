@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { presentationWindow } from "../lib/hosts/workspacePresentation";
 
 const BREAKPOINTS = {
   "2xl": 1536,
@@ -65,15 +66,15 @@ export function useMediaQuery(query: BreakpointQuery | MediaQueryInput | (string
   const mediaQuery = parseQuery(query);
 
   const subscribe = (callback: () => void) => {
-    if (typeof window === "undefined") return () => {};
-    const mql = window.matchMedia(mediaQuery);
+    const viewport = presentationWindow();
+    if (!viewport) return () => {};
+    const mql = viewport.matchMedia(mediaQuery);
     mql.addEventListener("change", callback);
     return () => mql.removeEventListener("change", callback);
   };
 
   const getSnapshot = () => {
-    if (typeof window === "undefined") return false;
-    return window.matchMedia(mediaQuery).matches;
+    return presentationWindow()?.matchMedia(mediaQuery).matches ?? false;
   };
 
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);

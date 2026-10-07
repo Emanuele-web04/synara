@@ -59,6 +59,7 @@ export interface WorkspaceSidebarKeyboardEvent extends KeyboardEvent {
 export interface WorkspaceFrameBinding {
   readonly host: ActiveHost;
   readonly controller: {
+    readonly desktop?: boolean;
     readonly environment: ExecutionEnvironmentDescriptor;
     readonly sidebar: {
       read(): SidebarContextProps;

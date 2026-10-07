@@ -4,7 +4,7 @@
 // Exports: useTheme for mode, resolved variant, theme-pack import/export, and active theme metadata.
 
 import { useEffect, useSyncExternalStore } from "react";
-import { isElectron } from "../env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import {
   DEFAULT_THEME_STATE,
@@ -183,7 +183,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   const activeTheme = resolveThemePack(state, variant);
   const translucency = state.translucency[variant];
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
-    electron: isElectron,
+    electron: isDesktopPresentation,
     isMac: isMacNavigatorPlatform(),
     systemUiFont: state.systemUiFont,
     translucency,

@@ -2829,10 +2829,19 @@ diffs-container {
   --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) 0;
 }
 
+/* Embedded content shares the controller's single window coat. */
+:root[data-workspace-frame="true"] body,
+:root[data-workspace-frame="true"] [data-sidebar-layout="rail"] {
+  background: transparent;
+}
+
 /* Panel collapsed: the route body is the whole block, so its left corners round too. They
    wait for the panel to slide most of the way out, so no notch opens beside it meanwhile;
    opening squares them at once. */
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"]) {
+[data-sidebar-layout="rail"]:is(
+  [data-shell-sidebar-state="collapsed"],
+  :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+) {
   --app-rail-block-radii: var(--app-rail-inset-radius);
   --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius);
   --app-rail-corner-delay: 180ms;
@@ -2931,7 +2940,10 @@ diffs-container {
 
 /* Panel collapsed: its zero-width box must not leave a border line next to the rail. The
    border stays until the slide ends, so the shrinking panel keeps its edges. */
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+[data-sidebar-layout="rail"]:is(
+    [data-shell-sidebar-state="collapsed"],
+    :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  )
   .app-rail-panel {
   border-width: 0;
   transition: border-width 0s linear 300ms;
@@ -2974,7 +2986,10 @@ diffs-container {
   opacity: 0;
 }
 
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+[data-sidebar-layout="rail"]:is(
+    [data-shell-sidebar-state="collapsed"],
+    :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  )
   .app-rail-header-divider {
   opacity: 0;
 }
@@ -3004,7 +3019,10 @@ diffs-container {
   [data-sidebar-layout="rail"] .chat-content-card::before,
   [data-sidebar-layout="rail"] .chat-content-card::after,
   [data-sidebar-layout="rail"] .app-rail-panel,
-  [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  [data-sidebar-layout="rail"]:is(
+      [data-shell-sidebar-state="collapsed"],
+      :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+    )
     .app-rail-panel {
     transition: none;
   }

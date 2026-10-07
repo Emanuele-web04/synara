@@ -9,7 +9,7 @@ import {
 } from "@synara/shared/desktopChrome";
 import { useLayoutEffect } from "react";
 
-import { isElectron } from "~/env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { useSidebar } from "~/components/ui/sidebar";
 import { useDesktopCustomTitleBarActive } from "~/hooks/useDesktopCustomTitleBar";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
@@ -75,7 +75,7 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
   const isMacDesktop = isMacNavigatorPlatform();
 
   useLayoutEffect(() => {
-    if (!isElectron || !isMacDesktop) {
+    if (!isDesktopPresentation || !isMacDesktop) {
       return;
     }
 
@@ -107,7 +107,7 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string {
   const { isMobile, open } = useSidebar();
   const isMacDesktop = isMacNavigatorPlatform();
   const gutterClassName = shouldReserveDesktopTopBarTrafficLightGutter({
-    isElectron,
+    isElectron: isDesktopPresentation,
     isMacDesktop,
     sidebarOpen: open,
     isMobile,
@@ -163,7 +163,7 @@ export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
 export function useDesktopTopBarWindowControlsGutterClassName(): string {
   const customTitleBarActive = useDesktopCustomTitleBarActive();
   const gutterClassName = shouldReserveDesktopTopBarWindowControlsGutter({
-    isElectron,
+    isElectron: isDesktopPresentation,
     customTitleBarActive,
   })
     ? DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS

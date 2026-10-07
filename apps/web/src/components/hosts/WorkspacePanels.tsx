@@ -13,6 +13,7 @@ import {
   useLayoutEffect,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { isElectron } from "../../env";
 import { serverConfigQueryOptions } from "../../lib/serverReactQuery";
 import { accountStatusQueryOptions } from "../../lib/accountReactQuery";
 import { connectionsQueryOptions } from "../../lib/hosts/queries";
@@ -137,6 +138,7 @@ function WorkspacePanel({
       frame.synaraWorkspace = {
         host,
         controller: {
+          desktop: isElectron,
           environment: readExecutionContext()!.controller,
           sidebar: sidebarBridge,
           sessions: readWorkspaceSessions,
@@ -247,7 +249,7 @@ function WorkspacePanel({
   return (
     <section
       hidden={!active}
-      className={active ? "absolute inset-0 z-10 flex min-h-0 flex-col bg-background" : "hidden"}
+      className={active ? "absolute inset-0 z-10 flex min-h-0 flex-col" : "hidden"}
       aria-label={`Workspace on ${host.hostName}`}
     >
       <iframe

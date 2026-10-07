@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { isElectron } from "~/env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { AppNavigationButtons } from "./AppNavigationButtons";
 import { SIDEBAR_OFFCANVAS_MOTION_CLASS, SidebarTrigger, useSidebar } from "./ui/sidebar";
 import { cn } from "~/lib/utils";
@@ -194,7 +194,7 @@ function SidebarLeadingControlsAnchor({
       className={cn(LEADING_CONTROLS_CLASS, "[-webkit-app-region:no-drag]")}
     >
       <div className="size-7 shrink-0" />
-      {isElectron ? (
+      {isDesktopPresentation ? (
         <div className="flex shrink-0 items-center gap-0.5">
           <div className="size-8" />
           <div className="size-8" />

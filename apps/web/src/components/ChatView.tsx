@@ -121,7 +121,7 @@ import {
   resolveComposerSlashRootBranch,
 } from "../composerSlashCommands";
 import { stripDiffSearchParams } from "../diffRouteSearch";
-import { isElectron } from "../env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { useFeatureFlags } from "../featureFlags";
 import {
   resolveThreadMentionForThreadId,
@@ -5205,7 +5205,7 @@ export default function ChatView({
           CHAT_BACKGROUND_CLASS_NAME,
         )}
       >
-        {!isElectron && (
+        {!isDesktopPresentation && (
           <header className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}>
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
@@ -5215,7 +5215,7 @@ export default function ChatView({
             </div>
           </header>
         )}
-        {isElectron && (
+        {isDesktopPresentation && (
           <div
             className={cn(
               CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
@@ -6221,7 +6221,7 @@ export default function ChatView({
           !isEditorRail && CHAT_SURFACE_HEADER_PADDING_X_CLASS,
           "flex items-center",
           isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-          isElectron && "drag-region",
+          isDesktopPresentation && "drag-region",
           // The editor-rail chat header sits in the editor's second row (inside the
           // right-side chat pane), not flush against the window edges — the editor's
           // own top bar already reserves both desktop window-control gutters. Applying

@@ -1,5 +1,25 @@
 # Remote connections — punto di ripartenza
 
+## Presentazione locale e remota — 7 ottobre 2026
+
+La connessione conserva l'esecuzione nel frame del computer proprietario, ma
+la presentazione appartiene alla finestra del controller. Il frame remoto
+saltava il contenitore rail della vista locale: mancavano fascia superiore,
+margini, bordi e stato degli angoli della sidebar. Inoltre l'assenza del preload
+Electron lo faceva classificare come browser per tema e controlli visivi.
+
+Le due viste ora riusano `ChatShell`; lo stato della sidebar del controller
+pilota gli stessi stili. `isDesktopPresentation` distingue l'aspetto desktop
+dalla disponibilità di `nativeApi`/`desktopBridge`, che restano isolati. Le query
+responsive JavaScript leggono il viewport del controller, non la larghezza del
+solo riquadro remoto. Il frame trasparente evita di ridipingere sopra il
+rivestimento della finestra. Nessuna modifica a provider, pairing o API remote.
+
+Verifica: 5.101 test web passati, 3 saltati; 8 test browser su contenitore,
+controlli della sidebar e traslucenza. Le nuove regressioni falliscono usando
+il contenitore remoto precedente e il rilevamento limitato al singolo frame.
+fmt/lint/typecheck passati (928 warning lint preesistenti, zero errori).
+
 ## Run on dopo il riavvio — 7 ottobre 2026
 
 Riprodotto nell'app nativa MacBook: Settings mostrava il Mini connesso su

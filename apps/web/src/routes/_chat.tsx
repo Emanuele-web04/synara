@@ -5,10 +5,10 @@ import {
   useWorkspaceSidebarControls,
 } from "../components/hosts/WorkspacePanels";
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
-import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChatShell } from "../components/ChatShell";
 
 import {
   goBackInAppHistory,
@@ -68,7 +68,6 @@ import {
   Sidebar,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
   SidebarInstanceProvider,
-  SidebarProvider,
   SidebarRail,
   useSidebar,
 } from "~/components/ui/sidebar";
@@ -649,17 +648,13 @@ function ChatRouteLayout() {
 
   if (readWorkspaceFrame()) {
     return (
-      <SidebarProvider
-        open={false}
-        controls={workspaceSidebarControls}
-        className="h-svh overflow-hidden bg-background"
-      >
+      <ChatShell open={false} controls={workspaceSidebarControls}>
         <WorkspaceFrameNavigation />
         <ChatRouteGlobalShortcuts />
         <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
           <Outlet />
         </div>
-      </SidebarProvider>
+      </ChatShell>
     );
   }
 
@@ -669,15 +664,7 @@ function ChatRouteLayout() {
   // the existing <Sidebar> offcanvas slide and resize run unchanged below the strip and are
   // clipped at the rail. The strip height reaches CSS as a variable (see index.css).
   return (
-    <SidebarProvider
-      defaultOpen
-      open={resolvedSidebarOpen}
-      onOpenChange={handleSidebarOpenChange}
-      className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
-      style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
-      data-sidebar-side="left"
-      data-sidebar-layout="rail"
-    >
+    <ChatShell defaultOpen open={resolvedSidebarOpen} onOpenChange={handleSidebarOpenChange}>
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
       <AppRailSlotProvider value={railSlot}>
@@ -700,7 +687,7 @@ function ChatRouteLayout() {
           {mainContentShell}
         </SidebarLeadingControlsDock>
       </AppRailSlotProvider>
-    </SidebarProvider>
+    </ChatShell>
   );
 }
 
