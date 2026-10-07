@@ -1,5 +1,15 @@
 # Remote connections — punto di ripartenza
 
+## Account nella rail — 7 ottobre 2026
+
+Ripristinato `AccountFooterControl`, rimasto importato ma non montato dopo il
+passaggio alla rail. Sostituisce l'ingranaggio fisso con l'avatar del profilo
+autenticato (foto o iniziali); da disconnessi mostra Sign in. Il menu esistente
+conserva profilo, Connections, Settings e Sign out, e aggiunge Usage. Riutilizza
+ProfileAvatar, SidebarIconButton e i menu condivisi, senza un secondo flusso
+di autenticazione. Passati 11 test browser account/login, 28 test account e
+tipografia, fmt/lint/typecheck; nessun logout delle sessioni reali per provarlo.
+
 ## App desktop MacBook — 7 ottobre 2026
 
 - Avviata la vera app Electron Synara (Dev) dal checkout isolato MacBook,

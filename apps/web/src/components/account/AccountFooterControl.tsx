@@ -1,7 +1,6 @@
 // FILE: AccountFooterControl.tsx
-// Purpose: The sidebar footer's account entry point — a signed-in row (avatar,
-// first name, chevron) opening the account menu, or a signed-out row opening
-// the local-mode menu. Replaces the old standalone Settings row; Settings
+// Purpose: The rail's account entry point — a signed-in avatar opening the
+// account menu, or a signed-out user icon opening the local-mode menu. Settings
 // lives inside both menus.
 // Layer: Web account feature (sidebar footer).
 
@@ -20,24 +19,15 @@ import {
   SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME,
   SidebarContextMenuIcon,
 } from "~/components/sidebarContextMenuStyles";
-import { SidebarMenuButton } from "~/components/ui/sidebar";
+import { SidebarIconButton } from "~/components/SidebarIconButton";
+import { appRailButtonClassName } from "~/components/AppRail";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
-import { ChevronUpIcon, ExternalLinkIcon, GlobeIcon, SettingsIcon } from "~/lib/icons";
+import { ExternalLinkIcon, GlobeIcon, SettingsIcon, UsageGaugeIcon, UserIcon } from "~/lib/icons";
 import { openExternalLink } from "~/lib/linkChips";
-import { cn, isMacPlatform } from "~/lib/utils";
+import { isMacPlatform } from "~/lib/utils";
 import { useAccount } from "~/hooks/useAccount";
-import {
-  accountErrorMessage,
-  accountFirstName,
-  accountInitial,
-  publicProfileUrl,
-} from "~/lib/accountLogic";
+import { accountErrorMessage, accountInitial, publicProfileUrl } from "~/lib/accountLogic";
 import { PROFILE_AVATAR_COLORS } from "~/components/profile/useProfileAvatarColor";
-import {
-  SIDEBAR_HEADER_ROW_CLASS_NAME,
-  SIDEBAR_ROW_HOVER_CLASS_NAME,
-  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-} from "~/sidebarRowStyles";
 import { useAccountDialogStore } from "./accountDialogStore";
 
 const DEFAULT_MENU_AVATAR_COLOR = PROFILE_AVATAR_COLORS[0] ?? "#22c55e";
@@ -81,30 +71,23 @@ function SignedInFooter() {
 
   return (
     <Menu>
-      <MenuTrigger
-        render={
-          <SidebarMenuButton
-            size="sm"
-            className={cn(
-              SIDEBAR_HEADER_ROW_CLASS_NAME,
-              SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-              SIDEBAR_ROW_HOVER_CLASS_NAME,
-              "flex-1",
-            )}
-          />
-        }
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={UserIcon}
+        label={`Account: ${displayName}`}
+        tooltip={displayName}
+        tooltipSide="right"
+        className={appRailButtonClassName(false)}
       >
         <ProfileAvatar
           initials={accountInitial(displayName)}
           color={avatarColor}
           image={avatarImage}
-          className="size-5 shrink-0"
+          className="size-7 shrink-0"
           textClassName="text-ui-xs"
         />
-        <span className="min-w-0 flex-1 truncate">{accountFirstName(me)}</span>
-        <ChevronUpIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      </MenuTrigger>
-      <ComposerPickerMenuPopup side="top" align="start" className="w-60 min-w-60">
+      </SidebarIconButton>
+      <ComposerPickerMenuPopup side="right" align="end" className="w-64 min-w-64">
         <MenuGroup>
           <div className="flex flex-col gap-0.5 px-2 py-1.5">
             <span className="truncate text-ui font-medium text-foreground">{displayName}</span>
@@ -119,6 +102,13 @@ function SignedInFooter() {
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>
+          <MenuItem
+            className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+            onClick={() => void navigate({ to: "/settings", search: { section: "usage" } })}
+          >
+            <SidebarContextMenuIcon icon={UsageGaugeIcon} />
+            <span>Usage</span>
+          </MenuItem>
           {/* Three honest states: a public profile links to its live page, a
               private one routes to the visibility setting (the page would
               404), and no profile resumes onboarding. */}
@@ -184,28 +174,16 @@ function SignedOutFooter() {
 
   return (
     <Menu>
-      <MenuTrigger
-        render={
-          <SidebarMenuButton
-            size="sm"
-            className={cn(
-              SIDEBAR_HEADER_ROW_CLASS_NAME,
-              SIDEBAR_ROW_HOVER_CLASS_NAME,
-              "flex-1 text-muted-foreground",
-            )}
-          />
-        }
-      >
-        <span
-          aria-hidden="true"
-          className="flex size-5 shrink-0 items-center justify-center rounded-full border border-dashed border-muted-foreground/48 text-ui-xs text-muted-foreground"
-        >
-          ?
-        </span>
-        <span className="min-w-0 flex-1 truncate">Sign in</span>
-        <ChevronUpIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      </MenuTrigger>
-      <ComposerPickerMenuPopup side="top" align="start" className="w-60 min-w-60">
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={UserIcon}
+        iconClassName="size-5"
+        label="Sign in"
+        tooltip="Sign in"
+        tooltipSide="right"
+        className={appRailButtonClassName(false)}
+      />
+      <ComposerPickerMenuPopup side="right" align="end" className="w-64 min-w-64">
         <MenuGroup>
           <div className="flex flex-col gap-0.5 px-2 py-1.5">
             <span className="text-ui font-medium text-foreground">You&rsquo;re in local mode</span>

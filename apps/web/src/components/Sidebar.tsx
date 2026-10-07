@@ -7313,19 +7313,6 @@ export default function Sidebar() {
     if (visible) return;
     updateSettings({ railShortcuts: toggleRailShortcutKey(appSettings.railShortcuts, key) });
   };
-  const railBottomItems: AppRailItem[] = [
-    {
-      id: "settings",
-      glyphs: railItemGlyphs("settings"),
-      label: "Settings",
-      badge: null,
-      active: railActiveItem === "settings",
-      onSelect: () => {
-        selectRailRouteItem("settings");
-        void navigate({ to: "/settings" });
-      },
-    },
-  ];
   // The rail owns the route destinations, so the panel keeps only "New thread": always
   // there, since the rail's Customize has no New thread row to bring it back.
   const panelSidebarNavIds: readonly SidebarNavItemId[] = ["newThread"];
@@ -7385,7 +7372,7 @@ export default function Sidebar() {
     items: railItems,
     shortcuts: railShortcutItems,
     moreSlot: railMoreMenu,
-    bottomItems: railBottomItems,
+    bottomItems: [],
     bottomSlot: (
       <>
         <AppRailUsage
@@ -7401,6 +7388,7 @@ export default function Sidebar() {
             onClick={handleDesktopUpdateButtonClick}
           />
         ) : null}
+        <AccountFooterControl />
       </>
     ),
     onContextMenu: handleNavContextMenu,
