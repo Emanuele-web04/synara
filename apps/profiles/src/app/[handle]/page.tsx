@@ -267,14 +267,7 @@ function ActivitySection({ profile }: { profile: PublicProfile }) {
       title="Activity"
       detail={`${formatCompact(tokensInYear(profile.heatmap, year))} tokens in ${year}`}
     >
-      <div
-        className="-mx-5 -mt-8 overflow-x-auto overscroll-x-contain px-5 pt-8 sm:mx-0 sm:mt-0 sm:overflow-visible sm:px-0 sm:pt-0"
-        role="group"
-        aria-label="Activity calendar, scroll to see the full year"
-        tabIndex={0}
-      >
-        <ProfileHeatmap cells={cells} today={today} className="min-w-[640px] sm:min-w-0" />
-      </div>
+      <ProfileHeatmap cells={cells} today={today} />
       <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
         <span>Less</span>
         {APP_HEATMAP_INTENSITY_CLASSES.map((className) => (

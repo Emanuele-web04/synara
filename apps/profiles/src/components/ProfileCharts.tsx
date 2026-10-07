@@ -6,7 +6,7 @@
 // owner's accent (`--info`). A client component only for the hover state; the data is
 // computed on the server.
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityHeatmap, type HeatmapCell } from "@synara/profile-ui/heatmap";
 import { formatCompact, formatHourLabel } from "@synara/profile-ui/formatting";
 import type { DailyPoint } from "../lib/dailySeries";
@@ -21,16 +21,17 @@ function heatmapLabel(cell: HeatmapCell): string {
 }
 
 /** Reuses the shared grid and chart tooltip for pointer, touch and keyboard input. */
-export function ProfileHeatmap({
-  cells,
-  className,
-  today,
-}: {
-  cells: readonly HeatmapCell[];
-  className?: string;
-  today?: string;
-}) {
+export function ProfileHeatmap({ cells, today }: { cells: readonly HeatmapCell[]; today: string }) {
+  const scroller = useRef<HTMLDivElement>(null);
   const container = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const viewport = scroller.current;
+    const current = viewport?.querySelector<HTMLElement>('[aria-current="date"]');
+    if (!viewport || !current || viewport.scrollWidth <= viewport.clientWidth) return;
+    const mark = current.getBoundingClientRect();
+    viewport.scrollLeft +=
+      mark.left - viewport.getBoundingClientRect().left - (viewport.clientWidth - mark.width) / 2;
+  }, [today]);
   const [active, setActive] = useState<{ cell: HeatmapCell; position: number } | null>(null);
   const show = (cell: HeatmapCell, target: HTMLDivElement) => {
     const bounds = container.current?.getBoundingClientRect();
@@ -43,47 +44,56 @@ export function ProfileHeatmap({
   };
   return (
     <div
-      ref={container}
-      className={`relative ${className ?? ""}`}
-      onPointerLeave={() => setActive(null)}
+      ref={scroller}
+      className="-mx-5 -mt-8 overflow-x-auto overscroll-x-contain px-5 pt-8 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:mt-0 sm:overflow-visible sm:px-0 sm:pt-0"
+      role="group"
+      aria-label="Activity calendar, scroll to see the full year"
+      tabIndex={0}
     >
-      <ActivityHeatmap
-        cells={cells}
-        fill
-        radius={999}
-        gap={2}
-        showMonths
-        renderTooltip={(cell, node) =>
-          today && cell.day > today ? (
-            <div aria-hidden className="opacity-25">
-              {node}
-            </div>
-          ) : (
-            <div
-              role="button"
-              tabIndex={0}
-              aria-label={heatmapLabel(cell)}
-              className="rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--info)]"
-              onPointerEnter={(event) => show(cell, event.currentTarget)}
-              onClick={(event) => show(cell, event.currentTarget)}
-              onFocus={(event) => show(cell, event.currentTarget)}
-              onBlur={() => setActive(null)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setActive(null);
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  show(cell, event.currentTarget);
-                }
-              }}
-            >
-              {node}
-            </div>
-          )
-        }
-      />
-      {active ? (
-        <ChartTooltip position={active.position}>{heatmapLabel(active.cell)}</ChartTooltip>
-      ) : null}
+      <div
+        ref={container}
+        className="relative min-w-[640px] sm:min-w-0"
+        onPointerLeave={() => setActive(null)}
+      >
+        <ActivityHeatmap
+          cells={cells}
+          fill
+          radius={999}
+          gap={2}
+          showMonths
+          renderTooltip={(cell, node) =>
+            today && cell.day > today ? (
+              <div aria-hidden className="opacity-25">
+                {node}
+              </div>
+            ) : (
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label={heatmapLabel(cell)}
+                aria-current={cell.day === today ? "date" : undefined}
+                className="rounded-full outline-none aria-[current=date]:ring-1 aria-[current=date]:ring-[var(--info)] focus-visible:ring-2 focus-visible:ring-[var(--info)]"
+                onPointerEnter={(event) => show(cell, event.currentTarget)}
+                onClick={(event) => show(cell, event.currentTarget)}
+                onFocus={(event) => show(cell, event.currentTarget)}
+                onBlur={() => setActive(null)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setActive(null);
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    show(cell, event.currentTarget);
+                  }
+                }}
+              >
+                {node}
+              </div>
+            )
+          }
+        />
+        {active ? (
+          <ChartTooltip position={active.position}>{heatmapLabel(active.cell)}</ChartTooltip>
+        ) : null}
+      </div>
     </div>
   );
 }

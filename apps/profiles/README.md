@@ -132,6 +132,14 @@ keyboard count/date readouts, future-day masking and no page overflow. The
 desktop calendar fits without scrolling. Build, formatting, lint, workspace
 typecheck and all 17 profiles tests passed; lint retains existing warnings.
 
+Version `7272ae04-e4de-4efb-aa0f-90b40163eb14` hides the calendar's scrollbar
+without disabling touch or keyboard scrolling. On initial mobile load it
+positions the current day in view and marks it with an accent outline;
+manual scrolling is not reset. At 390px, live verification confirmed the
+initial 290px scroll offset, visible current-day marker, hidden native
+scrollbar, manual scrolling back to 210px and no horizontal page overflow.
+Desktop keeps its full-year view with zero scroll offset.
+
 For subsequent deployments to this same verified destination, retain the
 existing proxy secret and explicitly override the trial API placeholder.
 From `apps/profiles` after the API and schema are ready:
