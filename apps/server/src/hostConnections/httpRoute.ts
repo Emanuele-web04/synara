@@ -3,7 +3,6 @@ import {
   decodeRemoteResourceReference,
   REMOTE_RESOURCE_LOCAL_PREFIX,
 } from "@synara/shared/remoteResources";
-import { requiresWebSocketAuthentication, shouldRejectAuthMutationOrigin } from "../trustedOrigins";
 // FILE: httpRoute.ts
 // Purpose: The local `/ws/remote/:hostId` upgrade a renderer uses to reach a
 //          host this shell has dialed, plus the negotiate answer the renderer's
@@ -28,7 +27,13 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { ServerAuth } from "../auth/Services/ServerAuth";
 import { makeEffectAuthRequest } from "../auth/effectHttp";
 import { ServerConfig } from "../config";
-import { shouldRejectUntrustedRequestOrigin } from "../trustedOrigins";
+import {
+  isTrustedAppOrigin,
+  normalizeCorsOrigin,
+  requiresWebSocketAuthentication,
+  shouldRejectAuthMutationOrigin,
+  shouldRejectUntrustedRequestOrigin,
+} from "../trustedOrigins";
 import { parseWsNegotiateSearchParams } from "../wsCompatibility";
 import { authenticateRpcWebSocketUpgrade } from "../wsRpc";
 import {
@@ -219,7 +224,14 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
         if (!hostId || !registry.hasConnector(hostId)) {
           return HttpServerResponse.text("No open connection to that host", { status: 404 });
         }
-        const headers = { "Cache-Control": "no-store" };
+        // Desktop renderers fetch from synara://app, just as on the local
+        // negotiation route. Reflect only origins the bridge already trusts.
+        const origin = normalizeCorsOrigin(request.headers.origin);
+        const corsHeaders =
+          origin && isTrustedAppOrigin({ origin, requestOrigin: url.origin, config })
+            ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" }
+            : {};
+        const headers = { "Cache-Control": "no-store", ...corsHeaders };
         const input = parseWsNegotiateSearchParams(url.searchParams);
         if (input instanceof WsCompatibilityError) {
           return HttpServerResponse.jsonUnsafe(input, { status: 426, headers });

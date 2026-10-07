@@ -1,5 +1,23 @@
 # Remote connections — punto di ripartenza
 
+## App desktop MacBook — 7 ottobre 2026
+
+- Avviata la vera app Electron Synara (Dev) dal checkout isolato MacBook,
+  con asset compilati e backend gestito dal desktop. Home di test conservata
+  e copiata in un backup privato prima del passaggio; Stable e Canary intatte.
+- Trovato un difetto non visibile nel test web: la negoziazione del bridge
+  remoto rispondeva 200 senza header CORS, impedendo al renderer `synara://app`
+  di leggerla. La route remota ora riflette soltanto le origin già ammesse
+  dalla policy esistente, come la negoziazione locale. Autenticazione e ruolo
+  owner restano obbligatori secondo la configurazione; nessuna wildcard.
+- Regressione sulla route HTTP reale: fallisce prima del fix per header assente,
+  passa dopo. Verifica anche origin estranee, client non-owner, autenticazione
+  mancante e risposte 426/503. Sul Mini passano 55 test mirati in 7 file,
+  fmt, lint (928 warning, zero errori) e typecheck (12 package).
+- Prova live sul MacBook: riapertura da Finder, account e pairing conservati;
+  Connections apre il workspace Mini e carica progetti e chat. È una build
+  locale di sviluppo, non un nuovo rilascio firmato o un aggiornamento Stable.
+
 ## Verifica live aggiuntiva — 7 ottobre 2026
 
 - Mini: l'app Dev corrente conserva la home `.synara/phone-playground/dev`;
