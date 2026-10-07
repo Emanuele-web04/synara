@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { AccountProfileThemeAccent } from "./account";
+
 import { boundedTrimmedNonEmptyString, EnvironmentId, NonNegativeInt } from "./baseSchemas";
 
 // ── Account usage sync ───────────────────────────────────────────────
@@ -149,6 +151,11 @@ export const PublicProfile = Schema.Struct({
   handle: Schema.String,
   displayName: Schema.String,
   avatarColor: Schema.String,
+  /**
+   * The owner's light/dark theme accents, or null when not published.
+   * Optional for wire compat with pre-accent servers; absent means null.
+   */
+  themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
   /**
    * The avatar image URL, or null when the owner chose a placeholder (or has
    * an sso avatar the service has not seen yet). Always resolvable without an

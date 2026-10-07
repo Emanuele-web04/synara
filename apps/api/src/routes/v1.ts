@@ -242,6 +242,13 @@ function errorResponse(
   return c.json(body, status);
 }
 
+/** Return a complete accent pair, or no published theme. */
+function profileThemeAccent(row: ProfileRow): AccountProfile["themeAccent"] {
+  return row.themeAccentLight !== null && row.themeAccentDark !== null
+    ? { light: row.themeAccentLight, dark: row.themeAccentDark }
+    : null;
+}
+
 /**
  * Widens a stored row to the contract. The two branded strings are asserted
  * rather than re-validated: the route validates on the way in, so a row that
@@ -253,6 +260,7 @@ function toAccountProfile(row: ProfileRow, avatarUrl: string | null): AccountPro
     handle: row.handle as AccountProfileHandle,
     displayName: row.displayName,
     avatarColor: row.avatarColor as AccountProfileAvatarColor,
+    themeAccent: profileThemeAccent(row),
     public: row.public,
     avatarUrl,
     avatarSource: row.avatarSource,
@@ -973,6 +981,14 @@ export function createV1Routes(deps: {
       );
     }
 
+    // Omission preserves the stored pair; explicit null clears both columns.
+    const themeAccentColumns =
+      parsed.themeAccent !== undefined
+        ? {
+            themeAccentLight: parsed.themeAccent?.light ?? null,
+            themeAccentDark: parsed.themeAccent?.dark ?? null,
+          }
+        : {};
     let displacedAvatarKey: string | null = null;
     try {
       const clampedOffset =
@@ -1009,6 +1025,7 @@ export function createV1Routes(deps: {
             handle: parsed.handle,
             displayName: parsed.displayName,
             avatarColor: parsed.avatarColor,
+            ...themeAccentColumns,
             // Absent means "leave visibility alone" on update and "private" on
             // first write — the safe default either way.
             ...(parsed.public !== undefined ? { public: parsed.public } : {}),
@@ -1026,6 +1043,7 @@ export function createV1Routes(deps: {
             set: {
               displayName: parsed.displayName,
               avatarColor: parsed.avatarColor,
+              ...themeAccentColumns,
               ...(parsed.public !== undefined ? { public: parsed.public } : {}),
               ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
               ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
@@ -2725,6 +2743,7 @@ export function createV1Routes(deps: {
       handle: row.handle,
       displayName: row.displayName,
       avatarColor: row.avatarColor,
+      themeAccent: profileThemeAccent(row),
       // Provider-free by construction: an sso avatar is served from the URL
       // cached at the owner's /me reads, never from a live provider call.
       avatarUrl: resolvedAvatarUrl(row, row.avatarSsoUrl),

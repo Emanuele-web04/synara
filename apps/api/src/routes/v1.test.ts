@@ -1104,6 +1104,42 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       };
     }
 
+    it("round trips theme accents, preserves omissions, clears null, and keeps private profiles hidden", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const base = profileBody();
+      const themeAccent = { light: "#aabbcc", dark: "#123456" };
+      const put = (extra: Record<string, unknown>) =>
+        app.request("/api/v1/profile", {
+          method: "PUT",
+          headers: authHeaders(token),
+          body: JSON.stringify({ ...base, ...extra }),
+        });
+      const readPublic = () => app.request(`/api/v1/profiles/${base.handle}`);
+      const created = await put({ themeAccent });
+      expect(created.status).toBe(200);
+      expect(await created.json()).toMatchObject({ profile: { themeAccent } });
+      expect((await readPublic()).status).toBe(404);
+
+      const published = await put({ public: true });
+      expect(await published.json()).toMatchObject({ profile: { themeAccent } });
+      const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await me.json()).toMatchObject({ profile: { themeAccent } });
+      expect(await (await readPublic()).json()).toMatchObject({ themeAccent });
+
+      const changed = { light: "#112233", dark: "#ddeeff" };
+      expect(await (await put({ themeAccent: changed })).json()).toMatchObject({
+        profile: { themeAccent: changed },
+      });
+      expect(await (await readPublic()).json()).toMatchObject({ themeAccent: changed });
+      expect(await (await put({ themeAccent: null })).json()).toMatchObject({
+        profile: { themeAccent: null },
+      });
+      expect(await (await readPublic()).json()).toMatchObject({ themeAccent: null });
+      const clearedMe = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await clearedMe.json()).toMatchObject({ profile: { themeAccent: null } });
+    });
+
     it("creates a profile and reports it from /me", async () => {
       const { app } = buildApp();
       const { token } = await signIn();

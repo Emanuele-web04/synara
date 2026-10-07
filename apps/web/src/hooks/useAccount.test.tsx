@@ -158,6 +158,12 @@ describe("useAccount", () => {
       avatarColor: "#22c55e",
     });
 
+    expect(accountApiMock.updateProfile).toHaveBeenCalledWith({
+      handle: "ada-l",
+      displayName: "Ada",
+      avatarColor: "#22c55e",
+      themeAccent: { light: "#0169cc", dark: "#0169cc" },
+    });
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-in",
       me: after,

@@ -127,6 +127,13 @@
       "when": 1790881643480,
       "tag": "0017_inbox_automatic_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791397153632,
+      "tag": "0018_profile_theme_accent",
+      "breakpoints": true
     }
   ]
 }

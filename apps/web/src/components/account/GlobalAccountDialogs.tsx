@@ -8,12 +8,14 @@
 
 import { useEffect } from "react";
 import { useAccount } from "~/hooks/useAccount";
+import { useProfileThemeAccentSync } from "~/hooks/useProfileThemeAccentSync";
 import { useAccountDialogStore } from "./accountDialogStore";
 import { OnboardingDialog } from "./OnboardingDialog";
 import { SignInDialog } from "./SignInDialog";
 
 export function GlobalAccountDialogs() {
   const account = useAccount();
+  useProfileThemeAccentSync(account);
   const view = useAccountDialogStore((state) => state.view);
   const openOnboarding = useAccountDialogStore((state) => state.openOnboarding);
   const close = useAccountDialogStore((state) => state.close);

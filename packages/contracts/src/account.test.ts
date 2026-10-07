@@ -199,3 +199,25 @@ describe("InstanceInfo", () => {
     ).toThrow();
   });
 });
+
+// Optional/null wire semantics allow old clients to keep updating their profiles.
+describe("profile theme accent", () => {
+  const base = { handle: "ada", displayName: "Ada", avatarColor: "#22c55e" };
+  const decode = Schema.decodeUnknownSync(UpdateProfileRequest);
+  it.each([undefined, null, { light: "#AABBCC", dark: "#123456" }])(
+    "accepts the compatible accent value %j",
+    (themeAccent) => {
+      expect(
+        decode({ ...base, ...(themeAccent !== undefined ? { themeAccent } : {}) }).themeAccent,
+      ).toEqual(themeAccent);
+    },
+  );
+  it.each([
+    { light: "red", dark: "#123456" },
+    { light: "#123", dark: "#123456" },
+    { light: "#123456" },
+    { light: "#123456", dark: "#12345678" },
+  ])("rejects invalid accent pairs %j", (themeAccent) => {
+    expect(() => decode({ ...base, themeAccent })).toThrow();
+  });
+});

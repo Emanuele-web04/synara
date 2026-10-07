@@ -105,6 +105,13 @@ export type AccountProfileHandle = typeof AccountProfileHandle.Type;
 export const AccountProfileAvatarColor = Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/));
 export type AccountProfileAvatarColor = typeof AccountProfileAvatarColor.Type;
 
+/** The owner's selected theme accent for each public-profile appearance. */
+export const AccountProfileThemeAccent = Schema.Struct({
+  light: AccountProfileAvatarColor,
+  dark: AccountProfileAvatarColor,
+});
+export type AccountProfileThemeAccent = typeof AccountProfileThemeAccent.Type;
+
 /**
  * Where a profile's avatar image comes from:
  *
@@ -133,6 +140,11 @@ export const AccountProfile = Schema.Struct({
   handle: AccountProfileHandle,
   displayName: TrimmedNonEmptyString,
   avatarColor: AccountProfileAvatarColor,
+  /**
+   * The owner's light/dark theme accents, or null when not published.
+   * Optional for wire compat with pre-accent servers; absent means null.
+   */
+  themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
   /**
    * Whether the profile is served publicly at trysynara.com/@handle.
    * Optional-with-default rather than required so a client built before
@@ -178,6 +190,12 @@ export const UpdateProfileRequest = Schema.Struct({
   handle: AccountProfileHandle,
   displayName: AccountNameString,
   avatarColor: AccountProfileAvatarColor,
+  /**
+   * The owner's light/dark theme accents. Optional for wire compat with
+   * pre-accent clients and servers; absent leaves stored accents alone on
+   * PUT, while null clears them.
+   */
+  themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
   /** Optional so pre-visibility clients keep writing profiles unchanged. */
   public: Schema.optional(Schema.Boolean),
   /**

@@ -319,6 +319,9 @@ export const profiles = pgTable("profiles", {
   handle: text("handle").notNull().unique(),
   displayName: text("display_name").notNull(),
   avatarColor: text("avatar_color").notNull(),
+  // Published together; NULL keeps profiles from pre-accent clients compatible.
+  themeAccentLight: text("theme_accent_light"),
+  themeAccentDark: text("theme_accent_dark"),
   // Opt-in, default private: a profile is served at trysynara.com/@handle
   // exactly when its owner flipped this on.
   public: boolean("public").notNull().default(false),
