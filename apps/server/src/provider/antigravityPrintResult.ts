@@ -15,6 +15,13 @@ const RESULT_STATUSES = new Set([
 ]);
 const STREAM_EVENTS = new Set(["init", "step_update", "result", "error"]);
 
+export function isAntigravityPostResponseTimeout(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  return (
+    trimmed === "timeout waiting for response" || trimmed === "Error: timeout waiting for response"
+  );
+}
+
 type Step = {
   state?: unknown;
   type?: unknown;
@@ -111,30 +118,32 @@ export function createAntigravityPrintResultParser() {
           lastResponse = step;
         }
       }
-      const completedResponse =
+      const hasCompleteAssistantResponse =
         streamed &&
         !malformedRecord &&
-        (state === undefined || state === "completed") &&
         lastResponse?.state === "DONE" &&
         lastResponse.text.trim().length > 0 &&
         [...steps.entries()].every(
           ([index, step]) =>
             step.state === "DONE" && (step.type !== "error" || index < lastResponseIndex),
         );
+      const completedResponse =
+        hasCompleteAssistantResponse && (state === undefined || state === "completed");
+      const hasExplicitResultError = result !== undefined && Object.hasOwn(result, "error");
+      const terminalError = typeof result?.error === "string" ? result.error : streamError;
       return {
         state,
+        hasCompleteAssistantResponse,
+        hasExplicitResultError,
         completedResponse,
         response:
           typeof result?.response === "string" && result.response.trim()
             ? result.response
             : (lastResponse?.text ?? ""),
         error:
-          typeof result?.error === "string"
-            ? result.error
-            : (streamError ??
-              (state === "failed"
-                ? `Antigravity ended with status ${result?.status}.`
-                : undefined)),
+          terminalError ??
+          (state === "failed" ? `Antigravity ended with status ${result?.status}.` : undefined),
+        ...(terminalError !== undefined ? { terminalError } : {}),
         failed: state === "failed",
       };
     },

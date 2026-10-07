@@ -61,7 +61,10 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
-import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
+import {
+  createAntigravityPrintResultParser,
+  isAntigravityPostResponseTimeout,
+} from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -2636,8 +2639,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            // Only our stop-hook teardown may replace a missing clean process exit.
-            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            // Only our stop-hook teardown may replace a missing clean process exit. A
+            // provider ERROR is authoritative unless it is the exact timeout emitted
+            // after a durable final response (agy can report this after the reply is visible).
             const completedAfterStopTeardown =
               context.stopTeardownRequested === true &&
               printResult?.completedResponse === true &&
@@ -2646,13 +2650,30 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               context.pendingTools.length === 0 &&
               context.pendingBackgroundTasks.size === 0 &&
               context.pendingAnonymousBackgroundTasks.length === 0;
+            const exactPostResponseTimeout =
+              isAntigravityPostResponseTimeout(printResult?.terminalError) ||
+              (printResult?.hasExplicitResultError !== true &&
+                printResult?.terminalError === undefined &&
+                isAntigravityPostResponseTimeout(stderr));
+            const completedAfterBenignPostResponseTimeout =
+              context.stopTeardownRequested !== true &&
+              exactPostResponseTimeout &&
+              printResult?.hasCompleteAssistantResponse === true &&
+              context.sawAssistant &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks.length === 0;
+            const completedAfterExpectedPostResponseExit =
+              completedAfterStopTeardown || completedAfterBenignPostResponseTimeout;
             const interrupted =
               context.interrupted ||
               printResult?.state === "interrupted" ||
-              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
+              (signal !== null &&
+                printResult?.state !== "failed" &&
+                !completedAfterExpectedPostResponseExit);
             const failed =
               !interrupted &&
-              !completedAfterStopTeardown &&
+              !completedAfterExpectedPostResponseExit &&
               ((code ?? 1) !== 0 ||
                 (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {

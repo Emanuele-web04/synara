@@ -1682,6 +1682,80 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     },
   );
 
+  it("completes a durable reply when agy exits with its exact post-response timeout", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "synara-antigravity-post-response-timeout-"),
+    );
+    const children: ChildProcess[] = [];
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-post-response-timeout");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* adapter.sendTurn({ threadId, input: "follow-up", attachments: [] });
+          children[0]!.stdout!.emit(
+            "data",
+            [
+              JSON.stringify({
+                event: "step_update",
+                step_update: {
+                  step_index: 1,
+                  state: "DONE",
+                  step_type: "agent_response",
+                  text_delta: "Finished",
+                },
+              }),
+              JSON.stringify({
+                event: "result",
+                result: { status: "ERROR", error: "timeout waiting for response" },
+              }),
+            ].join("\n"),
+          );
+          children[0]!.stderr!.emit("data", "Error: timeout waiting for response\n");
+          children[0]!.emit("close", 1, null);
+          const events = Array.from(
+            yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          expect(events.find((event) => event.type === "runtime.error")).toBeUndefined();
+          expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+            state: "completed",
+            stopReason: "model_stop",
+          });
+          expect(
+            events.filter((event) => event.type === "content.delta").map((event) => event.payload),
+          ).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess: makeSpawnProcess(children),
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-post-response-timeout-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("unlocks Cancel without letting a late close settle the follow-up", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-interrupt-hung-"));
     const children: ChildProcess[] = [];
