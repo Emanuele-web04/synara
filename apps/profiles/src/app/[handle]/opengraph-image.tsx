@@ -12,6 +12,7 @@ import { formatCompact, formatDays } from "@synara/profile-ui/formatting";
 import { SYNARA_LOGO_PATHS } from "@synara/profile-ui/logo";
 import { buildHeatmapCells } from "../../lib/heatmapCells";
 import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile";
+import { handleFromParam } from "../../lib/handleParam";
 
 export const alt = "Synara profile";
 export const size = { width: 1200, height: 630 };
@@ -33,15 +34,6 @@ const CELL = 34;
 const GAP = 6;
 
 type Params = { params: Promise<{ handle: string }> };
-
-// Same @-prefixed decode as the page; kept inline because importing the page
-// module would drag its React tree into the OG bundle.
-function handleFromParam(raw: string): string | null {
-  const decoded = decodeURIComponent(raw);
-  if (!decoded.startsWith("@")) return null;
-  const handle = decoded.slice(1).toLowerCase();
-  return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(handle) ? handle : null;
-}
 
 function SynaraMark({ edge }: { edge: number }) {
   return (

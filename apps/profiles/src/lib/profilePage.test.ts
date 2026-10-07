@@ -3,6 +3,7 @@ import { activeDayCount, buildDailySeries, tokensInYear } from "./dailySeries";
 import { buildCalendarYearCells, buildHeatmapCells, weeklyTotals } from "./heatmapCells";
 import { groupModelUsage } from "./modelUsage";
 import { formatStreakShort, joinedAgo } from "./profileFormat";
+import { isShareFormat, linePath, posterSentence, shareCardData } from "./shareCards";
 import { profileAccentStyle, resolveProfileAccent } from "./profileAccent";
 
 describe("resolveProfileAccent", () => {
@@ -171,5 +172,71 @@ describe("joinedAgo", () => {
   it("writes streaks compactly", () => {
     expect(formatStreakShort(0)).toBe("—");
     expect(formatStreakShort(199)).toBe("199d");
+  });
+});
+
+describe("share cards", () => {
+  const profile = {
+    handle: "ada",
+    displayName: "Ada",
+    avatarColor: "#123456",
+    themeAccent: { light: "#ff6600", dark: "#ff8833" },
+    createdAt: "2026-09-01T00:00:00Z",
+    lifetimeTokens: 869_231,
+    lifetimePrompts: 33,
+    lifetimeTurns: 35,
+    models: [
+      {
+        provider: "codex",
+        model: "gpt-6-astra",
+        reasoning: "low",
+        tokens: 700_000,
+        turns: 27,
+        prompts: 27,
+      },
+      {
+        provider: "claudeAgent",
+        model: "claude-sonnet-5-5",
+        reasoning: null,
+        tokens: 169_231,
+        turns: 8,
+        prompts: 6,
+      },
+    ],
+    heatmap: [
+      { day: "2026-10-06", tokens: 300_000, prompts: 10 },
+      { day: "2026-10-07", tokens: 569_231, prompts: 23 },
+    ],
+    localToday: "2026-10-07",
+    peakDay: { day: "2026-10-07", tokens: 569_231 },
+    hours: [
+      { hour: 9, prompts: 3 },
+      { hour: 15, prompts: 6 },
+    ],
+    currentStreakDays: 2,
+    longestStreakDays: 2,
+  };
+
+  it("summarizes the profile for the poster and the receipt", () => {
+    const data = shareCardData(profile);
+    expect(data).toMatchObject({
+      accent: "#ff6600",
+      totalTokensExact: "869,231",
+      activeDays: 2,
+      topModel: "GPT-6 Astra",
+      busiestHour: "3 PM",
+    });
+    expect(data.month).toHaveLength(30);
+    expect(data.month.slice(-2).map((point) => point.tokens)).toEqual([300_000, 569_231]);
+    expect(data.models.map((model) => model.name)).toEqual(["GPT-6 Astra", "Claude Sonnet 5.5"]);
+    expect(posterSentence(data)).toBe(
+      "33 prompts over 2 days, mostly with GPT-6 Astra, usually around 3 PM.",
+    );
+  });
+
+  it("knows its formats and draws a line through the month", () => {
+    expect(isShareFormat("story")).toBe(true);
+    expect(isShareFormat("receipt")).toBe(false);
+    expect(linePath([0, 10], 100, 50)).toBe("M0.0,50.0 L100.0,4.0");
   });
 });

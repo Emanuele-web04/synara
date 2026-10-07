@@ -30,6 +30,7 @@ import { groupModelUsage, type ModelUsageGroup } from "../../lib/modelUsage";
 import { profileAccentStyle, resolveProfileAccent } from "../../lib/profileAccent";
 import { formatStreakShort, joinedAgo } from "../../lib/profileFormat";
 import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile";
+import { handleFromParam } from "../../lib/handleParam";
 
 /** Days the Tokens and Prompts charts span. */
 const CHART_WINDOW_DAYS = 30;
@@ -39,18 +40,6 @@ const RING_MODELS = 3;
 const CONTENT_WIDTH = "max-w-[1040px]";
 
 type Params = { params: Promise<{ handle: string }> };
-
-/**
- * The trysynara.com rewrite delivers `/@dylan` as the `handle` segment, so
- * the raw param arrives URL-encoded with its @ ("%40dylan"). Anything that
- * does not carry the @ is not a profile URL this app serves.
- */
-function handleFromParam(raw: string): string | null {
-  const decoded = decodeURIComponent(raw);
-  if (!decoded.startsWith("@")) return null;
-  const handle = decoded.slice(1).toLowerCase();
-  return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(handle) ? handle : null;
-}
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const handle = handleFromParam((await params).handle);
@@ -130,7 +119,10 @@ export default async function ProfilePage({ params }: Params) {
                   <p className="truncate text-[13px] text-muted-foreground">@{profile.handle}</p>
                 </div>
               </div>
-              <ShareProfileButton title={`${profile.displayName} on Synara`} />
+              <ShareProfileButton
+                handle={profile.handle}
+                title={`${profile.displayName} on Synara`}
+              />
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 lg:hidden">
               <JoinedLine profile={profile} />
