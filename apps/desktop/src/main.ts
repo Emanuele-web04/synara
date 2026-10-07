@@ -158,6 +158,7 @@ import {
   quitConfirmationPresentationForPlatform,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
+import { installShutdownSignalHandlers } from "./shutdownSignals";
 import {
   hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
@@ -6341,15 +6342,9 @@ if (process.platform !== "win32") {
     requestGracefulAppQuit("EPIPE");
   });
 
-  process.on("SIGINT", () => {
+  installShutdownSignalHandlers(app.whenReady(), (signal) => {
     if (desktopShutdownPromise) return;
-    writeDesktopLogHeader("SIGINT received");
-    requestGracefulAppQuit("SIGINT");
-  });
-
-  process.on("SIGTERM", () => {
-    if (desktopShutdownPromise) return;
-    writeDesktopLogHeader("SIGTERM received");
-    requestGracefulAppQuit("SIGTERM");
+    writeDesktopLogHeader(`${signal} received`);
+    requestGracefulAppQuit(signal);
   });
 }
