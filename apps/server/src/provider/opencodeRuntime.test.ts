@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
+  createOpenCodeApiCompatibleFetch,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   makeOpenCodeRuntimeLive,
@@ -35,6 +36,71 @@ import {
   buildOpenCodeServerProcessEnv,
   openCodeBinarySearchDirectories,
 } from "./providerBinaryResolution.ts";
+
+describe("OpenCode API compatibility", () => {
+  it("keeps JSON responses on the legacy route", async () => {
+    const requests: Array<string> = [];
+    const fetchImpl = createOpenCodeApiCompatibleFetch(async (input) => {
+      const request = input instanceof Request ? input : new Request(String(input));
+      requests.push(new URL(request.url).pathname);
+      return new Response('{"ok":true}', {
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const response = await fetchImpl("http://127.0.0.1:4096/provider");
+
+    expect(await response.json()).toEqual({ ok: true });
+    expect(requests).toEqual(["/provider"]);
+  });
+
+  it("retries HTML route fallbacks against the OpenCode 2 API", async () => {
+    const requests: Array<{ method: string; path: string; body: string }> = [];
+    const fetchImpl = createOpenCodeApiCompatibleFetch(async (input) => {
+      const request = input instanceof Request ? input : new Request(String(input));
+      requests.push({
+        method: request.method,
+        path: new URL(request.url).pathname,
+        body: await request.clone().text(),
+      });
+      if (!new URL(request.url).pathname.startsWith("/api/")) {
+        return new Response("<html>OpenCode</html>", {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      return new Response('{"ok":true}', {
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const response = await fetchImpl("http://127.0.0.1:4096/path", {
+      method: "POST",
+      body: '{"prompt":"hello"}',
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(await response.json()).toEqual({ ok: true });
+    expect(requests).toEqual([
+      { method: "POST", path: "/path", body: '{"prompt":"hello"}' },
+      { method: "POST", path: "/api/location", body: '{"prompt":"hello"}' },
+    ]);
+  });
+
+  it("does not prefix an already-versioned API route", async () => {
+    const requests: Array<string> = [];
+    const fetchImpl = createOpenCodeApiCompatibleFetch(async (input) => {
+      const request = input instanceof Request ? input : new Request(String(input));
+      requests.push(new URL(request.url).pathname);
+      return new Response("<html>OpenCode</html>", {
+        headers: { "content-type": "text/html" },
+      });
+    });
+
+    await fetchImpl("http://127.0.0.1:4096/api/provider");
+
+    expect(requests).toEqual(["/api/provider"]);
+  });
+});
 
 const encoder = new TextEncoder();
 
@@ -494,6 +560,53 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     );
 
     expect(server.url).toBe("http://127.0.0.1:58123");
+  });
+
+  it("probes the OpenCode 2 API when the legacy route returns the web app", async () => {
+    const probePaths: Array<string> = [];
+    const server = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime.startOpenCodeServerProcess({
+            binaryPath: "opencode",
+            hostname: "127.0.0.1",
+            port: 58_123,
+          });
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: async (input) => {
+              const request = input instanceof Request ? input : new Request(String(input));
+              const path = new URL(request.url).pathname;
+              probePaths.push(path);
+              return path === "/provider"
+                ? new Response("<html>OpenCode</html>", {
+                    headers: { "content-type": "text/html" },
+                  })
+                : new Response("{}", {
+                    headers: { "content-type": "application/json" },
+                  });
+            },
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(server.url).toBe("http://127.0.0.1:58123");
+    expect(probePaths).toEqual(["/provider", "/api/provider"]);
   });
 
   it("fails startup when the server does not serve the legacy surface", async () => {

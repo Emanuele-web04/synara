@@ -65,6 +65,8 @@ const DEFAULT_HOSTNAME = "127.0.0.1";
 export const OPENCODE_LOCAL_SERVER_IDLE_TTL_MS = 5 * 60_000;
 const OPENCODE_STARTUP_OUTPUT_MAX_CHARS = 4_000;
 const REDACTED_STARTUP_SECRET = "[redacted]";
+const OPENCODE_HTML_RESPONSE_PATTERN = /^text\/html(?:\s*;|$)/iu;
+type OpenCodeFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const STARTUP_OUTPUT_AUTHORIZATION_PATTERN =
   /(["']?)(authorization)\1(\s*[:=]\s*)(["']?)(bearer\s+)?[^"'\s,;}]+\4/gi;
 const STARTUP_OUTPUT_SECRET_ASSIGNMENT_PATTERN =
@@ -97,6 +99,31 @@ export const KILO_CLI_SPEC: OpenCodeCompatibleCliSpec = {
   dataDirectoryName: "kilo",
   serverAuthUsername: "kilo",
 };
+
+/**
+ * OpenCode 2 moved its HTTP API under `/api` while keeping the web app as the
+ * fallback response for the old routes. Keep the 1.x SDK usable against both
+ * server generations by retrying only that unmistakable HTML fallback.
+ */
+export function createOpenCodeApiCompatibleFetch(
+  fetchImpl: OpenCodeFetch = (input, init) =>
+    globalThis.fetch(input as string | URL | Request, init),
+): OpenCodeFetch {
+  return async (input, init) => {
+    const request =
+      input instanceof Request ? new Request(input, init) : new Request(String(input), init);
+    const response = await fetchImpl(request.clone() as unknown as Request);
+    const contentType = response.headers.get("content-type")?.trim() ?? "";
+    if (!OPENCODE_HTML_RESPONSE_PATTERN.test(contentType)) return response;
+
+    const url = new URL(request.url);
+    if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return response;
+
+    const rewrittenPath = url.pathname === "/path" ? "/api/location" : `/api${url.pathname}`;
+    url.pathname = rewrittenPath;
+    return fetchImpl(new Request(url.toString(), request as unknown as RequestInit));
+  };
+}
 
 export interface OpenCodeServerProcess {
   readonly url: string;
@@ -938,6 +965,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     );
     const pooledServerMutex = yield* Semaphore.make(1);
     const pooledServers = new Map<string, PooledOpenCodeServer>();
+    const fetchImpl = createOpenCodeApiCompatibleFetch(options?.fetchImpl ?? fetch);
 
     const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
       Effect.gen(function* () {
@@ -1200,7 +1228,6 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         // A missing route (404/405) establishes incompatibility, not the CLI
         // version. Retry other statuses and connection failures separately.
         const probeUrl = `${readyOption.value.replace(/\/$/, "")}/provider`;
-        const fetchImpl = options?.fetchImpl ?? fetch;
         let probeStatus: number | null = null;
         let surfaceConfirmed = false;
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1484,6 +1511,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             }
           : {}),
         throwOnError: true,
+        fetch: fetchImpl as typeof fetch,
       });
 
     const loadProviders = (client: OpencodeClient) =>
