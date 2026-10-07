@@ -1,5 +1,28 @@
 # Remote connections — punto di ripartenza
 
+## Codice rifiutato alla creazione — 7 ottobre 2026
+
+Sul MacBook la normale creazione del codice falliva prima di mostrare il QR,
+con “The pairing code is invalid, used, or expired”. Identità, account,
+workspace e host coincidevano. Pubblicare lo stesso tipo di invito con 30
+secondi in meno di durata riusciva: il client usava esattamente il limite API
+di dieci minuti, senza margine per piccoli scarti d'orologio.
+
+`1b80cbc7a` riduce a nove minuti la scadenza dell'invito persistito e pubblicato.
+Il limite e le verifiche dell'API rimangono invariati. Il dialogo riutilizza il
+pulsante esistente per offrire Try again quando la creazione iniziale fallisce.
+Le due regressioni falliscono prima della correzione; dopo passano 12 test
+server con SQLite reale e 8 test browser. fmt/lint/typecheck passati (928 warning
+lint, zero errori), build desktop/CLI/web completata. Nessuna migrazione o
+modifica delle credenziali.
+
+Mini aggiornato nella stessa home: generazione del codice sull'API reale
+riuscita. Un nuovo invito consegnato al simulatore iPhone tramite deep link
+arriva a “Connected to Macmini-di-Emanuele”; il server conferma l'abbinamento
+della chiave del simulatore già autorizzata. Nessun telefono fisico usato.
+La prova copre creazione, riscatto e pairing; non è una prova di scansione
+ottica della fotocamera o di un nuovo turno provider.
+
 ## Directory e computer abbinati — 7 ottobre 2026
 
 La lista “Computers you can control” usava l'intera directory account: vecchie
