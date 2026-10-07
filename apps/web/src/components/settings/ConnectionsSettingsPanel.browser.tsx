@@ -7,7 +7,7 @@
 import "../../index.css";
 
 import type { DesktopKeepAwakeState } from "@synara/contracts";
-import type { CSSProperties } from "react";
+import { StrictMode, type CSSProperties } from "react";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -178,9 +178,9 @@ const keepAwake = {
   setRemoteAccessAllowed: vi.fn(async () => keepAwake.state),
 };
 
-async function renderPanel() {
+async function renderPanel(strictMode = false) {
   await page.viewport(900, 1100);
-  return render(
+  const panel = (
     <div
       className="mx-auto max-w-2xl bg-background px-6 py-8 text-foreground"
       // The app theme sets the accent at runtime; pin one so screenshots show switch state.
@@ -188,8 +188,9 @@ async function renderPanel() {
     >
       <h1 className="mb-8 text-xl font-medium tracking-tight">Connections</h1>
       <ConnectionsSettingsPanel active />
-    </div>,
+    </div>
   );
+  return render(strictMode ? <StrictMode>{panel}</StrictMode> : panel);
 }
 
 beforeEach(() => {
@@ -268,13 +269,16 @@ describe("Connections settings", () => {
     await expect.element(page.getByText("Ada's iPad")).not.toBeInTheDocument();
   });
 
-  it("shows a QR and short code in the Add dialog and approves a pending device", async () => {
-    await renderPanel();
+  it("mints one code per opening under StrictMode and approves a pending device", async () => {
+    await renderPanel(true);
     await page.getByRole("button", { name: "Add", exact: true }).click();
     await expect
       .element(page.getByRole("img", { name: "Scan to connect to this computer" }))
       .toBeVisible();
     await expect.element(page.getByText("ABCD-2345", { exact: true })).toBeVisible();
+    expect(
+      fixture.request.mock.calls.filter(([request]) => request.operation === "create-code"),
+    ).toHaveLength(1);
     await expect.element(page.getByText(/Expires in \d+:\d\d/)).toBeVisible();
     // Let the dialog's open transition settle so the screenshot is legible.
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -296,6 +300,14 @@ describe("Connections settings", () => {
         inviteId: "qr-fixture",
       }),
     );
+    await expect
+      .element(page.getByRole("heading", { name: "Add a device" }))
+      .not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect.element(page.getByText("ABCD-2345", { exact: true })).toBeVisible();
+    expect(
+      fixture.request.mock.calls.filter(([request]) => request.operation === "create-code"),
+    ).toHaveLength(2);
   });
 
   it("persists keep awake through the desktop bridge", async () => {

@@ -79,6 +79,7 @@ function AddDeviceDialogContent({
   const [now, setNow] = useState(Date.now());
   const openedAt = useRef(Date.now());
   const mounted = useRef(true);
+  const initialCodeRequested = useRef(false);
 
   const run = async (work: () => Promise<void>, failure: string) => {
     if (busy) return;
@@ -102,7 +103,10 @@ function AddDeviceDialogContent({
 
   useEffect(() => {
     mounted.current = true;
-    if (createCode) void newCode();
+    if (createCode && !initialCodeRequested.current) {
+      initialCodeRequested.current = true;
+      void newCode();
+    }
     const countdown = setInterval(() => setNow(Date.now()), 1_000);
     return () => {
       mounted.current = false;

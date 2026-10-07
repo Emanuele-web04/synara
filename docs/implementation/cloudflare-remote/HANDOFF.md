@@ -22,9 +22,26 @@
   risponde 200 con TLS verificato e DNS normale. Checkout MacBook:
   `/Users/emanueledipietro/.codex/worktrees/remote-macbook-mvp-20261007/synara`;
   home `/Users/emanueledipietro/.local/share/synara-tests/remote-macbook-mvp-20261007`.
-- **Non ancora qualificato:** nuovo pairing MacBook, turno remoto bidirezionale,
-  revoca live e recupero dopo interruzione. La nuova home ha un'identità nuova:
-  non ereditare né dichiarare valide le approvazioni del vecchio test.
+- Nuovo pairing MacBook autorizzato e completato con la nuova identità della
+  home isolata: il Mini mostra il MacBook fra i dispositivi autorizzati.
+  Da Dia sul MacBook il workspace remoto si apre via Cloudflare; un turno reale
+  nella chat demo del Mini restituisce `MACBOOK TO MINI OK`.
+  Dopo ricostruzione del runtime senza diagnostica temporanea, riavvio del solo
+  server isolato MacBook e reload di Dia, il Mini si riconnette e la risposta
+  ricompare senza un nuovo pairing. Stable e Canary restano intatte.
+- Individuata e corretta la doppia creazione del codice all'apertura di Add a
+  device sotto React StrictMode: la seconda richiesta revocava il primo invito,
+  ma la UI poteva mostrare proprio il codice revocato. La creazione iniziale
+  avviene ora una sola volta per apertura; chiudere e riaprire genera un nuovo
+  codice. Il test browser esistente riproduce il difetto prima del fix (2
+  richieste invece di 1) e passa dopo; nessun bypass delle verifiche di pairing.
+  La prova live usa un invito unico generato dall'RPC ufficiale del Mini.
+- Verifiche mirate del fix: 7 test browser e 17 test ConnectionsRows passati;
+  fmt, lint (928 warning, zero errori) e typecheck (12 package) passati. La suite
+  completa documentata sotto precede questo fix UI e non è stata ripetuta.
+- **Non ancora qualificato:** direzione Mini → nuova istanza MacBook, revoca
+  live, sleep/wake e interruzioni di rete prolungate. Le approvazioni del vecchio test non sono
+  state ereditate. Nessun telefono fisico usato.
 
 ## MVP backend e simulatori — 7 ottobre 2026
 
