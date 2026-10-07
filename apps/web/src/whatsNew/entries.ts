@@ -22,6 +22,123 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.1-beta.2",
+    date: "Oct 7",
+    features: [
+      {
+        id: "multi-folder",
+        title: "Projects can now span several folders",
+        description:
+          "Bring a frontend, API and shared package into one project, with an explicit primary folder.",
+        details:
+          "Choose Source folders when creating a project. Codex and Claude support the extra folders in Local mode. The folder set is fixed at creation; Git actions, checkpoint diffs and Undo cover only the primary folder.",
+      },
+      {
+        id: "chat-search",
+        title: "Find chats by what you said",
+        description:
+          "The command palette now searches saved user and assistant messages, including conversations you have not opened recently.",
+        details:
+          "Results include short excerpts. Archived, deleted and subagent chats are excluded; every search word must match the message body, with ASCII case-insensitive matching.",
+      },
+      {
+        id: "keep-awake",
+        title: "Keep your Mac awake while agents work",
+        description: "Choose Off, On or Agent from Settings or the coffee menu in the rail.",
+        details:
+          "Off by default and available on supported macOS hosts. Synara releases its caffeinate assertion when disabled, when the last turn stops in agent mode, or when the server exits; persistent power settings are unchanged.",
+      },
+      {
+        id: "palette-shortcuts",
+        title: "More actions from the keyboard",
+        description:
+          "Jump to workspace destinations and settings, or create an automation, from the command palette.",
+        details:
+          "Archive the focused chat with Mod+Alt+Shift+A, snooze with Mod+Alt+Shift+S, and mark unread with Mod+Alt+Shift+U. Mod is Command on macOS and Ctrl elsewhere; customize these in Keyboard shortcuts.",
+      },
+      {
+        id: "terminal-dock",
+        title: "Independent terminals beside your chat",
+        description:
+          "Open multiple right-dock terminal tabs, each with its own shell, and run project actions beside the conversation.",
+        details:
+          "Tabs and sessions survive reload. Project actions replace only the selected idle dock terminal; busy or unverifiable sessions are protected, other terminals keep running, and the center chat stays in place.",
+      },
+      {
+        id: "provider-visibility",
+        title: "Keep only the providers you use in view",
+        description:
+          "Disable a provider in Settings to hide it across model pickers, CLI tools, usage options and the plugin library.",
+        details:
+          "Accounts, custom models, starred models and existing chats are preserved. Running turns continue; re-enabling restores saved preferences without installing or signing in the provider.",
+      },
+      {
+        id: "failure-recovery",
+        title: "Clearer interrupted-task recovery",
+        description:
+          "Task interrupted notices now survive reopening and session recovery, with Continue task and Change model actions.",
+        details:
+          "Read full runtime errors with Show details or copy every line with Copy error. A ready connection does not mean a failed task completed or retried. Provider retrying remains distinct from a definitive failure.",
+      },
+      {
+        id: "connection",
+        title: "More resilient streaming and reconnects",
+        description:
+          "Connection notices distinguish reconnecting from a busy server, and paused updates offer a focused Retry updates action.",
+        details:
+          "An overflowing subscription recovers from its last applied event without replacing unrelated streams. Recovery is bounded and never blindly resends a mutation; failed synchronization remains visible even when cached messages are available.",
+      },
+      {
+        id: "parallel-work",
+        title: "Less waiting between independent tasks",
+        description:
+          "Independent chats and workspaces no longer share the same provider-delivery, command-preparation and checkpoint queues.",
+        details:
+          "Work for the same session or physical checkout keeps its ordering. Slow baselines have a bounded preparation budget; missing initial checkpoints are reported, and unsafe Undo or ambiguous resend operations are refused.",
+      },
+      {
+        id: "process-priority",
+        title: "Give your desktop more room to respond",
+        description:
+          "Newly launched agent processes use lower CPU priority by default; turn off Keep Synara responsive in Settings if needed.",
+        details:
+          "This is scheduling priority, not a CPU quota. Existing sessions need a restart to pick up changes. The server, user terminals and checkpoint helpers retain their priority; externally managed OpenCode servers remain operator-controlled.",
+      },
+      {
+        id: "claude-accounts",
+        title: "More reliable Claude accounts and handoffs",
+        description:
+          "Managed Claude accounts preserve macOS Keychain access while keeping each account’s configuration separate.",
+        details:
+          "Usage errors stay with the matching account. Older sign-ins saved in a private Keychain may require signing in again. Fresh Claude sessions resume only after conversation output; model or provider changes show a dismissible context/cache tip.",
+      },
+      {
+        id: "drafts-undo",
+        title: "Preview drafts and undo Done",
+        description:
+          "Thread hover cards preview unsent drafts, and marking a chat Done offers Undo.",
+        details:
+          "Background work uses a slow dashed status ring. Registered projects inside dot folders remain selectable. Sendable drafts on the per-project Kanban board gain Move to In Progress, using the same action as drag-and-drop.",
+      },
+      {
+        id: "composer",
+        title: "Small improvements throughout the composer",
+        description:
+          "Queued follow-ups explain their actions more clearly, and asynchronous question answers send with Enter like the composer.",
+        details:
+          "Notices share consistent styling and focus states. Assistant Markdown follows your chosen font size and renders inline HTML line breaks. Automatic handoff dividers appear before the message that triggered them.",
+      },
+      {
+        id: "startup-diagnostics",
+        title: "Cleaner startup and Beta error handling",
+        description:
+          "Welcome, What’s New and other startup surfaces appear one at a time; Git action rows and dialog shortcuts are easier to discover.",
+        details:
+          "Beta upload failures and writable-stream errors are handled more reliably, with expanded diagnostic redaction. Claude Computer-off restarts wait for background work; imported Codex sessions retain verified continuation identity. Stable sends no Beta diagnostics. Feedback opens with the correct chat context; Plan and Simulator panels reuse the dock header and disclosure controls.",
+      },
+    ],
+  },
+  {
     version: "1.0.0",
     date: "Oct 5",
     features: [

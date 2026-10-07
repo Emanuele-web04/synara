@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+## [1.0.1-beta.2] — 2026-10-07
+
+**Multi-folder projects, message-content search, macOS Keep Awake and more reliable parallel agent work.**
+
+This Beta inventory covers the complete `v1.0.1-beta.1..48603e869` range. Hubs and Tasks remain Beta-only; Stable and Beta keep separate apps, data homes and update feeds. The reverted project-logo expansion, compact Activity rail conversations and shared empty-state hero are excluded. Oh My Pi, Inbox and the workspace rail were already in the previous Beta and are not new here.
+
+### Added
+
+- **Projects can now span several folders.** Bring a frontend, API and shared package into one project, with an explicit primary folder. Choose Source folders when creating a project. Codex and Claude support the extra folders in Local mode. The folder set is fixed at creation; Git actions, checkpoint diffs and Undo cover only the primary folder.
+- **Find chats by what you said.** The command palette now searches saved user and assistant messages, including conversations you have not opened recently. Results include short excerpts. Archived, deleted and subagent chats are excluded; every search word must match the message body, with ASCII case-insensitive matching.
+- **Keep your Mac awake while agents work.** Choose Off, On or Agent from Settings or the coffee menu in the rail. Off by default and available on supported macOS hosts. Synara releases its caffeinate assertion when disabled, when the last turn stops in agent mode, or when the server exits; persistent power settings are unchanged.
+- **More actions from the keyboard.** Jump to workspace destinations and settings, or create an automation, from the command palette. Archive the focused chat with Mod+Alt+Shift+A, snooze with Mod+Alt+Shift+S, and mark unread with Mod+Alt+Shift+U. Mod is Command on macOS and Ctrl elsewhere; customize these in Keyboard shortcuts.
+- **Keep only the providers you use in view.** Disable a provider in Settings to hide it across model pickers, CLI tools, usage options and the plugin library. Accounts, custom models, starred models and existing chats are preserved. Running turns continue; re-enabling restores saved preferences without installing or signing in the provider.
+- **Clearer interrupted-task recovery.** Task interrupted notices now survive reopening and session recovery, with Continue task and Change model actions. Read full runtime errors with Show details or copy every line with Copy error. A ready connection does not mean a failed task completed or retried. Provider retrying remains distinct from a definitive failure.
+- **Preview drafts and undo Done.** Thread hover cards preview unsent drafts, and marking a chat Done offers Undo. Background work uses a slow dashed status ring. Registered projects inside dot folders remain selectable. Sendable drafts on the per-project Kanban board gain Move to In Progress, using the same action as drag-and-drop.
+
+### Changed
+
+- **Independent terminals beside your chat.** Open multiple right-dock terminal tabs, each with its own shell, and run project actions beside the conversation. Tabs and sessions survive reload. Project actions replace only the selected idle dock terminal; busy or unverifiable sessions are protected, other terminals keep running, and the center chat stays in place.
+- **Less waiting between independent tasks.** Independent chats and workspaces no longer share the same provider-delivery, command-preparation and checkpoint queues. Work for the same session or physical checkout keeps its ordering. Slow baselines have a bounded preparation budget; missing initial checkpoints are reported, and unsafe Undo or ambiguous resend operations are refused.
+- **Give your desktop more room to respond.** Newly launched agent processes use lower CPU priority by default; turn off Keep Synara responsive in Settings if needed. This is scheduling priority, not a CPU quota. Existing sessions need a restart to pick up changes. The server, user terminals and checkpoint helpers retain their priority; externally managed OpenCode servers remain operator-controlled.
+
+### Fixed
+
+- **More resilient streaming and reconnects.** Connection notices distinguish reconnecting from a busy server, and paused updates offer a focused Retry updates action. An overflowing subscription recovers from its last applied event without replacing unrelated streams. Recovery is bounded and never blindly resends a mutation; failed synchronization remains visible even when cached messages are available.
+- **More reliable Claude accounts and handoffs.** Managed Claude accounts preserve macOS Keychain access while keeping each account’s configuration separate. Usage errors stay with the matching account. Older sign-ins saved in a private Keychain may require signing in again. Fresh Claude sessions resume only after conversation output; model or provider changes show a dismissible context/cache tip.
+- **Small improvements throughout the composer.** Queued follow-ups explain their actions more clearly, and asynchronous question answers send with Enter like the composer. Notices share consistent styling and focus states. Assistant Markdown follows your chosen font size and renders inline HTML line breaks. Automatic handoff dividers appear before the message that triggered them.
+- **Cleaner startup and Beta error handling.** Welcome, What’s New and other startup surfaces appear one at a time; Git action rows and dialog shortcuts are easier to discover. Beta upload failures and writable-stream errors are handled more reliably, with expanded diagnostic redaction. Claude Computer-off restarts wait for background work; imported Codex sessions retain verified continuation identity. Stable sends no Beta diagnostics. Feedback opens with the correct chat context; Plan and Simulator panels reuse the dock header and disclosure controls.
+- Codex auth filesystem validation no longer runs synchronously on each streaming callback; origin checks remain fail-closed and event publication stays ordered. The available latency profile predates the final native-read permit reduction, so no final-build speedup percentage is claimed.
+- Durable delivery preserves session ownership, checkpoint ordering, cancellation and restart receipts. Long buffered turns retain their delivery mode beyond one hour. Git admission reserves capacity for checkpoints and reads.
+
+### Verification
+
+- Node 24.21.0 / Bun 1.4.2: `bun run fmt:check`, `bun run lint`, `bun run typecheck`, `bun run release:smoke`, `bun run build`, `bun run test`, `bun run windows-runtime:check` and `bun run migrations:check` passed.
+- Full workspace tests: **15,695 passed, 37 skipped**, six successful test tasks. The initial run used Node 26 and stopped at `packages/shared/src/outboundHttp.test.ts` → “survives an immediate TLS connection error and serves the next request” because Node 26 rejects TypeScript transform mode. Its targeted rerun and the full suite passed with Node 24; no assertions were weakened.
+- CI on source head `48603e869` passed, including browser suites, server shards, Windows process regression and migration lineage.
+- Public website: docs audit complete; multi-folder guide, navigation, source evidence and related operational guides updated. `npm run test:docs` (59 tests plus integrity), `npm run lint` and `npm run build` passed. Initial docs/lint failures came from Finder AppleDouble metadata on the external disk; quarantining those metadata files resolved them. No new external URLs were added.
+- Local tests and source checks do not establish live-provider or signed-platform success. Native packaging, startup smoke, Windows Defender scan and publication remain mandatory release-workflow gates.
+
 ## [1.0.0] — 2026-10-05
 
 **Synara 1.0.0 Stable brings the new workspace rail, multi-account providers, same-chat handoffs, Inbox, Auto-fix CI and Oh My Pi to Stable, together with a redesigned review workflow and one terminal pane per chat.**
