@@ -92,8 +92,29 @@ describe("groupModelUsage", () => {
         turns: 3,
         prompts: 3,
       },
+      {
+        provider: "claudeAgent",
+        model: "claude-haiku-4-5-20251001",
+        reasoning: null,
+        tokens: 5,
+        turns: 1,
+        prompts: 1,
+      },
+      {
+        provider: "claudeAgent",
+        model: "claude-haiku-4-5",
+        reasoning: null,
+        tokens: 4,
+        turns: 1,
+        prompts: 1,
+      },
     ]);
-    expect(groups.map((group) => group.displayName)).toEqual(["GPT-6 Astra", "Claude Sonnet 5.5"]);
+    expect(groups.map((group) => group.displayName)).toEqual([
+      "GPT-6 Astra",
+      "Claude Sonnet 5.5",
+      "Claude Haiku 4.5",
+    ]);
+    expect(groups[2]).toMatchObject({ tokens: 9, turns: 2 });
     expect(groups[0]).toMatchObject({ tokens: 670, turns: 7, reasoning: ["low", "high"] });
   });
 });

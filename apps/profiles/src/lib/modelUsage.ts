@@ -15,14 +15,18 @@ export type ModelUsageGroup = {
   reasoning: string[];
 };
 
+/** A provider's dated snapshot suffix ("claude-haiku-4-5-20251001"): the same model to a reader. */
+const BUILD_DATE_SUFFIX = /[-_]\d{8}$/u;
+
 export function groupModelUsage(rows: readonly PublicProfileModelUsage[]): ModelUsageGroup[] {
   const groups = new Map<string, ModelUsageGroup & { reasoningTokens: Map<string, number> }>();
   for (const row of rows) {
-    const key = `${row.provider}\u0000${row.model.toLowerCase()}`;
+    const model = row.model.replace(BUILD_DATE_SUFFIX, "");
+    const key = `${row.provider}\u0000${model.toLowerCase()}`;
     const group = groups.get(key) ?? {
       provider: row.provider,
-      model: row.model,
-      displayName: humanizeModelSlug(row.model),
+      model,
+      displayName: humanizeModelSlug(model),
       tokens: 0,
       turns: 0,
       reasoning: [],
