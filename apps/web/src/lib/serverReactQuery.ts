@@ -241,14 +241,26 @@ export async function refreshServerConfigAfterTransportOpen(
       }));
   const config = await loadConfig();
   const latestProviderSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient);
-  const providers =
+  const streamArrivedDuringRefresh =
     latestProviderSnapshot?.reconciled === true &&
-    latestProviderSnapshot.revision > providerRevisionAtStart
-      ? latestProviderSnapshot.providers
-      : mergeProviderStatusSnapshots(
-          providerSnapshotAtStart?.providers ?? configSnapshotAtStart?.providers,
-          config.providers,
-        );
+    latestProviderSnapshot.revision > providerRevisionAtStart;
+  const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+  const providers = mergeProviderStatusSnapshots(
+    configSnapshotAtStart?.providers,
+    mergeProviderStatusSnapshots(
+      currentConfig?.providers,
+      streamArrivedDuringRefresh
+        ? mergeProviderStatusSnapshots(config.providers, latestProviderSnapshot.providers)
+        : mergeProviderStatusSnapshots(providerSnapshotAtStart?.providers, config.providers),
+    ),
+  );
+  // A configuration refresh can be newer than the last stream event. Retain
+  // its statuses too, without pretending a fresh stream snapshot has arrived.
+  latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+    revision: latestProviderSnapshot?.revision ?? providerRevisionAtStart,
+    providers,
+    reconciled: streamArrivedDuringRefresh,
+  });
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), {
     ...config,
     providers,
