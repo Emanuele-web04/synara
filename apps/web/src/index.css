@@ -375,8 +375,10 @@
 }
 
 .sidebar-surface-enter {
-  animation: sidebar-surface-enter 160ms ease-out both;
-  will-change: opacity, transform;
+  /* Fill `backwards`, not `both`, and no `will-change`: a retained transform or standing
+     hint keeps the sidebar list on its own layer, which Chromium does not re-rasterize
+     after a display-scale change, so its text stays blurry until restart. */
+  animation: sidebar-surface-enter 160ms ease-out backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -731,6 +733,19 @@ input {
 .drag-region select,
 .drag-region a {
   -webkit-app-region: no-drag;
+}
+
+/* Chromium does not clip native app regions to scrolling ancestors. Exclude the
+   visible content-tab viewport once, instead of letting offscreen chips and their
+   buttons subtract rectangles from neighboring window chrome. The strip fits its
+   content up to the available width, leaving unused header space draggable. */
+.surface-content-tabs {
+  -webkit-app-region: no-drag;
+}
+
+.surface-content-tabs [data-surface-tab],
+.surface-content-tabs [data-surface-tab] button {
+  -webkit-app-region: initial;
 }
 
 /* Scrollbar styling.

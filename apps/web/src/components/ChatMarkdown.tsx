@@ -42,7 +42,7 @@ import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -319,6 +319,24 @@ type MarkdownParentNode = {
 type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
 const CHAT_FIND_TEXT_TAG_NAME = "chat-find-text";
 const CHAT_FIND_TEXT_START_ATTRIBUTE = "data-chat-find-text-start";
+// Keep the renderer's generated metadata through the authored-HTML sanitizer.
+// KaTeX runs afterward so its generated MathML/styles do not widen this allowlist.
+const AUTHORED_HTML_SCHEMA = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), CHAT_FIND_TEXT_TAG_NAME],
+  attributes: {
+    ...defaultSchema.attributes,
+    [CHAT_FIND_TEXT_TAG_NAME]: ["dataChatFindTextStart"],
+    blockquote: [
+      ...(defaultSchema.attributes?.blockquote ?? []),
+      ["dataGithubAlert", "note", "tip", "important", "warning", "caution"],
+    ],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "file", "thread", "synara"],
+  },
+};
 function remarkFindableText() {
   return (tree: MarkdownNode) => wrapFindableTextNodes(tree);
 }
@@ -1500,7 +1518,7 @@ function ChatMarkdown({
       // Raw HTML is only enabled for authored local-file previews. Sanitize
       // immediately after parsing so scripts, event handlers, and unsafe URL
       // schemes never reach React's renderer.
-      return [rehypeRaw, rehypeSanitize, ...MARKDOWN_REHYPE_PLUGINS];
+      return [rehypeRaw, [rehypeSanitize, AUTHORED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS];
     }
     return MARKDOWN_REHYPE_PLUGINS;
   }, [isUserVariant, parseHtml]);

@@ -276,7 +276,7 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
-import { ProjectImportLandingBanner } from "~/projectImport/ProjectImportLandingBanner";
+import { SponsorLandingBanner } from "./SponsorLandingBanner";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 
@@ -1664,8 +1664,11 @@ export default function ChatView({
   // Providers that clear `activeTurnId` on every terminal event (Claude) would
   // otherwise leave the transcript with no active turn while work is still in
   // progress, collapsing the newest answer into a closed "Worked for" disclosure.
-  // The latest turn is the transcript's own notion of "current", so fall back to it.
-  const activeTurnIdForTranscript = activeThread?.session?.activeTurnId ?? activeLatestTurnId;
+  // Fall back only while that turn is unsettled. A follow-up send can be busy
+  // before its new turn exists; it must not reopen the previous turn's work.
+  const activeTurnIdForTranscript = latestTurnSettled
+    ? null
+    : (activeThread?.session?.activeTurnId ?? activeLatestTurnId);
   // The edit affordance must mirror the exact policy the server decider applies:
   // resolve the editable target from the raw sequence-ordered thread messages and
   // the running-session turn id — never from the createdAt-sorted timeline rows,
@@ -6464,7 +6467,7 @@ export default function ChatView({
                   {/* Pinned to the top so the heading stays optically centered; hidden on
                       short panes where it would crowd the heading. */}
                   <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                    <SponsorLandingBanner className="w-full max-w-[520px]" />
                   </div>
                   <div
                     className={cn(
@@ -6608,7 +6611,10 @@ export default function ChatView({
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
-                    followLiveOutput={hasStreamingAssistantText && !isUserScrollDetached}
+                    // End-follow belongs to the reader, including the gaps
+                    // between assistant text and subsequent tool/layout updates.
+                    followLiveOutput={!isUserScrollDetached}
+                    animateTailAnchorSlide={!hasStreamingAssistantText}
                     onIsAtEndChange={onIsAtEndChange}
                     onNavigate={onTranscriptNavigate}
                     markdownCwd={threadWorkspaceCwd ?? undefined}

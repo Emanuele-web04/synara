@@ -3100,10 +3100,12 @@ it.layer(
 
       const settledRows = yield* sql<{
         readonly status: string;
+        readonly resolvedAt: string;
         readonly pendingUserInputCount: number;
       }>`
         SELECT
           interactions.status,
+          interactions.resolved_at AS "resolvedAt",
           threads.pending_user_input_count AS "pendingUserInputCount"
         FROM projection_pending_interactions AS interactions
         INNER JOIN projection_threads AS threads
@@ -3112,7 +3114,9 @@ it.layer(
           AND interactions.interaction_kind = 'userInput'
           AND interactions.request_id = ${requestId}
       `;
-      assert.deepEqual(settledRows, [{ status: "uncertain", pendingUserInputCount: 0 }]);
+      assert.deepEqual(settledRows, [
+        { status: "confirmed", resolvedAt: reconciledAt, pendingUserInputCount: 0 },
+      ]);
     }),
   );
 });

@@ -17,7 +17,7 @@ import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQu
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
-import { StudioOutputReactorLive } from "./orchestration/Layers/StudioOutputReactor";
+import { HubOutputReactorLive } from "./orchestration/Layers/HubOutputReactor";
 import { ThreadGitMetadataReactorLive } from "./orchestration/Layers/ThreadGitMetadataReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
@@ -121,9 +121,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(ComputerServiceLive),
   );
-  const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-  );
+  const hubOutputReactorLayer = HubOutputReactorLive.pipe(Layer.provideMerge(runtimeServicesLayer));
   const threadGitMetadataReactorLayer = ThreadGitMetadataReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitLayerLive),
@@ -150,7 +148,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
-    Layer.provideMerge(studioOutputReactorLayer),
+    Layer.provideMerge(hubOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(serverSettingsLayer),
@@ -177,7 +175,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
-    Layer.provideMerge(studioOutputReactorLayer),
+    Layer.provideMerge(hubOutputReactorLayer),
     Layer.provideMerge(threadGitMetadataReactorLayer),
     Layer.provideMerge(sidechatExpiryReactorLayer),
   );
