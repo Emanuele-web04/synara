@@ -1,4 +1,5 @@
-import { CheckIcon, LoaderIcon } from "~/lib/icons";
+import { CheckIcon } from "~/lib/icons";
+import { LiveStatusSpinner } from "../ui/spinner";
 import { cn } from "~/lib/utils";
 
 type TaskProgressStep = {
@@ -38,7 +39,7 @@ export function TaskProgressSteps({
               {step.status === "completed" ? (
                 <CheckIcon className="size-3" />
               ) : step.status === "inProgress" ? (
-                <LoaderIcon className="size-3 animate-spin" />
+                <LiveStatusSpinner className="size-3" />
               ) : (
                 <span className="block size-[7px] rounded-full border border-current" />
               )}

@@ -13,9 +13,10 @@ import {
 
 import type { ActiveTaskListState } from "../../session-logic";
 import { TaskProgressSteps } from "./TaskProgressSteps";
-import { BotIcon, LoaderIcon } from "~/lib/icons";
+import { BotIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
+import { LiveStatusSpinner } from "../ui/spinner";
 import {
   ComposerStackedPanelHeaderRow,
   ComposerStackedPanelRowLabel,
@@ -57,7 +58,7 @@ export function ActiveTaskListCard({
       <ComposerStackedPanelHeaderRow>
         <ComposerStackedPanelRowMain>
           {compact && hasInProgressTask ? (
-            <LoaderIcon className={cn(COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, "animate-spin")} />
+            <LiveStatusSpinner className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           ) : (
             <PiSlidersHorizontal className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}
