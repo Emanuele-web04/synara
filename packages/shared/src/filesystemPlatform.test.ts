@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  isMacAppBundlePath,
   sameFileIdentity,
   supportsPosixPermissions,
   syncDirectoryEntry,
@@ -37,6 +38,13 @@ describe("filesystemPlatform", () => {
     writeFileSync(filePath, "snapshot");
 
     await expect(syncRegularFile(filePath, process.platform)).resolves.toBeUndefined();
+  });
+
+  it("recognizes macOS app bundles without catching dotted folders", () => {
+    expect(isMacAppBundlePath("/Users/me/Fake Report.app", "darwin")).toBe(true);
+    expect(isMacAppBundlePath("/Users/me/Old Build.APP", "darwin")).toBe(true);
+    expect(isMacAppBundlePath("/Users/me/code/next.js", "darwin")).toBe(false);
+    expect(isMacAppBundlePath("/home/me/Fake Report.app", "linux")).toBe(false);
   });
 
   it("uses inode identity on POSIX and the documented Windows path-guard fallback", () => {
