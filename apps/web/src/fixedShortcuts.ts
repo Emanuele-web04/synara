@@ -10,12 +10,7 @@ import type { KeybindingShortcut, KeybindingWhenNode } from "@synara/contracts";
 import { matchesShortcut, type ShortcutEventLike } from "./keybindings";
 import { isMacPlatform } from "./lib/utils";
 
-export type FixedShortcutId =
-  | "navigation.back"
-  | "navigation.forward"
-  | "search.files"
-  | "search.content"
-  | "terminal.search";
+export type FixedShortcutId = "navigation.back" | "navigation.forward" | "terminal.search";
 
 export interface FixedShortcut {
   readonly id?: FixedShortcutId;
@@ -91,12 +86,6 @@ export const FIXED_SHORTCUTS: readonly FixedShortcut[] = [
     shortcut: chord("arrowright", alt),
     reason: "always goes forward in the desktop app",
     platform: "other",
-  },
-  { id: "search.files", shortcut: chord("p"), reason: "always opens file search" },
-  {
-    id: "search.content",
-    shortcut: chord("f", { shiftKey: true }),
-    reason: "always opens search in files",
   },
   {
     id: "terminal.search",

@@ -334,6 +334,16 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("p"),
+    command: "search.files",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("f", { shiftKey: true }),
+    command: "search.content",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("u", { shiftKey: true }),
     command: "settings.usage",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -541,6 +551,74 @@ describe("terminal shortcuts", () => {
         platform: "Linux",
       }),
       "terminal.new",
+    );
+  });
+});
+
+describe("workspace search shortcuts", () => {
+  it("resolves file and snippet search outside terminal focus", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "p", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "search.files",
+    );
+    assert.equal(
+      resolveShortcutCommand(event({ key: "f", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "search.content",
+    );
+  });
+
+  it("keeps the shipped search chords in a focused terminal", () => {
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "p", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: true },
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "f", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+
+  it("honors a remapped search command and an explicit unassignment", () => {
+    const remapped = compile([
+      {
+        shortcut: modShortcut("g"),
+        command: "search.files",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+      {
+        shortcut: { ...modShortcut("unassigned"), modKey: false },
+        command: "search.content",
+      },
+    ]);
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "g", metaKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "search.files",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "p", metaKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "f", metaKey: true, shiftKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
     );
   });
 });
