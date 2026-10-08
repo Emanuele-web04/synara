@@ -1,4 +1,3 @@
-import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 import Migration0136 from "./Migrations/136_RemoteAccessControls.ts";
 import Migration0135 from "./Migrations/135_RemoteConnectionPreferences.ts";
 import Migration0134 from "./Migrations/134_RemoteDeviceTrust.ts";
@@ -158,6 +157,7 @@ import Migration0127 from "./Migrations/127_ProjectImportHistory.ts";
 import Migration0128 from "./Migrations/128_HubWork.ts";
 import Migration0129 from "./Migrations/129_ProjectionThreadsSnooze.ts";
 import Migration0130 from "./Migrations/130_PullRequestAutoFix.ts";
+import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 
 /**
  * Migration loader with all migrations defined inline.

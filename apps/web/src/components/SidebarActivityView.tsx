@@ -68,6 +68,7 @@ import {
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
   resolveActivityScope,
+  resolveActivityThreadReadAt,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
   type ActivityGroupMode,
@@ -652,8 +653,8 @@ export function SidebarActivityView({
   onReturnSnoozedThread: (threadId: ThreadId) => void;
   onToggleThreadPinned: (threadId: ThreadId) => void;
   onArchiveThread: (threadId: ThreadId) => void;
-  /** Records a completion as seen (the classic sidebar's markThreadVisited). */
-  onMarkThreadRead: (threadId: ThreadId, completedAt?: string) => void;
+  /** Records a completion or snooze reminder as seen (the classic sidebar's markThreadVisited). */
+  onMarkThreadRead: (threadId: ThreadId, readAt?: string) => void;
   /** Double-click a row (the classic sidebar's rename gesture). */
   onRenameThread: (threadId: ThreadId) => void;
   /** Touch/pen double-tap fallback for the same rename gesture. */
@@ -856,7 +857,7 @@ export function SidebarActivityView({
   const markAllRead = () => {
     for (const thread of unreadThreads) {
       if (externalRows?.has(thread.id)) continue;
-      onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
+      onMarkThreadRead(thread.id, resolveActivityThreadReadAt(thread));
     }
   };
 
@@ -892,7 +893,7 @@ export function SidebarActivityView({
         onOpen={external?.onOpen ?? (() => onOpenThread(thread.id))}
         onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
         onSetSettled={(settled) => {
-          if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
+          if (settled) onMarkThreadRead(thread.id, resolveActivityThreadReadAt(thread));
           onSetThreadSettled(thread.id, settled);
         }}
         onReturnSnoozed={() => onReturnSnoozedThread(thread.id)}

@@ -19,6 +19,7 @@ import {
 } from "node:child_process";
 
 import {
+  lowerProcessPriority,
   prepareProcess,
   type ProcessLaunchInput,
   type ProcessLaunchPlan,
@@ -33,6 +34,8 @@ type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "requireExec
 type ProcessGroupOptions = {
   /** Own a POSIX process group while keeping Windows launches attached for tree control. */
   readonly ownProcessGroup?: boolean;
+  /** Opt-in for agent processes; internal request-path helpers keep their priority. */
+  readonly lowerPriority?: boolean;
 };
 
 export type RuntimeSpawnOptions = Omit<
@@ -79,6 +82,7 @@ function planFromOptions(
   options: PlanningOptions,
 ): ProcessLaunchPlan {
   return prepareProcess(command, args, {
+    ...("lowerPriority" in options && options.lowerPriority ? { lowerPriority: true } : {}),
     ...(options.platform !== undefined ? { platform: options.platform } : {}),
     ...(typeof options.cwd === "string" ? { cwd: options.cwd } : {}),
     ...(options.env !== undefined ? { env: options.env } : {}),
@@ -90,11 +94,12 @@ function planFromOptions(
 
 function runtimeOptions<T extends ProcessPlanningOptions & ProcessGroupOptions>(
   options: T,
-): Omit<T, "platform" | "requireExecutable" | "ownProcessGroup"> {
+): Omit<T, "platform" | "requireExecutable" | "ownProcessGroup" | "lowerPriority"> {
   const {
     platform: _platform,
     requireExecutable: _requireExecutable,
     ownProcessGroup: _ownProcessGroup,
+    lowerPriority: _lowerPriority,
     ...nodeOptions
   } = options;
   return nodeOptions;
@@ -117,21 +122,7 @@ export function spawnProcess(
   options: RuntimeSpawnOptions = {},
 ): ChildProcess {
   const plan = planFromOptions(command, args, options);
-  return trackProcessSpawn(
-    nodeSpawn(plan.command, plan.args, {
-      ...runtimeOptions(options),
-      ...(options.ownProcessGroup
-        ? {
-            detached:
-              plan.executionBackend === "native" &&
-              (options.platform ?? process.platform) !== "win32",
-          }
-        : {}),
-      shell: false,
-      windowsHide: plan.windowsHide,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    }),
-  );
+  return spawnPlannedProcess(plan, options);
 }
 
 /** Spawn an already planned command. Used by infrastructure that logs the plan first. */
@@ -147,21 +138,26 @@ export function spawnPlannedProcess(
   plan: ProcessLaunchPlan,
   options: RuntimeSpawnOptions = {},
 ): ChildProcess {
-  return trackProcessSpawn(
-    nodeSpawn(plan.command, plan.args, {
-      ...runtimeOptions(options),
-      ...(options.ownProcessGroup
-        ? {
-            detached:
-              plan.executionBackend === "native" &&
-              (options.platform ?? process.platform) !== "win32",
-          }
-        : {}),
-      shell: false,
-      windowsHide: plan.windowsHide,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    }),
-  );
+  const child = nodeSpawn(plan.command, plan.args, {
+    ...runtimeOptions(options),
+    ...(options.ownProcessGroup
+      ? {
+          detached:
+            plan.executionBackend === "native" &&
+            (options.platform ?? process.platform) !== "win32",
+        }
+      : {}),
+    shell: false,
+    windowsHide: plan.windowsHide,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
+  });
+  if (
+    options.lowerPriority &&
+    ((options.platform ?? process.platform) === "win32" || !plan.priorityBeforeExec)
+  ) {
+    lowerProcessPriority(child.pid, options);
+  }
+  return trackProcessSpawn(child);
 }
 
 /** Synchronous counterpart used by bounded discovery and compatibility probes. */

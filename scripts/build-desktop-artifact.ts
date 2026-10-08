@@ -867,13 +867,14 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
     // node-pty's npm package does not ship Linux prebuilds. Keep the frozen
     // install's blanket lifecycle-script block, then rebuild only node-pty so
     // npm supplies node-gyp to its install script and compiles the native
-    // binding required by the packaged terminal.
+    // binding required by the packaged terminal. Set an explicit package prefix
+    // so npm does not parse the workspace's Bun-specific scoped overrides.
     yield* Effect.log("[desktop-artifact] Building staged Linux node-pty binding...");
     yield* runCommand(
       ChildProcess.make({
         cwd: stageAppDir,
         ...commandOutputOptions(verbose),
-      })`npm rebuild node-pty --foreground-scripts`,
+      })`npm rebuild node-pty --foreground-scripts --prefix ${path.join(stageAppDir, "node_modules", "node-pty")}`,
     );
   }
 

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { requestComposerFocus } from "../../composerFocusRequestStore";
 import { resolveShortcutCommand } from "../../keybindings";
+import { hasOpenDismissibleOverlay } from "../../lib/editableEventTarget";
 import { isTerminalFocused } from "../../lib/terminalFocus";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import { scheduleDeferredChatMount } from "./deferredChatMount";
@@ -11,17 +12,6 @@ import {
   type RightDockPane,
   resolveActivePane,
 } from "../../rightDockStore.logic";
-
-function hasOpenDismissibleOverlay(): boolean {
-  return Array.from(
-    document.querySelectorAll<HTMLElement>(
-      '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-slot="context-menu-popup"], [data-testid="composer-extras-panel"]',
-    ),
-  ).some(
-    (element) =>
-      !element.closest('[inert], [aria-hidden="true"]') && element.getClientRects().length > 0,
-  );
-}
 
 // The dock host owns the shortcut: the single-chat surface for its thread's sidechats, the
 // GitHub inbox for the selected item's. Embedded ChatViews must not each create or toggle a

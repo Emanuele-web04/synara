@@ -284,9 +284,9 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `groups` (Hubs), `tasks` (Tasks), `remoteConnections`,
+The list currently contains `groups` (Hubs), `remoteConnections`,
 `accountProfileSync`, and `accountInbox` (account-saved Inbox history), all gated off in
-Stable. Inbox and Auto-fix CI are available in both apps.
+Stable. Tasks, Inbox, and Auto-fix CI are available in both apps.
 Oh My Pi, the rail sidebar layout, and message trail
 sound are available in both Stable and Beta.
 
@@ -300,14 +300,15 @@ chats stay reachable. The gate lives in
 `apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
 `apps/web/src/betaFeatures.ts`.
 
-`tasks` enables the Tasks list and delegation APIs. In Beta, Tasks takes Kanban's
-navigation slot and preserves its saved order and visibility; Stable keeps Kanban.
-A Beta client connected to a server that refuses Tasks returns to Kanban.
+Tasks and its delegation APIs are available in Stable and Beta. Tasks takes
+Kanban's navigation slot and preserves its saved order and visibility; its
+List / Kanban switch keeps the board accessible. A client connected to an older
+server that refuses Tasks returns to Kanban.
 
 Inbox and its `stats.getRecap` RPC are available in Stable and Beta. Stable shows
 chat attention, running and finished work, review requests, and the activity recap.
 The to-do list, quick-add, delegation card, and **All tasks** link appear only where
-Tasks is available; Stable keeps Kanban and does not request the to-do APIs.
+Tasks is available, including Stable and Beta.
 
 `accountInbox` is the account-saved Inbox history. In Beta, a signed-in computer
 automatically saves account/workspace-owned daily snapshots, including project names,

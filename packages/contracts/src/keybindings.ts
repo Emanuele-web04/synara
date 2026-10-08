@@ -79,6 +79,9 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "thread.jump.8",
   "thread.jump.9",
   "thread.copyId",
+  "thread.archive",
+  "thread.snooze",
+  "thread.markUnread",
   "chat.visible.next",
   "chat.visible.previous",
   "threadTab.next",
@@ -86,6 +89,8 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "editor.openFavorite",
   "editor.file.save",
   "git.commitAndPush",
+  "search.files",
+  "search.content",
 ] as const;
 
 // Shared list of numbered thread-jump commands used by the web shortcut UI.

@@ -1,10 +1,19 @@
 import "../index.css";
 import {
   ThreadId,
+  ProjectId,
   type NativeApi,
   type TerminalCloseInput,
   type TerminalOpenInput,
+  type TerminalWriteInput,
+  type TerminalEvent,
 } from "@synara/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RightDock } from "./chat/RightDock";
+import { DockTerminalPane } from "./chat/DockTerminalPane";
+import { selectRightDockState, useRightDockStore } from "../rightDockStore";
+import { useStore } from "../store";
+import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { afterEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -25,11 +34,11 @@ const api = vi.hoisted(() => ({
       exitSignal: null,
       updatedAt: new Date().toISOString(),
     })),
-    write: vi.fn(async () => {}),
+    write: vi.fn<(input: TerminalWriteInput) => Promise<void>>(async () => {}),
     resize: vi.fn(async () => {}),
     ackOutput: vi.fn(async () => {}),
     close: vi.fn<(input: TerminalCloseInput) => Promise<void>>(async () => {}),
-    onEvent: vi.fn(() => () => {}),
+    onEvent: vi.fn<(listener: (event: TerminalEvent) => void) => () => void>(() => () => {}),
   },
 }));
 vi.mock("../nativeApi", () => ({ readNativeApi: () => api }));
@@ -37,6 +46,7 @@ vi.mock("../nativeApi", () => ({ readNativeApi: () => api }));
 afterEach(() => {
   terminalRuntimeRegistry.disposeOrphanedThreads(new Set());
   useTerminalStateStore.setState({ terminalStateByThreadId: {} });
+  useRightDockStore.setState({ dockStateByThreadId: {} });
   vi.clearAllMocks();
   api.terminal.close.mockReset();
 });
@@ -180,5 +190,136 @@ it("keeps a reopened shell alive when cleanup of the exited shell finishes later
   } finally {
     finishClose();
     await cleanup;
+  }
+});
+
+const dockHostId = ThreadId.makeUnsafe("multiple-dock-terminals");
+const dockProjectId = ProjectId.makeUnsafe("terminal-project");
+
+function TerminalDock() {
+  const state = useRightDockStore(selectRightDockState(dockHostId));
+  const store = useRightDockStore.getState();
+  return (
+    <RightDock
+      state={state}
+      minWidth={300}
+      defaultWidth="50vw"
+      shouldAcceptWidth={() => true}
+      addMenuKinds={["terminal"]}
+      onSelectPane={(paneId) => store.setActivePane(dockHostId, paneId)}
+      onClosePane={(paneId) => {
+        void closeTerminalSurface(dockTerminalThreadId(dockHostId), false, paneId).then(
+          (closed) => {
+            if (closed) store.closePane(dockHostId, paneId);
+          },
+        );
+      }}
+      onCollapse={() => store.setDockOpen(dockHostId, false)}
+      onOpenChange={(open) => store.setDockOpen(dockHostId, open)}
+      onAddPane={(kind) => store.openPane(dockHostId, { kind })}
+      renderPane={(pane, context) => (
+        <DockTerminalPane
+          hostThreadId={dockHostId}
+          paneId={pane.id}
+          projectId={dockProjectId}
+          isActive={context.isVisible}
+          onClosePanel={() => store.closePane(dockHostId, pane.id)}
+        />
+      )}
+    />
+  );
+}
+
+it("opens independent shells through the plus menu and keeps siblings interactive after closing a tab", async () => {
+  await page.viewport(1280, 800);
+  const previousProjects = useStore.getState().projects;
+  useStore.setState({
+    projects: [
+      {
+        id: dockProjectId,
+        kind: "project",
+        name: "Terminal project",
+        remoteName: "",
+        folderName: "tmp",
+        localName: null,
+        cwd: "/tmp",
+        defaultModelSelection: null,
+        expanded: true,
+        scripts: [],
+      },
+    ],
+  });
+  useRightDockStore.getState().openPane(dockHostId, { kind: "terminal" });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+  const view = await render(
+    <QueryClientProvider client={client}>
+      <div style={{ display: "flex", width: 1280, height: 800 }}>
+        <div style={{ flex: 1 }}>Chat</div>
+        <TerminalDock />
+      </div>
+    </QueryClientProvider>,
+  );
+  const scopeId = dockTerminalThreadId(dockHostId);
+  const panes = () => useRightDockStore.getState().dockStateByThreadId[dockHostId]!.panes;
+  try {
+    await expect.poll(() => api.terminal.open.mock.calls.length).toBe(1);
+    for (const count of [2, 3]) {
+      await page.getByRole("button", { name: "Add panel", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
+      await expect.poll(() => panes().length).toBe(count);
+      await expect.poll(() => api.terminal.open.mock.calls.length).toBe(count);
+    }
+    const sessions = api.terminal.open.mock.calls.map(([input]) => input.terminalId);
+    expect(new Set(sessions).size).toBe(3);
+    expect(api.terminal.open.mock.calls.every(([input]) => input.threadId === scopeId)).toBe(true);
+    const tabs = page.getByRole("button", { name: "Terminal", exact: true });
+    await tabs.nth(0).click();
+    await page.getByRole("textbox", { name: "Terminal input" }).fill("echo first");
+    await expect
+      .poll(() => api.terminal.write.mock.lastCall?.[0])
+      .toMatchObject({
+        threadId: scopeId,
+        terminalId: sessions[0],
+      });
+    await page.getByRole("button", { name: "Close Terminal", exact: true }).nth(1).click();
+    await expect.poll(() => panes().length).toBe(2);
+    expect(api.terminal.close).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        threadId: scopeId,
+        terminalId: sessions[1],
+      }),
+    );
+    await tabs.nth(1).click();
+    await page.getByRole("textbox", { name: "Terminal input" }).fill("echo third");
+    await expect
+      .poll(() => api.terminal.write.mock.lastCall?.[0])
+      .toMatchObject({
+        threadId: scopeId,
+        terminalId: sessions[2],
+      });
+    expect(api.terminal.open.mock.calls).toHaveLength(3);
+    await page.screenshot({ path: "../../../../output/playwright/multiple-dock-terminals.png" });
+    await tabs.nth(0).click();
+    api.terminal.onEvent.mock.lastCall![0]({
+      type: "exited",
+      threadId: scopeId,
+      terminalId: sessions[2]!,
+      exitCode: 0,
+      exitSignal: null,
+      createdAt: new Date().toISOString(),
+    });
+    await expect.poll(() => panes().length).toBe(1);
+    await page.getByRole("textbox", { name: "Terminal input" }).fill("echo still alive");
+    await expect
+      .poll(() => api.terminal.write.mock.lastCall?.[0])
+      .toMatchObject({
+        threadId: scopeId,
+        terminalId: sessions[0],
+      });
+    expect(api.terminal.open.mock.calls).toHaveLength(3);
+  } finally {
+    await view.unmount();
+    client.clear();
+    useStore.setState({ projects: previousProjects });
   }
 });

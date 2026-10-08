@@ -176,6 +176,8 @@ export interface Project {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+  /** Extra source folders of a multi-folder project; `cwd` is the primary one. */
+  additionalFolders?: ReadonlyArray<string>;
 }
 
 export interface Space {

@@ -44,6 +44,7 @@ import {
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
+  type ServerKeepAwakeUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
   ServerVoiceTranscriptionResult,
@@ -76,7 +77,11 @@ import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
 import { isMacNavigatorPlatform } from "./lib/utils";
-import { type WsTransport, type WsThreadStreamFailure } from "./wsTransport";
+import {
+  type WsTransport,
+  type WsShellStreamFailure,
+  type WsThreadStreamFailure,
+} from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveExecutionResource } from "./lib/wsHttpUrl";
 import type { HostsApi } from "./lib/hosts/api";
@@ -155,6 +160,7 @@ const serverProviderStatusesUpdatedListeners =
   createListenerRegistry<ServerProviderStatusesUpdatedPayload>();
 const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
+const serverKeepAwakeUpdatedListeners = createListenerRegistry<ServerKeepAwakeUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
 const projectProvisionProgressListeners =
@@ -186,6 +192,7 @@ const computerEventListeners = createListenerRegistry<ComputerEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
+const shellStreamFailureListeners = createListenerRegistry<WsShellStreamFailure>();
 const threadStreamFailureListeners = createListenerRegistry<WsThreadStreamFailure>();
 const fallbackBrowserStateListeners = createListenerRegistry<ThreadBrowserState>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
@@ -196,6 +203,7 @@ function clearWsNativeApiListeners(): void {
   serverProviderStatusesUpdatedListeners.clear();
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
+  serverKeepAwakeUpdatedListeners.clear();
   gitActionProgressListeners.clear();
   gitWorktreeSetupProgressListeners.clear();
   projectProvisionProgressListeners.clear();
@@ -210,6 +218,7 @@ function clearWsNativeApiListeners(): void {
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
   threadStreamFailureListeners.clear();
+  shellStreamFailureListeners.clear();
   fallbackBrowserStateListeners.clear();
 }
 
@@ -448,6 +457,19 @@ export function onServerSettingsUpdated(
   });
 }
 
+/** Subscribe to keep-awake (caffeinate) state; replays the latest push. */
+export function onServerKeepAwakeUpdated(
+  listener: (payload: ServerKeepAwakeUpdatedPayload) => void,
+): () => void {
+  const latestKeepAwake =
+    instance?.transport.getLatestPush(WS_CHANNELS.serverKeepAwakeUpdated)?.data ?? null;
+  return subscribeWithReplay({
+    registry: serverKeepAwakeUpdatedListeners,
+    listener,
+    latest: latestKeepAwake,
+  });
+}
+
 /**
  * Subscribe to unrecoverable per-thread stream failures (retries and reconnect
  * exhausted). Lets thread-detail consumers surface a failed hydration state
@@ -457,6 +479,14 @@ export function onThreadStreamFailure(
   listener: (failure: WsThreadStreamFailure) => void,
 ): () => void {
   const unsubscribe = threadStreamFailureListeners.subscribe(listener);
+  return () => void unsubscribe();
+}
+
+/** Subscribe to an exhausted shell stream; retrying it does not reconnect other streams. */
+export function onShellStreamFailure(
+  listener: (failure: WsShellStreamFailure) => void,
+): () => void {
+  const unsubscribe = shellStreamFailureListeners.subscribe(listener);
   return () => void unsubscribe();
 }
 
@@ -502,6 +532,9 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
     serverSettingsUpdatedListeners.emit(message.data);
   });
+  transport.subscribe(WS_CHANNELS.serverKeepAwakeUpdated, (message) => {
+    serverKeepAwakeUpdatedListeners.emit(message.data);
+  });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
   });
@@ -529,6 +562,7 @@ export function createWsNativeApi(): NativeApi {
       computerEventListeners.emit(message.data);
     });
   }
+  // Do not open the Tasks stream when the connected server has refused it.
   if (TASKS_OFFERED_BY_BUILD) {
     transport.subscribe(WS_CHANNELS.todoEvent, (message) => {
       todoEventListeners.emit(message.data);
@@ -542,6 +576,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
     orchestrationThreadEventListeners.emit(message.data);
+  });
+  transport.onShellStreamFailure((failure) => {
+    shellStreamFailureListeners.emit(failure);
   });
   transport.onThreadStreamFailure((failure) => {
     threadStreamFailureListeners.emit(failure);
@@ -845,6 +882,7 @@ export function createWsNativeApi(): NativeApi {
       getShellSnapshot: () => executionRequest(ORCHESTRATION_WS_METHODS.getShellSnapshot),
       getThreadDetailSnapshot: (input) =>
         executionRequest(ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot, input),
+      searchThreads: (input) => executionRequest(ORCHESTRATION_WS_METHODS.searchThreads, input),
       dispatchCommand: (command) => {
         return executionRequest(ORCHESTRATION_WS_METHODS.dispatchCommand, {
           command: omitNullUserInputAnswers(command),

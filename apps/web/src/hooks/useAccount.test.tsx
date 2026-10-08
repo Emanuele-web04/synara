@@ -162,7 +162,7 @@ describe("useAccount", () => {
       handle: "ada-l",
       displayName: "Ada",
       avatarColor: "#22c55e",
-      themeAccent: { light: "#0169cc", dark: "#0169cc" },
+      themeAccent: { light: "#c74614", dark: "#f2612d" },
     });
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-in",
