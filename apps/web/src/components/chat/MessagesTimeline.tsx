@@ -62,7 +62,6 @@ import {
   ClockIcon,
   GitForkIcon,
   GoalIcon,
-  LoaderIcon,
   MessageDeliveryCheckIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -75,6 +74,7 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
+import { LiveStatusSpinner } from "../ui/spinner";
 import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
@@ -311,7 +311,7 @@ function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"
   if (status === "active") {
     // Spinner sized to match the pending nodes, in foreground (black) so the
     // active step reads as the current work rather than an accent flourish.
-    return <LoaderIcon className="size-2.5 animate-spin text-[var(--color-text-foreground)]" />;
+    return <LiveStatusSpinner className="size-2.5 text-[var(--color-text-foreground)]" />;
   }
   if (status === "error") {
     return <CircleAlertIcon className="size-2.5 text-destructive" />;

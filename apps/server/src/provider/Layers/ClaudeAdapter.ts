@@ -84,6 +84,7 @@ import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
 import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { approvalRequestKindFromRequestType } from "@synara/shared/threadSummary";
+import { nonEmptyTrimmed } from "@synara/shared/text";
 import {
   claudeCacheContextTokens,
   claudeCacheFromRequest,
@@ -4656,6 +4657,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
           const run = subagentRunForTask(context, undefined, message.task_id);
+          const error = nonEmptyTrimmed(patch?.error);
           const raw = {
             source: "claude.sdk.message" as const,
             method: sdkNativeMethod(message),
@@ -4673,7 +4675,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             payload: {
               taskId: RuntimeTaskId.makeUnsafe(message.task_id),
               ...(status !== undefined ? { status } : {}),
-              ...(patch?.error ? { error: patch.error } : {}),
+              ...(error ? { error } : {}),
               ...(isBackgrounded !== undefined ? { isBackgrounded } : {}),
               ...(run ? { toolUseId: run.toolUseId } : {}),
               ...(workflowTaskId
@@ -4941,15 +4943,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const workflowAgentPlans = workflowScript
               ? extractClaudeWorkflowAgentPlans(workflowScript)
               : undefined;
-            const workflowName = message.workflow_name ?? workflowMeta?.name;
+            // The journal rejects untrimmed strings, and SDK task descriptions
+            // (often a raw Bash command) can end in a newline or space.
+            const description = nonEmptyTrimmed(message.description);
+            const taskType = nonEmptyTrimmed(message.task_type);
+            const subagentType = nonEmptyTrimmed(message.subagent_type);
+            const workflowName = nonEmptyTrimmed(message.workflow_name ?? workflowMeta?.name);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "task.started",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
-                description: message.description,
-                ...(message.task_type ? { taskType: message.task_type } : {}),
-                ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+                ...(description ? { description } : {}),
+                ...(taskType ? { taskType } : {}),
+                ...(subagentType ? { subagentType } : {}),
                 ...(workflowName ? { workflowName } : {}),
                 ...(workflowTaskId
                   ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
@@ -4981,15 +4988,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               }
             }
             const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
+            const lastToolName = nonEmptyTrimmed(message.last_tool_name);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "task.progress",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
-                description: message.description,
+                description: nonEmptyTrimmed(message.description) ?? "Task",
                 ...(message.summary?.trim() ? { summary: message.summary.trim() } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
-                ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
+                ...(lastToolName ? { lastToolName } : {}),
                 ...(workflowTaskId
                   ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
                   : {}),
