@@ -310,6 +310,10 @@ function resolvePersistedProviderListEntry(provider: string): ProviderKind | und
 }
 
 const PersistedProviderKindList = persistedIdList(ProviderKind, resolvePersistedProviderListEntry);
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
+const PersistedProviderInstanceIdList = persistedIdList(ProviderInstanceId, (value) =>
+  isProviderInstanceId(value) ? value : undefined,
+);
 
 const PersistedHiddenModels = Schema.Array(
   Schema.Struct({
@@ -444,10 +448,14 @@ export const AppSettingsSchema = Schema.Struct({
   // also write back here so the last explicit open/close survives reloads.
   environmentPanelDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Providers whose usage ring sits at the bottom of the app rail (see AppRailUsage.logic for
-  // the cap). A ring only draws once its provider reports usage.
+  // Legacy provider selection, retained to migrate existing sidebar preferences.
   railUsageProviders: PersistedProviderKindList.pipe(
     withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
+  ),
+  // Accounts whose usage rings sit at the bottom of the app rail. Null migrates the
+  // legacy provider ids to their default accounts; an empty list explicitly hides all rings.
+  railUsageInstanceIds: Schema.NullOr(PersistedProviderInstanceIdList).pipe(
+    withDefaults(() => null),
   ),
   railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
   // Usage popovers (rail rings, chat header, branch toolbar) open on the limit rows only;
@@ -1423,6 +1431,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     : DEFAULT_CODEX_ACCOUNT_ID;
   return {
     ...currentSettings,
+    railUsageInstanceIds: settings.railUsageInstanceIds ?? settings.railUsageProviders,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
     // Read the legacy Studio key once: it defaults to true, so only an explicit
     // `false` carries over onto the renamed Groups section.
