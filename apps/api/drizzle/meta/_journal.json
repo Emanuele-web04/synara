@@ -141,6 +141,13 @@
       "when": 1791409952217,
       "tag": "0019_profile_social_links",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791468895083,
+      "tag": "0020_profile_accent_color",
+      "breakpoints": true
     }
   ]
 }

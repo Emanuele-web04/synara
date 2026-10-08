@@ -21,7 +21,7 @@ export function useProfileThemeAccentSync(account: ReturnType<typeof useAccount>
   } = account;
 
   useEffect(() => {
-    if (!profileSyncEnabled || !me?.profile) {
+    if (!profileSyncEnabled || !me?.profile || me.profile.accentColor) {
       lastAttempt.current = null;
       return;
     }
@@ -45,7 +45,8 @@ export function useProfileThemeAccentSync(account: ReturnType<typeof useAccount>
         return;
       const profile = status.me.profile;
       const current = readProfileThemeAccent();
-      if (!profile || current.light !== light || current.dark !== dark) return;
+      if (!profile || profile.accentColor || current.light !== light || current.dark !== dark)
+        return;
       if (
         profile.themeAccent?.light?.toLowerCase() === light &&
         profile.themeAccent?.dark?.toLowerCase() === dark

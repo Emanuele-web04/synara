@@ -22,6 +22,7 @@ export interface ProfileIdentityDraft {
   readonly name: string;
   readonly handle: string;
   readonly avatarColor: string;
+  readonly accentColor?: string | null;
   readonly avatarImage: string | null;
   /** Public-page visibility; only meaningful when signed in with a profile. */
   readonly isPublic?: boolean;
@@ -77,7 +78,7 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
 
   /**
    * Commits an edit. Signed in: write through the account first (the handle is
-   * immutable server-side, so the stored handle is always sent), then mirror
+   * guarded by the previous handle), then mirror
    * name/handle/color into localStorage as the offline cache — never the
    * photo, which is account state. Signed out: localStorage only. Rejects
    * when the account write fails, leaving the local cache untouched.
@@ -93,11 +94,13 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
     }
     if (accountProfile) {
       await account.updateProfile.mutateAsync({
-        handle: accountProfile.handle,
+        handle: next.handle.replace(/^@/, ""),
+        previousHandle: accountProfile.handle,
         // The contract requires a non-empty display name; clearing the field
         // means "keep what I had", matching the local hook's default fallback.
         displayName: next.name.trim().length > 0 ? next.name.trim() : name,
         avatarColor: next.avatarColor,
+        ...(next.accentColor !== undefined ? { accentColor: next.accentColor } : {}),
         ...(next.isPublic !== undefined ? { public: next.isPublic } : {}),
         ...(next.avatarSource !== undefined ? { avatarSource: next.avatarSource } : {}),
         ...(next.socialLinks !== undefined ? { socialLinks: next.socialLinks } : {}),
@@ -107,7 +110,7 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
       });
     }
     setName(next.name);
-    setHandle(accountProfile ? accountProfile.handle : next.handle);
+    setHandle(next.handle);
     setColor(next.avatarColor);
     // The stored photo belongs to the signed-out identity; a signed-in save
     // must not overwrite or clear it.

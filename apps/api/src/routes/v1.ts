@@ -289,6 +289,7 @@ function toAccountProfile(row: ProfileRow, avatarUrl: string | null): AccountPro
     displayName: row.displayName,
     avatarColor: row.avatarColor as AccountProfileAvatarColor,
     themeAccent: profileThemeAccent(row),
+    accentColor: row.accentColor,
     socialLinks: storedSocialLinks(row.socialLinks),
     public: row.public,
     avatarUrl,
@@ -968,15 +969,8 @@ export function createV1Routes(deps: {
     return c.body(null, 204);
   });
 
-  /**
-   * Upserts the caller's profile — the write that completes onboarding.
-   *
-   * The handle is immutable in V1: it is the closest thing to a public
-   * identifier a user has, and a rename needs a redirect story (and a decision
-   * about whether the freed handle is claimable) that V1 does not have. So a
-   * changed handle is refused rather than silently ignored, which is the
-   * failure a client can act on.
-   */
+  // Renames compare the previous handle under the upsert lock. The unique
+  // index owns availability; old clients cannot silently undo a rename.
   v1.put("/profile", async (c) => {
     // Mutating and user-visible: membership resolved live, never off the cache.
     const session = await requireOrgSession(c, { freshMembership: true });
@@ -1001,12 +995,15 @@ export function createV1Routes(deps: {
     if (user instanceof Response) return user;
 
     const existing = await readProfileRow(session.userId);
-    if (existing && existing.handle !== parsed.handle) {
+    if (
+      (existing && existing.handle !== (parsed.previousHandle ?? parsed.handle)) ||
+      (!existing && parsed.previousHandle !== undefined)
+    ) {
       return errorResponse(
         c,
         400,
         "validation_failed",
-        "Your handle cannot be changed once it is set",
+        "Your profile handle changed. Reload your profile before saving.",
       );
     }
 
@@ -1018,6 +1015,8 @@ export function createV1Routes(deps: {
             themeAccentDark: parsed.themeAccent?.dark ?? null,
           }
         : {};
+    const accentColumns =
+      parsed.accentColor !== undefined ? { accentColor: parsed.accentColor } : {};
     // An object replaces the entire set; empty or null clears the column.
     const socialLinksColumns =
       parsed.socialLinks !== undefined
@@ -1060,6 +1059,7 @@ export function createV1Routes(deps: {
             displayName: parsed.displayName,
             avatarColor: parsed.avatarColor,
             ...themeAccentColumns,
+            ...accentColumns,
             ...socialLinksColumns,
             // Absent means "leave visibility alone" on update and "private" on
             // first write — the safe default either way.
@@ -1069,16 +1069,14 @@ export function createV1Routes(deps: {
             // 'uploaded'); the upload route is the sole writer of that state.
             ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
           })
-          // Only the editable columns are updated. `handle` is excluded rather
-          // than written back identically: the guard above already refused a
-          // change, and leaving it out of the statement means a future guard bug
-          // cannot rewrite someone's handle through this path.
           .onConflictDoUpdate({
             target: profiles.userId,
             set: {
+              handle: parsed.handle,
               displayName: parsed.displayName,
               avatarColor: parsed.avatarColor,
               ...themeAccentColumns,
+              ...accentColumns,
               ...socialLinksColumns,
               ...(parsed.public !== undefined ? { public: parsed.public } : {}),
               ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
@@ -1087,14 +1085,9 @@ export function createV1Routes(deps: {
               ...(shouldClearAvatar ? { avatarKey: null } : {}),
               updatedAt: new Date(),
             },
-            // Only when the stored handle matches the request. Two racing
-            // first-time PUTs with different handles interleave so the loser's
-            // upsert lands as this UPDATE; unconditional, it would overwrite
-            // the winner's display name/visibility/etc. before the post-upsert
-            // check rejects it — a rejected request that still mutated. With
-            // the guard the loser's statement is a no-op and the re-read below
-            // reports the conflict with nothing changed.
-            setWhere: sql`${profiles.handle} = excluded.handle`,
+            // Guard both stale renames and racing first-time inserts: a
+            // rejected write must not change name, visibility or avatar.
+            setWhere: sql`${profiles.handle} = ${parsed.previousHandle ?? parsed.handle}`,
           });
 
         return shouldClearAvatar ? locked.avatarKey : null;
@@ -1117,10 +1110,7 @@ export function createV1Routes(deps: {
       scheduleAvatarObjectDelete(session.userId, displacedAvatarKey);
     }
 
-    // Re-read and verify the handle actually stored. Two concurrent
-    // first-time submits can interleave so the loser's upsert lands as an
-    // update (which never writes `handle`) — without this check the loser
-    // would be told their handle saved while the winner's stands.
+    // A compare-and-set no-op must be reported, not presented as a saved edit.
     const [stored] = await db
       .select({ handle: profiles.handle })
       .from(profiles)
@@ -1131,7 +1121,7 @@ export function createV1Routes(deps: {
         c,
         400,
         "validation_failed",
-        "Your handle cannot be changed once it is set",
+        "Your profile handle changed. Reload your profile before saving.",
       );
     }
 
@@ -2780,6 +2770,7 @@ export function createV1Routes(deps: {
       displayName: row.displayName,
       avatarColor: row.avatarColor,
       themeAccent: profileThemeAccent(row),
+      accentColor: row.accentColor,
       socialLinks: storedSocialLinks(row.socialLinks),
       // Provider-free by construction: an sso avatar is served from the URL
       // cached at the owner's /me reads, never from a live provider call.

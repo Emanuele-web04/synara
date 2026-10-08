@@ -211,3 +211,12 @@ showed the profile with its photo and an authenticated diagnostics dashboard
 with the migrated history (79 installs and 12 issues; live totals can change).
 Both tabs were left open for the operator. HTTPS certificate validation was
 kept enabled throughout the subdomain propagation window.
+
+## October 8 — Editable profiles and an independent accent
+
+- The desktop editor reuses the existing photo/source, social links and theme color picker. Name, handle, initials color, visibility and the new profile accent save through the account API. The iPhone/iPad profile page now opens a native editor using the same API, with PhotosPicker, ColorPicker and HEX inputs. Public profiles retain Open profile online and Share profile; private profiles remain private until the owner changes visibility.
+- `accentColor` is optional/nullable. A custom HEX takes priority over `themeAccent` on the public page and share cards. `null` restores automatic theme colors; omission preserves a stored choice, including writes from older clients. Desktop background theme sync leaves custom colors alone.
+- Handle renames send `previousHandle`; the API compares it against the current handle and the upsert condition prevents stale writes. The existing unique index rejects occupied handles with `409 handle_taken`. Changing a handle changes its public URL; the old URL returns 404 and the old handle becomes claimable. No redirect aliases were introduced.
+- Additive migration `0020_profile_accent_color.sql` adds `profiles.accent_color` with `IF NOT EXISTS`. API startup applies the migration. No sponsor tables, credentials, RLS policies or usage counters are changed by this migration.
+- Deployed in Synara Orgs: API Worker `06e1afd8-38e3-46c0-922d-fa829c775a03` (Container image `04c770b556f879440183d8821d4cb3b9667fa858ae4b7d27a5a510938329754c`); profiles Worker `34b4de16-aac0-4aa9-a3d8-53c8770f9475`. Live public API returns 200 and includes `accentColor`; the branded profile route remains available.
+- Focused verification: 343 API tests against disposable PostgreSQL; 22 profiles tests; 27 web unit tests; 9 theme-sync browser tests; workspace typecheck, lint, formatting and migration lineage checks. The new API regression fails on the previous implementation. Native verification is recorded in the mobile handoff.

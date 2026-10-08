@@ -41,6 +41,7 @@ export type PublicProfile = {
    * Optional so the page keeps rendering against a pre-accent API.
    */
   themeAccent?: { light: string; dark: string } | null;
+  accentColor?: string | null;
   /**
    * Published social usernames by platform (never URLs), or null when none.
    * Optional so the page keeps rendering against a pre-links API; the page

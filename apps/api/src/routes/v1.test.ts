@@ -1325,6 +1325,79 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
     });
 
+    it("renames only from the current handle and keeps a custom accent across old-client writes", async () => {
+      const { app, db } = buildApp();
+      const first = await signIn();
+      const second = await signIn();
+      const original = profileBody({ public: true });
+      const put = (token: string, body: unknown) =>
+        app.request("/api/v1/profile", {
+          method: "PUT",
+          headers: authHeaders(token),
+          body: JSON.stringify(body),
+        });
+      await put(first.token, original);
+      const renamed = {
+        ...original,
+        handle: `${original.handle}x`,
+        previousHandle: original.handle,
+        accentColor: "#AB12EF",
+        themeAccent: { light: "#112233", dark: "#334455" },
+      };
+      const saved = await put(first.token, renamed);
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({
+        profile: { handle: renamed.handle, accentColor: "#AB12EF" },
+      });
+      const publicRead = await app.request(`/api/v1/profiles/${renamed.handle}`);
+      expect(await publicRead.json()).toMatchObject({ accentColor: "#AB12EF" });
+      expect((await app.request(`/api/v1/profiles/${original.handle}`)).status).toBe(404);
+      // A stale client must not rename back or partially write the other fields.
+      expect(
+        (await put(first.token, { ...original, displayName: "Stale", public: false })).status,
+      ).toBe(400);
+      expect(
+        (
+          await put(first.token, {
+            ...renamed,
+            handle: `${original.handle}y`,
+            previousHandle: original.handle,
+          })
+        ).status,
+      ).toBe(400);
+      expect((await put(second.token, { ...original, handle: renamed.handle })).status).toBe(409);
+      const [row] = await db.select().from(profiles).where(eq(profiles.userId, first.userId));
+      expect(row).toMatchObject({
+        handle: renamed.handle,
+        displayName: original.displayName,
+        public: true,
+      });
+      // Omitted fields preserve customization; null deliberately returns to theme.
+      expect(
+        (
+          await put(first.token, {
+            ...original,
+            handle: renamed.handle,
+            themeAccent: { light: "#445566", dark: "#667788" },
+          })
+        ).status,
+      ).toBe(200);
+      const me = await app.request("/api/v1/me", { headers: authHeaders(first.token) });
+      expect(await me.json()).toMatchObject({ profile: { accentColor: "#AB12EF" } });
+      const cleared = await put(first.token, {
+        ...original,
+        handle: renamed.handle,
+        accentColor: null,
+      });
+      expect(await cleared.json()).toMatchObject({
+        profile: { accentColor: null, themeAccent: { light: "#445566", dark: "#667788" } },
+      });
+      expect(
+        (await put(first.token, { ...original, handle: renamed.handle, accentColor: "red" }))
+          .status,
+      ).toBe(400);
+    });
+
     it("answers 409 handle_taken when another user holds the handle", async () => {
       const { app } = buildApp();
       const first = await signIn();
