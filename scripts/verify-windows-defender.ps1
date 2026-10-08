@@ -38,6 +38,14 @@ try {
     }
     Set-MpPreference -DisableRealtimeMonitoring $false -DisableArchiveScanning $false -DisableIOAVProtection $false -DisableBehaviorMonitoring $false -DisableScriptScanning $false
     Update-MpSignature
+    $signatureStatus = Get-MpComputerStatus
+    if (-not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
+        # A configured source can successfully return older staged definitions.
+        # Retry Microsoft's direct source; the freshness gate below still applies.
+        Save-DefenderState 'default-update'
+        Write-Output 'Configured update source returned stale definitions; retrying MMPC.'
+        Update-MpSignature -UpdateSource MMPC
+    }
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { break }
         Start-Sleep -Seconds 5
