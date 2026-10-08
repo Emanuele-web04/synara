@@ -40,16 +40,13 @@ export function collectWorkspaceFileFindMatches(
   const needle = query.trim();
   if (needle.length === 0 || text.length === 0 || maxMatches <= 0) return [];
 
-  const haystackLower = text.toLocaleLowerCase();
-  const needleLower = needle.toLocaleLowerCase();
+  // Case conversion can change UTF-16 length (for example, İ becomes i + ◌̇).
+  // Match the original text so offsets remain valid for DOM Range boundaries.
+  const pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
   const ranges: WorkspaceFileFindRange[] = [];
-  let from = 0;
-  while (from <= haystackLower.length - needleLower.length) {
-    const index = haystackLower.indexOf(needleLower, from);
-    if (index < 0) break;
-    ranges.push({ startOffset: index, endOffset: index + needle.length });
+  for (const match of text.matchAll(pattern)) {
+    ranges.push({ startOffset: match.index, endOffset: match.index + match[0].length });
     if (ranges.length >= maxMatches) break;
-    from = index + needle.length;
   }
   return ranges;
 }

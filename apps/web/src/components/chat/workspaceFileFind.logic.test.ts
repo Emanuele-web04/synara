@@ -80,6 +80,44 @@ describe("collectWorkspaceFileFindMatches", () => {
     ]);
   });
 
+  it("keeps original UTF-16 offsets after a character that expands when lowercased", () => {
+    expect(collectWorkspaceFileFindMatches("İabc", "abc")).toEqual([
+      { startOffset: 1, endOffset: 4 },
+    ]);
+    expect(collectWorkspaceFileFindMatches("İ\nabc", "abc")).toEqual([
+      { startOffset: 2, endOffset: 5 },
+    ]);
+  });
+
+  it("finds every literal occurrence of a character that expands when lowercased", () => {
+    expect(collectWorkspaceFileFindMatches("İİ", "İ")).toEqual([
+      { startOffset: 0, endOffset: 1 },
+      { startOffset: 1, endOffset: 2 },
+    ]);
+  });
+
+  it("uses Unicode case-insensitive matching without changing source offsets", () => {
+    expect(collectWorkspaceFileFindMatches("ΟΣ οσ ος", "οσ")).toEqual([
+      { startOffset: 0, endOffset: 2 },
+      { startOffset: 3, endOffset: 5 },
+      { startOffset: 6, endOffset: 8 },
+    ]);
+    expect(collectWorkspaceFileFindMatches("𐐀 𐐨", "𐐨")).toEqual([
+      { startOffset: 0, endOffset: 2 },
+      { startOffset: 3, endOffset: 5 },
+    ]);
+  });
+
+  it("treats regex metacharacters as literal query text", () => {
+    const literal = ".*+?^${}()|[]\\";
+    expect(collectWorkspaceFileFindMatches(`prefix ${literal} suffix`, literal)).toEqual([
+      { startOffset: 7, endOffset: 7 + literal.length },
+    ]);
+    expect(collectWorkspaceFileFindMatches("abc axc a.c", "a.c")).toEqual([
+      { startOffset: 8, endOffset: 11 },
+    ]);
+  });
+
   it("ignores an empty or whitespace-only query", () => {
     expect(collectWorkspaceFileFindMatches("hello", "")).toEqual([]);
     expect(collectWorkspaceFileFindMatches("hello", "   ")).toEqual([]);
