@@ -879,7 +879,11 @@ function isAccountIsolatedProviderDriver(
   provider: ProviderChildKind,
 ): provider is Extract<ProviderProcessEnvDriver, ProviderChildKind> {
   return (
-    provider === "cursor" || provider === "grok" || provider === "opencode" || provider === "pi"
+    provider === "cursor" ||
+    provider === "grok" ||
+    provider === "opencode" ||
+    provider === "pi" ||
+    provider === "omp"
   );
 }
 
@@ -1033,8 +1037,12 @@ const runPiCommand = (
     ),
   );
 
-const runOmpCommand = (args: ReadonlyArray<string>, executable = "omp") =>
-  runProviderCommand(executable, args, { env: providerCommandEnv(OMP_PROVIDER) }).pipe(
+const runOmpCommand = (
+  args: ReadonlyArray<string>,
+  executable = "omp",
+  env: NodeJS.ProcessEnv = providerCommandEnv(OMP_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1985,13 +1993,24 @@ export const checkPiProviderStatus = (
 export const checkOmpProviderStatus = (
   agentDir?: string,
   binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined);
+    const probeEnvResult = tryMakeProviderProbeEnv(OMP_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(OMP_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
+    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined, {
+      env: probeEnv,
+      ...(probeEnv.HOME ? { homeDir: probeEnv.HOME } : {}),
+    });
 
     const versionProbe = yield* probeProviderCliVersion(
-      runOmpCommand(["--version"], executable),
+      runOmpCommand(["--version"], executable, probeEnv),
       DEFAULT_TIMEOUT_MS,
     );
 
@@ -3325,11 +3344,19 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               ),
             );
           }
-          case "omp":
+          case "omp": {
+            const ompOptions = providerStartOptionsFromInstance(instance)?.omp;
             return checkProviderInstanceWhenEnabled(
               instance,
-              checkOmpProviderStatus(readInstanceConfigString(instance, "agentDir"), binaryPath),
+              checkOmpProviderStatus(
+                readInstanceConfigString(instance, "agentDir"),
+                binaryPath,
+                ompOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
             );
+          }
         }
       };
 
