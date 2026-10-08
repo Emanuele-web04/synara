@@ -882,6 +882,19 @@ label:has(> select#reasoning-effort) select {
   cursor: pointer;
 }
 
+/* Transcript markdown opts into native bidi ownership per prose block. Keep
+   list gutters on both inline edges so mixed-direction items cannot push a
+   checkbox or marker outside the message bubble. */
+.chat-markdown[data-direction-mode="auto-blocks"] ul,
+.chat-markdown[data-direction-mode="auto-blocks"] ol {
+  padding-inline: 1.25rem;
+}
+
+.chat-markdown-technical-isolate {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 .chat-markdown hr {
   margin: 1.5rem 0;
   border: 0;
