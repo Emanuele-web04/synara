@@ -489,7 +489,15 @@ export class DesktopBrowserManager {
     warmInactiveRuntimeCount: 0,
   };
 
+  private readonly updateNativeViewBackgrounds = () => {
+    const color = nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff";
+    for (const runtime of this.runtimes.values()) {
+      if (!runtime.webContents.isDestroyed()) runtime.view?.setBackgroundColor(color);
+    }
+  };
+
   constructor(private readonly options: DesktopBrowserManagerOptions = {}) {
+    nativeTheme.on("updated", this.updateNativeViewBackgrounds);
     this.sessionPolicy = new BrowserSessionPolicy((event) => {
       this.handleSessionDownload(event);
     });
@@ -1242,6 +1250,7 @@ export class DesktopBrowserManager {
   }
 
   dispose(): void {
+    nativeTheme.removeListener("updated", this.updateNativeViewBackgrounds);
     this.disposed = true;
     this.annotations.dispose();
     this.sessionPolicy.dispose();

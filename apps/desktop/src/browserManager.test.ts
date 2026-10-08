@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 
 import { ThreadId } from "@synara/contracts";
-import type { BrowserWindow, WebContents } from "electron";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { nativeTheme, type BrowserWindow, type WebContents } from "electron";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = vi.hoisted(() => {
   const rendererWebContentsById = new Map<number, unknown>();
@@ -17,7 +17,7 @@ const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = v
   };
 });
 
-vi.mock("electron", () => ({
+vi.mock("electron", async () => ({
   app: {
     getName: () => "Synara",
     getPreferredSystemLanguages: () => ["en-US"],
@@ -27,7 +27,9 @@ vi.mock("electron", () => ({
   BrowserWindow: class {},
   clipboard: { writeImage: vi.fn(), writeText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn() },
-  nativeTheme: { shouldUseDarkColors: false },
+  nativeTheme: Object.assign(new (await import("node:events")).EventEmitter(), {
+    shouldUseDarkColors: false,
+  }),
   session: {
     fromPartition: () => browserSession,
   },
@@ -145,6 +147,8 @@ interface BrowserManagerCharacterizationAccess {
 }
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
+
+afterEach(() => nativeTheme.removeAllListeners("updated"));
 
 function asCharacterizationAccess(
   manager: DesktopBrowserManager,
