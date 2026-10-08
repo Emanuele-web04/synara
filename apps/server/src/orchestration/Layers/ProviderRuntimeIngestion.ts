@@ -3261,20 +3261,27 @@ const make = Effect.gen(function* () {
           : runtimeSequence,
       );
       if (rebuildAcceptedProgress && snapshotKey !== undefined) {
-        // Restore replaceable tool snapshot fingerprints without dispatching
-        // intermediate snapshots. Task phases and reasoning sections replay
-        // through stable command receipts, repairing missing activity dispatches.
-        if (snapshotKey !== undefined)
-          yield* Effect.forEach(activities, (activity) => {
+        // Acknowledgement also covers suppressed snapshots. Only restore a
+        // fingerprint when this activity was actually projected; otherwise a
+        // failed survivor with the same payload would be skipped after restart.
+        // Task phases and reasoning sections replay through stable receipts.
+        yield* Effect.forEach(activities, (activity) =>
+          Effect.gen(function* () {
             const key = providerActivityUpdateDedupeKey(activityEvent, thread.id, activity);
-            return key
-              ? Cache.set(
-                  latestActivityUpdateFingerprintByKey,
-                  key,
-                  providerActivityUpdateFingerprint(activity),
-                )
-              : Effect.void;
-          });
+            if (!key) return;
+            const durable = yield* projectionThreadActivityRepository.getById({
+              threadId: thread.id,
+              activityId: activity.id,
+            });
+            if (Option.isSome(durable)) {
+              yield* Cache.set(
+                latestActivityUpdateFingerprintByKey,
+                key,
+                providerActivityUpdateFingerprint(activity),
+              );
+            }
+          }),
+        );
       } else {
         yield* Effect.forEach(
           suppressProgressActivity && snapshotKey !== undefined ? [] : activities,

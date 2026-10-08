@@ -1002,6 +1002,63 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual(["accepted-progress-4"]);
   });
 
+  it("recovers a failed tool snapshot after its coalesced prefix was acknowledged", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "tool.progress",
+            eventId: asEventId(`failed-survivor-${index}`),
+            provider: "claudeAgent",
+            createdAt: "2026-10-06T12:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("failed-survivor-turn"),
+            payload: { toolUseId: "failed-survivor-tool", summary: "Running command" },
+          }),
+        ),
+      );
+    }
+    const dispatch = harness.engine.dispatch;
+    const failingDispatch = vi
+      .spyOn(harness.engine, "dispatch")
+      .mockImplementation((command) =>
+        command.type === "thread.activity.append" && command.activity.id === "failed-survivor-1"
+          ? Effect.die(new Error("temporary activity persistence failure"))
+          : dispatch(command),
+      );
+    try {
+      await harness.startIngestion();
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+    } finally {
+      failingDispatch.mockRestore();
+    }
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(rows[0]!.sequence);
+    expect(
+      (await harness.readProjectedThread())!.activities.filter(
+        (entry) => entry.kind === "tool.updated",
+      ),
+    ).toEqual([]);
+    const drain = await harness.restartIngestion();
+    await drain();
+    expect(
+      (await harness.readProjectedThread())!.activities
+        .filter((entry) => entry.kind === "tool.updated")
+        .map((entry) => entry.id),
+    ).toEqual(["failed-survivor-1"]);
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(rows[1]!.sequence);
+  });
+
   it("repairs a failed accepted task activity on restart without duplicating committed receipts", async () => {
     const harness = await createHarness({ startIngestion: false });
     const rows: PersistedProviderRuntimeEvent[] = [];
