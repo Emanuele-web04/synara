@@ -166,13 +166,27 @@ export async function reconcileServerProviderStatuses(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
+  const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
   const snapshot = recordProviderStatusSnapshot(queryClient, providers);
+  const effectiveProviders = mergeProviderStatusSnapshots(
+    currentConfig?.providers,
+    snapshot.providers,
+  );
+  if (effectiveProviders !== snapshot.providers) {
+    latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+      ...snapshot,
+      providers: effectiveProviders,
+    });
+  }
 
   let applied = false;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
     if (!current) return current;
     applied = true;
-    return { ...current, providers: snapshot.providers };
+    return {
+      ...current,
+      providers: mergeProviderStatusSnapshots(current.providers, effectiveProviders),
+    };
   });
   if (applied) return;
 
@@ -203,6 +217,7 @@ export async function refreshServerConfigAfterTransportOpen(
   },
 ): Promise<void> {
   const providerSnapshotAtStart = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  const configSnapshotAtStart = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
   const providerRevisionAtStart = providerSnapshotAtStart?.revision ?? 0;
   latestProviderStatusSnapshotByQueryClient.set(queryClient, {
     revision: providerRevisionAtStart,
@@ -222,7 +237,10 @@ export async function refreshServerConfigAfterTransportOpen(
     latestProviderSnapshot?.reconciled === true &&
     latestProviderSnapshot.revision > providerRevisionAtStart
       ? latestProviderSnapshot.providers
-      : mergeProviderStatusSnapshots(providerSnapshotAtStart?.providers, config.providers);
+      : mergeProviderStatusSnapshots(
+          providerSnapshotAtStart?.providers ?? configSnapshotAtStart?.providers,
+          config.providers,
+        );
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), {
     ...config,
     providers,
