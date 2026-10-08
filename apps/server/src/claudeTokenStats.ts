@@ -94,10 +94,18 @@ export function claudeTokenActivityCtes(sql: SqlClient.SqlClient, scope?: TokenS
                   AND json_extract(parent_usage.value, '$.totalTokens') > 0
                 THEN json_extract(parent_usage.value, '$.totalTokens')
                 ELSE
-                  COALESCE(json_extract(parent_usage.value, '$.inputTokens'), 0)
-                  + COALESCE(json_extract(parent_usage.value, '$.cacheReadInputTokens'), 0)
-                  + COALESCE(json_extract(parent_usage.value, '$.cacheCreationInputTokens'), 0)
-                  + COALESCE(json_extract(parent_usage.value, '$.outputTokens'), 0)
+                  CASE WHEN json_type(parent_usage.value, '$.inputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.inputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.inputTokens') ELSE 0 END
+                  + CASE WHEN json_type(parent_usage.value, '$.cacheReadInputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.cacheReadInputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.cacheReadInputTokens') ELSE 0 END
+                  + CASE WHEN json_type(parent_usage.value, '$.cacheCreationInputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.cacheCreationInputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.cacheCreationInputTokens') ELSE 0 END
+                  + CASE WHEN json_type(parent_usage.value, '$.outputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.outputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.outputTokens') ELSE 0 END
               END
             ) > 0
         )

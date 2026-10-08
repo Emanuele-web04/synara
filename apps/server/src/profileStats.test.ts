@@ -175,6 +175,41 @@ describe("ProfileStatsQuery", () => {
             },
           },
         });
+        // A malformed numeric field must not make a parent look usable and
+        // suppress the child's valid usage.
+        yield* sql`
+          INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, source_turn_id)
+          VALUES (
+            'malformed-parent', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            NULL, NULL, NULL
+          ),
+          (
+            'malformed-child', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            'malformed-parent', 'provider_native', NULL
+          )
+        `;
+        yield* addActivity("10-parent", "malformed-parent", "malformed-parent-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: "not-a-number",
+              outputTokens: "also-not-a-number",
+            },
+          },
+        });
+        yield* addActivity("10-child", "malformed-child", "malformed-child-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 300,
+              outputTokens: 200,
+            },
+          },
+        });
         // Successful main-loop usage survives even though old compact model totals
         // cannot be classified as per-turn or cumulative without process evidence.
         yield* sql`
@@ -210,9 +245,9 @@ describe("ProfileStatsQuery", () => {
         // The verified fallback must outlive ordinary runtime-event retention.
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
-        expect(result.lifetimeTotalTokens).toBe(89_728);
+        expect(result.lifetimeTotalTokens).toBe(90_228);
         expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
-          { model: "claude-fable-5", tokens: 87_728 },
+          { model: "claude-fable-5", tokens: 88_228 },
           { model: "claude-opus-4-8", tokens: 2_000 },
         ]);
       }),
