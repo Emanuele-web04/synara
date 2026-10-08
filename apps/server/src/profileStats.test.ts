@@ -2224,6 +2224,63 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("starts a fresh cumulative baseline for each native usage session", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-native-session', 'project-profile', 'Native session thread',
+            '{"provider":"antigravity","model":"Gemini 3.5 Flash"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T12:00:00.000Z', '2026-06-13T12:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('native-session-1', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1000}',
+              1, '2026-06-13T12:00:00.000Z'),
+            ('native-session-2', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1500}',
+              2, '2026-06-13T12:01:00.000Z'),
+            ('native-session-3', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":1500}',
+              3, '2026-06-13T12:02:00.000Z'),
+            ('native-session-4', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":2000}',
+              4, '2026-06-13T12:03:00.000Z')
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.lifetimeTotalTokens).toBe(3_500);
+        expect(tokenStats.models).toEqual([
+          {
+            provider: "antigravity",
+            instanceId: "antigravity",
+            model: "Gemini 3.5 Flash",
+            tokens: 3_500,
+            percent: 100,
+          },
+        ]);
+      }),
+    );
+  });
+
   it("never ranks per-chat or Studio container projects as the most-worked project", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {
