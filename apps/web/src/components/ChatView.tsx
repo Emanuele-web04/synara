@@ -276,7 +276,7 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
-import { ProjectImportLandingBanner } from "~/projectImport/ProjectImportLandingBanner";
+import { SponsorLandingBanner } from "./SponsorLandingBanner";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 
@@ -6464,7 +6464,7 @@ export default function ChatView({
                   {/* Pinned to the top so the heading stays optically centered; hidden on
                       short panes where it would crowd the heading. */}
                   <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                    <SponsorLandingBanner className="w-full max-w-[520px]" />
                   </div>
                   <div
                     className={cn(
