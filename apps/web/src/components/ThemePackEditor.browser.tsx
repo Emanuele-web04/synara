@@ -83,3 +83,48 @@ it("previews an inactive light preset and applies it only when the user chooses 
   expect(saved.codeThemeIds.dark).toBe("synara");
   expect(saved.systemUiFont).toBe(true);
 });
+
+it.each(["dark", "light"] as const)(
+  "replaces Linear completely with Codex and an orange accent when selecting Synara (%s)",
+  async (variant) => {
+    const title = variant === "dark" ? "Dark" : "Light";
+    const accent = variant === "dark" ? "#f2612d" : "#c74614";
+    const otherVariant = variant === "dark" ? "light" : "dark";
+    const stored = {
+      ...DEFAULT_THEME_STATE,
+      mode: variant,
+      systemUiFont: false,
+      codeThemeIds: { ...DEFAULT_THEME_STATE.codeThemeIds, [variant]: "linear" },
+      chromeThemes: {
+        ...DEFAULT_THEME_STATE.chromeThemes,
+        [variant]: {
+          ...getCodeThemeSeed("linear", variant),
+          contrast: 22,
+          fonts: { ui: "Inter", code: "Menlo" },
+        },
+      },
+    };
+    localStorage.setItem("synara:theme", JSON.stringify(stored));
+    await render(<ThemePackEditor variant={variant} />);
+    window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
+    await expect.poll(() => root.getAttribute("data-code-theme-id")).toBe("linear");
+
+    await page.getByRole("combobox", { name: `${title} theme code theme` }).click();
+    await page.getByRole("option", { name: "Synara", exact: true }).click();
+    await expect.poll(() => root.getAttribute("data-code-theme-id")).toBe("synara");
+
+    const saved = parseStoredThemeState(localStorage.getItem("synara:theme"));
+    const codex = getCodeThemeSeed("codex", variant);
+    expect(saved.chromeThemes[variant]).toEqual({ ...codex, accent });
+    expect(saved.chromeThemes[otherVariant]).toEqual(stored.chromeThemes[otherVariant]);
+    expect(root.style.getPropertyValue("--codex-base-accent")).toBe(accent);
+    expect(root.style.getPropertyValue("--codex-base-surface")).toBe(codex.surface);
+    expect(root.style.getPropertyValue("--codex-base-ink")).toBe(codex.ink);
+    expect(root.style.getPropertyValue("--color-accent-purple")).toBe(codex.semanticColors.skill);
+    expect(root.style.getPropertyValue("--theme-font-ui-family")).toBe("");
+    const preview = page.getByRole("img", { name: `${title} theme preview: Synara` });
+    const fontFamily = getComputedStyle(preview.element()).fontFamily;
+    expect(fontFamily).toContain("system-ui");
+    expect(fontFamily).not.toContain("Inter");
+  },
+);
