@@ -102,7 +102,8 @@ function ToolGroupCollapseTimeline(props: {
 
 function createTimelineHost(): HTMLDivElement {
   const host = document.createElement("div");
-  host.style.cssText = "display:flex;width:600px;height:520px;overflow:hidden;";
+  host.style.cssText =
+    "display:flex;flex-direction:column;width:600px;height:520px;overflow:hidden;";
   document.body.append(host);
   return host;
 }
@@ -139,6 +140,43 @@ async function expectLiveRunFoldedToNewestCall(): Promise<HTMLButtonElement> {
 describe("MessagesTimeline tool group collapse", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("renders submitted questions and answers as separate transcript bubbles", async () => {
+    const entries = [
+      assistantEntry("before-question", "I need your preference.", false),
+      commandEntry("earlier-command", "git status"),
+      {
+        id: "entry-answer",
+        kind: "work" as const,
+        createdAt: "2026-03-17T19:12:28.000Z",
+        entry: {
+          id: "answered",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "User input submitted",
+          tone: "info" as const,
+          activityKind: "user-input.resolved",
+          userInputExchange: [
+            {
+              id: "q",
+              header: "Color",
+              question: "Which accent color?",
+              options: ["Amber", "Blue"],
+              answer: "Amber",
+            },
+          ],
+        },
+      },
+      assistantEntry("after-question", "I applied your preference.", false),
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
+      container: createTimelineHost(),
+    });
+    await expect.element(screen.getByText("Which accent color?", { exact: true })).toBeVisible();
+    await expect.element(screen.getByText("Amber", { exact: true })).toBeVisible();
+    await expect.element(screen.getByText("Amber · Blue", { exact: true })).toBeVisible();
+    expect(isVisibleOutsideClosedDisclosure("Which accent color?")).toBe(true);
+    expect(isVisibleOutsideClosedDisclosure("Amber")).toBe(true);
   });
 
   it.each(["reasoning", "tool summary"] as const)(
