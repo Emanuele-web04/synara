@@ -27,6 +27,7 @@ import {
   EyeOpenIcon,
   PencilIcon,
   RefreshCwIcon,
+  SearchIcon,
 } from "~/lib/icons";
 import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
@@ -68,6 +69,8 @@ interface WorkspaceFilePreviewHeaderProps {
   /** Re-fetches the current file without discarding a dirty edit buffer. */
   onReload?: (() => void) | undefined;
   reloading?: boolean;
+  /** Opens the scoped find bar for the currently loaded preview. */
+  onFind?: (() => void) | undefined;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -355,6 +358,18 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
               );
             })}
           </div>
+        ) : null}
+
+        {props.onFind ? (
+          <ChatHeaderIconButton
+            type="button"
+            tone="plain"
+            label="Find in file"
+            title="Find in file (⌘F / Ctrl+F)"
+            onClick={props.onFind}
+          >
+            <SearchIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
         ) : null}
 
         {props.onEditFile ? (
