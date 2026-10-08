@@ -194,6 +194,36 @@ Starred models absent from the current catalog remain saved and can be removed, 
 selected. They become selectable again when discovery or custom model settings add them to the
 catalog.
 
+## OpenCode V2
+
+Synara selects the native `@opencode/client` API after a read-only `/api/info` probe;
+`@opencode-ai/sdk/v2` remains the V1-server fallback (its package subpath is not the V2
+server protocol). Managed and external servers use the same adapter boundary. V2 session
+permissions, model/agent selection, prompt receipts, messages, execution events, forms,
+MCP configuration, and pagination use their native contracts.
+
+Scoped root dependency overrides keep Synara's Effect platform, SQLite, and test packages on
+the catalog runtime. OpenCode's protocol/schema dependencies retain their own Effect version.
+
+Install V2 following the [official guide](https://opencode.ai/v2/docs/), then select its
+`opencode` executable in the existing provider account. Restart provider sessions and refresh
+model discovery. V2 uses `@opencode/cli` or `anomalyco/tap/opencode-v2` for package updates;
+V1 retains its own packages. External-server updates belong to that server's operator.
+
+Preserve the OpenCode account/data directories to retain native session IDs. OpenCode owns
+migration of its history and credentials. Synara does not copy provider databases or silently
+replace missing resumed sessions. Existing supported V1 configuration remains readable by V2;
+V1 plugins need migration. See [OpenCode's migration guide](https://opencode.ai/v2/docs/migrate-v1/).
+
+The task-scoped Agent Gateway retains its existing credentials, capabilities, cancellation,
+and ownership checks. V2 uses MCP PUT registration followed by status discovery. Computer
+Use still requires a connected gateway on a managed server. V2 execution terminal events,
+not individual assistant steps, settle turns; disconnect recovery checks native outcomes and
+replays message snapshots before accepting a terminal event. Failed snapshot reads leave the
+turn active for recovery to retry.
+Rollback commits a cut at a user-turn boundary with provider file restoration disabled because
+Synara owns workspace checkpoints.
+
 ## Provider sessions
 
 Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and
@@ -470,9 +500,10 @@ failure checks.
 Blocking questions show **Cancel** whether or not they offer choices. Cancel applies to
 the whole pending request, including any later questions in the same set. Once an
 answer or cancellation is being submitted, the form disables Cancel until the
-request settles. For OpenCode, cancellation uses its `question.reject` operation;
-submitting completed answers uses `question.reply`. Both requests are scoped to
-the task's OpenCode working directory.
+request settles. For OpenCode V1, cancellation uses `question.reject` and answers use `question.reply`.
+V2 uses the owning session’s native form cancellation/reply endpoints. External, hidden,
+or conditional V2 fields remain visible with a cancellation action and a direction to
+complete the form in OpenCode. Requests retain their task and provider-session scope.
 
 ## Codex asynchronous questions
 
