@@ -2,7 +2,7 @@
 // Purpose: Shared provider→model option catalog (static + custom + runtime-discovered)
 //          for composer-like surfaces outside ChatView, e.g. the kanban new-task dialog.
 // Layer: Web hooks
-// Exports: useProviderModelCatalog, ProviderModelCatalog
+// Exports: useProviderModelCatalog, ProviderModelCatalog, modelQueryOptionsForProviderInstance
 
 import type {
   ProviderAgentDescriptor,
@@ -99,7 +99,7 @@ function readProviderOptionString(options: unknown, key: string): string | null 
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function modelQueryOptionsForProviderInstance(input: {
+export function modelQueryOptionsForProviderInstance(input: {
   readonly settings: Parameters<typeof getProviderStartOptions>[0];
   readonly provider: ProviderKind;
   readonly instanceId: ProviderInstanceId;

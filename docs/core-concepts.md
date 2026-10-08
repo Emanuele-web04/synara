@@ -86,7 +86,9 @@ Desktop quit requests ask for confirmation even when no chats are running. On ma
 ⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
 application and its running chats stay active. Quitting with no open window uses a
 native confirmation. With an open window and running chats, the quit dialog lists the work that
-will stop and offers to resume it automatically on the next launch.
+will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
+or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
+asking.
 
 ## Projects
 
@@ -333,11 +335,11 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
-Pre-turn checkpoint and Studio output baselines share a five-second preparation budget, including
+Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;
 invalid values use the default and positive values are clamped to that range. When preparation fails
 or the combined budget expires, Synara reports unavailable baselines and preserves independently
-completed results. Studio reports completed, not-applicable and failed preparation separately;
+completed results. The Hub output worker reports completed, not-applicable and failed preparation separately;
 failed or inapplicable preparation is never presented as a preserved baseline. The provider starts
 after cancellation cleanup finishes, which can extend beyond the preparation budget; an absolute process-cleanup bound has not been verified. A bounded exact-ref
 check after cleanup recognizes a checkpoint published just before cancellation. Initial and later
@@ -349,9 +351,10 @@ Native provider turns, including native child turns, may begin without Synara's 
 Synara never takes a replacement capture. Expected missing-baseline notices for native children are
 suppressed when they have no independent send, while failures of their own sends and actual capture
 errors remain visible. Diff and file undo that require an exact initial checkpoint remain unavailable,
-and Studio output discovery is unavailable for turns without a prepared Studio baseline. File Undo
+and Hub output discovery is unavailable for turns without a prepared Hub baseline. File Undo
 also refuses an earlier turn when a later managed checkpoint has no initial baseline, before changing
-files or checkpoint refs.
+files or checkpoint refs. The worker is named `HubOutputReactor`; legacy `studio.*` RPC and
+activity keys remain unchanged for client and persisted-history compatibility.
 
 ## Hubs
 

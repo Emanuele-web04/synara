@@ -134,8 +134,6 @@ import {
   toggleRailShortcutKey,
 } from "../appRail.logic";
 import { useRailShellStore } from "../railShellStore";
-import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
-import { SidebarKeepAwakeMenu } from "./KeepAwakeControls";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
@@ -198,6 +196,8 @@ import {
   pullRequestQueryKeys,
 } from "../lib/pullRequestReactQuery";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { resolveProviderDiscoveryCwd } from "../lib/providerDiscovery";
+import { modelQueryOptionsForProviderInstance } from "../hooks/useProviderModelCatalog";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -441,7 +441,6 @@ import {
   DISCLOSURE_INNER_CLASS,
 } from "~/lib/disclosureMotion";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
-import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import {
   canCreateThreadHandoff,
   canContinueThreadHandoff,
@@ -1493,7 +1492,6 @@ export default function Sidebar() {
     () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
-  const keepAwakeState = useKeepAwakeState();
   const sidebarProviderInstances = useMemo(
     () => getProviderInstanceOptions(appSettings),
     [appSettings],
@@ -5077,7 +5075,7 @@ export default function Sidebar() {
       slotOccupied: Boolean(input.threadJumpLabel),
     });
     return (
-      <div className="relative flex min-w-0 items-center justify-end gap-[3px] group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
+      <div className="relative flex min-w-0 items-center justify-end gap-2 group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
         {input.rightMetaChips.length > 0 ? (
           <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
@@ -5228,7 +5226,18 @@ export default function Sidebar() {
           worktreeName={hoverMetadata.worktreeName}
           pullRequest={prByThreadId.get(thread.id) ?? null}
           onOpenPullRequest={openPrLink}
-          model={resolveThreadModelSummary(thread.modelSelection)}
+          model={thread.modelSelection}
+          modelCatalogQueryOptions={modelQueryOptionsForProviderInstance({
+            provider: thread.modelSelection.provider,
+            instanceId: thread.modelSelection.instanceId ?? thread.modelSelection.provider,
+            settings: appSettings,
+            enabled: false,
+            cwd: resolveProviderDiscoveryCwd({
+              activeThreadWorktreePath: thread.worktreePath,
+              activeProjectCwd: hoverProject?.cwd ?? null,
+              serverCwd,
+            }),
+          })}
           status={hoverStatus}
         />
       </TooltipPopup>
@@ -7014,12 +7023,6 @@ export default function Sidebar() {
             void navigate({ to: "/settings", search: { section: "usage" } });
           }}
         />
-        {keepAwakeState?.available ? (
-          <SidebarKeepAwakeMenu
-            state={keepAwakeState}
-            onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
-          />
-        ) : null}
         <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
         {showDesktopUpdateButton && desktopUpdateState ? (
           <DesktopUpdateRailButton

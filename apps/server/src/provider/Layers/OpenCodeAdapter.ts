@@ -107,6 +107,11 @@ import {
   resolvePreferredOpenCodeModelProviders,
 } from "../OpenCodeDiscovery.ts";
 import { nonNegativeFiniteNumber, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
+import type {
+  OpenCodeExecutionEvent,
+  OpenCodeExecutionStartedEvent,
+} from "../openCodeV2Messages.ts";
+import { isOpenCodeV2Client, openCodeV2ExecutionOutcome } from "../openCodeV2Client.ts";
 
 export { flattenOpenCodeCliModels, flattenOpenCodeModels, resolvePreferredOpenCodeModelProviders };
 
@@ -184,11 +189,13 @@ const OPENCODE_MAX_RELATED_SESSIONS = 256;
 export const resolveOpenCodeStartInstanceId = resolveProviderSessionInstanceId;
 
 type OpenCodeSubscribedEvent =
-  Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
-    readonly stream: AsyncIterable<infer TEvent>;
-  }
-    ? TEvent
-    : never;
+  | OpenCodeExecutionEvent
+  | OpenCodeExecutionStartedEvent
+  | (Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
+      readonly stream: AsyncIterable<infer TEvent>;
+    }
+      ? TEvent
+      : never);
 
 interface OpenCodeHarnessPolicyDelivery {
   readonly sessionId: string;
@@ -256,6 +263,10 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   activeAgent: string | undefined;
   activeVariant: string | undefined;
   readonly stopped: Ref.Ref<boolean>;
+  readonly eventsAbortController: AbortController;
+  readonly eventsReady: Deferred.Deferred<void>;
+  nativeTranscriptNeedsReconciliation: boolean;
+  allowNativeContinuation: boolean;
   readonly sessionScope: Scope.Closeable;
 }
 
@@ -1143,6 +1154,8 @@ function shouldHandleRelatedOpenCodeSessionEvent(event: OpenCodeSubscribedEvent)
 function isOpenCodeBackgroundSessionLifecycleEvent(event: OpenCodeSubscribedEvent): boolean {
   return (
     event.type === "session.status" ||
+    event.type === "synara.opencode.execution" ||
+    event.type === "synara.opencode.execution.started" ||
     event.type === "session.idle" ||
     event.type === "session.error"
   );
@@ -1327,6 +1340,8 @@ const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResourc
   context: OpenCodeSessionContext,
   beforeRelease?: Effect.Effect<void>,
 ) {
+  // Abort the network reader before closing the scope whose fibers await it.
+  context.eventsAbortController.abort();
   yield* Effect.gen(function* () {
     if (beforeRelease !== undefined) {
       yield* beforeRelease;
@@ -1782,6 +1797,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly raw: unknown;
           readonly totalCostUsd?: number | undefined;
           readonly errorMessage?: string | undefined;
+          readonly interrupted?: boolean;
         },
       ) {
         if (context.activeTurnId !== input.turnId) {
@@ -1808,7 +1824,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 errorMessage: input.errorMessage,
               }
             : {
-                state: "completed",
+                state: input.interrupted ? "interrupted" : "completed",
                 ...(input.totalCostUsd !== undefined ? { totalCostUsd: input.totalCostUsd } : {}),
               },
         });
@@ -2095,8 +2111,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       ) {
         const settled = yield* Deferred.make<ProviderAdapterRequestError | null, never>();
-        yield* runOpenCodeSdk("session.promptAsync", () =>
-          context.client.session.promptAsync(input.promptInput),
+        yield* runOpenCodeSdk("session.promptAsync", (signal) =>
+          context.client.session.promptAsync(input.promptInput, { signal }),
         ).pipe(
           Effect.mapError(toAdapterRequestError),
           Effect.tap(() =>
@@ -2303,6 +2319,81 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
 
         switch (event.type) {
+          case "synara.opencode.execution.started": {
+            if (backgroundTaskId !== undefined || turnId) break;
+            if (!context.allowNativeContinuation) {
+              // A late background report after Stop must not restart work.
+              yield* runOpenCodeSdk("session.abort", (signal) =>
+                context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
+              ).pipe(Effect.ignore({ log: true }));
+              break;
+            }
+            const continuationId = TurnId.makeUnsafe(
+              `${adapterConfig.turnIdPrefix}-${randomUUID()}`,
+            );
+            context.activeTurnId = continuationId;
+            context.activeInteractionMode = context.appliedPermissionInteractionMode;
+            updateProviderSession(context, { status: "running", activeTurnId: continuationId });
+            yield* emit(context, {
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId: continuationId,
+                raw: event,
+              }),
+              type: "turn.started",
+              payload: { model: context.session.model },
+            });
+            yield* startTurnSnapshotWatchdog(
+              context,
+              continuationId,
+              new Set(context.messageRoleById.keys()),
+            );
+            break;
+          }
+          case "synara.opencode.execution": {
+            const outcome = event.properties.outcome;
+            if (backgroundTaskId !== undefined) {
+              yield* settleOpenCodeBackgroundTask(context, {
+                taskId: backgroundTaskId,
+                status:
+                  outcome === "succeeded"
+                    ? "completed"
+                    : outcome === "failed"
+                      ? "failed"
+                      : "stopped",
+                ...(event.properties.message ? { summary: event.properties.message } : {}),
+                raw: event,
+              });
+            } else if (turnId) {
+              if (context.nativeTranscriptNeedsReconciliation) {
+                const snapshotsExit = yield* Effect.exit(loadCurrentMessageSnapshots(context));
+                if (Exit.isFailure(snapshotsExit)) {
+                  yield* Effect.logWarning(
+                    `${adapterConfig.displayName} terminal transcript reconciliation failed`,
+                    Cause.squash(snapshotsExit.cause),
+                  );
+                  // Keep the turn active so a later terminal or the watchdog can retry.
+                  break;
+                }
+                if (context.activeTurnId !== turnId) break;
+                yield* replayOpenCodeMessageSnapshots(context, snapshotsExit.value, turnId);
+                if (context.activeTurnId !== turnId) break;
+                context.nativeTranscriptNeedsReconciliation = false;
+              }
+              // V2 has an authoritative execution terminal. Step/text completion
+              // can precede tools, retries, and later steps and must not settle it.
+              yield* completeOpenCodeTurn(context, {
+                turnId,
+                raw: event,
+                totalCostUsd: context.latestTurnCostUsd,
+                ...(outcome === "failed"
+                  ? { errorMessage: event.properties.message ?? "OpenCode execution failed." }
+                  : {}),
+                interrupted: outcome === "interrupted",
+              });
+            }
+            break;
+          }
           case "message.updated": {
             context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
             context.messageSnapshotKeyById.set(
@@ -3417,12 +3508,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       );
 
-      const replayOpenCodeMessageSnapshots = Effect.fn("replayOpenCodeMessageSnapshots")(function* (
+      const replayOpenCodeMessageSnapshots: (
+        context: OpenCodeSessionContext,
+        snapshots: ReadonlyArray<OpenCodeMessageSnapshot>,
+        turnId: TurnId,
+      ) => Effect.Effect<void> = Effect.fn("replayOpenCodeMessageSnapshots")(function* (
         context: OpenCodeSessionContext,
         snapshots: ReadonlyArray<OpenCodeMessageSnapshot>,
         turnId: TurnId,
       ) {
         for (const snapshot of snapshots) {
+          if (context.activeTurnId !== turnId) return;
           const messageKey = openCodeSnapshotKey(snapshot.info);
           if (context.messageSnapshotKeyById.get(snapshot.info.id) !== messageKey) {
             yield* handleSubscribedEvent(context, {
@@ -3435,6 +3531,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           for (const part of snapshot.parts) {
+            if (context.activeTurnId !== turnId) return;
             const partKey = openCodeSnapshotKey(part);
             if (context.partSnapshotKeyById.get(part.id) === partKey) {
               continue;
@@ -3462,7 +3559,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       // synthesizes the idle event so the turn completes. Messages are only pulled
       // once the session is no longer busy — fetching a large transcript every
       // 500ms would be wasteful on big turns.
-      const startTurnSnapshotWatchdog = Effect.fn("startTurnSnapshotWatchdog")(function* (
+      const startTurnSnapshotWatchdog: (
+        context: OpenCodeSessionContext,
+        turnId: TurnId,
+        baselineMessageIds: ReadonlySet<string>,
+      ) => Effect.Effect<void> = Effect.fn("startTurnSnapshotWatchdog")(function* (
         context: OpenCodeSessionContext,
         turnId: TurnId,
         baselineMessageIds: ReadonlySet<string>,
@@ -3501,6 +3602,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
             if (!statusKnown || sessionBusy) {
               idlePollsWithFinalMessage = 0;
+              continue;
+            }
+
+            if (isOpenCodeV2Client(context.client)) {
+              const outcome = yield* runOpenCodeSdk("session.outcome", (signal) =>
+                openCodeV2ExecutionOutcome(context.client, context.openCodeSessionId, signal),
+              ).pipe(Effect.catch(() => Effect.succeed(undefined)));
+              if (outcome) yield* handleSubscribedEvent(context, outcome);
               continue;
             }
 
@@ -3543,7 +3652,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const startEventPump = Effect.fn("startEventPump")(function* (
         context: OpenCodeSessionContext,
       ) {
-        const eventsAbortController = new AbortController();
+        const eventsAbortController = context.eventsAbortController;
         yield* Scope.addFinalizer(
           context.sessionScope,
           Effect.sync(() => eventsAbortController.abort()),
@@ -3559,6 +3668,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     signal: eventsAbortController.signal,
                   }),
                 );
+                yield* Deferred.succeed(context.eventsReady, undefined);
                 yield* reconcilePendingOpenCodeInteractions(context).pipe(
                   Effect.catchCause((cause) =>
                     Effect.logWarning(
@@ -3582,6 +3692,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               return;
             }
 
+            // A new V2 subscription has no mapper state for pre-disconnect messages,
+            // and events may also have been missed while disconnected.
+            context.nativeTranscriptNeedsReconciliation = true;
             const delayMs =
               OPENCODE_EVENT_RECONNECT_DELAYS_MS[
                 Math.min(reconnectAttempt, OPENCODE_EVENT_RECONNECT_DELAYS_MS.length - 1)
@@ -3965,6 +4078,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   activeVariant: undefined,
                   stopped: yield* Ref.make(false),
                   sessionScope: started.sessionScope,
+                  eventsAbortController: new AbortController(),
+                  eventsReady: yield* Deferred.make<void>(),
+                  nativeTranscriptNeedsReconciliation: false,
+                  allowNativeContinuation: false,
                 };
                 sessions.set(input.threadId, context);
                 sessionScopeTransferred = true;
@@ -4017,6 +4134,23 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         turnId: TurnId,
       ) {
         const context = ensureAdapterSessionContext(input.threadId);
+        if (isOpenCodeV2Client(context.client)) {
+          // V2 admits a prompt asynchronously. Subscribe first so a fast
+          // execution cannot finish before the session-owned reader exists.
+          yield* Deferred.await(context.eventsReady).pipe(
+            Effect.timeout("10 seconds"),
+            Effect.mapError((cause) =>
+              toAdapterRequestError(
+                new OpenCodeRuntimeError({
+                  operation: "event.subscribe",
+                  detail:
+                    "OpenCode event subscription is not ready. Retry when the connection recovers.",
+                  cause,
+                }),
+              ),
+            ),
+          );
+        }
         const modelSelection =
           input.modelSelection ??
           (context.session.model ? { provider, model: context.session.model } : undefined);
@@ -4065,7 +4199,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
           },
         );
-        const providerText = [harnessPolicy, text].filter(Boolean).join("\n\n");
+        const nativeV2 = isOpenCodeV2Client(context.client);
+        const providerText = nativeV2 ? text : [harnessPolicy, text].filter(Boolean).join("\n\n");
 
         const requestedAgent =
           input.modelSelection?.provider === provider
@@ -4081,6 +4216,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         yield* applyPermissionInteractionMode(context, permissionInteractionMode);
 
         context.activeTurnId = turnId;
+        context.allowNativeContinuation = true;
         context.pendingHarnessPolicyTurnId = harnessPolicy === null ? undefined : turnId;
         context.activeTurnEventSerial = 0;
         context.activeTurnProviderActivitySerial = 0;
@@ -4133,6 +4269,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           turnId,
           promptInput: {
             sessionID: context.openCodeSessionId,
+            ...(nativeV2 && harnessPolicy ? { system: harnessPolicy } : {}),
             model: parsedModel,
             ...(context.activeAgent ? { agent: context.activeAgent } : {}),
             ...(context.activeVariant ? { variant: context.activeVariant } : {}),
@@ -4200,6 +4337,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             return;
           }
           const activeTurnId = turnId ?? context.activeTurnId;
+          context.allowNativeContinuation = false;
           yield* withAgentGatewayTurnCancellation(
             context.gatewaySessionLease,
             activeTurnId,
@@ -4518,7 +4656,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             (entry) => entry.info.role === "assistant",
           );
           const targetIndex = assistantMessages.length - numTurns - 1;
-          const target = targetIndex >= 0 ? assistantMessages[targetIndex] : null;
+          // A V2 execution may contain many assistant steps. Rollback counts
+          // user turns, including interrupted turns with no assistant message.
+          const userMessages = (messages.data ?? []).filter((entry) => entry.info.role === "user");
+          const target = isOpenCodeV2Client(context.client)
+            ? userMessages[Math.max(0, userMessages.length - numTurns)]
+            : targetIndex >= 0
+              ? assistantMessages[targetIndex]
+              : null;
           yield* runOpenCodeSdk("session.revert", () =>
             context.client.session.revert({
               sessionID: context.openCodeSessionId,
@@ -4533,6 +4678,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const compactThread: NonNullable<OpenCodeAdapterShape["compactThread"]> = (threadId) =>
         Effect.gen(function* () {
           const context = ensureAdapterSessionContext(threadId);
+          if (isOpenCodeV2Client(context.client)) context.allowNativeContinuation = true;
           const parsedModel = parseOpenCodeModelSlug(context.session.model);
           if (!parsedModel) {
             return yield* new ProviderAdapterValidationError({

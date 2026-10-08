@@ -1,21 +1,22 @@
 /**
- * StudioOutputReactorLive - Per-turn Studio output capture layer.
+ * HubOutputReactorLive - Per-turn Hub output capture layer.
  *
- * Git checkpoints attribute produced files precisely, but the Studio root is
+ * Git checkpoints attribute produced files precisely, but the Hub root is
  * typically not a Git repository, and file-change tool activities miss files
  * created by shell subprocesses (scripts, converters, downloads). This reactor
- * closes that gap: it snapshots the Studio workspace tree before provider turn
+ * closes that gap: it snapshots the Hub workspace tree before provider turn
  * execution, rescans when the turn settles, and persists the diff as a thread activity
- * (`studio.outputs.captured`) that the Studio outputs listing reads back.
+ * (`studio.outputs.captured`) that the Hub outputs listing reads back.
+ * The activity kind retains its legacy name for persisted-history compatibility.
  *
- * Codex-generated images live under the Codex home, outside the Studio root, so
+ * Codex-generated images live under the Codex home, outside the Hub root, so
  * this scan never sees them; ProviderRuntimeIngestion owns copying those into
  * the workspace (with their own direct attribution) as image items complete.
  *
- * Concurrent Studio chats share one root, so overlapping turns may both claim
+ * Concurrent Hub chats share one root, so overlapping turns may both claim
  * a file; attribution is deliberately generous rather than lossy.
  *
- * @module StudioOutputReactorLive
+ * @module HubOutputReactorLive
  */
 import {
   CommandId,
@@ -46,15 +47,12 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
-import {
-  StudioOutputReactor,
-  type StudioOutputReactorShape,
-} from "../Services/StudioOutputReactor.ts";
+import { HubOutputReactor, type HubOutputReactorShape } from "../Services/HubOutputReactor.ts";
 
 // Baselines whose terminal event never arrives must not accumulate forever; one
 // entry per active turn stays far below this.
 const MAX_TRACKED_TURN_BASELINES = 128;
-const STUDIO_OUTPUT_REACTOR_CAPACITY = 128;
+const HUB_OUTPUT_REACTOR_CAPACITY = 128;
 
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
@@ -63,13 +61,13 @@ const serverCommandId = (tag: string): CommandId =>
 // never clobber each other's baseline.
 const baselineKey = (threadId: ThreadId, turnId: string) => `${threadId}\0${turnId}`;
 
-interface StudioTurnBaseline {
+interface HubTurnBaseline {
   readonly threadId: ThreadId;
   readonly workspaceRoot: string;
   readonly files: StudioWorkspaceScan;
 }
 
-interface ActiveStudioTurnBaseline extends StudioTurnBaseline {
+interface ActiveHubTurnBaseline extends HubTurnBaseline {
   readonly turnId: TurnId;
 }
 
@@ -88,14 +86,14 @@ const make = Effect.gen(function* () {
   // ProviderCommandReactor writes this map before invoking sendTurn/startReview.
   // The subsequent runtime turn.started event promotes the prepared entry into
   // baselineByTurn without rescanning after provider execution has begun.
-  const pendingBaselineByThread = new Map<ThreadId, StudioTurnBaseline>();
-  const baselineByTurn = new Map<string, ActiveStudioTurnBaseline>();
+  const pendingBaselineByThread = new Map<ThreadId, HubTurnBaseline>();
+  const baselineByTurn = new Map<string, ActiveHubTurnBaseline>();
 
-  // Resolves the Studio workspace root to scan for a thread, or null when this
-  // reactor should stay out of the way: non-Studio projects, unresolvable cwds,
+  // Resolves the Hub workspace root to scan for a thread, or null when this
+  // reactor should stay out of the way: non-Hub projects, unresolvable cwds,
   // and Git roots (checkpoint capture already attributes those precisely).
   // Shell reads keep this cheap: it runs on every turn boundary of every thread.
-  const resolveStudioScanRoot = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const resolveHubScanRoot = Effect.fnUntraced(function* (threadId: ThreadId) {
     const threadOption = yield* projectionSnapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.catch(() => Effect.succeed(Option.none())));
@@ -139,7 +137,7 @@ const make = Effect.gen(function* () {
     // A retry replaces an earlier preparation for this thread. Remove it before
     // scanning so a failed fresh capture cannot leave a stale baseline behind.
     pendingBaselineByThread.delete(threadId);
-    const workspaceRoot = yield* resolveStudioScanRoot(threadId);
+    const workspaceRoot = yield* resolveHubScanRoot(threadId);
     if (!workspaceRoot) {
       return { status: "not-applicable" as const };
     }
@@ -149,7 +147,7 @@ const make = Effect.gen(function* () {
     return { status: "completed" as const };
   });
 
-  const captureBaselineBeforeTurn: StudioOutputReactorShape["captureBaselineBeforeTurn"] = (
+  const captureBaselineBeforeTurn: HubOutputReactorShape["captureBaselineBeforeTurn"] = (
     threadId,
   ) =>
     captureBaselineBeforeTurnUnsafe(threadId).pipe(
@@ -157,14 +155,14 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("studio output reactor failed to capture pre-turn baseline", {
+        return Effect.logWarning("hub output reactor failed to capture pre-turn baseline", {
           threadId,
           cause: Cause.pretty(cause),
         }).pipe(Effect.as({ status: "failed" as const, detail: Cause.pretty(cause) }));
       }),
     );
 
-  const cancelPendingTurnBaseline: StudioOutputReactorShape["cancelPendingTurnBaseline"] = (
+  const cancelPendingTurnBaseline: HubOutputReactorShape["cancelPendingTurnBaseline"] = (
     threadId,
   ) => Effect.sync(() => pendingBaselineByThread.delete(threadId)).pipe(Effect.asVoid);
 
@@ -188,9 +186,9 @@ const make = Effect.gen(function* () {
 
       // An absent preparation may have timed out or been cancelled. Never scan
       // at turn.started: provider edits could already be part of that baseline.
-      // Only Studio workspaces need this feedback. Resolve their identity, but
+      // Only Hub workspaces need this feedback. Resolve their identity, but
       // never scan files to reconstruct a provider-native turn's initial state.
-      if (!(yield* resolveStudioScanRoot(event.threadId))) return;
+      if (!(yield* resolveHubScanRoot(event.threadId))) return;
       const threadOption = yield* projectionSnapshotQuery
         .getThreadDetailById(event.threadId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
@@ -232,10 +230,10 @@ const make = Effect.gen(function* () {
           id: activityId,
           tone: "info",
           kind: "checkpoint.baseline.skipped",
-          summary: "Studio output baseline unavailable for this turn",
+          summary: "Hub output baseline unavailable for this turn",
           payload: {
             detail:
-              "The initial Studio workspace state is unavailable for this turn, so its output changes cannot be indexed. Files are not rescanned after edits to invent a baseline.",
+              "The initial Hub workspace state is unavailable for this turn, so its output changes cannot be indexed. Files are not rescanned after edits to invent a baseline.",
             ...(messageId === undefined ? {} : { messageId }),
           },
           turnId: event.turnId,
@@ -246,7 +244,7 @@ const make = Effect.gen(function* () {
     });
 
   const persistBaselineOutputs = Effect.fnUntraced(function* (input: {
-    readonly baseline: StudioTurnBaseline;
+    readonly baseline: HubTurnBaseline;
     readonly turnId: TurnId | null;
     readonly createdAt: string;
   }) {
@@ -257,7 +255,7 @@ const make = Effect.gen(function* () {
     }
 
     // The payload mirrors the provider file-change activity shape (itemType + data
-    // holding `path` entries) so the Studio outputs listing extracts paths through
+    // holding `path` entries) so the Hub outputs listing extracts paths through
     // the same collector that already handles provider payloads.
     yield* orchestrationEngine.dispatch({
       type: "thread.activity.append",
@@ -267,7 +265,7 @@ const make = Effect.gen(function* () {
         id: EventId.makeUnsafe(crypto.randomUUID()),
         tone: "info",
         kind: STUDIO_OUTPUTS_ACTIVITY_KIND,
-        summary: "Studio outputs captured",
+        summary: "Hub outputs captured",
         payload: studioOutputsCapturedActivityPayload(changedRelativePaths),
         turnId: input.turnId,
         createdAt: input.createdAt,
@@ -282,7 +280,7 @@ const make = Effect.gen(function* () {
   const captureTurnOutputs = Effect.fnUntraced(function* (
     event: Extract<ProviderRuntimeEvent, { type: "turn.completed" | "turn.aborted" }>,
   ) {
-    let baseline: StudioTurnBaseline | undefined;
+    let baseline: HubTurnBaseline | undefined;
     if (event.turnId !== undefined) {
       const key = baselineKey(event.threadId, event.turnId);
       baseline = baselineByTurn.get(key);
@@ -306,7 +304,7 @@ const make = Effect.gen(function* () {
   const captureTerminatedSessionOutputs = Effect.fnUntraced(function* (
     event: Extract<ProviderRuntimeEvent, { type: "session.exited" | "runtime.error" }>,
   ) {
-    const baselines: Array<{ baseline: StudioTurnBaseline; turnId: TurnId | null }> = [];
+    const baselines: Array<{ baseline: HubTurnBaseline; turnId: TurnId | null }> = [];
     const pending = pendingBaselineByThread.get(event.threadId);
     pendingBaselineByThread.delete(event.threadId);
     if (pending) {
@@ -346,7 +344,7 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("studio output reactor failed to process event", {
+        return Effect.logWarning("hub output reactor failed to process event", {
           eventType: event.type,
           threadId: event.threadId,
           cause: Cause.pretty(cause),
@@ -355,10 +353,10 @@ const make = Effect.gen(function* () {
     );
 
   const worker = yield* makeDrainableWorker(processEventSafely, {
-    capacity: STUDIO_OUTPUT_REACTOR_CAPACITY,
+    capacity: HUB_OUTPUT_REACTOR_CAPACITY,
   });
 
-  const start: StudioOutputReactorShape["start"] = startDrainableWorkerProducers(
+  const start: HubOutputReactorShape["start"] = startDrainableWorkerProducers(
     worker,
     Effect.gen(function* () {
       yield* Effect.forkScoped(
@@ -380,9 +378,9 @@ const make = Effect.gen(function* () {
     cancelPendingTurnBaseline,
     start,
     drain: worker.drain,
-  } satisfies StudioOutputReactorShape;
+  } satisfies HubOutputReactorShape;
 });
 
-export const StudioOutputReactorLive = Layer.effect(StudioOutputReactor, make).pipe(
+export const HubOutputReactorLive = Layer.effect(HubOutputReactor, make).pipe(
   Layer.provide(ProjectionTurnRepositoryLive),
 );
