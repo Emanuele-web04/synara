@@ -134,8 +134,6 @@ import {
   toggleRailShortcutKey,
 } from "../appRail.logic";
 import { useRailShellStore } from "../railShellStore";
-import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
-import { SidebarKeepAwakeMenu } from "./KeepAwakeControls";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
@@ -1494,7 +1492,6 @@ export default function Sidebar() {
     () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
-  const keepAwakeState = useKeepAwakeState();
   const sidebarProviderInstances = useMemo(
     () => getProviderInstanceOptions(appSettings),
     [appSettings],
@@ -7026,12 +7023,6 @@ export default function Sidebar() {
             void navigate({ to: "/settings", search: { section: "usage" } });
           }}
         />
-        {keepAwakeState?.available ? (
-          <SidebarKeepAwakeMenu
-            state={keepAwakeState}
-            onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
-          />
-        ) : null}
         <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
         {showDesktopUpdateButton && desktopUpdateState ? (
           <DesktopUpdateRailButton
