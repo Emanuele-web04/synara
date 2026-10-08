@@ -1,3 +1,19 @@
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import {
+  appendDirectoriesToPathEnv,
+  buildOpenCodeServerProcessEnv,
+  commandExistsOnPath,
+  directoriesContainingCommand,
+  openCodeBinarySearchDirectories,
+} from "./providerBinaryResolution.ts";
+
+const missingPath = () => false;
+
 describe("commandExistsOnPath", () => {
   it.skipIf(process.platform === "win32")(
     "rejects non-executable files and directories in PATH",
@@ -10,7 +26,7 @@ describe("commandExistsOnPath", () => {
         expect(commandExistsOnPath("codex", options)).toBe(false);
 
         rmSync(commandPath, { recursive: true });
-        writeFileSync(commandPath, "#!/bin/sh\\nexit 0\\n");
+        writeFileSync(commandPath, "#!/bin/sh");
         chmodSync(commandPath, 0o644);
         expect(commandExistsOnPath("codex", options)).toBe(false);
 
@@ -41,22 +57,6 @@ describe("commandExistsOnPath", () => {
     ).toBe(false);
   });
 });
-
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-import { describe, expect, it } from "vitest";
-
-import {
-  appendDirectoriesToPathEnv,
-  commandExistsOnPath,
-  buildOpenCodeServerProcessEnv,
-  directoriesContainingCommand,
-  openCodeBinarySearchDirectories,
-} from "./providerBinaryResolution.ts";
-
-const missingPath = () => false;
 
 describe("openCodeBinarySearchDirectories", () => {
   it.skipIf(process.platform === "win32").each([
