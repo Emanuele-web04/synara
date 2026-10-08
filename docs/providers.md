@@ -345,11 +345,11 @@ boundaries and remaining live validation.
 
 ### OpenCode
 
-Synara uses OpenCode's legacy endpoint family, including `/session` and MCP
-for the Synara tools attached to managed sessions. Startup checks `GET /provider`
-and rejects a server that reports that route as unavailable; this does not identify
-the CLI's version. The SDK is pinned exactly (`1.18.31`) — bump it deliberately,
-never by range.
+Synara detects the server protocol with a read-only `GET /api/info` request.
+V2 uses native `/api` session and MCP endpoints. V1 retains the legacy `/session`
+endpoint family and must pass a `GET /provider` readiness check. An HTML app shell
+is not API readiness. The V1 SDK (`1.18.31`) and V2 client (`2.0.25`) are pinned
+exactly — bump them deliberately, never by range.
 
 The `opencode` executable resolves from `PATH` first, then the standard install
 locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,

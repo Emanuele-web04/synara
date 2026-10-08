@@ -49,6 +49,7 @@ function fixture() {
   let authStatus = 200;
   let protocol: "v1" | "v2" = "v2";
   let repeatedCursor = false;
+  let pagedChildren = false;
   let pendingForm: FormInfo = form;
   let failRevertCommit = false;
   let pendingMcp = false;
@@ -88,8 +89,23 @@ function fixture() {
       if (!url.pathname.startsWith("/api/"))
         return new Response("legacy API removed", { status: 405 });
       if (url.pathname === "/api/session" && request.method === "POST") return data(session);
-      if (url.pathname === "/api/session" && request.method === "GET")
+      if (url.pathname === "/api/session" && request.method === "GET") {
+        if (pagedChildren) {
+          const next = url.searchParams.has("cursor");
+          const matchesParent = url.searchParams.get("parentID") === session.id;
+          return json({
+            data: [
+              {
+                ...session,
+                id: matchesParent ? (next ? "ses_child2" : "ses_child") : "ses_unrelated",
+                parentID: matchesParent ? session.id : "ses_other",
+              },
+            ],
+            cursor: next ? {} : { next: "children2" },
+          });
+        }
         return json({ data: [{ ...session, id: "ses_child", parentID: session.id }], cursor: {} });
+      }
       if (url.pathname === "/api/session/active") return json({});
       if (url.pathname === "/api/session/ses_root" && request.method === "GET")
         return data({
@@ -223,6 +239,9 @@ function fixture() {
     set protocol(value: typeof protocol) {
       protocol = value;
     },
+    set pagedChildren(value: boolean) {
+      pagedChildren = value;
+    },
     set repeatedCursor(value: boolean) {
       repeatedCursor = value;
     },
@@ -240,6 +259,13 @@ function fixture() {
 }
 
 describe("OpenCode V2 client boundary", () => {
+  it("keeps child session pagination scoped to its parent", async () => {
+    const server = fixture();
+    server.pagedChildren = true;
+    const children = await server.client.session.children({ sessionID: session.id });
+    expect(children.data?.map((child) => child.id)).toEqual(["ses_child", "ses_child2"]);
+  });
+
   it("executes discovered slash commands natively while keeping harness instructions separate", async () => {
     const server = fixture();
     await server.client.session.promptAsync({

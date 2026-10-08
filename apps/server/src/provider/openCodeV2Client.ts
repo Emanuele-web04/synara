@@ -309,7 +309,7 @@ export function withOpenCodeV2Client(
       const seen = new Set<string>();
       do {
         const page = await native.session.list(
-          cursor ? { cursor } : { parentID: params.sessionID, limit: 100 },
+          { parentID: params.sessionID, limit: 100, ...(cursor ? { cursor } : {}) },
           requestOptions(options),
         );
         children.push(...page.data.map(openCodeV2Session));

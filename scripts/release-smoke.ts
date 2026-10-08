@@ -615,6 +615,11 @@ function verifyDesktopStageLockAuthority(): void {
     "--filter @synara/",
     "Desktop staging must not use Bun workspace filters because filtered hoisted installs can diverge from bun.lock.",
   );
+  assertContains(
+    buildScript,
+    'npm rebuild node-pty --foreground-scripts --prefix ${path.join(stageAppDir, "node_modules", "node-pty")}',
+    "Expected Linux desktop staging to build only node-pty after the script-free frozen install.",
+  );
   assertNotContains(
     buildScript,
     "npm rebuild --foreground-scripts",
