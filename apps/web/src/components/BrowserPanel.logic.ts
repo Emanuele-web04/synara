@@ -482,6 +482,17 @@ export function browserAddressDisplayValue(
   return nextUrl === BROWSER_BLANK_URL ? "" : nextUrl;
 }
 
+// Host shown in "Clear browsing data"; only web pages have site data to clear.
+export function resolveBrowserSiteHost(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.host : null;
+  } catch {
+    return null;
+  }
+}
+
 // Component-facing alias for the shared desktop/web browser URL normalizer.
 export const normalizeBrowserAddressInput = normalizeBrowserUrlInput;
 

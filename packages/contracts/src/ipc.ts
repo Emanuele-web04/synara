@@ -725,6 +725,8 @@ interface BrowserControlMethods {
   detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
   copyLink: (input: BrowserTabInput) => Promise<void>;
   copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
+  clearSiteData: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+  clearAllData: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
   captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
   capturePreview: (input: BrowserTabInput) => Promise<string | null>;
   navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;

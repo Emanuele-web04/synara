@@ -384,6 +384,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     copyLink: (input) => ipcRenderer.invoke(IPC.browser.requestCopyLink, input),
     copyScreenshotToClipboard: (input) =>
       ipcRenderer.invoke(IPC.browser.copyScreenshotToClipboard, input),
+    clearSiteData: (input) => ipcRenderer.invoke(IPC.browser.clearSiteData, input),
+    clearAllData: (input) => ipcRenderer.invoke(IPC.browser.clearAllData, input),
     captureScreenshot: (input) => ipcRenderer.invoke(IPC.browser.captureScreenshot, input),
     capturePreview: (input) => ipcRenderer.invoke(IPC.browser.capturePreview, input),
     navigate: (input) => {

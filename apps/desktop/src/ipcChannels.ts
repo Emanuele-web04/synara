@@ -118,6 +118,8 @@ export const DESKTOP_IPC_CHANNELS = {
     copyLink: "desktop:browser-copy-link",
     requestCopyLink: "desktop:browser-request-copy-link",
     copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",
+    clearSiteData: "desktop:browser-clear-site-data",
+    clearAllData: "desktop:browser-clear-all-data",
     captureScreenshot: "desktop:browser-capture-screenshot",
     capturePreview: "desktop:browser-capture-preview",
     navigate: "desktop:browser-navigate",
