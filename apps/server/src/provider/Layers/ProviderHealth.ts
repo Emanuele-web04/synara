@@ -117,6 +117,7 @@ import {
   normalizeCommandPath,
   parseGenericCliVersion,
   resolveProviderMaintenanceCapabilitiesEffect,
+  withOpenCodeMaintenanceVersion,
   type PackageManagedProviderMaintenanceDefinition,
 } from "../providerMaintenance";
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
@@ -3047,10 +3048,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         function* (target: {
           readonly provider: ProviderKind;
           readonly instanceId?: ProviderInstanceId | undefined;
+          readonly installedVersion?: string | null | undefined;
         }) {
           const settings = yield* serverSettings.getSettings;
           const instance = resolveProviderInstanceTarget(settings, target);
           if (!instance || !instance.enabled) {
+            return makeManualProviderMaintenanceCapabilities(target.provider);
+          }
+          if (target.provider === "opencode" && readInstanceConfigString(instance, "serverUrl")) {
             return makeManualProviderMaintenanceCapabilities(target.provider);
           }
           const configuredBinaryPath = readInstanceConfigString(instance, "binaryPath");
@@ -3084,11 +3089,26 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 { cause },
               ),
           });
-          return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: binaryPath ?? null,
-            env: updateEnv,
-            platform: process.platform,
-          }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+          let installedVersion = target.installedVersion;
+          if (target.provider === "opencode" && installedVersion === undefined) {
+            const probe = yield* probeProviderCliVersion(
+              runOpenCodeCommand(["--version"], binaryPath ?? "opencode", updateEnv),
+              OPENCODE_HEALTH_TIMEOUT_MS,
+            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+            if (probe.outcome !== "success")
+              return makeManualProviderMaintenanceCapabilities(target.provider);
+            installedVersion = parseGenericCliVersion(
+              `${probe.result.stdout}\n${probe.result.stderr}`,
+            );
+          }
+          return yield* resolveProviderMaintenanceCapabilitiesEffect(
+            withOpenCodeMaintenanceVersion(definition, installedVersion),
+            {
+              binaryPath: binaryPath ?? null,
+              env: updateEnv,
+              platform: process.platform,
+            },
+          ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
         },
       );
 
@@ -3185,6 +3205,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return getProviderMaintenanceCapabilities({
               provider,
               instanceId: providerStatusInstanceKey(status),
+              installedVersion: status.version ?? null,
             }).pipe(
               Effect.flatMap((capabilities) =>
                 enrichProviderStatusWithVersionAdvisory(status, capabilities),
