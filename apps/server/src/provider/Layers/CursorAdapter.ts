@@ -150,6 +150,7 @@ const nonNegativeInteger = (value: number | null | undefined) =>
  */
 export function cursorPromptUsageSnapshot(
   usage: Acp.Usage | null | undefined,
+  contextUsage?: ThreadTokenUsageSnapshot,
 ): ThreadTokenUsageSnapshot | undefined {
   if (!usage || !Number.isFinite(usage.totalTokens) || usage.totalTokens < 0) {
     return undefined;
@@ -164,7 +165,7 @@ export function cursorPromptUsageSnapshot(
   return {
     // Cursor's ACP response does not report context occupancy. The cumulative
     // spend counter is still useful to Profile via totalProcessedTokens.
-    usedTokens: 0,
+    ...(contextUsage ?? { usedTokens: 0 }),
     totalProcessedTokens,
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(outputTokens !== undefined ? { outputTokens } : {}),
@@ -269,6 +270,7 @@ interface CursorSessionContext {
   activeTurnId: TurnId | undefined;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  latestContextUsage: ThreadTokenUsageSnapshot | undefined;
   // Epoch-ms of the last inbound ACP activity for the active turn; drives the
   // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
@@ -1098,6 +1100,7 @@ export function makeCursorAdapter(
             activeTurnId: undefined,
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            latestContextUsage: undefined,
             lastTurnActivityAt: undefined,
             latestSessionCostUsd: undefined,
             sessionConfigReady,
@@ -1211,6 +1214,7 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    ctx.latestContextUsage = event.usage;
                     recordCursorSessionCost(ctx, event.cost);
                     yield* offerRuntimeEvent(
                       input.lifecycleGeneration,
@@ -1488,7 +1492,7 @@ export function makeCursorAdapter(
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
-                const promptUsage = cursorPromptUsageSnapshot(result.usage);
+                const promptUsage = cursorPromptUsageSnapshot(result.usage, ctx.latestContextUsage);
                 if (promptUsage !== undefined) {
                   yield* offerRuntimeEvent(
                     ctx.lifecycleGeneration,

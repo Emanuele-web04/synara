@@ -77,4 +77,23 @@ describe("CursorAdapter ACP usage", () => {
       outputTokens: 2,
     });
   });
+
+  it("preserves the latest context occupancy when adding cumulative spend", () => {
+    expect(
+      cursorPromptUsageSnapshot(
+        { totalTokens: 400, inputTokens: 350, outputTokens: 50 } satisfies Acp.Usage,
+        {
+          usedTokens: 32_000,
+          usedPercent: 12.5,
+          maxTokens: 256_000,
+          compactsAutomatically: true,
+        },
+      ),
+    ).toMatchObject({
+      usedTokens: 32_000,
+      usedPercent: 12.5,
+      maxTokens: 256_000,
+      totalProcessedTokens: 400,
+    });
+  });
 });
