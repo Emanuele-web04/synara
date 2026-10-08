@@ -4,12 +4,14 @@ import { ThreadId, type NativeApi } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
+import { useDockExplorerBrowseStore } from "../../dockExplorerBrowseStore";
 import { DockExplorerPane } from "./DockExplorerPane";
 
 let restore: (() => void) | undefined;
 afterEach(async () => {
   await cleanup();
   restore?.();
+  useDockExplorerBrowseStore.setState({ browseStateByThreadId: {} });
 });
 async function mount() {
   // The lightweight editor accepts native textarea input; persistence is the
