@@ -152,6 +152,16 @@ describe("ProfileStatsQuery", () => {
             },
           },
         });
+        // Malformed historical payloads are ignored by the fallback probe
+        // instead of making the entire Profile query fail.
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (
+            '9-invalid-parent', 'uncovered-parent', 'uncovered-parent-turn',
+            'error', 'turn.completed', 'interrupted', '{not-json', 10, '2026-09-10T12:00:00Z'
+          )
+        `;
         // If a provider-native child is the only row with a usable breakdown,
         // retain its verified usage even though the parent has no result row.
         yield* addActivity("9", "uncovered-child", "uncovered", {
