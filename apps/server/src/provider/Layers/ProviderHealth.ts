@@ -2070,6 +2070,10 @@ export const checkAntigravityProviderStatus = (
     const probeEnv = {
       ...makeProviderProbeEnv(ANTIGRAVITY_PROVIDER, environment),
       NO_BROWSER: "true",
+      // Health probes are read-only. Prevent Antigravity from starting its
+      // detached updater, which can flash a console on Windows when Synara
+      // refreshes provider status (#1029).
+      AGY_CLI_DISABLE_AUTO_UPDATE: "true",
     };
     const versionProbe = yield* probeProviderCliVersion(
       runAntigravityCommand(["--version"], executable, probeEnv),
