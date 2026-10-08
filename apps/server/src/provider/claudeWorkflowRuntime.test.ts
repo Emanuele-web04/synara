@@ -123,6 +123,18 @@ describe("applyClaudeWorkflowJournalLines", () => {
 });
 
 describe("applyClaudeWorkflowAgentTranscriptLines", () => {
+  it("never ends a truncated prompt preview in whitespace", () => {
+    const agent = agentAccum();
+    applyClaudeWorkflowAgentTranscriptLines(agent, [
+      JSON.stringify({
+        type: "user",
+        agentId: "a423ae8cef86a1ed4",
+        message: { role: "user", content: `${"x".repeat(399)} and the rest of the prompt` },
+      }),
+    ]);
+    expect(agent.promptPreview).toBe("x".repeat(399));
+  });
+
   it("accumulates prompt, model, latest usage total, and tool calls", () => {
     const agent = agentAccum();
     const changed = applyClaudeWorkflowAgentTranscriptLines(agent, [

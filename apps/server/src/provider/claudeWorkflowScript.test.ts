@@ -262,6 +262,21 @@ describe("parseClaudeWorkflowProgressAgents", () => {
     expect(parseClaudeWorkflowProgressAgents("{}")).toBeUndefined();
   });
 
+  it("never ends a truncated prompt preview in whitespace", () => {
+    const content = JSON.stringify({
+      workflowProgress: [
+        {
+          type: "workflow_agent",
+          label: "scope",
+          promptPreview: `${"y".repeat(399)}\nand the rest of the prompt`,
+        },
+      ],
+    });
+    expect(parseClaudeWorkflowProgressAgents(content)).toEqual([
+      { label: "scope", promptPreview: "y".repeat(399) },
+    ]);
+  });
+
   it("captures the rich per-agent fields real output files carry", () => {
     // Mirrors ~/.claude/projects/<session>/workflows/wf_*.json workflow_agent
     // entries (1-based phaseIndex plus phaseTitle, runtime metrics, previews).

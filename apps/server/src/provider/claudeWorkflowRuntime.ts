@@ -140,7 +140,12 @@ export function applyClaudeWorkflowAgentTranscriptLines(
       typeof message.content === "string" &&
       message.content.trim().length > 0
     ) {
-      agent.promptPreview = message.content.trim().slice(0, WORKFLOW_PROMPT_PREVIEW_CHARS);
+      // Trim again after the cut: a boundary on whitespace would end the preview in
+      // a space or newline, which the trimmed-string contract (and journal) rejects.
+      agent.promptPreview = message.content
+        .trim()
+        .slice(0, WORKFLOW_PROMPT_PREVIEW_CHARS)
+        .trimEnd();
       changed = true;
     }
     if (record.type !== "assistant") {

@@ -408,7 +408,11 @@ export function parseClaudeWorkflowProgressAgents(
     const toolCalls = readInt(record.toolCalls);
     const durationMs = readInt(record.durationMs);
     const lastToolName = readString(record.lastToolName);
-    const promptPreview = readString(record.promptPreview)?.slice(0, WORKFLOW_PROMPT_PREVIEW_CHARS);
+    // Trim again after the cut so a whitespace boundary cannot end the preview in a
+    // space, which would fail the journal's trimmed-string check for the whole event.
+    const promptPreview = readString(record.promptPreview)
+      ?.slice(0, WORKFLOW_PROMPT_PREVIEW_CHARS)
+      .trimEnd();
     return [
       {
         label,
