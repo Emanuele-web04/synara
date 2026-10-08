@@ -126,6 +126,15 @@ function verifyReleaseWorkflowSafety(): void {
     resolve(repoRoot, ".github/workflows/release.yml"),
     "utf8",
   ).replaceAll("\r\n", "\n");
+  const platformWorkflow = readFileSync(
+    resolve(repoRoot, ".github/workflows/release-platform.yml"),
+    "utf8",
+  ).replaceAll("\r\n", "\n");
+  const packagingJob = platformWorkflow.slice(
+    platformWorkflow.indexOf("  package:\n"),
+    platformWorkflow.indexOf("  qualify:\n"),
+  );
+  const qualificationJob = platformWorkflow.slice(platformWorkflow.indexOf("  qualify:\n"));
   assertContains(
     workflow,
     "\npermissions: {}\n",
@@ -145,7 +154,7 @@ function verifyReleaseWorkflowSafety(): void {
     workflow.indexOf("  build:\n"),
     workflow.indexOf("  publish_cli:\n"),
   );
-  const buildSteps = buildJob.split(/\n      - /).slice(1);
+  const buildSteps = qualificationJob.split(/\n      - /).slice(1);
   const defenderIndex = buildSteps.findIndex((step) =>
     step.includes("run: ./scripts/verify-windows-defender.ps1"),
   );
@@ -153,7 +162,7 @@ function verifyReleaseWorkflowSafety(): void {
     step.includes("node scripts/verify-packaged-desktop-startup.ts"),
   );
   const uploadIndex = buildSteps.findIndex((step) =>
-    step.includes("name: desktop-${{ matrix.platform }}-${{ matrix.arch }}"),
+    step.includes("name: desktop-${{ inputs.platform }}-${{ inputs.arch }}"),
   );
   if (defenderIndex < 0 || startupIndex <= defenderIndex || uploadIndex <= defenderIndex) {
     throw new Error("Windows Defender must qualify installers before startup or artifact upload.");
@@ -164,42 +173,33 @@ function verifyReleaseWorkflowSafety(): void {
   }
   const defenderPredicate = defenderStep.match(/\n        if: (.+)/)?.[1];
   if (!defenderPredicate) throw new Error("Missing Windows Defender platform predicate.");
-  const scans = new Function("matrix", "needs", `return ${defenderPredicate};`) as (
-    matrix: { platform: string },
-    needs: { preflight: { outputs: { package_artifacts: string } } },
-  ) => boolean;
+  const scans = new Function("inputs", `return ${defenderPredicate};`) as (inputs: {
+    platform: string;
+  }) => boolean;
   for (const platform of ["win", "mac", "linux"]) {
-    for (const packageArtifacts of ["true", "false"]) {
-      if (
-        scans({ platform }, { preflight: { outputs: { package_artifacts: packageArtifacts } } }) !==
-        (platform === "win" && packageArtifacts === "true")
-      ) {
-        throw new Error(`Incorrect Defender routing for ${platform}/${packageArtifacts}.`);
-      }
+    if (scans({ platform }) !== (platform === "win")) {
+      throw new Error(`Incorrect Defender routing for ${platform}.`);
     }
   }
   const defenderId = defenderStep.match(/\n        id: (.+)/)?.[1];
   const evidenceStep = buildSteps.find((step) =>
-    step.includes("name: windows-defender-${{ matrix.arch }}"),
+    step.includes("name: windows-defender-${{ inputs.arch }}"),
   );
   const evidencePredicate = evidenceStep?.match(/\n        if: \$\{\{ (.+) \}\}/)?.[1];
   if (!defenderId || !evidencePredicate) throw new Error("Missing Defender evidence routing.");
   const preservesEvidence = new Function(
-    "matrix",
-    "needs",
+    "inputs",
     "steps",
     "always",
     `return ${evidencePredicate};`,
   ) as (
-    matrix: { platform: string },
-    needs: { preflight: { outputs: { package_artifacts: string } } },
+    inputs: { platform: string },
     steps: Record<string, { outcome: string }>,
     always: () => boolean,
   ) => boolean;
   for (const outcome of ["success", "failure", "cancelled", "skipped"]) {
     const upload = preservesEvidence(
       { platform: "win" },
-      { preflight: { outputs: { package_artifacts: "true" } } },
       { [defenderId]: { outcome } },
       () => true,
     );
@@ -207,6 +207,60 @@ function verifyReleaseWorkflowSafety(): void {
       throw new Error(`Incorrect Defender evidence upload after ${outcome} scan.`);
     }
   }
+  assertContains(
+    buildJob,
+    "uses: ./.github/workflows/release-platform.yml",
+    "Desktop matrix must await the package/qualify workflow.",
+  );
+  assertContains(
+    qualificationJob,
+    "needs: package",
+    "Qualification must await its platform checkpoint.",
+  );
+  const checkpointIndex = buildSteps.findIndex((step) =>
+    step.includes("node scripts/verify-release-artifact-checkpoint.ts"),
+  );
+  const restoreIndex = buildSteps.findIndex((step) =>
+    step.includes("uses: actions/download-artifact@"),
+  );
+  if (
+    restoreIndex < 0 ||
+    checkpointIndex <= restoreIndex ||
+    defenderIndex <= checkpointIndex ||
+    uploadIndex <= startupIndex
+  ) {
+    throw new Error(
+      "Checkpoint restore and identity verification must precede qualification and qualified upload.",
+    );
+  }
+  const restore = buildSteps[restoreIndex]!;
+  assertContains(
+    restore,
+    "name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}",
+    "Qualification must restore its platform's candidate.",
+  );
+  if (/\n\s+(?:run-id|github-token|repository):/.test(restore))
+    throw new Error("Candidate checkpoints must come from the same workflow run.");
+  assertContains(
+    packagingJob,
+    "name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}",
+    "Packaging must preserve the candidate before qualification.",
+  );
+  assertNotContains(
+    packagingJob,
+    "name: desktop-",
+    "Unqualified candidates must not use the publication artifact prefix.",
+  );
+  assertNotContains(
+    qualificationJob,
+    "dist:desktop:artifact",
+    "Qualification retries must not rebuild installers.",
+  );
+  assertContains(
+    platformWorkflow,
+    "permissions:\n  contents: read",
+    "Platform workflows must remain read-only.",
+  );
   // Execute the actual job predicate against failed/skipped prerequisites. A
   // matching source string would not detect a permissive OR elsewhere in it.
   const predicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
@@ -282,7 +336,11 @@ function verifyReleaseWorkflowSafety(): void {
     "name: mac-icon-catalog",
     'echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"',
   ]) {
-    assertContains(workflow, toolchain, "Expected separate native and icon release toolchains.");
+    assertContains(
+      workflow + platformWorkflow,
+      toolchain,
+      "Expected separate native and icon release toolchains.",
+    );
   }
   assertContains(
     readFileSync(resolve(repoRoot, ".github/actions/provision-cua/action.yml"), "utf8"),
@@ -362,8 +420,8 @@ function verifyReleaseWorkflowSafety(): void {
     "Expected preflight to expose the resolved desktop flavor.",
   );
   assertContains(
-    workflow,
-    '--flavor "${{ needs.preflight.outputs.desktop_flavor }}"',
+    packagingJob,
+    '--flavor "${{ inputs.desktop_flavor }}"',
     "Expected the desktop matrix to build the resolved flavor.",
   );
   assertContains(
@@ -377,7 +435,7 @@ function verifyReleaseWorkflowSafety(): void {
     "Expected feed prep to receive the resolved update channel.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "--executable-name",
     "Expected packaged startup verification to resolve the flavor's executable name.",
   );
@@ -411,9 +469,9 @@ function verifyReleaseWorkflowSafety(): void {
     "--app-icon Synara",
     "Expected every flavor's icon catalog to keep the Synara asset name.",
   );
-  const collectStep = workflow.slice(
-    workflow.indexOf("  - name: Collect release assets"),
-    workflow.indexOf("  - name: Verify and record artifact provenance"),
+  const collectStep = packagingJob.slice(
+    packagingJob.indexOf("  - name: Collect release assets"),
+    packagingJob.indexOf("  - name: Verify and record artifact provenance"),
   );
   assertContains(
     collectStep,
@@ -421,27 +479,27 @@ function verifyReleaseWorkflowSafety(): void {
     "Expected the collect step to glob the release/ output directory.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "--output-dir release",
     "Expected every flavor's build to write into the collected release/ directory.",
   );
   assertContains(
-    workflow,
-    "SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}",
+    platformWorkflow,
+    "SYNARA_PUBLISH_RELEASE: ${{ inputs.publish_release }}",
     "Expected artifact signing admission to know whether artifacts will be published.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "Publishing macOS artifacts requires every signing and notarization secret.",
     "Expected macOS publication to fail closed when signing is unavailable.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "Publishing Windows artifacts requires every Azure Trusted Signing secret.",
     "Expected Windows publication to fail closed when signing is unavailable.",
   );
   assertNotContains(
-    workflow,
+    platformWorkflow,
     "Windows signing is optional",
     "Windows publication must not retain the unsigned-installer fallback.",
   );
@@ -461,12 +519,12 @@ function verifyReleaseWorkflowSafety(): void {
     "Expected the verified lockfile digest to be a preflight output.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     '--source-commit "$SOURCE_COMMIT"',
     "Expected desktop packaging to revalidate the verified source commit.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     '--lockfile-sha256 "$LOCKFILE_SHA256"',
     "Expected desktop packaging to revalidate the verified lockfile digest.",
   );
@@ -476,37 +534,37 @@ function verifyReleaseWorkflowSafety(): void {
     "Release jobs must not mutate package versions after source provenance is established.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "node scripts/write-release-artifact-provenance.ts",
     "Expected every platform lane to prove collected artifacts before upload.",
   );
   assertContains(
-    workflow,
-    'mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ matrix.arch }}.yml"',
+    platformWorkflow,
+    'mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ inputs.arch }}.yml"',
     "Expected the x64 macOS matrix lane to preserve a distinct updater manifest for merging.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}",
     "Expected macOS signing admission to pin the post-build Team ID.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}",
     "Expected Windows signing admission to require the exact certificate subject DN.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     '--expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"',
     "Expected Windows artifact provenance to verify the exact certificate subject DN.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}",
     "Expected the Windows build to receive the publisher identity that is pinned in the bundle.",
   );
   assertContains(
-    workflow,
+    platformWorkflow,
     "node scripts/verify-packaged-desktop-startup.ts",
     "Expected every native payload to pass isolated packaged startup before upload.",
   );
