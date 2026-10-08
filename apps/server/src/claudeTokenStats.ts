@@ -55,9 +55,52 @@ export function claudeTokenActivityCtes(sql: SqlClient.SqlClient, scope?: TokenS
       LEFT JOIN projection_turns pt ON pt.thread_id = a.thread_id AND pt.turn_id = a.turn_id
       LEFT JOIN projection_thread_messages pm
         ON pm.thread_id = pt.thread_id AND pm.message_id = pt.pending_message_id
-      -- Provider-native children mirror usage that the parent result already
-      -- includes. Other child threads are independent work and must count.
-      WHERE COALESCE(th.creation_source, '') != 'provider_native'
+      -- Provider-native children usually mirror usage that the parent result
+      -- already includes. Keep a child when its model has no usable parent
+      -- breakdown, because the child may be the only durable usage evidence
+      -- after an interrupted or result-less parent turn.
+      WHERE (
+        COALESCE(th.creation_source, '') != 'provider_native'
+        OR NOT EXISTS (
+          SELECT 1
+          FROM projection_thread_activities parent_activity
+          JOIN json_each(
+            CASE
+              WHEN json_valid(parent_activity.payload_json)
+                AND json_type(parent_activity.payload_json, '$.modelUsage') = 'object'
+              THEN json_extract(parent_activity.payload_json, '$.modelUsage')
+              ELSE '{}'
+            END
+          ) parent_usage
+          WHERE parent_activity.thread_id = th.parent_thread_id
+            AND parent_activity.kind = 'turn.completed'
+            AND (
+              th.source_turn_id IS NULL
+              OR parent_activity.turn_id = th.source_turn_id
+            )
+            AND json_extract(parent_activity.payload_json, '$.tokenAccountingVersion') = 1
+            AND json_type(parent_activity.payload_json, '$.modelUsage') = 'object'
+            AND LOWER(TRIM(CAST(parent_usage.key AS TEXT))) = LOWER(TRIM(CAST(
+              COALESCE(tm.model, CASE WHEN json_valid(th.model_selection_json)
+                AND (json_extract(a.payload_json, '$.provider') IS NULL
+                  OR json_extract(a.payload_json, '$.provider') = json_extract(th.model_selection_json, '$.provider'))
+                THEN json_extract(th.model_selection_json, '$.model') END, 'unknown') AS TEXT
+            )))
+            AND json_type(parent_usage.value) = 'object'
+            AND (
+              CASE
+                WHEN json_type(parent_usage.value, '$.totalTokens') IN ('integer', 'real')
+                  AND json_extract(parent_usage.value, '$.totalTokens') > 0
+                THEN json_extract(parent_usage.value, '$.totalTokens')
+                ELSE
+                  COALESCE(json_extract(parent_usage.value, '$.inputTokens'), 0)
+                  + COALESCE(json_extract(parent_usage.value, '$.cacheReadInputTokens'), 0)
+                  + COALESCE(json_extract(parent_usage.value, '$.cacheCreationInputTokens'), 0)
+                  + COALESCE(json_extract(parent_usage.value, '$.outputTokens'), 0)
+              END
+            ) > 0
+        )
+      )
         AND COALESCE(
           json_extract(a.payload_json, '$.provider'), tm.provider,
           CASE WHEN json_valid(th.model_selection_json)
