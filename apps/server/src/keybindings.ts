@@ -898,7 +898,8 @@ export interface KeybindingsShape {
    * Start the keybindings runtime and attach file watching.
    *
    * Safe to call multiple times. The first successful call establishes the
-   * runtime; later calls await the same startup.
+   * runtime; later calls await the same startup. A failed attempt can be
+   * retried after its underlying filesystem problem is repaired.
    */
   readonly start: Effect.Effect<void, KeybindingsConfigError>;
 
@@ -968,10 +969,12 @@ const makeKeybindings = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const upsertSemaphore = yield* Semaphore.make(1);
+  const startupSemaphore = yield* Semaphore.make(1);
   const resolvedConfigCacheKey = "resolved" as const;
   const changesPubSub = yield* PubSub.unbounded<KeybindingsChangeEvent>();
   const startedRef = yield* Ref.make(false);
-  const startedDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
+  const initialStartedDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
+  const startedDeferredRef = yield* Ref.make(initialStartedDeferred);
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
   const emitChange = (configState: KeybindingsConfigState) =>
@@ -1267,28 +1270,39 @@ const makeKeybindings = Effect.gen(function* () {
     }).pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(watcherScope), Effect.asVoid);
   });
 
-  const start = Effect.gen(function* () {
-    const alreadyStarted = yield* Ref.get(startedRef);
-    if (alreadyStarted) {
-      return yield* Deferred.await(startedDeferred);
-    }
+  const start = startupSemaphore.withPermits(1)(
+    Effect.gen(function* () {
+      const alreadyStarted = yield* Ref.get(startedRef);
+      const startedDeferred = yield* Ref.get(startedDeferredRef);
+      if (alreadyStarted) {
+        return yield* Deferred.await(startedDeferred);
+      }
 
-    yield* Ref.set(startedRef, true);
-    const startup = Effect.gen(function* () {
-      yield* startWatcher;
-      yield* syncDefaultKeybindingsOnStartup;
-      yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
-      yield* loadConfigStateFromCacheOrDisk;
-    });
+      yield* Ref.set(startedRef, true);
+      const startup = Effect.gen(function* () {
+        yield* syncDefaultKeybindingsOnStartup;
+        yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
+        yield* loadConfigStateFromCacheOrDisk;
+        // Attach the watcher last so a failed sync/read attempt cannot leave a live
+        // watcher behind when the caller retries startup.
+        yield* startWatcher;
+      });
 
-    const startupExit = yield* Effect.exit(startup);
-    if (startupExit._tag === "Failure") {
-      yield* Deferred.failCause(startedDeferred, startupExit.cause).pipe(Effect.orDie);
-      return yield* Effect.failCause(startupExit.cause);
-    }
+      const startupExit = yield* Effect.exit(startup);
+      if (startupExit._tag === "Failure") {
+        // Do not strand callers on a permanently failed deferred. Publish this attempt's
+        // failure, then install a fresh readiness gate so a later call can retry after a
+        // transient filesystem or permission error is repaired.
+        yield* Deferred.failCause(startedDeferred, startupExit.cause).pipe(Effect.orDie);
+        const retryDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
+        yield* Ref.set(startedDeferredRef, retryDeferred);
+        yield* Ref.set(startedRef, false);
+        return yield* Effect.failCause(startupExit.cause);
+      }
 
-    yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
-  });
+      yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
+    }),
+  );
 
   const validateUpsertRule = (rule: KeybindingRule) =>
     compileResolvedKeybindingRule(rule) === null
@@ -1339,7 +1353,10 @@ const makeKeybindings = Effect.gen(function* () {
 
   return {
     start,
-    ready: Deferred.await(startedDeferred),
+    ready: Effect.gen(function* () {
+      const startedDeferred = yield* Ref.get(startedDeferredRef);
+      return yield* Deferred.await(startedDeferred);
+    }),
     syncDefaultKeybindingsOnStartup,
     loadConfigState: loadConfigStateFromCacheOrDisk,
     getSnapshot: loadConfigStateFromCacheOrDisk,

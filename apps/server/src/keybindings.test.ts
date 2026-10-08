@@ -219,6 +219,29 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("allows startup to retry after a transient config filesystem failure", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      const keybindings = yield* Keybindings;
+      const configDirectory = path.dirname(keybindingsConfigPath);
+
+      // Replace the config directory with a regular file so the first startup write fails.
+      yield* fs.remove(configDirectory, { recursive: true });
+      yield* fs.writeFileString(configDirectory, "temporarily blocked");
+      const firstStart = yield* keybindings.start.pipe(Effect.exit);
+      assert.equal(firstStart._tag, "Failure");
+
+      // Once the filesystem problem is repaired, the same service instance must be able to
+      // establish its watcher and readiness instead of awaiting the failed first attempt.
+      yield* fs.remove(configDirectory);
+      yield* keybindings.start;
+      yield* keybindings.ready;
+      assert.isTrue(yield* fs.exists(keybindingsConfigPath));
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("uses defaults in runtime when config is malformed without overriding file", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
