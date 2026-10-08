@@ -522,19 +522,24 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly close: () => void;
 }
 
-function prestartClaudeMessageStream(queryRuntime: ClaudeQueryRuntime): AsyncIterable<SDKMessage> {
-  // SDK discovery waits for a handshake that only starts on the first iterator read.
-  // Keep that read for the real stream consumer, while making cancellation win the
-  // race so session teardown never waits on an unread first message.
+function cancellableClaudeMessageStream(
+  queryRuntime: AsyncIterable<SDKMessage>,
+  options: { readonly prestart: boolean },
+): AsyncIterable<SDKMessage> {
+  // Stream interruption awaits the iterator's `return()`, and an SDK query is an async
+  // generator: its `return()` queues behind the pending `next()`, which never settles
+  // while Claude sits idle. Cancellation must win that race, or stopping an idle session
+  // hangs before the process tree is torn down, and quit leaves Claude running.
+  // SDK discovery (Auto mode) waits for a handshake that only starts on the first
+  // iterator read, so `prestart` issues that read now and keeps it for the consumer.
   const iterator = queryRuntime[Symbol.asyncIterator]();
-  const firstResult = iterator.next();
-  void firstResult.catch(() => undefined);
+  let firstResult = options.prestart ? iterator.next() : undefined;
+  void firstResult?.catch(() => undefined);
   const doneResult: IteratorResult<SDKMessage> = { done: true, value: undefined };
   let resolveClosed!: (result: IteratorResult<SDKMessage>) => void;
   const closedResult = new Promise<IteratorResult<SDKMessage>>((resolve) => {
     resolveClosed = resolve;
   });
-  let firstResultPending = true;
   let closed = false;
 
   const raceWithClose = (
@@ -549,8 +554,8 @@ function prestartClaudeMessageStream(queryRuntime: ClaudeQueryRuntime): AsyncIte
       if (closed) {
         return Promise.resolve(doneResult);
       }
-      const result = firstResultPending ? firstResult : iterator.next();
-      firstResultPending = false;
+      const result = firstResult ?? iterator.next();
+      firstResult = undefined;
       return raceWithClose(result);
     },
     return: async () => {
@@ -6275,8 +6280,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ]).pipe(Effect.asVoid),
           ),
         );
-        const messageStream =
-          input.runtimeMode === "auto" ? prestartClaudeMessageStream(queryRuntime) : undefined;
+        const messageStream = cancellableClaudeMessageStream(queryRuntime, {
+          prestart: input.runtimeMode === "auto",
+        });
 
         let installationContext: ClaudeSessionContext | undefined;
         let installationComplete = false;
@@ -6368,7 +6374,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             query: queryRuntime,
             commandDiscoveryKey,
             accountDiscoveryKey,
-            ...(messageStream ? { messageStream } : {}),
+            messageStream,
             processOwner,
             stoppedSignal: Deferred.makeUnsafe<void>(),
             pendingCompactionPreparations: new Set(),
