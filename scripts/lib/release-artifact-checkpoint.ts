@@ -9,6 +9,11 @@ import type {
   ReleaseArtifactProvenanceManifest,
 } from "./release-artifact-provenance.ts";
 
+// Qualification has no dependency install. Resolve this owned, dependency-free shared
+// module from the checkout, while keeping its types behind the shared subpath export.
+const { matchesDistinguishedName }: typeof import("@synara/shared/windowsCertificate") =
+  await import(new URL("../../packages/shared/src/windowsCertificate.ts", import.meta.url).href);
+
 export interface ReleaseArtifactCheckpointInput extends Pick<
   ReleaseArtifactProvenanceInput,
   | "assetsDirectory"
@@ -23,6 +28,7 @@ export interface ReleaseArtifactCheckpointInput extends Pick<
   | "allowUnsignedWindowsPublication"
   | "expectedMacTeamId"
   | "expectedWindowsPublisher"
+  | "expectedWindowsSubjectDn"
 > {
   readonly flavor: "production" | "beta";
 }
@@ -72,7 +78,9 @@ function verifySigning(
       if (typeof identity.teamId !== "string" || !identity.teamId) {
         throw new Error("Checkpoint macOS signing team is missing.");
       }
-      if (input.expectedMacTeamId) equal("macOS team", identity.teamId, input.expectedMacTeamId);
+      const expectedTeamId = input.expectedMacTeamId?.trim();
+      if (!expectedTeamId) throw new Error("Signed macOS checkpoint requires an expected team ID.");
+      equal("macOS team", identity.teamId, expectedTeamId);
     } else {
       equal("Windows signing scheme", signing.scheme, "windows-authenticode");
       if (!Array.isArray(signing.identity) || signing.identity.length !== 1) {
@@ -83,8 +91,20 @@ function verifySigning(
       if (typeof identity.publisher !== "string" || !identity.publisher) {
         throw new Error("Checkpoint Windows signing publisher is missing.");
       }
-      if (input.expectedWindowsPublisher) {
-        equal("Windows publisher", identity.publisher, input.expectedWindowsPublisher);
+      const expectedPublisher = input.expectedWindowsPublisher?.trim();
+      const expectedSubjectDn = input.expectedWindowsSubjectDn?.trim();
+      if (!expectedPublisher) {
+        throw new Error("Signed Windows checkpoint requires an expected publisher.");
+      }
+      if (!expectedSubjectDn) {
+        throw new Error("Signed Windows checkpoint requires an expected subject DN.");
+      }
+      equal("Windows publisher", identity.publisher, expectedPublisher);
+      if (
+        typeof identity.subject !== "string" ||
+        !matchesDistinguishedName(expectedSubjectDn, identity.subject)
+      ) {
+        throw new Error("Checkpoint Windows subject DN does not match this release.");
       }
     }
     return;

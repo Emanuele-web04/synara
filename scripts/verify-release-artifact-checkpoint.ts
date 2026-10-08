@@ -17,6 +17,7 @@ const known = new Set([
   "--allow-unsigned-windows-publication",
   "--expected-mac-team-id",
   "--expected-windows-publisher",
+  "--expected-windows-subject-dn",
 ]);
 const args = process.argv.slice(2);
 for (let index = 0; index < args.length; index += 2) {
@@ -62,6 +63,9 @@ await verifyReleaseArtifactCheckpoint({
     : {}),
   ...(values.get("--expected-windows-publisher")
     ? { expectedWindowsPublisher: values.get("--expected-windows-publisher")! }
+    : {}),
+  ...(values.get("--expected-windows-subject-dn")
+    ? { expectedWindowsSubjectDn: values.get("--expected-windows-subject-dn")! }
     : {}),
 });
 console.log(`Verified ${platform} ${required("--arch")} release checkpoint.`);

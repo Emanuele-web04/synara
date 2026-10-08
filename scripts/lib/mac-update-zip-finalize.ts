@@ -171,20 +171,19 @@ function computeSha512Base64(filePath: string): Promise<string> {
 
 function resolveDmgUpdateZip(stageDistDir: string, entries: ReadonlyArray<string>) {
   // The retained stage owns the package identity, including recovery after a
-  // failed DMG notarization. Missing ZIPs are valid only for our DMG-only build.
-  const stagedPackage = JSON.parse(
-    readFileSync(join(dirname(stageDistDir), "package.json"), "utf8"),
-  ) as {
+  // failed DMG notarization or an interrupted ZIP/manifest finalization.
+  // Legacy ZIP stages cannot reconstruct a missing manifest from this identity.
+  const packagePath = join(dirname(stageDistDir), "package.json");
+  if (!existsSync(packagePath)) return undefined;
+  const stagedPackage = JSON.parse(readFileSync(packagePath, "utf8")) as {
     version?: unknown;
     productName?: unknown;
     build?: { mac?: { target?: unknown }; publish?: unknown };
   };
   const targets = stagedPackage.build?.mac?.target;
+  if (!Array.isArray(targets) || targets.length !== 1 || targets[0] !== "dmg") return undefined;
   const version = stagedPackage.version;
   if (
-    !Array.isArray(targets) ||
-    targets.length !== 1 ||
-    targets[0] !== "dmg" ||
     typeof version !== "string" ||
     typeof stagedPackage.productName !== "string" ||
     !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)
@@ -222,10 +221,21 @@ export async function finalizeMacUpdateZip(
   }
 
   const distEntries = readdirSync(options.stageDistDir);
-  const dmgUpdateZip = distEntries.some((entry) => entry.endsWith(".zip"))
-    ? undefined
-    : resolveDmgUpdateZip(options.stageDistDir, distEntries);
-  const zipFileName = dmgUpdateZip?.zipFileName ?? resolveSingleMacUpdateZipFileName(distEntries);
+  const manifestNames = resolveMacUpdateManifestFileNames(distEntries, { required: false });
+  const existingZipFileName = distEntries.some((entry) => entry.endsWith(".zip"))
+    ? resolveSingleMacUpdateZipFileName(distEntries)
+    : undefined;
+  const dmgUpdateZip =
+    !existingZipFileName || (options.requireUpdateManifest !== false && manifestNames.length === 0)
+      ? resolveDmgUpdateZip(options.stageDistDir, distEntries)
+      : undefined;
+  if (existingZipFileName && dmgUpdateZip && existingZipFileName !== dmgUpdateZip.zipFileName) {
+    throw new Error("macOS update ZIP filename does not match its staged package identity.");
+  }
+  const zipFileName =
+    existingZipFileName ??
+    dmgUpdateZip?.zipFileName ??
+    resolveSingleMacUpdateZipFileName(distEntries);
   const zipPath = join(options.stageDistDir, zipFileName);
   const appBundleName = basename(appBundlePath);
   const appBundleParent = dirname(appBundlePath);
@@ -258,7 +268,6 @@ export async function finalizeMacUpdateZip(
   const sha512 = await computeSha512Base64(zipPath);
 
   const updatedManifestPaths: string[] = [];
-  const manifestNames = resolveMacUpdateManifestFileNames(distEntries, { required: false });
   if (
     dmgUpdateZip?.hasUpdaterFeed &&
     options.requireUpdateManifest !== false &&

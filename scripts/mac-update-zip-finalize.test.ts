@@ -108,6 +108,46 @@ describe.runIf(process.platform === "darwin")("macOS update ZIP finalization", (
     },
   );
 
+  it.each([true, false])(
+    "recovers an interrupted ZIP before its manifest only for a DMG-only stage (%s)",
+    async (dmgOnly) => {
+      const fixture = createDmgStage("Synara Beta", "1.0.2-beta.1", "x64", true);
+      const zipPath = join(fixture.dist, `${fixture.artifactStem}.zip`);
+      execFileSync("ditto", [
+        "-c",
+        "-k",
+        "--sequesterRsrc",
+        "--keepParent",
+        join(fixture.dist, "mac", fixture.appName),
+        zipPath,
+      ]);
+      if (!dmgOnly) {
+        const packagePath = join(fixture.stage, "package.json");
+        const stagedPackage = JSON.parse(readFileSync(packagePath, "utf8"));
+        stagedPackage.build.mac.target.push("zip");
+        writeFileSync(packagePath, JSON.stringify(stagedPackage));
+      }
+      const manifestPath = join(fixture.dist, "latest-mac.yml");
+      expect(existsSync(manifestPath)).toBe(false);
+      const finalization = finalizeMacUpdateZip({ stageDistDir: fixture.dist, signed: false });
+      if (!dmgOnly) {
+        await expect(finalization).rejects.toThrow("Expected at least one macOS update manifest");
+        expect(existsSync(manifestPath)).toBe(false);
+        return;
+      }
+      const result = await finalization;
+      const bytes = readFileSync(result.zipPath);
+      const manifest = parseMacUpdateManifest(readFileSync(manifestPath, "utf8"), manifestPath);
+      expect(manifest.files).toEqual([
+        {
+          url: `${fixture.artifactStem}.zip`,
+          sha512: createHash("sha512").update(bytes).digest("base64"),
+          size: bytes.length,
+        },
+      ]);
+    },
+  );
+
   it("requires the app signature before creating a signed update ZIP", async () => {
     const fixture = createDmgStage("Synara", "1.0.2", "arm64", true);
     await expect(

@@ -96,6 +96,36 @@ function checkpoint(
   return { input, manifestPath, payloadPath: join(assetsDirectory, payload), changeManifest };
 }
 
+function signedWindowsCheckpoint() {
+  const fixture = checkpoint("win");
+  fixture.changeManifest((manifest) => {
+    manifest.signing = {
+      status: "verified",
+      scheme: "windows-authenticode",
+      identity: [
+        {
+          fileName: "Synara-1.2.3-x64.exe",
+          publisher: "Acme",
+          subject: "O=Acme Software, CN=Acme, C=IT",
+          thumbprint: "C".repeat(40),
+          timestampSubject: "CN=Timestamp Authority",
+          timestampThumbprint: "D".repeat(40),
+        },
+      ],
+      checks: ["publisher exact match", "subject DN field match"],
+    };
+  });
+  return {
+    ...fixture,
+    input: {
+      ...fixture.input,
+      allowUnsignedWindowsPublication: false,
+      expectedWindowsPublisher: "Acme",
+      expectedWindowsSubjectDn: "CN=Acme, O=Acme Software, C=IT",
+    },
+  };
+}
+
 describe("same-run release artifact checkpoint", () => {
   it.each([
     ["linux", "production"],
@@ -188,6 +218,34 @@ describe("same-run release artifact checkpoint", () => {
     await expect(
       verifyReleaseArtifactCheckpoint({ ...input, allowUnsignedWindowsPublication: false }),
     ).rejects.toThrow("requires verified signing");
+  });
+
+  it("rechecks the current subject DN even when the Windows publisher is unchanged", async () => {
+    const { input } = signedWindowsCheckpoint();
+    // The existing normalizer accepts the reordered fields from native certificate output.
+    await expect(verifyReleaseArtifactCheckpoint(input)).resolves.toMatchObject({
+      signing: { status: "verified" },
+    });
+    await expect(
+      verifyReleaseArtifactCheckpoint({
+        ...input,
+        expectedWindowsSubjectDn: "CN=Acme, O=Different Organization, C=IT",
+      }),
+    ).rejects.toThrow("Windows subject DN");
+  });
+
+  it.each([
+    ["expectedMacTeamId", "mac", "expected team ID"],
+    ["expectedWindowsPublisher", "win", "expected publisher"],
+    ["expectedWindowsSubjectDn", "win", "expected subject DN"],
+  ] as const)("requires %s for a retained signed receipt", async (key, platform, message) => {
+    const fixture = platform === "mac" ? checkpoint("mac") : signedWindowsCheckpoint();
+    const missing: ReleaseArtifactCheckpointInput = { ...fixture.input };
+    const { [key]: _omitted, ...withoutIdentity } = missing;
+    await expect(verifyReleaseArtifactCheckpoint(withoutIdentity)).rejects.toThrow(message);
+    await expect(verifyReleaseArtifactCheckpoint({ ...missing, [key]: "   " })).rejects.toThrow(
+      message,
+    );
   });
 
   it("rejects unsigned macOS publication and signing receipts from another team", async () => {
