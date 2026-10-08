@@ -73,6 +73,54 @@ describe("server provider status reconciliation", () => {
     ]);
   });
 
+  it("does not resurrect an older warning after a provider has recovered", async () => {
+    const queryClient = new QueryClient();
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      available: true,
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+      message: "Pi health check timed out.",
+    } satisfies ServerProviderStatus;
+    const recoveredStatus = {
+      ...READY_CODEX_STATUS,
+      checkedAt: "2026-07-26T16:40:10.000Z",
+    } satisfies ServerProviderStatus;
+
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([]));
+    await reconcileServerProviderStatuses(queryClient, [recoveredStatus]);
+    await reconcileServerProviderStatuses(queryClient, [warningStatus]);
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      recoveredStatus,
+    ]);
+  });
+
+  it("accepts a newer failure after recovery", async () => {
+    const queryClient = new QueryClient();
+    const recoveredStatus = {
+      ...READY_CODEX_STATUS,
+      checkedAt: "2026-07-26T16:40:00.000Z",
+    } satisfies ServerProviderStatus;
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      available: true,
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:10.000Z",
+      message: "Pi health check timed out.",
+    } satisfies ServerProviderStatus;
+
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([]));
+    await reconcileServerProviderStatuses(queryClient, [recoveredStatus]);
+    await reconcileServerProviderStatuses(queryClient, [warningStatus]);
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      warningStatus,
+    ]);
+  });
+
   it("keeps a provider snapshot that arrives during reconnect config refresh", async () => {
     const queryClient = new QueryClient();
     const unavailableStatus = {
@@ -101,6 +149,32 @@ describe("server provider status reconciliation", () => {
 
     expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
       READY_CODEX_STATUS,
+    ]);
+  });
+
+  it("keeps a newer provider snapshot when reconnect config is stale", async () => {
+    const queryClient = new QueryClient();
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      available: true,
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+      message: "Pi health check timed out.",
+    } satisfies ServerProviderStatus;
+    const recoveredStatus = {
+      ...READY_CODEX_STATUS,
+      checkedAt: "2026-07-26T16:40:10.000Z",
+    } satisfies ServerProviderStatus;
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([warningStatus]));
+    await reconcileServerProviderStatuses(queryClient, [recoveredStatus]);
+
+    await refreshServerConfigAfterTransportOpen(queryClient, {
+      loadConfig: async () => makeServerConfig([warningStatus]),
+    });
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      recoveredStatus,
     ]);
   });
 

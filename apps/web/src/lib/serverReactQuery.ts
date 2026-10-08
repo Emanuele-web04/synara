@@ -102,13 +102,52 @@ export function hasReconciledServerProviderStatuses(queryClient: QueryClient): b
   return latestProviderStatusSnapshotByQueryClient.get(queryClient)?.reconciled === true;
 }
 
+function providerStatusIdentity(
+  status: Pick<ServerProviderStatus, "provider" | "driver" | "instanceId">,
+): string {
+  const driver = status.driver ?? status.provider;
+  return `${driver}:${status.instanceId ?? status.provider}`;
+}
+
+function mergeProviderStatusSnapshots(
+  previous: readonly ServerProviderStatus[] | undefined,
+  next: readonly ServerProviderStatus[],
+): readonly ServerProviderStatus[] {
+  if (!previous || previous.length === 0) {
+    return next;
+  }
+
+  const previousByIdentity = new Map(
+    previous.map((status) => [providerStatusIdentity(status), status]),
+  );
+  return next.map((status) => {
+    const prior = previousByIdentity.get(providerStatusIdentity(status));
+    if (!prior) {
+      return status;
+    }
+
+    // Provider refreshes can overlap: a slow initial Pi probe may publish its
+    // warning after the fast recovery probe has already published ready.
+    // checkedAt is stamped when each probe begins, so never let an older
+    // snapshot resurrect a stale banner/toast in the web cache.
+    const priorCheckedAt = Date.parse(prior.checkedAt);
+    const nextCheckedAt = Date.parse(status.checkedAt);
+    return Number.isFinite(priorCheckedAt) &&
+      Number.isFinite(nextCheckedAt) &&
+      nextCheckedAt < priorCheckedAt
+      ? prior
+      : status;
+  });
+}
+
 function recordProviderStatusSnapshot(
   queryClient: QueryClient,
   providers: readonly ServerProviderStatus[],
 ): ProviderStatusSnapshot {
+  const previous = latestProviderStatusSnapshotByQueryClient.get(queryClient);
   const snapshot = {
-    revision: (latestProviderStatusSnapshotByQueryClient.get(queryClient)?.revision ?? 0) + 1,
-    providers,
+    revision: (previous?.revision ?? 0) + 1,
+    providers: mergeProviderStatusSnapshots(previous?.providers, providers),
     reconciled: true,
   };
   latestProviderStatusSnapshotByQueryClient.set(queryClient, snapshot);
@@ -127,13 +166,13 @@ export async function reconcileServerProviderStatuses(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
-  recordProviderStatusSnapshot(queryClient, providers);
+  const snapshot = recordProviderStatusSnapshot(queryClient, providers);
 
   let applied = false;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
     if (!current) return current;
     applied = true;
-    return { ...current, providers };
+    return { ...current, providers: snapshot.providers };
   });
   if (applied) return;
 
@@ -146,7 +185,7 @@ export async function reconcileServerProviderStatuses(
       }));
   const hydratedConfig = await loadConfig();
   const latestProviders =
-    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.providers ?? providers;
+    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.providers ?? snapshot.providers;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => ({
     ...(current ?? hydratedConfig),
     providers: latestProviders,
@@ -179,13 +218,14 @@ export async function refreshServerConfigAfterTransportOpen(
       }));
   const config = await loadConfig();
   const latestProviderSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  const providers =
+    latestProviderSnapshot?.reconciled === true &&
+    latestProviderSnapshot.revision > providerRevisionAtStart
+      ? latestProviderSnapshot.providers
+      : mergeProviderStatusSnapshots(providerSnapshotAtStart?.providers, config.providers);
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), {
     ...config,
-    providers:
-      latestProviderSnapshot?.reconciled === true &&
-      latestProviderSnapshot.revision > providerRevisionAtStart
-        ? latestProviderSnapshot.providers
-        : config.providers,
+    providers,
   });
 }
 
