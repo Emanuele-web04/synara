@@ -124,6 +124,7 @@ import {
 } from "../../routes/-chatThreadRoute.logic";
 import { matchesFixedShortcut } from "~/fixedShortcuts";
 import { isShortcutDispatchSuspended } from "~/keybindings";
+import { isTerminalFocused } from "~/lib/terminalFocus";
 import { cn } from "~/lib/utils";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
@@ -396,9 +397,10 @@ export function SingleChatSurface(props: {
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.repeat || isShortcutDispatchSuspended()) return;
-      const mode = matchesFixedShortcut(event, "search.files")
+      const context = { terminalFocus: isTerminalFocused() };
+      const mode = matchesFixedShortcut(event, "search.files", navigator.platform, context)
         ? "files"
-        : matchesFixedShortcut(event, "search.content")
+        : matchesFixedShortcut(event, "search.content", navigator.platform, context)
           ? "snippets"
           : null;
       if (!mode) return;
