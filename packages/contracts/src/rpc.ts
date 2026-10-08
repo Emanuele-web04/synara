@@ -276,7 +276,11 @@ import {
   OrchestrationShellStreamItem,
   OrchestrationThreadStreamItem,
 } from "./orchestration";
-import { ProviderCompactThreadInput } from "./provider";
+import {
+  ProviderCompactThreadInput,
+  ProviderPrewarmThreadInput,
+  ProviderPrewarmThreadResult,
+} from "./provider";
 import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
@@ -1607,6 +1611,12 @@ export const WsProviderCompactThreadRpc = Rpc.make(WS_METHODS.providerCompactThr
   error: WsRpcError,
 });
 
+export const WsProviderPrewarmThreadRpc = Rpc.make(WS_METHODS.providerPrewarmThread, {
+  payload: ProviderPrewarmThreadInput,
+  success: ProviderPrewarmThreadResult,
+  error: WsRpcError,
+});
+
 export const WsProviderListCommandsRpc = Rpc.make(WS_METHODS.providerListCommands, {
   payload: ProviderListCommandsInput,
   success: ProviderListCommandsResult,
@@ -2300,6 +2310,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsSubscribeServerSettingsRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,
+  WsProviderPrewarmThreadRpc,
   WsProviderListCommandsRpc,
   WsProviderListSkillsRpc,
   WsProviderListSkillsCatalogRpc,

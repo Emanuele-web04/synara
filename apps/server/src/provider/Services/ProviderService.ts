@@ -270,6 +270,16 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Start a thread's stopped runtime from its persisted binding ahead of the
+   * next turn, through the same recovery a turn send would run. Resolves true
+   * only when it started one; a live runtime, an active turn, or nothing to
+   * resume is a no-op.
+   */
+  readonly prewarmSession?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
+
+  /**
    * Trigger provider-native context compaction for a thread.
    */
   readonly compactThread: (input: {

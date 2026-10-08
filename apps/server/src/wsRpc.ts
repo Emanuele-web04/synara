@@ -2748,6 +2748,13 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.providerCompactThread]: (input) =>
           rpcEffect(providerService.compactThread(input), "Failed to compact thread"),
+        [WS_METHODS.providerPrewarmThread]: (input) =>
+          rpcEffect(
+            (providerService.prewarmSession?.(input) ?? Effect.succeed(false)).pipe(
+              Effect.map((started) => ({ started })),
+            ),
+            "Failed to prewarm the thread's provider",
+          ),
         [WS_METHODS.providerListCommands]: (input) =>
           rpcEffect(providerDiscoveryService.listCommands(input), "Failed to list commands"),
         [WS_METHODS.providerListSkills]: (input) =>
