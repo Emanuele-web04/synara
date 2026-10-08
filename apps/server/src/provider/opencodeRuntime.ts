@@ -59,6 +59,8 @@ import {
 } from "./supervisedProcessTeardown.ts";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
 import { parseOpenCodeReasoningOptions } from "./openCodeReasoningOptions.ts";
+import { detectOpenCodeProtocol } from "./openCodeProtocol.ts";
+import { openCodeV2CredentialProviderIDs, withOpenCodeV2Client } from "./openCodeV2Client.ts";
 
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
@@ -1049,6 +1051,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         });
         childEnv.OPENCODE_SERVER_USERNAME = cliSpec.serverAuthUsername;
         childEnv.OPENCODE_SERVER_PASSWORD = serverPassword;
+        // V2 gives this name precedence over the legacy variable, including an
+        // inherited value from another OpenCode instance.
+        childEnv.OPENCODE_PASSWORD = serverPassword;
         const child = yield* spawnProviderProcess(spawner, expandHomePath(input.binaryPath), args, {
           env: childEnv,
           ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
@@ -1196,34 +1201,62 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           });
         }
 
-        // Synara needs the legacy endpoint family, so probe `provider.list`.
-        // A missing route (404/405) establishes incompatibility, not the CLI
-        // version. Retry other statuses and connection failures separately.
+        // V2 readiness is /api/info. V1 serves HTML for unknown routes, so its
+        // fallback must prove the provider API rather than accepting that shell.
         const probeUrl = `${readyOption.value.replace(/\/$/, "")}/provider`;
         const fetchImpl = options?.fetchImpl ?? fetch;
+        const probeHeaders = {
+          Authorization: `Basic ${Buffer.from(`${cliSpec.serverAuthUsername}:${serverPassword}`, "utf8").toString("base64")}`,
+        };
         let probeStatus: number | null = null;
         let surfaceConfirmed = false;
         for (let attempt = 0; attempt < 3; attempt += 1) {
           if (attempt > 0) yield* Effect.sleep(250);
+          const protocolExit = yield* Effect.exit(
+            Effect.tryPromise({
+              try: (signal) =>
+                detectOpenCodeProtocol({
+                  baseUrl: readyOption.value,
+                  headers: probeHeaders,
+                  signal,
+                  fetch: fetchImpl,
+                }),
+              catch: (cause) =>
+                new OpenCodeRuntimeError({
+                  operation: "startOpenCodeServerProcess",
+                  detail: openCodeRuntimeErrorDetail(cause),
+                  cause,
+                }),
+            }),
+          );
+          if (Exit.isFailure(protocolExit)) {
+            if (attempt === 2) return yield* Effect.failCause(protocolExit.cause);
+            continue;
+          }
+          if (protocolExit.value === "v2") {
+            surfaceConfirmed = true;
+            break;
+          }
           const response = yield* Effect.promise(() =>
             fetchImpl(probeUrl, {
-              headers: {
-                Authorization: `Basic ${Buffer.from(`${cliSpec.serverAuthUsername}:${serverPassword}`, "utf8").toString("base64")}`,
-              },
+              headers: probeHeaders,
               signal: AbortSignal.timeout(5_000),
             }).then(
               (result) => result,
               () => null,
             ),
           );
-          if (response?.ok) {
-            surfaceConfirmed = true;
-            break;
+          if (response?.ok && response.headers.get("content-type")?.includes("application/json")) {
+            const body: unknown = yield* Effect.promise(() => response.json().catch(() => null));
+            if (body && typeof body === "object" && "all" in body && Array.isArray(body.all)) {
+              surfaceConfirmed = true;
+              break;
+            }
           }
           if (response !== null && (response.status === 404 || response.status === 405)) {
             return yield* new OpenCodeRuntimeError({
               operation: "startOpenCodeServerProcess",
-              detail: `${cliSpec.displayName} server does not serve the legacy surface Synara requires (GET /provider → HTTP ${response.status}). Install a compatible CLI release (https://opencode.ai) or set an explicit binary path in provider settings.`,
+              detail: `${cliSpec.displayName} server does not serve a supported V1 or V2 API (GET /provider → HTTP ${response.status}). Check the CLI binary path in provider settings.`,
             });
           }
           probeStatus = response === null ? null : response.status;
@@ -1231,7 +1264,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         if (!surfaceConfirmed) {
           return yield* new OpenCodeRuntimeError({
             operation: "startOpenCodeServerProcess",
-            detail: `${cliSpec.displayName} server did not pass the legacy surface probe after 3 attempts (GET /provider → ${probeStatus === null ? "unreachable" : `HTTP ${probeStatus}`}).${probeStatus === 401 || probeStatus === 403 ? " The server rejected the credentials it was started with; report this as a bug." : ""}`,
+            detail: `${cliSpec.displayName} server did not pass the API readiness probe after 3 attempts (GET /provider → ${probeStatus === null ? "unreachable" : `HTTP ${probeStatus}`}).${probeStatus === 401 || probeStatus === 403 ? " The server rejected the credentials it was started with; report this as a bug." : ""}`,
           });
         }
 
@@ -1472,8 +1505,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       });
     };
 
-    const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = (input) =>
-      createOpencodeClient({
+    const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = (input) => {
+      const headers = input.serverPassword
+        ? {
+            Authorization: `Basic ${Buffer.from(`${(input.cliSpec ?? OPENCODE_CLI_SPEC).serverAuthUsername}:${input.serverPassword}`, "utf8").toString("base64")}`,
+          }
+        : undefined;
+      const client = createOpencodeClient({
         baseUrl: input.baseUrl,
         directory: input.directory,
         ...(input.serverPassword
@@ -1485,6 +1523,12 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           : {}),
         throwOnError: true,
       });
+      return withOpenCodeV2Client(client, {
+        baseUrl: input.baseUrl,
+        directory: input.directory,
+        headers,
+      });
+    };
 
     const loadProviders = (client: OpencodeClient) =>
       runOpenCodeSdk("provider.list", (signal) => client.provider.list(undefined, { signal })).pipe(
@@ -1641,37 +1685,31 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
 
     const loadOpenCodeCredentialProviderIDs: OpenCodeRuntimeShape["loadOpenCodeCredentialProviderIDs"] =
       (client, cliSpec = OPENCODE_CLI_SPEC) =>
-        loadOpenCodePaths(client).pipe(
-          Effect.flatMap((pathInfo) =>
-            Effect.tryPromise({
-              try: () =>
-                readOpenCodeAuthFileUtf8({
-                  homeDir: pathInfo.home,
-                  env: process.env,
-                  platform: process.platform,
-                  dataDirectoryName: cliSpec.dataDirectoryName,
-                }),
-              catch: (cause) =>
-                new OpenCodeRuntimeError({
-                  operation: "readOpenCodeCredentialProviderIDs",
-                  detail: openCodeRuntimeErrorDetail(cause),
-                  cause,
-                }),
-            }),
-          ),
-          Effect.flatMap((content) =>
-            Effect.try({
-              try: () => parseOpenCodeCredentialProviderIDs(content),
-              catch: (cause) =>
-                new OpenCodeRuntimeError({
-                  operation: "parseOpenCodeCredentialProviderIDs",
-                  detail: openCodeRuntimeErrorDetail(cause),
-                  cause,
-                }),
-            }),
-          ),
-          // Explicit credential metadata is optional. Discovery should still work when
-          // the auth file does not exist, is unreadable, or belongs to another machine.
+        Effect.gen(function* () {
+          const pathInfo = yield* loadOpenCodePaths(client);
+          const nativeIDs = yield* runOpenCodeSdk("provider.credentials", () =>
+            openCodeV2CredentialProviderIDs(client),
+          );
+          if (nativeIDs !== undefined) return nativeIDs;
+          const content = yield* Effect.tryPromise({
+            try: () =>
+              readOpenCodeAuthFileUtf8({
+                homeDir: pathInfo.home,
+                env: process.env,
+                platform: process.platform,
+                dataDirectoryName: cliSpec.dataDirectoryName,
+              }),
+            catch: (cause) =>
+              new OpenCodeRuntimeError({
+                operation: "readOpenCodeCredentialProviderIDs",
+                detail: openCodeRuntimeErrorDetail(cause),
+                cause,
+              }),
+          });
+          return parseOpenCodeCredentialProviderIDs(content);
+        }).pipe(
+          // Credential metadata is optional; remote V2 discovery never reads a
+          // local auth file on behalf of another machine or provider account.
           Effect.catch(() => Effect.succeed([])),
         );
 
