@@ -223,8 +223,10 @@ const CODE_THEME_SEED_PATCH_METADATA: Partial<
     light: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
   },
   synara: {
-    dark: { contrast: true },
-    light: { contrast: true },
+    // Selecting Synara explicitly applies the complete Codex-based preset, including
+    // its native fonts and translucent material, rather than retaining Linear's style.
+    dark: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
+    light: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
   },
 };
 
