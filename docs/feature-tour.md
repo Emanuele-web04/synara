@@ -6,14 +6,14 @@ still reports 0.9.2, so waiting for a version change would hide these highlights
 
 ## Curated highlights
 
-| Slide       | Changes inspected                                                                                                                                         | Availability      |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| Workspace   | Rail and customization (#1353, #1364), open-thread tabs (#1383), window appearance (#1382, #1421), unified tabs and Hugeicons (#1513)                     | Stable and Beta   |
-| Agents      | Multiple provider accounts (#1165), account picker (#1402), guided sign-in and Stable OMP (#1459), per-account usage (#1474), same-thread handoff (#1494) | Stable and Beta   |
-| Code review | PRs and issues, list/detail layout and side chats (#1400), sorting (`155c99309`), agent handoff (#1441)                                                   | Stable and Beta   |
-| Teams       | Hubs and Library (#1378, #1390, #1490), Tasks with List/Kanban and delegation (#1368, #1379)                                                              | Beta feature gate |
+| Slide       | Changes inspected                                                                                                                                         | Availability                       |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Workspace   | Rail and customization (#1353, #1364), open-thread tabs (#1383), window appearance (#1382, #1421), unified tabs and Hugeicons (#1513)                     | Stable and Beta                    |
+| Agents      | Multiple provider accounts (#1165), account picker (#1402), guided sign-in and Stable OMP (#1459), per-account usage (#1474), same-thread handoff (#1494) | Stable and Beta                    |
+| Code review | PRs and issues, list/detail layout and side chats (#1400), sorting (`155c99309`), agent handoff (#1441)                                                   | Stable and Beta                    |
+| Teams       | Hubs and Library (#1378, #1390, #1490), Tasks with List/Kanban and delegation (#1368, #1379)                                                              | Hubs: Beta; Tasks: Stable and Beta |
 
-Inbox is available in Stable and Beta; its to-do controls require Beta Tasks.
+Inbox is available in Stable and Beta; its to-do controls use Tasks in both apps.
 Auto-fix CI is also available in both apps and remains opt-in.
 
 Small fixes, internal refactors, and existing features with minor refinements are

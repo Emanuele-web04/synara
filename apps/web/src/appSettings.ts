@@ -159,7 +159,7 @@ function persistedKnownIdList<const Ids extends ReadonlyArray<string>>(ids: Ids)
 }
 
 const RailOrderableItemIdList = persistedKnownIdList(RAIL_ORDERABLE_ITEM_IDS);
-/** Where Beta's Tasks entry opens: the to-do list or the Kanban board of chats. */
+/** Where the Tasks entry opens: the to-do list or the Kanban board of chats. */
 export const TasksViewMode = Schema.Literals(["list", "kanban"]);
 export type TasksViewMode = typeof TasksViewMode.Type;
 export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
@@ -425,7 +425,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Deprecated rename bridge from the Studio surface. Normalization migrates this
   // value onto `showGroupsSection` once and then omits the key.
   showStudioSection: Schema.optionalKey(Schema.Boolean),
-  // Beta-only: the view the Tasks entry opens, last picked in its List/Kanban switch.
+  // The view the Tasks entry opens, last picked in its List/Kanban switch.
   // Stable never reads it (Kanban is its only view).
   tasksViewMode: TasksViewMode.pipe(withDefaults(() => DEFAULT_TASKS_VIEW_MODE)),
   // Rail shortcuts the user added from the rail's "…" menu, in rail order:
