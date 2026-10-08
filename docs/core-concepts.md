@@ -86,7 +86,9 @@ Desktop quit requests ask for confirmation even when no chats are running. On ma
 ⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
 application and its running chats stay active. Quitting with no open window uses a
 native confirmation. With an open window and running chats, the quit dialog lists the work that
-will stop and offers to resume it automatically on the next launch.
+will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
+or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
+asking.
 
 ## Projects
 
