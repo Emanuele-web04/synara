@@ -1,5 +1,46 @@
 # Remote connections — punto di ripartenza
 
+## Integrazione main e parità mobile — 8 ottobre 2026
+
+Integrato `origin/main` fino a `587dd3c` nella PR #1412 tramite merge, senza
+riscrivere i commit condivisi o modificare il worktree con cambi locali alla
+pagina profilo. Risolti 20 file in conflitto conservando le connessioni per
+computer, i frame remoti, il pairing e la lineage delle migrazioni 131–136.
+La patch Effect combina la gestione errori NodeSink di main con il cleanup
+NodeRuntime già presente nel branch; lockfile aggiornato dalla reinstallazione.
+
+- Tema Synara aggiornato con superfici e accenti Light/Dark di main. Il frame
+  remoto continua a usare la presentazione del controller e non mostra onboarding.
+- Create project unisce selezione computer/nome e cartelle aggiuntive di main:
+  trasmette `additionalFolders` anche al proprietario remoto, mantiene il campo
+  principale stabile e ignora i risultati browse di un computer precedente.
+- Ricerca messaggi persistiti locale integrata; un risultato locale non può
+  comparire su una chat remota con lo stesso ID. La ricerca remota conserva
+  titolo/progetto/computer: non interroga ancora lo storico messaggi remoto.
+- Busy status e finalizzazione RPC convivono con analytics e controllo generazione.
+  Mantenute anche correzioni provider, streaming/recovery, keep-awake e priorità
+  processi di main; nessuna modifica alle scelte provider dell'operatore.
+- iPhone PR #1 allinea i token tema (senza azzerare preferenze), conserva i nuovi
+  campi progetto e usa keepalive 5 s / silenzio 180 s con attività server monotona.
+  Overflow stream: otto retry con backoff prima del recupero supervisor esistente.
+  iPad PR #2 integra la base iPhone aggiornata conservando sidebar/split adattivo.
+  UI mobile multi-folder e retry manuale per-stream desktop non sono dichiarati.
+
+Verifica con Node 24.21.0: 16.884 test workspace passati, 254 saltati, più 54 test
+browser su creazione progetto, ricerca e sidebar. I task dei pacchetti sono stati
+completati in due passaggi: una vecchia aspettativa del colore profilo è stata
+corretta per il nuovo tema e web/server sono stati rieseguiti interamente.
+fmt:check, lint (950 warning, zero errori), typecheck, migrations:check e
+windows-runtime:check passati. I 203 test API con database non configurato restano
+saltati; il check Windows non qualifica un pacchetto Windows installato.
+
+Per ciascun branch mobile: 249 test SwiftPM, 82 fixture contro i contratti desktop,
+build Debug app/widget per simulatore riusciti. Avvio con fixture isolate osservato
+su iPhone 18 Pro e iPad Pro 11 (tema e layout compatto/split); rilanciati poi senza
+argomenti di test. Nessun XCTest, telefono fisico, nuovo login/pairing/provider live,
+deploy cloud, merge delle PR o release firmata. CI GitHub mobile bloccata dal limite
+billing/spesa dell'account: non è dichiarata verde sulla base dei controlli locali.
+
 ## Presentazione locale e remota — 7 ottobre 2026
 
 La connessione conserva l'esecuzione nel frame del computer proprietario, ma

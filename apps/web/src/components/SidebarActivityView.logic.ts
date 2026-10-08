@@ -433,6 +433,20 @@ export function collectUnreadActivityThreads(
   );
 }
 
+/**
+ * The visit that reads an activity thread: its latest completion, or the snooze reminder
+ * when the chat came back from snooze after it. Like opening the chat, this uses the
+ * server's reminder time rather than this device's clock.
+ */
+export function resolveActivityThreadReadAt(thread: SidebarThreadSummary): string | undefined {
+  const completedAt = thread.latestTurn?.completedAt ?? undefined;
+  const reminderAt = thread.snoozeReminderAt ?? undefined;
+  if (reminderAt === undefined || !hasUnseenSnoozeReturn(thread)) return completedAt;
+  return completedAt !== undefined && Date.parse(completedAt) > Date.parse(reminderAt)
+    ? completedAt
+    : reminderAt;
+}
+
 /** The open thread is already being read even if its visited timestamp update is one render late. */
 export function hasUnreadActivity(
   threads: readonly SidebarThreadSummary[],

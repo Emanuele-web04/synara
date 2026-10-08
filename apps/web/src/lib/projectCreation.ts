@@ -25,6 +25,8 @@ const DEFAULT_PROJECT_CREATE_RECOVERY_MAX_ATTEMPTS = 6;
 const DEFAULT_PROJECT_CREATE_RECOVERY_DELAY_MS = 50;
 export const PROJECT_CREATE_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
+export const PROJECT_CREATE_MULTI_FOLDER_DUPLICATE_ERROR =
+  "The primary folder already belongs to a project. Make another folder primary, or remove that project first.";
 export const PROJECT_CREATE_SYNC_ERROR =
   "The project was created, but it has not synced into Synara yet. Try again in a moment.";
 
@@ -38,6 +40,8 @@ export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
   name?: string;
+  /** Extra source folders of a multi-folder project; `workspaceRoot` is the primary one. */
+  additionalFolders?: ReadonlyArray<string>;
   createIfMissing?: boolean;
   /** Overrides the active-space default; `null` files the project in Void. */
   spaceId?: SpaceId | null;
@@ -64,6 +68,9 @@ export async function createOrRecoverProjectFromPath(input: {
   const projectId = newProjectId();
   const createdAt = new Date().toISOString();
   const title = input.name?.trim() || buildProjectTitleFromWorkspaceRoot(workspaceRoot);
+  const additionalFolders = (input.additionalFolders ?? [])
+    .map((folder) => folder.trim())
+    .filter((folder) => folder.length > 0);
   const seedProvider =
     input.defaultProvider === "pi" || input.defaultProvider === "omp"
       ? "codex"
@@ -77,6 +84,7 @@ export async function createOrRecoverProjectFromPath(input: {
       kind: "project",
       title,
       workspaceRoot,
+      ...(additionalFolders.length > 0 ? { additionalFolders } : {}),
       createWorkspaceRootIfMissing: input.createIfMissing === true,
       defaultModelSelection: {
         provider: seedProvider,
@@ -106,6 +114,10 @@ export async function createOrRecoverProjectFromPath(input: {
       error instanceof Error ? error.message : "An error occurred while adding the project.";
     if (!isDuplicateProjectCreateError(description)) {
       throw error instanceof Error ? error : new Error(description);
+    }
+    // Opening the existing project would silently drop the extra folders.
+    if (additionalFolders.length > 0) {
+      throw new Error(PROJECT_CREATE_MULTI_FOLDER_DUPLICATE_ERROR, { cause: error });
     }
 
     const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({

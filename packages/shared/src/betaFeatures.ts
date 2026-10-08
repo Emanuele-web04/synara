@@ -14,9 +14,7 @@ import {
 /**
  * Features that ship only in non-Stable builds. Keep a feature out of Stable
  * by adding its key here; promote it by deleting the entry. A provider's key
- * is its ProviderKind. "groups" is Groups (below);
- * "tasks" is the Tasks to-do list, which replaces Kanban in Beta while Stable
- * keeps Kanban.
+ * is its ProviderKind. "groups" is Groups (below).
  */
 export type BetaOnlyFeature = string;
 
@@ -44,7 +42,6 @@ export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
 
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   GROUPS_BETA_FEATURE,
-  "tasks",
   "remoteConnections",
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,

@@ -53,7 +53,10 @@ import { ProviderIcon } from "../ProviderIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurfaceHeader } from "../RouteSurface";
 import { resolvePullRequestReviewBadge } from "../Sidebar.logic";
-import { collectUnreadActivityThreads } from "../SidebarActivityView.logic";
+import {
+  collectUnreadActivityThreads,
+  resolveActivityThreadReadAt,
+} from "../SidebarActivityView.logic";
 import { TaskCardSurface, useTaskSelection } from "../tasks/TaskCardSurface";
 import { toLocalDueDate } from "../tasks/tasks.logic";
 import { useTaskRows, useTodoList, useTodoMutations } from "../tasks/useTodos";
@@ -672,7 +675,7 @@ export default function InboxView() {
   );
   const markAllRead = () => {
     for (const thread of unreadThreads) {
-      markThreadVisited(thread.id, thread.latestTurn?.completedAt ?? undefined);
+      markThreadVisited(thread.id, resolveActivityThreadReadAt(thread));
     }
   };
   const dateLabel = LONG_DATE_FORMAT.format(nowMs);

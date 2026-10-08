@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertExactLoopbackIpAddress,
   assertOutboundUrlAllowed,
+  assertPublicIpAddress,
+  isBenchmarkIpAddress,
   isPublicIpAddress,
   normalizeOutboundOrigin,
   OutboundPolicyError,
@@ -71,5 +73,24 @@ describe("isPublicIpAddress", () => {
   it("still accepts ordinary public IPv4 and IPv6 addresses", () => {
     expect(isPublicIpAddress("8.8.8.8")).toBe(true);
     expect(isPublicIpAddress("2001:4860:4860::8888")).toBe(true);
+  });
+});
+
+describe("isBenchmarkIpAddress", () => {
+  it("matches the RFC 2544 benchmarking range only", () => {
+    expect(isBenchmarkIpAddress("198.18.0.0")).toBe(true);
+    expect(isBenchmarkIpAddress("198.18.0.1")).toBe(true);
+    expect(isBenchmarkIpAddress("198.19.255.255")).toBe(true);
+    expect(isBenchmarkIpAddress("198.17.255.255")).toBe(false);
+    expect(isBenchmarkIpAddress("198.20.0.0")).toBe(false);
+    expect(isBenchmarkIpAddress("8.8.8.8")).toBe(false);
+    expect(isBenchmarkIpAddress("::1")).toBe(false);
+    expect(isBenchmarkIpAddress("not-an-address")).toBe(false);
+  });
+
+  it("keeps the range on the shared blocklist for ordinary callers", () => {
+    expect(isPublicIpAddress("198.18.0.1")).toBe(false);
+    expect(() => assertPublicIpAddress("198.18.0.1")).toThrowError(OutboundPolicyError);
+    expect(() => assertPublicIpAddress("198.19.255.255")).toThrowError(/private/u);
   });
 });

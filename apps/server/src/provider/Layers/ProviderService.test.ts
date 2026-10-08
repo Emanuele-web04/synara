@@ -405,6 +405,7 @@ function makeFakeCodexAdapter(
         sessions.delete(threadId);
       }),
   );
+  const renewAgentGatewayCredential = vi.fn((_threadId: ThreadId) => Effect.succeed(false));
 
   const listSessions = vi.fn(
     (): Effect.Effect<ReadonlyArray<ProviderSession>> =>
@@ -482,6 +483,7 @@ function makeFakeCodexAdapter(
     respondToRequest,
     respondToUserInput,
     stopSession,
+    renewAgentGatewayCredential,
     listSessions,
     hasSession,
     readThread,
@@ -529,6 +531,7 @@ function makeFakeCodexAdapter(
     respondToRequest,
     respondToUserInput,
     stopSession,
+    renewAgentGatewayCredential,
     listSessions,
     hasSession,
     readThread,
@@ -2008,6 +2011,41 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("carries a multi-folder project's extra folders through session recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-additional-directories-recovery");
+      const additionalDirectories = ["/tmp/repos/api", "/tmp/repos/shared"];
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+        additionalDirectories,
+      });
+      const persisted = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.deepStrictEqual(
+        asRuntimePayloadRecord(persisted?.runtimePayload).additionalDirectories,
+        additionalDirectories,
+      );
+
+      // A recovered runtime must keep the same folder grant it was spawned with.
+      yield* routing.codex.stopSession(threadId);
+      yield* provider.sendTurn({
+        threadId,
+        input: "keep going",
+        attachments: [],
+      });
+
+      const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.strictEqual(recoveredStart?.threadId, threadId);
+      assert.deepStrictEqual(recoveredStart?.additionalDirectories, additionalDirectories);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("imports a native copy once and preserves it across runtime stop and retries", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -2015,6 +2053,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const threadId = asThreadId("external-import-copy");
       const forkCallCount = routing.codex.forkThread.mock.calls.length;
       const starts = routing.codex.startSession.mock.calls.length;
+      const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-import-"));
+      const codexHome = path.join(importRoot, "codex-home");
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+      const importEnvironment = { SYNARA_HOME: path.join(importRoot, "synara-runtime") };
       const input = {
         threadId,
         provider: "codex" as const,
@@ -2022,7 +2065,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         sourceCwd: "/repo/original",
         cwd: "/repo/original",
         modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
-        providerOptions: { codex: { homePath: "/custom/codex", binaryPath: "/custom/bin/codex" } },
+        providerOptions: {
+          codex: {
+            homePath: codexHome,
+            binaryPath: "/custom/bin/codex",
+            environment: importEnvironment,
+          },
+        },
         runtimeMode: "full-access" as const,
       };
       routing.codex.forkThread.mockImplementationOnce(() =>
@@ -2034,6 +2083,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const first = yield* provider.importExternalThread!(input);
       const firstBinding = Option.getOrThrow(yield* directory.getBinding(threadId));
       assert.equal(typeof firstBinding.lifecycleGeneration, "string");
+      // The import establishes the account's shared continuation state and
+      // forwards its verified generation to the native fork.
+      const importedGeneration = readCodexSharedContinuationGeneration({
+        env: { ...process.env, ...importEnvironment },
+        homePath: codexHome,
+      });
+      if (!importedGeneration) {
+        assert.fail("Expected the import to establish a shared continuation generation.");
+      }
       assert.deepEqual(routing.codex.forkThread.mock.calls.at(-1)?.[0], {
         threadId,
         sourceThreadId: asThreadId("external-original"),
@@ -2046,6 +2104,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         providerInstanceId: "codex",
         runtimeMode: input.runtimeMode,
         lifecycleGeneration: firstBinding.lifecycleGeneration,
+        expectedCodexContinuationGeneration: importedGeneration,
         requireCompletedSource: true,
       });
       yield* provider.stopRuntimeSession!({ threadId });
@@ -2057,21 +2116,137 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(stopped.status, "stopped");
       assert.deepEqual(stopped.resumeCursor, { threadId: "independent-copy" });
       assert.equal(asRuntimePayloadRecord(stopped.runtimePayload).cwd, input.cwd);
-      assert.deepEqual(
-        asRuntimePayloadRecord(stopped.runtimePayload).providerOptions,
-        input.providerOptions,
-      );
+      // Runtime environments never persist; the binding keeps the redacted copy.
+      assert.deepEqual(asRuntimePayloadRecord(stopped.runtimePayload).providerOptions, {
+        codex: { ...input.providerOptions.codex, environment: {} },
+      });
       // The copy records the launch identity a normal start would, so it can resume.
       assert.equal(asRuntimePayloadRecord(stopped.runtimePayload).providerInstanceId, "codex");
-      assert.equal(
-        typeof asRuntimePayloadRecord(stopped.runtimePayload).continuationIdentity,
-        "string",
+      assert.match(
+        String(asRuntimePayloadRecord(stopped.runtimePayload).continuationIdentity),
+        new RegExp(`^codex:shared-v2:${importedGeneration}:`),
       );
       const mismatch = yield* Effect.result(
         provider.importExternalThread!({ ...input, externalThreadId: "different-source" }),
       );
       assert.equal(mismatch._tag, "Failure");
       yield* provider.stopSession({ threadId });
+      fs.rmSync(importRoot, { recursive: true, force: true });
+    }),
+  );
+
+  it.effect(
+    "establishes the Codex continuation generation on first import and reuses it on retry",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("external-import-codex-generation");
+        const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-import-retry-"));
+        const codexHome = path.join(importRoot, "codex-home");
+        fs.mkdirSync(codexHome, { recursive: true });
+        fs.writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+        const importEnvironment = { SYNARA_HOME: path.join(importRoot, "synara-runtime") };
+        const input = {
+          threadId,
+          provider: "codex" as const,
+          externalThreadId: "external-original",
+          sourceCwd: "/repo/original",
+          modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
+          providerOptions: { codex: { homePath: codexHome, environment: importEnvironment } },
+          runtimeMode: "full-access" as const,
+        };
+        // A fresh Codex home has no shared continuation state until the import
+        // prepares it.
+        assert.equal(
+          isCodexSharedContinuationStatePrepared({
+            env: { ...process.env, ...importEnvironment },
+            homePath: codexHome,
+          }),
+          false,
+        );
+        const forkCallCount = routing.codex.forkThread.mock.calls.length;
+        routing.codex.forkThread
+          .mockImplementationOnce((forkInput) =>
+            Effect.succeed({
+              threadId: forkInput.threadId,
+              resumeCursor: { threadId: "independent-copy-first" },
+            }),
+          )
+          .mockImplementationOnce((forkInput) =>
+            Effect.succeed({
+              threadId: forkInput.threadId,
+              resumeCursor: { threadId: "independent-copy-second" },
+            }),
+          );
+
+        yield* provider.importExternalThread!(input);
+        const generation = readCodexSharedContinuationGeneration({
+          env: { ...process.env, ...importEnvironment },
+          homePath: codexHome,
+        });
+        assert.match(generation ?? "", /^[0-9a-f-]{36}$/);
+        assert.equal(
+          routing.codex.forkThread.mock.calls.at(-1)?.[0].expectedCodexContinuationGeneration,
+          generation,
+        );
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.match(
+          String(asRuntimePayloadRecord(binding.runtimePayload).continuationIdentity),
+          new RegExp(`^codex:shared-v2:${generation}:`),
+        );
+
+        // Retrying after the first binding is discarded prepares the same
+        // already-established generation instead of minting a new one.
+        yield* provider.stopRuntimeSession!({ threadId });
+        yield* directory.remove(threadId);
+        yield* provider.importExternalThread!(input);
+        assert.equal(
+          routing.codex.forkThread.mock.calls.at(-1)?.[0].expectedCodexContinuationGeneration,
+          generation,
+        );
+        assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 2);
+
+        yield* provider.stopSession({ threadId });
+        fs.rmSync(importRoot, { recursive: true, force: true });
+      }),
+  );
+
+  it.effect("rejects Codex external imports when the prepared continuation source is damaged", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-damaged-continuation");
+      const fixture = yield* Effect.promise(() => makeSharedCodexContinuationFixture(["imported"]));
+      fs.rmSync(path.join(fixture.homePath, "sessions"), { recursive: true, force: true });
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId,
+          provider: "codex",
+          externalThreadId: "external-original",
+          sourceCwd: "/repo/original",
+          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          providerOptions: {
+            codex: {
+              homePath: fixture.homePath,
+              shadowHomePath: fixture.shadowHomePath("imported"),
+              accountId: "imported",
+              environment: fixture.environment,
+            },
+          },
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.match(String(result.failure), /missing|damaged|refusing to recreate/);
+      }
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 0);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
 
@@ -3207,14 +3382,18 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect(
-    "retires A's runtime before admitting B while allowing background tasks to finish",
-    () =>
+  it.effect.each([false, true])(
+    "renews or replaces A before admitting B, after background tasks finish (reuse=%s)",
+    (reuse) =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;
         const directory = yield* ProviderSessionDirectory;
         const threadId = asThreadId("thread-terminal-gateway-credential-rotation");
         const turnA = asTurnId(`turn-${threadId}`);
+        routing.codex.renewAgentGatewayCredential.mockImplementationOnce(() =>
+          Effect.succeed(reuse),
+        );
+        const renewalsBefore = routing.codex.renewAgentGatewayCredential.mock.calls.length;
 
         yield* provider.startSession(threadId, {
           provider: "codex",
@@ -3286,6 +3465,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB);
         assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB);
         assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB);
+        assert.equal(routing.codex.renewAgentGatewayCredential.mock.calls.length, renewalsBefore);
 
         routing.codex.emit({
           type: "task.updated",
@@ -3298,10 +3478,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
         });
         yield* Fiber.join(turnB);
 
-        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB + 1);
-        assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB + 1);
+        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB + (reuse ? 0 : 1));
+        assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB + (reuse ? 0 : 1));
         assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB + 1);
         const recoveredBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        if (reuse) assert.equal(recoveredBinding?.lifecycleGeneration, lifecycleGeneration);
         assert.equal(
           asRuntimePayloadRecord(recoveredBinding?.runtimePayload)
             .agentGatewayCredentialRotationRequired,

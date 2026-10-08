@@ -11,6 +11,7 @@ import {
 import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { useStore } from "~/store";
 import type { SidebarThreadSummary } from "~/types";
 
 const fixture = vi.hoisted(() => ({
@@ -83,9 +84,10 @@ it("opens a Stable Inbox deep link", async () => {
   }
 });
 
-it("loads the Stable Inbox without offering or requesting Beta to-dos", async () => {
+it("offers Tasks in the Stable Inbox", async () => {
   fixture.navigate.mockReset();
   fixture.listTodos.mockReset();
+  fixture.listTodos.mockResolvedValue({ todos: [] });
   fixture.activity.mockReturnValue({ visibleNonGroupThreads: [] });
   fixture.getRecap.mockRejectedValue({ code: "FEATURE_UNAVAILABLE" });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -101,13 +103,44 @@ it("loads the Stable Inbox without offering or requesting Beta to-dos", async ()
       .toBeVisible();
     expect(fixture.getRecap).toHaveBeenCalled();
     expect(fixture.navigate).not.toHaveBeenCalled();
-    expect(fixture.listTodos).not.toHaveBeenCalled();
-    await expect
-      .element(view.getByRole("heading", { name: "Today’s tasks" }))
-      .not.toBeInTheDocument();
-    await expect.element(view.getByRole("button", { name: "All tasks" })).not.toBeInTheDocument();
+    expect(fixture.listTodos).toHaveBeenCalled();
+    await expect.element(view.getByRole("heading", { name: "Today’s tasks" })).toBeVisible();
+    await expect.element(view.getByRole("button", { name: "All tasks" })).toBeVisible();
   } finally {
     await view.unmount();
     client.clear();
+  }
+});
+
+it("reads a chat back from snooze at its reminder with Mark all read", async () => {
+  const returned = {
+    id: "inbox-returned",
+    projectId: "inbox-project",
+    title: "Back from snooze",
+    modelSelection: { provider: "codex" },
+    latestTurn: { state: "completed", completedAt: "2026-08-02T10:00:00.000Z" },
+    lastVisitedAt: "2026-08-02T11:00:00.000Z",
+    snoozedUntil: null,
+    snoozeReminderAt: "2026-08-02T12:00:00.000Z",
+  } as unknown as SidebarThreadSummary;
+  const markThreadVisited = vi.spyOn(useStore.getState(), "markThreadVisited");
+  fixture.activity.mockReturnValue({ visibleNonGroupThreads: [returned] });
+  fixture.getRecap.mockRejectedValue({ code: "FEATURE_UNAVAILABLE" });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = await render(
+    <QueryClientProvider client={client}>
+      <InboxView />
+    </QueryClientProvider>,
+  );
+  try {
+    await view.getByRole("button", { name: "Mark all read", exact: true }).click();
+    expect(markThreadVisited).toHaveBeenCalledExactlyOnceWith(
+      returned.id,
+      returned.snoozeReminderAt,
+    );
+  } finally {
+    await view.unmount();
+    client.clear();
+    markThreadVisited.mockRestore();
   }
 });

@@ -25,6 +25,18 @@ const mousePointerEvent = (type: string, x: number, y: number) =>
     clientX: x,
     clientY: y,
   });
+const makeFilePane = (id: string) => ({
+  id,
+  kind: "file" as const,
+  filePath: id + ".md",
+  threadId: null,
+  diffTurnId: null,
+  diffFilePath: null,
+  pullRequestProjectId: null,
+  pullRequestRepository: null,
+  pullRequestNumber: null,
+  pullRequestInitialTab: null,
+});
 
 function renderDock(content: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
@@ -150,6 +162,55 @@ it("maximizes and restores without remounting or resetting document state", asyn
   expect(document.querySelector('[data-testid="document"]')).toBe(doc);
   expect(doc.scrollTop).toBe(120);
   expect(document.querySelector<HTMLElement>('[data-testid="chat"]')!.inert).toBe(false);
+});
+
+it("keeps each file tab mounted so switching tabs preserves its scroll position", async () => {
+  await page.viewport(1280, 800);
+  const { useState } = await import("react");
+  function Harness() {
+    const [state, setState] = useState<RightDockThreadState>({
+      open: true,
+      activePaneId: "a",
+      panes: [makeFilePane("a"), makeFilePane("b")],
+    });
+    return (
+      <div style={{ display: "flex", width: 1000, height: 600 }}>
+        <div style={{ flex: 1 }}>Chat</div>
+        <RightDock
+          state={state}
+          paneLabelOverrides={{ a: "a.md", b: "b.md" }}
+          minWidth={300}
+          defaultWidth="500px"
+          shouldAcceptWidth={() => true}
+          addMenuKinds={[]}
+          onSelectPane={(id) => setState((current) => ({ ...current, activePaneId: id }))}
+          onClosePane={() => {}}
+          onCollapse={() => {}}
+          onOpenChange={() => {}}
+          onAddPane={() => {}}
+          renderPane={(currentPane) => (
+            <div
+              data-testid={`file-pane-${currentPane.id}`}
+              style={{ height: 400, overflow: "auto" }}
+            >
+              <div style={{ height: 2000 }}>Document {currentPane.id}</div>
+            </div>
+          )}
+        />
+      </div>
+    );
+  }
+
+  const screen = await renderDock(<Harness />);
+  const firstPane = document.querySelector<HTMLElement>('[data-testid="file-pane-a"]')!;
+  firstPane.scrollTop = 240;
+  await screen.getByRole("button", { name: "b.md", exact: true }).click();
+  await expect.element(screen.getByText("Document b", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: "a.md", exact: true }).click();
+  await expect.element(screen.getByText("Document a", { exact: true })).toBeVisible();
+  expect(document.querySelector('[data-testid="file-pane-a"]')).toBe(firstPane);
+  expect(firstPane.scrollTop).toBe(240);
+  await screen.unmount();
 });
 
 it("keeps the whole dock maximized across selecting, opening and closing documents", async () => {

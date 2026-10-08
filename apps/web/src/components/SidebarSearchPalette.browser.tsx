@@ -3,12 +3,18 @@ import "../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page, userEvent } from "vitest/browser";
 import { describe, expect, it, vi } from "vitest";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 import { render } from "vitest-browser-react";
 
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import type { SidebarSearchProject, SidebarSearchThread } from "./SidebarSearchPalette.logic";
 import type { ThreadImportTarget } from "../lib/threadImport";
+
+const searchThreads = vi.hoisted(() => vi.fn());
+vi.mock("~/nativeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/nativeApi")>()),
+  readNativeApi: () => ({ orchestration: { searchThreads } }),
+}));
 
 const thread: SidebarSearchThread = {
   id: "thread-1",
@@ -24,10 +30,11 @@ const thread: SidebarSearchThread = {
 
 async function renderPalette(
   searchThread: SidebarSearchThread = thread,
-  options: { threads?: SidebarSearchThread[]; projects?: SidebarSearchProject[] } = {},
+  overrides: Partial<ComponentProps<typeof SidebarSearchPalette>> = {},
 ) {
   const onOpenThread = vi.fn();
   const onOpenProject = vi.fn();
+  const onOpenSettings = vi.fn();
   const onOpenChange = vi.fn();
   await render(
     <QueryClientProvider client={new QueryClient()}>
@@ -37,13 +44,13 @@ async function renderPalette(
         onModeChange={vi.fn()}
         onOpenChange={onOpenChange}
         actions={[]}
-        projects={options.projects ?? []}
-        threads={options.threads ?? [searchThread]}
+        projects={overrides.projects ?? []}
+        threads={overrides.threads ?? [searchThread]}
         onCreateChat={vi.fn()}
         onCreateThread={vi.fn()}
         onAddProjectPath={vi.fn().mockResolvedValue(undefined)}
         homeDir={null}
-        onOpenSettings={vi.fn()}
+        onOpenSettings={onOpenSettings}
         onOpenFeedback={vi.fn()}
         onOpenUsageSettings={vi.fn()}
         onOpenProject={onOpenProject}
@@ -51,10 +58,11 @@ async function renderPalette(
         importTargets={[]}
         onImportThread={vi.fn().mockResolvedValue(undefined)}
         onImportProjects={vi.fn()}
+        {...overrides}
       />
     </QueryClientProvider>,
   );
-  return { onOpenThread, onOpenProject, onOpenChange };
+  return { onOpenThread, onOpenProject, onOpenSettings, onOpenChange };
 }
 
 const project: SidebarSearchProject = {
@@ -119,6 +127,50 @@ it("keeps unavailable remote results visible without opening or dismissing the p
   expect(onOpenChange).not.toHaveBeenCalled();
 });
 
+it("searches settings and opens the matching section and row", async () => {
+  const { onOpenSettings, onOpenChange } = await renderPalette();
+  await page.getByPlaceholder("Search chats or run a command").fill("base font size");
+  const result = page.getByRole("option", { name: /Base font size/ });
+  await expect.element(result).toHaveTextContent("Appearance");
+  await userEvent.keyboard("{Enter}");
+  expect(onOpenSettings).toHaveBeenCalledWith("appearance", { target: "setting-base-font-size" });
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+
+it("opens panel-only settings without inventing an anchor", async () => {
+  const { onOpenSettings } = await renderPalette();
+  await page.getByPlaceholder("Search chats or run a command").fill("keybindings");
+  await page.getByRole("option", { name: "Keybindings Keybindings", exact: true }).click();
+  expect(onOpenSettings).toHaveBeenCalledWith("shortcuts", undefined);
+});
+
+it("announces no results when nothing matches", async () => {
+  await renderPalette();
+  await page.getByPlaceholder("Search chats or run a command").fill("zzzzunmatchedzzzz");
+  await expect.element(page.getByRole("status")).toHaveTextContent("No results");
+  expect(page.getByRole("option").length).toBe(0);
+});
+
+it("runs a space command and closes the palette", async () => {
+  const run = vi.fn();
+  const { onOpenChange } = await renderPalette(thread, {
+    actions: [
+      {
+        id: "switch-space-work",
+        label: "Switch to Work",
+        description: "Switch space",
+        requiresQuery: true,
+        run,
+      },
+    ],
+  });
+  expect(page.getByRole("option", { name: "Switch to Work" }).length).toBe(0);
+  await page.getByPlaceholder("Search chats or run a command").fill("work");
+  await page.getByRole("option", { name: "Switch to Work" }).click();
+  expect(run).toHaveBeenCalledOnce();
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+
 it.each(["control-panel", "Client work"])(
   "explains a thread found by project or space metadata: %s",
   async (query) => {
@@ -151,6 +203,27 @@ it("keeps recent and title matches compact, while retaining message snippets", a
   await input.fill("expired");
   await expect.element(result).toHaveTextContent("Check the expired session token");
   await expect.element(result).toHaveTextContent("Chat match");
+});
+
+it("finds a thread through server message hits when its messages are not loaded", async () => {
+  searchThreads.mockResolvedValue({
+    matches: [
+      {
+        threadId: thread.id,
+        excerpt: "The refund webhook retries three times before giving up.",
+        matchCount: 2,
+      },
+    ],
+  });
+  const { onOpenThread } = await renderPalette({ ...thread, messages: [] });
+  await page.getByPlaceholder("Search chats or run a command").fill("webhook retries");
+
+  const result = page.getByRole("option", { name: /Fix login flow/ });
+  await expect.element(result).toHaveTextContent("refund webhook retries three times");
+  await expect.element(result).toHaveTextContent("2 chat hits");
+  expect(searchThreads).toHaveBeenCalledWith({ query: "webhook retries", limit: 50 });
+  await result.click();
+  expect(onOpenThread).toHaveBeenCalledWith(thread.id);
 });
 
 it("shows only unique matching metadata so a space match is not buried behind project names", async () => {

@@ -13,6 +13,8 @@
      share frames instead of repeatedly recompositing the translucent sidebar
      and composer. Keep 1300ms / 26 steps equal to shimmer's 2000ms / 40 steps. */
   --animate-spin-stepped: spin-stepped 1.3s steps(26, end) infinite;
+  /* Same 50ms step, half the speed: background work that keeps going without you. */
+  --animate-spin-stepped-slow: spin-stepped 2.6s steps(52, end) infinite;
   --font-sans: var(--font-ui-family);
   /* Font sizes that follow the size chosen in Settings (useAppTypography). */
   --text-ui: var(--app-font-size-ui);
@@ -377,8 +379,10 @@
 }
 
 .sidebar-surface-enter {
-  animation: sidebar-surface-enter 160ms ease-out both;
-  will-change: opacity, transform;
+  /* Fill `backwards`, not `both`, and no `will-change`: a retained transform or standing
+     hint keeps the sidebar list on its own layer, which Chromium does not re-rasterize
+     after a display-scale change, so its text stays blurry until restart. */
+  animation: sidebar-surface-enter 160ms ease-out backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -733,6 +737,19 @@ input {
 .drag-region select,
 .drag-region a {
   -webkit-app-region: no-drag;
+}
+
+/* Chromium does not clip native app regions to scrolling ancestors. Exclude the
+   visible content-tab viewport once, instead of letting offscreen chips and their
+   buttons subtract rectangles from neighboring window chrome. The strip fits its
+   content up to the available width, leaving unused header space draggable. */
+.surface-content-tabs {
+  -webkit-app-region: no-drag;
+}
+
+.surface-content-tabs [data-surface-tab],
+.surface-content-tabs [data-surface-tab] button {
+  -webkit-app-region: initial;
 }
 
 /* Scrollbar styling.
@@ -2504,8 +2521,8 @@ label:has(> select#reasoning-effort) select {
 /* Text shimmer utility — vendored verbatim from shadcn 4.12.0
    (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
    imported because it would clash with this project's custom theme, so the
-   self-contained shimmer block lives here instead. Applied on the
-   "Working for …" status line via the `shimmer` class. Provides `shimmer`,
+   self-contained shimmer block lives here instead. Applied on typing and
+   worktree-preparation indicators. Provides `shimmer`,
    `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`,
    `shimmer-color-*`, `shimmer-once`, `shimmer-reverse`, and `shimmer-none`.
    One deliberate deviation: the animation is duty-cycled via `--shimmer-timing`
@@ -2529,9 +2546,11 @@ label:has(> select#reasoning-effort) select {
   @keyframes tw-shimmer {
     from {
       background-position: 100% 0;
+      mask-position: 100% 0;
     }
     to {
       background-position: 0 0;
+      mask-position: 0 0;
     }
   }
 }
@@ -2576,6 +2595,22 @@ label:has(> select#reasoning-effort) select {
   }
 }
 
+/* Mask the whole indicator so SVG strokes shimmer together with its text. */
+@utility shimmer-group {
+  @apply shimmer;
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
+  mask-image: linear-gradient(
+    calc(90deg + var(--shimmer-angle)),
+    #000 calc(50% - var(--_spread)),
+    rgb(0 0 0 / 0.2) 50%,
+    #000 calc(50% + var(--_spread))
+  );
+  mask-repeat: no-repeat;
+  mask-size: calc(200% + var(--_spread) * 2) 100%;
+  mask-position: 0 0;
+}
+
 @utility shimmer-once {
   animation-iteration-count: 1;
 }
@@ -2616,6 +2651,11 @@ label:has(> select#reasoning-effort) select {
     animation: none;
     background-image: none;
     -webkit-text-fill-color: currentColor;
+  }
+
+  .shimmer-group {
+    animation: none;
+    mask-image: none;
   }
 }
 

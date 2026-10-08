@@ -41,6 +41,7 @@ import {
   isFileChangeWorkLogEntry,
   type WorkLogEntry,
 } from "../../session-logic";
+import type { WorkLogUserInputExchangeItem } from "../../workLog";
 import {
   type TurnDiffSummary,
   type WorktreeSetupResolutionAction,
@@ -61,7 +62,6 @@ import {
   ClockIcon,
   GitForkIcon,
   GoalIcon,
-  LoaderIcon,
   MessageDeliveryCheckIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -69,17 +69,17 @@ import {
   SteerIcon,
   ThinkingIcon,
   Undo2Icon,
-  WorkDetailsIcon,
-  WorkingIcon,
   WorktreeIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
+import { LiveStatusSpinner } from "../ui/spinner";
 import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
 import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
+import { ThreadErrorBanner } from "./ThreadErrorBanner";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -161,6 +161,7 @@ import {
   getChatTranscriptUserMessageTextStyle,
   USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
   USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+  USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME,
   userMessageBubbleBorderClassName,
 } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
@@ -310,7 +311,7 @@ function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"
   if (status === "active") {
     // Spinner sized to match the pending nodes, in foreground (black) so the
     // active step reads as the current work rather than an accent flourish.
-    return <LoaderIcon className="size-2.5 animate-spin text-[var(--color-text-foreground)]" />;
+    return <LiveStatusSpinner className="size-2.5 text-[var(--color-text-foreground)]" />;
   }
   if (status === "error") {
     return <CircleAlertIcon className="size-2.5 text-destructive" />;
@@ -427,6 +428,8 @@ interface MessagesTimelineProps {
   /** Resolve the in-flight worktree preparation (cancel the send or fall back to the local checkout). */
   onResolveWorktreeSetup?: (action: WorktreeSetupResolutionAction) => void;
   followLiveOutput?: boolean;
+  /** Normal sends ease into their anchor independently of end-follow ownership. */
+  animateTailAnchorSlide?: boolean;
   emptyStateContent?: ReactNode;
   historyHeader?: ReactElement | undefined;
   listRef?: RefObject<LegendListRef | null>;
@@ -468,6 +471,10 @@ interface MessagesTimelineProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   /** Coordinator/bot chats hide tool rows and keep a text conversation. */
   conversationOnly?: boolean;
+  recoverableTurnId?: TurnId | null;
+  turnRecoveryDisabled?: boolean;
+  onContinueFailedTurn?: (turnId: TurnId) => Promise<boolean>;
+  onChangeRecoveryModel?: () => void;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
   onToggleWorkGroup?: (groupId: string) => void;
@@ -549,6 +556,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   worktreeSetupPendingAction: worktreeSetupPendingActionProp,
   onResolveWorktreeSetup,
   followLiveOutput: followLiveOutputProp,
+  animateTailAnchorSlide,
   listRef,
   controllerRef,
   pinnedMessageIds,
@@ -567,6 +575,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hubWorkItemsByMessageId,
   turnDiffSummaryByAssistantMessageId,
   conversationOnly: conversationOnlyProp,
+  recoverableTurnId,
+  turnRecoveryDisabled,
+  onContinueFailedTurn,
+  onChangeRecoveryModel,
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
@@ -781,7 +793,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
     messageChangeSignal: messageChangeSignalProp ?? timelineEntries,
-    animateAnchorSlide: !followLiveOutput,
+    animateAnchorSlide: animateTailAnchorSlide ?? !followLiveOutput,
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
@@ -1408,6 +1420,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
+        row.groupedEntries.map((entry) =>
+          entry.turnFailure ? (
+            <div key={entry.id} data-turn-failure={entry.turnId ?? entry.id}>
+              <ThreadErrorBanner
+                title="Task interrupted"
+                error={entry.turnFailure.message}
+                {...(entry.turnId && entry.turnId === recoverableTurnId && onContinueFailedTurn
+                  ? {
+                      onContinue: () => {
+                        void onContinueFailedTurn(entry.turnId!);
+                      },
+                      ...(onChangeRecoveryModel ? { onChangeModel: onChangeRecoveryModel } : {}),
+                    }
+                  : {})}
+                recoveryDisabled={turnRecoveryDisabled ?? false}
+              />
+            </div>
+          ) : null,
+        )}
+      {row.kind === "work" &&
         row.groupedEntries.map((workEntry) =>
           workEntry.providerHandoff ? (
             <ProviderHandoffDivider
@@ -1424,7 +1456,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // The provider's actual Synara MCP tool rows remain visible here.
           // Handoff boundaries render as the divider above, not as work rows.
           const groupedEntries = row.groupedEntries.filter(
-            (workEntry) => !workEntry.synaraThreadCreation && !workEntry.providerHandoff,
+            (workEntry) =>
+              !workEntry.synaraThreadCreation &&
+              !workEntry.providerHandoff &&
+              !workEntry.turnFailure,
           );
           if (groupedEntries.length === 0) {
             return null;
@@ -2264,17 +2299,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // ChatView's click anchor preserves this trigger's screen position
                       // while the disclosure height animates, so opening it should not tail-scroll.
                       className={cn(
-                        "inline-flex items-center gap-1.5 pb-2 text-left transition-colors duration-200 hover:text-foreground",
+                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
                         MUTED_LABEL_TEXT_CLASS_NAME,
                       )}
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
-                      <span aria-hidden="true" className="flex shrink-0">
-                        {renderWorkEntryIcon(
-                          row.collapsedWorkElapsed ? ClockIcon : WorkDetailsIcon,
-                          MESSAGE_ACTION_ICON_CLASS_NAME,
-                        )}
-                      </span>
                       <span>
                         {row.collapsedWorkElapsed
                           ? `Worked for ${row.collapsedWorkElapsed}`
@@ -2658,23 +2687,29 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
+      {row.kind === "user-input" && (
+        <UserInputExchange
+          items={row.entry.userInputExchange}
+          chatTypographyStyle={chatTypographyStyle}
+          answerTypographyStyle={userMessageTypographyStyle}
+          labelStyle={chatMessageFooterStyle}
+        />
+      )}
+
       {row.kind === "working-header" && !conversationOnly && (
         <div>
           {/* Non-collapsible twin of the settled "Worked for" header: same label
               tone, size, and full-width divider, but counting up live. */}
           <div
-            className={cn("flex items-center gap-1.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
+            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
-            <WorkingIcon className={cn("shrink-0", MESSAGE_ACTION_ICON_CLASS_NAME)} />
-            <span>
-              Working for{" "}
-              {nowIso ? (
-                (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
-              ) : (
-                <WorkingTimer createdAt={row.createdAt} />
-              )}
-            </span>
+            Working for{" "}
+            {nowIso ? (
+              (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
+            ) : (
+              <WorkingTimer createdAt={row.createdAt} />
+            )}
           </div>
           <div className="h-px w-full bg-border" />
         </div>
@@ -2682,8 +2717,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
+          ref={syncAnimationsToTimelineOrigin}
           className={cn(
-            "flex items-center gap-1.5 pt-0.5 font-system-ui",
+            "shimmer-group flex w-fit items-center gap-1.5 pt-0.5 font-system-ui",
             MUTED_LABEL_TEXT_CLASS_NAME,
           )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
@@ -2691,9 +2727,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <span aria-hidden="true" className="flex shrink-0">
             {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
           </span>
-          <span ref={syncAnimationsToTimelineOrigin} className="shimmer">
-            {workingLabel}
-          </span>
+          <span>{workingLabel}</span>
         </div>
       )}
 
@@ -3662,3 +3696,42 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     />
   );
 });
+
+// An answered agent question: the question as a left bubble and the submitted
+// answer as a right bubble, both dashed so they read as part of the agent's run.
+function UserInputExchange(props: {
+  items: ReadonlyArray<WorkLogUserInputExchangeItem>;
+  chatTypographyStyle: CSSProperties;
+  answerTypographyStyle: CSSProperties;
+  labelStyle: CSSProperties;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 py-0.5">
+      {props.items.map((item) => (
+        <div key={item.id} className="flex min-w-0 flex-col gap-2">
+          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-start")}>
+            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+              {item.header}
+            </p>
+            <p className="whitespace-pre-wrap break-words" style={props.chatTypographyStyle}>
+              {item.question}
+            </p>
+            {item.options.length > 0 ? (
+              <p className="text-muted-foreground" style={props.labelStyle}>
+                {item.options.join(" · ")}
+              </p>
+            ) : null}
+          </div>
+          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-end")}>
+            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+              Answer
+            </p>
+            <p className="whitespace-pre-wrap break-words" style={props.answerTypographyStyle}>
+              {item.answer ?? "No answer"}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

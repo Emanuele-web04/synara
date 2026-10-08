@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -35,6 +35,7 @@
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@opencode-ai/sdk": "1.18.31",
+    "@opencode/client": "2.0.25",
     "@peculiar/x509": "2.1.0",
     "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",

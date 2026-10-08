@@ -4,6 +4,7 @@ import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
 
 import {
   areSidebarSearchThreadListsEqual,
+  buildSidebarSearchServerThreadMatches,
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
@@ -193,6 +194,32 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(typed[0]?.id, "switch-space-work");
   });
 
+  it("matches command words across labels and keywords without admitting partial queries", () => {
+    const commands: SidebarSearchAction[] = [
+      { id: "go-inbox", label: "Go to Inbox", description: "Open Inbox.", keywords: ["navigate"] },
+      { id: "go-kanban", label: "Go to Kanban", description: "Open Kanban.", keywords: ["board"] },
+      {
+        id: "new-automation",
+        label: "New automation",
+        description: "Schedule a recurring task.",
+        keywords: ["create"],
+      },
+    ];
+    assert.deepEqual(
+      matchSidebarSearchActions(commands, "go inbox").map((action) => action.id),
+      ["go-inbox"],
+    );
+    assert.deepEqual(
+      matchSidebarSearchActions(commands, "kanban board").map((action) => action.id),
+      ["go-kanban"],
+    );
+    assert.deepEqual(
+      matchSidebarSearchActions(commands, "create automation").map((action) => action.id),
+      ["new-automation"],
+    );
+    assert.deepEqual(matchSidebarSearchActions(commands, "go missing"), []);
+  });
+
   it("matches themes by query relevance", () => {
     const result = matchSidebarSearchThemes(themes, "dark");
 
@@ -287,6 +314,78 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(result[0]?.thread.id, "thread-alpha-compose-prompt");
     assert.equal(result[0]?.matchKind, "title");
     assert.equal(result[0]?.messageMatchCount, 2);
+  });
+
+  it("uses server hits for threads whose messages are not loaded", () => {
+    const unloaded = threads.map((thread) => ({ ...thread, messages: [] }));
+    const serverMatches = new Map([
+      [
+        "thread-beta-settings",
+        { excerpt: "Settings page should expose desktop notification toggles.", matchCount: 3 },
+      ],
+    ]);
+
+    assert.deepEqual(matchSidebarSearchThreads(unloaded, "desktop notification"), []);
+    const result = matchSidebarSearchThreads(unloaded, "desktop notification", 8, serverMatches);
+
+    assert.equal(result[0]?.thread.id, "thread-beta-settings");
+    assert.equal(result[0]?.matchKind, "message");
+    assert.equal(result[0]?.messageMatchCount, 3);
+    assert.include(result[0]?.snippet ?? "", "desktop notification toggles");
+  });
+
+  it("does not apply local server hits to a remote chat with the same id", () => {
+    const local = { ...threads[0]!, messages: [] };
+    const remote = { ...local, host: { environmentId: "other-mac", name: "Other Mac" } };
+    const matches = new Map([[local.id, { excerpt: "unique persisted phrase", matchCount: 1 }]]);
+    const results = matchSidebarSearchThreads(
+      [local, remote],
+      "unique persisted phrase",
+      8,
+      matches,
+    );
+    assert.lengthOf(results, 1);
+    assert.isUndefined(results[0]?.thread.host);
+  });
+
+  it("keeps a server hit whose excerpt misses some query tokens", () => {
+    const unloaded = threads.map((thread) => ({ ...thread, messages: [] }));
+    const serverMatches = new Map([
+      ["thread-beta-settings", { excerpt: "...expose desktop toggles", matchCount: 1 }],
+    ]);
+
+    const result = matchSidebarSearchThreads(unloaded, "desktop rollout", 8, serverMatches);
+
+    assert.equal(result[0]?.thread.id, "thread-beta-settings");
+    assert.equal(result[0]?.matchKind, "message");
+  });
+});
+
+describe("buildSidebarSearchServerThreadMatches", () => {
+  const result = {
+    query: "desk",
+    matches: [
+      { threadId: "thread-a", excerpt: "desktop notifications", matchCount: 1 },
+      { threadId: "thread-b", excerpt: "standing desk", matchCount: 2 },
+    ],
+  };
+
+  it("keeps every hit for the current query", () => {
+    assert.deepEqual(
+      [...buildSidebarSearchServerThreadMatches(result, " Desk ").keys()],
+      ["thread-a", "thread-b"],
+    );
+  });
+
+  it("keeps only hits whose excerpt matches a newer query", () => {
+    assert.deepEqual(
+      [...buildSidebarSearchServerThreadMatches(result, "desktop").keys()],
+      ["thread-a"],
+    );
+  });
+
+  it("returns an empty map without a response", () => {
+    assert.equal(buildSidebarSearchServerThreadMatches(undefined, "desk").size, 0);
   });
 });
 

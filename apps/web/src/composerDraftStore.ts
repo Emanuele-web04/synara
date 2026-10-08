@@ -19,6 +19,7 @@ import {
   COMPOSER_DRAFT_STORAGE_KEY,
   COMPOSER_DRAFT_STORAGE_VERSION,
   composerThreadDraftIsPending,
+  composerThreadDraftPreviewText,
   selectComposerThreadDraft,
   selectThreadIdsWithPendingDraft,
   type ComposerDraftStoreState,
@@ -134,6 +135,13 @@ export function useThreadHasPendingDraft(threadId: ThreadId): boolean {
     const draft = state.draftsByThreadId[threadId];
     return draft !== undefined && composerThreadDraftIsPending(draft);
   });
+}
+
+/** Short excerpt of the chat's unsent prompt, or null when it has no draft text. */
+export function useThreadDraftPreviewText(threadId: ThreadId): string | null {
+  return useComposerDraftStore((state) =>
+    composerThreadDraftPreviewText(state.draftsByThreadId[threadId]),
+  );
 }
 
 /**

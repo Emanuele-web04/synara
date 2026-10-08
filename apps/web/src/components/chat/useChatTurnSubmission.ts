@@ -1,5 +1,6 @@
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
+import { projectFoldersSessionIssue } from "@synara/shared/projectFolders";
 import {
   prepareComputerPermissionGuide,
   readLocalComputerPermissionBridge,
@@ -605,6 +606,19 @@ export function useChatTurnSubmission({
           type: "error",
           title: sendProviderAvailability.unavailableReason,
         });
+        return false;
+      }
+      // The server refuses these chats too; stopping here explains why and avoids
+      // creating a worktree the turn would never use.
+      const projectFolderIssue =
+        (activeProject.additionalFolders?.length ?? 0) > 0
+          ? projectFoldersSessionIssue({
+              provider: selectedModelSelectionForSend.provider,
+              worktree: envModeForSend === "worktree",
+            })
+          : null;
+      if (projectFolderIssue !== null) {
+        toastManager.add({ type: "error", title: projectFolderIssue });
         return false;
       }
       if (hasPendingCacheReview()) return false;
