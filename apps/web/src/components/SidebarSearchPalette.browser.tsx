@@ -11,9 +11,10 @@ import type { SidebarSearchThread } from "./SidebarSearchPalette.logic";
 import type { ThreadImportTarget } from "../lib/threadImport";
 
 const searchThreads = vi.hoisted(() => vi.fn());
+const searchEntries = vi.hoisted(() => vi.fn());
 vi.mock("~/nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/nativeApi")>()),
-  readNativeApi: () => ({ orchestration: { searchThreads } }),
+  readNativeApi: () => ({ orchestration: { searchThreads }, projects: { searchEntries } }),
 }));
 
 const thread: SidebarSearchThread = {
@@ -86,6 +87,34 @@ it("announces no results when nothing matches", async () => {
   await page.getByPlaceholder("Search chats or run a command").fill("zzzzunmatchedzzzz");
   await expect.element(page.getByRole("status")).toHaveTextContent("No results");
   expect(page.getByRole("option").length).toBe(0);
+});
+
+it("searches active project files and opens the selected file", async () => {
+  searchEntries.mockResolvedValue({
+    entries: [{ path: "src/auth/session.ts", kind: "file" }],
+    truncated: false,
+  });
+  const onOpenFile = vi.fn();
+  const { onOpenChange } = await renderPalette(thread, {
+    activeProjectCwd: "/workspace/project",
+    activeThreadId: thread.id,
+    onOpenFile,
+  });
+
+  await page.getByPlaceholder("Search chats or run a command").fill("session");
+  const result = page.getByRole("option", { name: /session.ts/ });
+  await expect.element(result).toBeVisible();
+  await expect.element(result).toHaveTextContent("src/auth");
+  await result.click();
+
+  expect(onOpenFile).toHaveBeenCalledWith("src/auth/session.ts");
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+  expect(searchEntries).toHaveBeenCalledWith({
+    cwd: "/workspace/project",
+    query: "session",
+    limit: 30,
+    kind: "file",
+  });
 });
 
 it("runs a space command and closes the palette", async () => {
