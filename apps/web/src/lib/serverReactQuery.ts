@@ -198,12 +198,20 @@ export async function reconcileServerProviderStatuses(
         staleTime: 0,
       }));
   const hydratedConfig = await loadConfig();
-  const latestProviders =
-    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.providers ?? snapshot.providers;
-  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => ({
-    ...(current ?? hydratedConfig),
-    providers: latestProviders,
-  }));
+  const latestSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient) ?? snapshot;
+  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
+    // Hydration and another cache writer may both know about a newer probe.
+    // Keep stream membership, but choose the freshest status for each instance.
+    const reconciledProviders = mergeProviderStatusSnapshots(
+      current?.providers,
+      mergeProviderStatusSnapshots(hydratedConfig.providers, latestSnapshot.providers),
+    );
+    latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+      ...latestSnapshot,
+      providers: reconciledProviders,
+    });
+    return { ...(current ?? hydratedConfig), providers: reconciledProviders };
+  });
 }
 
 /**

@@ -44,6 +44,88 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
 }
 
 describe("server provider status reconciliation", () => {
+  it("keeps a newer ready status returned by initial config hydration", async () => {
+    const queryClient = new QueryClient();
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+    } satisfies ServerProviderStatus;
+
+    await reconcileServerProviderStatuses(queryClient, [warningStatus], {
+      loadConfig: async () => makeServerConfig([READY_CODEX_STATUS]),
+    });
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      READY_CODEX_STATUS,
+    ]);
+  });
+
+  it("keeps a genuinely newer failure returned by initial config hydration", async () => {
+    const queryClient = new QueryClient();
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:42:00.000Z",
+    } satisfies ServerProviderStatus;
+
+    await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS], {
+      loadConfig: async () => makeServerConfig([warningStatus]),
+    });
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      warningStatus,
+    ]);
+  });
+
+  it("keeps a newer config written while initial hydration was in flight", async () => {
+    const queryClient = new QueryClient();
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+    } satisfies ServerProviderStatus;
+    const newerStatus = {
+      ...READY_CODEX_STATUS,
+      checkedAt: "2026-07-26T16:42:00.000Z",
+    } satisfies ServerProviderStatus;
+
+    await reconcileServerProviderStatuses(queryClient, [warningStatus], {
+      loadConfig: async () => {
+        queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([newerStatus]));
+        return makeServerConfig([READY_CODEX_STATUS]);
+      },
+    });
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      newerStatus,
+    ]);
+  });
+
+  it("remembers the hydrated status when the next reconnect returns stale config", async () => {
+    const queryClient = new QueryClient();
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+    } satisfies ServerProviderStatus;
+
+    await reconcileServerProviderStatuses(queryClient, [warningStatus], {
+      loadConfig: async () => makeServerConfig([READY_CODEX_STATUS]),
+    });
+    await refreshServerConfigAfterTransportOpen(queryClient, {
+      loadConfig: async () => makeServerConfig([warningStatus]),
+    });
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      READY_CODEX_STATUS,
+    ]);
+  });
+
   it("keeps the newest provider snapshot when hydration overlaps multiple events", async () => {
     const queryClient = new QueryClient();
     let resolveConfig!: (config: ServerConfig) => void;
