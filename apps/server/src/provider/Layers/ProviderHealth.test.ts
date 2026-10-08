@@ -1104,6 +1104,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           Layer.provideMerge(
             ServerSettingsService.layerTest({
               ...allProvidersDisabledSettings,
+              // This race test only exercises refresh serialization. Keep it hermetic so
+              // provider-maintenance advisory lookups cannot consume the test deadline.
+              enableProviderUpdateChecks: false,
               providers: {
                 ...allProvidersDisabledSettings.providers,
                 codex: { enabled: true },
