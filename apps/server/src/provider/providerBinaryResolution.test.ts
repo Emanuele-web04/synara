@@ -69,11 +69,15 @@ describe("resolveWindowsLocalAppDataBinary", () => {
       env: { LOCALAPPDATA: directory },
       pathExists: () => true,
     };
-    expect(resolveWindowsLocalAppDataBinary(paths, { ...options, isExecutable: () => false })).toBeUndefined();
-    expect(resolveWindowsLocalAppDataBinary(paths, {
-      ...options,
-      isExecutable: (path) => path === candidate,
-    })).toBe(candidate);
+    expect(
+      resolveWindowsLocalAppDataBinary(paths, { ...options, isExecutable: () => false }),
+    ).toBeUndefined();
+    expect(
+      resolveWindowsLocalAppDataBinary(paths, {
+        ...options,
+        isExecutable: (path) => path === candidate,
+      }),
+    ).toBe(candidate);
   });
 });
 
