@@ -405,6 +405,7 @@ function makeFakeCodexAdapter(
         sessions.delete(threadId);
       }),
   );
+  const renewAgentGatewayCredential = vi.fn((_threadId: ThreadId) => Effect.succeed(false));
 
   const listSessions = vi.fn(
     (): Effect.Effect<ReadonlyArray<ProviderSession>> =>
@@ -482,6 +483,7 @@ function makeFakeCodexAdapter(
     respondToRequest,
     respondToUserInput,
     stopSession,
+    renewAgentGatewayCredential,
     listSessions,
     hasSession,
     readThread,
@@ -529,6 +531,7 @@ function makeFakeCodexAdapter(
     respondToRequest,
     respondToUserInput,
     stopSession,
+    renewAgentGatewayCredential,
     listSessions,
     hasSession,
     readThread,
@@ -3379,14 +3382,18 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect(
-    "retires A's runtime before admitting B while allowing background tasks to finish",
-    () =>
+  it.effect.each([false, true])(
+    "renews or replaces A before admitting B, after background tasks finish (reuse=%s)",
+    (reuse) =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;
         const directory = yield* ProviderSessionDirectory;
         const threadId = asThreadId("thread-terminal-gateway-credential-rotation");
         const turnA = asTurnId(`turn-${threadId}`);
+        routing.codex.renewAgentGatewayCredential.mockImplementationOnce(() =>
+          Effect.succeed(reuse),
+        );
+        const renewalsBefore = routing.codex.renewAgentGatewayCredential.mock.calls.length;
 
         yield* provider.startSession(threadId, {
           provider: "codex",
@@ -3458,6 +3465,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB);
         assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB);
         assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB);
+        assert.equal(routing.codex.renewAgentGatewayCredential.mock.calls.length, renewalsBefore);
 
         routing.codex.emit({
           type: "task.updated",
@@ -3470,10 +3478,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
         });
         yield* Fiber.join(turnB);
 
-        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB + 1);
-        assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB + 1);
+        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB + (reuse ? 0 : 1));
+        assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB + (reuse ? 0 : 1));
         assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB + 1);
         const recoveredBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        if (reuse) assert.equal(recoveredBinding?.lifecycleGeneration, lifecycleGeneration);
         assert.equal(
           asRuntimePayloadRecord(recoveredBinding?.runtimePayload)
             .agentGatewayCredentialRotationRequired,
