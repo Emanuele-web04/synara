@@ -555,20 +555,9 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
-    const ompRoles = ompDynamicModelsQuery.data?.roles ?? [];
-    if (ompRoles.length > 0) {
-      const roleOptions: ProviderModelOption[] = ompRoles.map((role) => ({
-        slug: `role:${role.name}`,
-        name: role.name.replace(/[-_]/g, " "),
-        upstreamProviderName: "Roles",
-        upstreamProviderId: "roles",
-        role:
-          role.thinkingLevel !== undefined
-            ? { name: role.name, model: role.model, thinkingLevel: role.thinkingLevel }
-            : { name: role.name, model: role.model },
-      }));
-      result.omp = [...roleOptions, ...result.omp];
-    }
+    // OMP modelRoles describe internal sub-agent routing. They remain part of
+    // discovery for the ACP/runtime path, but are not user-selectable models
+    // and must never become `role:*` entries in the composer catalog.
     // Terminal OMP discovery failure: drop the hint placeholder but keep
     // user-configured custom models — the picker still renders the
     // discovery error line above whatever options remain.
