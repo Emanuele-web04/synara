@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import { cursorPromptUsageSnapshot, stampCursorTerminalEventInstance } from "./CursorAdapter.ts";
+import { makeAcpTokenUsageEvent } from "../acp/AcpCoreRuntimeEvents.ts";
 
 describe("CursorAdapter terminal event identity", () => {
   it("keeps the stopped account identity after the thread is rebound to another account", () => {
@@ -35,6 +36,23 @@ describe("CursorAdapter terminal event identity", () => {
 });
 
 describe("CursorAdapter ACP usage", () => {
+  it("keeps the native session identity on token events for session-scoped accounting", () => {
+    const event = makeAcpTokenUsageEvent({
+      stamp: {
+        eventId: EventId.makeUnsafe("cursor-usage-event"),
+        createdAt: "2026-10-08T00:00:00.000Z",
+      },
+      provider: "cursor",
+      threadId: ThreadId.makeUnsafe("cursor-thread"),
+      turnId: undefined,
+      providerRefs: { providerThreadId: "cursor-native-session" },
+      usage: { usedTokens: 0, totalProcessedTokens: 12 },
+      rawPayload: {},
+    });
+
+    expect(event.providerRefs).toEqual({ providerThreadId: "cursor-native-session" });
+  });
+
   it("projects cumulative PromptResponse usage into profile token accounting", () => {
     expect(
       cursorPromptUsageSnapshot({

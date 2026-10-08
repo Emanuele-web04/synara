@@ -282,6 +282,13 @@ interface CursorSessionContext {
   stopped: boolean;
 }
 
+function cursorNativeSessionRefs(
+  ctx: CursorSessionContext,
+): ProviderRuntimeEvent["providerRefs"] | undefined {
+  const sessionId = parseCursorResume(ctx.session.resumeCursor)?.sessionId;
+  return sessionId === undefined ? undefined : { providerThreadId: sessionId };
+}
+
 function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boolean {
   if (ctx.activeTurnId !== turnId) {
     return false;
@@ -1223,6 +1230,9 @@ export function makeCursorAdapter(
                         provider: PROVIDER,
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
+                        ...(cursorNativeSessionRefs(ctx)
+                          ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                          : {}),
                         usage: event.usage,
                         rawPayload: event.rawPayload,
                       }),
@@ -1501,6 +1511,9 @@ export function makeCursorAdapter(
                       provider: PROVIDER,
                       threadId: input.threadId,
                       turnId,
+                      ...(cursorNativeSessionRefs(ctx)
+                        ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                        : {}),
                       usage: promptUsage,
                       rawPayload: result,
                     }),

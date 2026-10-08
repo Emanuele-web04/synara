@@ -394,14 +394,17 @@ function buildContextWindowActivityPayload(
   // Stamp the emitting provider so token stats can attribute usage to the
   // provider that actually processed the turn, not the thread's persisted
   // model selection (which can drift, e.g. across future per-turn providers).
+  const providerThreadId = event.providerRefs?.providerThreadId;
+  const usageSessionId =
+    providerThreadId === undefined
+      ? undefined
+      : event.provider === "cursor"
+        ? providerThreadId
+        : `${providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`;
   return toActivityPayload({
     ...usage,
     provider: event.provider,
-    ...(event.providerRefs?.providerThreadId
-      ? {
-          usageSessionId: `${event.providerRefs.providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`,
-        }
-      : {}),
+    ...(usageSessionId !== undefined ? { usageSessionId } : {}),
   });
 }
 
