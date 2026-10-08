@@ -27,6 +27,7 @@ vi.mock("electron", () => ({
   BrowserWindow: class {},
   clipboard: { writeImage: vi.fn(), writeText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn() },
+  nativeTheme: { shouldUseDarkColors: false },
   session: {
     fromPartition: () => browserSession,
   },

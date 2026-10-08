@@ -9,6 +9,7 @@ import {
   BrowserWindow,
   clipboard,
   nativeImage,
+  nativeTheme,
   session as electronSession,
   webContents as electronWebContents,
   WebContentsView,
@@ -2925,6 +2926,9 @@ export class DesktopBrowserManager {
           : {}),
       },
     });
+    // Suspended tabs reload on activation. Without an opaque backdrop the view
+    // shows black until the page paints, which reads as a broken tab switch.
+    view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff");
     const runtime: LiveTabRuntime = {
       key: buildRuntimeKey(threadId, tabId),
       threadId,
