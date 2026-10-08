@@ -65,6 +65,7 @@ import {
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
   resolveActivityScope,
+  resolveActivityThreadReadAt,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
   type ActivityGroupMode,
@@ -270,17 +271,19 @@ export function ActivityThreadRow({
             <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
-            {isWorktree ? (
-              <WorktreeIcon
-                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                aria-label="Worktree"
-              />
-            ) : null}
-            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
+              {isWorktree ? (
+                <span className="inline-flex size-5 shrink-0 items-center justify-center">
+                  <WorktreeIcon
+                    className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                    aria-label="Worktree"
+                  />
+                </span>
+              ) : null}
               {pr ? (
                 <PrStateChip
                   pr={pr}
-                  className="[&_svg]:size-2.5"
+                  className="min-h-5 min-w-5 justify-center [&_svg]:size-3"
                   onOpen={(event) => onOpenPullRequest(event, pr)}
                 />
               ) : null}
@@ -598,8 +601,8 @@ export function SidebarActivityView({
   onReturnSnoozedThread: (threadId: ThreadId) => void;
   onToggleThreadPinned: (threadId: ThreadId) => void;
   onArchiveThread: (threadId: ThreadId) => void;
-  /** Records a completion as seen (the classic sidebar's markThreadVisited). */
-  onMarkThreadRead: (threadId: ThreadId, completedAt?: string) => void;
+  /** Records a completion or snooze reminder as seen (the classic sidebar's markThreadVisited). */
+  onMarkThreadRead: (threadId: ThreadId, readAt?: string) => void;
   /** Double-click a row (the classic sidebar's rename gesture). */
   onRenameThread: (threadId: ThreadId) => void;
   /** Touch/pen double-tap fallback for the same rename gesture. */
@@ -801,7 +804,7 @@ export function SidebarActivityView({
 
   const markAllRead = () => {
     for (const thread of unreadThreads) {
-      onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
+      onMarkThreadRead(thread.id, resolveActivityThreadReadAt(thread));
     }
   };
 
@@ -832,7 +835,7 @@ export function SidebarActivityView({
       onOpen={() => onOpenThread(thread.id)}
       onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
       onSetSettled={(settled) => {
-        if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
+        if (settled) onMarkThreadRead(thread.id, resolveActivityThreadReadAt(thread));
         onSetThreadSettled(thread.id, settled);
       }}
       onReturnSnoozed={() => onReturnSnoozedThread(thread.id)}

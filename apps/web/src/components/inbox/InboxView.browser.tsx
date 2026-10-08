@@ -11,6 +11,7 @@ import {
 import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { useStore } from "~/store";
 import type { SidebarThreadSummary } from "~/types";
 
 const fixture = vi.hoisted(() => ({
@@ -109,5 +110,38 @@ it("loads the Stable Inbox without offering or requesting Beta to-dos", async ()
   } finally {
     await view.unmount();
     client.clear();
+  }
+});
+
+it("reads a chat back from snooze at its reminder with Mark all read", async () => {
+  const returned = {
+    id: "inbox-returned",
+    projectId: "inbox-project",
+    title: "Back from snooze",
+    modelSelection: { provider: "codex" },
+    latestTurn: { state: "completed", completedAt: "2026-08-02T10:00:00.000Z" },
+    lastVisitedAt: "2026-08-02T11:00:00.000Z",
+    snoozedUntil: null,
+    snoozeReminderAt: "2026-08-02T12:00:00.000Z",
+  } as unknown as SidebarThreadSummary;
+  const markThreadVisited = vi.spyOn(useStore.getState(), "markThreadVisited");
+  fixture.activity.mockReturnValue({ visibleNonGroupThreads: [returned] });
+  fixture.getRecap.mockRejectedValue({ code: "FEATURE_UNAVAILABLE" });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = await render(
+    <QueryClientProvider client={client}>
+      <InboxView />
+    </QueryClientProvider>,
+  );
+  try {
+    await view.getByRole("button", { name: "Mark all read", exact: true }).click();
+    expect(markThreadVisited).toHaveBeenCalledExactlyOnceWith(
+      returned.id,
+      returned.snoozeReminderAt,
+    );
+  } finally {
+    await view.unmount();
+    client.clear();
+    markThreadVisited.mockRestore();
   }
 });

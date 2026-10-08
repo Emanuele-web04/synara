@@ -10,6 +10,8 @@ import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
 // Layer: Orchestration provider reactor
 
 import { isDeepStrictEqual } from "node:util";
+import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
+import { makeKeyedLock } from "../../provider/keyedLock.ts";
 
 import {
   type ChatAttachment,
@@ -21,6 +23,7 @@ import {
   type ModelSelection,
   MessageId,
   type OrchestrationEvent,
+  OrchestrationEventType,
   type OrchestrationRegenerateThreadTitleResult,
   PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -80,6 +83,10 @@ import {
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
+import {
+  buildProjectFoldersPreamble,
+  projectFoldersSessionIssue,
+} from "@synara/shared/projectFolders";
 
 import {
   checkpointRefForThreadMessageStart,
@@ -138,6 +145,7 @@ import { ProjectionPendingInteractionRepository } from "../../persistence/Servic
 import {
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
+  providerThreadProcessedConsumerName,
   type ProviderBlockingDeliveryEvidence,
 } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
@@ -170,10 +178,11 @@ import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
-import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
+import { HubOutputReactor } from "../Services/HubOutputReactor.ts";
 import {
   isClaimedProviderIntent,
   isProviderIntentEvent,
+  isProviderIntentEventType,
   isProviderSideEffectIntent,
   isQuarantineExemptProviderIntent,
   isReplaySafeClaimedProviderIntent,
@@ -181,7 +190,10 @@ import {
 } from "../providerIntentClassification.ts";
 import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
+import { makeKeyedSingleFlightCache } from "@synara/shared/KeyedSingleFlightCache";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
+
+const providerIntentEventTypes = OrchestrationEventType.literals.filter(isProviderIntentEventType);
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
 type ProviderQueueDrainEvent = Extract<
@@ -591,6 +603,18 @@ const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
+const PRE_TURN_BASELINE_TIMEOUT = Duration.seconds(5);
+const GATEWAY_OPERATION_COMPLETION_NEGATIVE_CACHE_TTL = Duration.seconds(30);
+
+/** Operator override stays finite; test/factory options take precedence. */
+export function resolvePreTurnBaselineTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number(env.SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS?.trim());
+  const timeoutMs =
+    Number.isFinite(parsed) && parsed > 0 ? parsed : Duration.toMillis(PRE_TURN_BASELINE_TIMEOUT);
+  return Math.min(30_000, Math.max(1_000, timeoutMs));
+}
+const PRE_TURN_BASELINE_REF_PROBE_TIMEOUT = Duration.seconds(1);
+const PROVIDER_CACHE_RESPONSE_TIMEOUT = Duration.minutes(15);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
@@ -841,10 +865,18 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 export interface ProviderCommandReactorLiveOptions {
   readonly commandEventTimeout?: Duration.Duration;
+  readonly preTurnBaselineTimeout?: Duration.Duration;
+  readonly cacheResponseTimeout?: Duration.Duration;
+  readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
+  readonly gatewayOperationCompletionNegativeCacheTtl?: Duration.Duration;
 }
 
 interface ProviderCommandReactorConfigShape {
   readonly commandEventTimeout: Duration.Duration;
+  readonly preTurnBaselineTimeout: Duration.Duration;
+  readonly cacheResponseTimeout: Duration.Duration;
+  readonly gatewayOperationCompletionWaitTimeout: Duration.Duration;
+  readonly gatewayOperationCompletionNegativeCacheTtl: Duration.Duration;
 }
 
 class ProviderCommandReactorConfig extends ServiceMap.Service<
@@ -853,7 +885,13 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
 >()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
 
 const make = Effect.gen(function* () {
-  const { commandEventTimeout } = yield* ProviderCommandReactorConfig;
+  const {
+    commandEventTimeout,
+    preTurnBaselineTimeout,
+    cacheResponseTimeout,
+    gatewayOperationCompletionWaitTimeout,
+    gatewayOperationCompletionNegativeCacheTtl,
+  } = yield* ProviderCommandReactorConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const deliveryRepository = yield* OrchestrationEventDeliveryRepository;
   const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
@@ -870,7 +908,7 @@ const make = Effect.gen(function* () {
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
   const checkpointStore = yield* CheckpointStore;
-  const studioOutputReactor = yield* StudioOutputReactor;
+  const hubOutputReactor = yield* HubOutputReactor;
   const git = yield* GitCore;
   const gatewayOperations = yield* AgentGatewayOperationRepository;
   // Captured at build like the rest of the reactor's services: the command
@@ -881,7 +919,17 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettings = yield* ServerSettingsService;
 
-  const waitForGatewayOperationCompletion = Effect.fnUntraced(function* (operationId: string) {
+  // All children share one poll and warning for their creating operation. A
+  // failed wait cannot authorize a rename; a short negative TTL deduplicates
+  // a burst while allowing a later durable completion to authorize new work.
+  const gatewayCompletionWaits = yield* makeKeyedSingleFlightCache<boolean, never>({
+    maxEntries: 256,
+    ttlMs: (completed) =>
+      completed
+        ? Number.POSITIVE_INFINITY
+        : Duration.toMillis(gatewayOperationCompletionNegativeCacheTtl),
+  });
+  const readGatewayOperationCompletion = Effect.fnUntraced(function* (operationId: string) {
     const completed = yield* Effect.gen(function* () {
       while (true) {
         const operation = yield* gatewayOperations
@@ -905,7 +953,7 @@ const make = Effect.gen(function* () {
         }
         yield* Effect.sleep(Duration.millis(100));
       }
-    }).pipe(Effect.timeoutOption(GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT));
+    }).pipe(Effect.timeoutOption(gatewayOperationCompletionWaitTimeout));
     if (Option.isNone(completed)) {
       yield* Effect.logWarning(
         "provider command reactor timed out waiting for creating gateway operation; skipping worktree branch rename",
@@ -915,6 +963,8 @@ const make = Effect.gen(function* () {
     }
     return completed.value;
   });
+  const waitForGatewayOperationCompletion = (operationId: string) =>
+    gatewayCompletionWaits.get(operationId, readGatewayOperationCompletion(operationId));
   const managedAttachments = yield* ManagedAttachmentRepository;
   const serverConfig = yield* ServerConfig;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -922,7 +972,7 @@ const make = Effect.gen(function* () {
     timeToLive: HANDLED_TURN_START_KEY_TTL,
     lookup: () => Effect.succeed(true),
   });
-  const deliverySourceLock = yield* Semaphore.make(1);
+  const deliveryThreadLock = makeKeyedLock<string>();
   const pendingClaudeCacheResponses = new Map<
     number,
     {
@@ -1667,8 +1717,68 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
-  const resolveProviderSessionThread = (threadId: ThreadId) =>
-    resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
+  const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const projected = yield* resolveProviderSessionThreadFromProjection(
+      projectionSnapshotQuery,
+      threadId,
+    );
+    if (
+      projected !== null &&
+      (projected.id !== threadId ||
+        (!projected.parentThreadId && !threadId.startsWith("subagent:")))
+    )
+      return projected;
+
+    // A committed intent can precede its shell projection. Keep provider calls
+    // and their owner locks on the same committed identity during that gap.
+    // Query failures propagate; only an absent/unresolved shell uses hot state.
+    const threads = (yield* orchestrationEngine.getReadModel()).threads;
+    const thread = projected ?? threads.find((entry) => entry.id === threadId) ?? null;
+    if (thread?.parentThreadId) {
+      const parent =
+        Option.getOrNull(
+          yield* projectionSnapshotQuery.getThreadShellById(thread.parentThreadId),
+        ) ?? threads.find((entry) => entry.id === thread.parentThreadId);
+      if (parent !== undefined && parent !== null) return parent;
+      return yield* Effect.die(
+        new Error(`Provider session parent ${thread.parentThreadId} is missing for ${threadId}`),
+      );
+    }
+    if (threadId.startsWith("subagent:")) {
+      const parent =
+        Option.getOrNull(
+          yield* projectionSnapshotQuery.findSyntheticSubagentParentThread(threadId),
+        ) ??
+        threads
+          .filter(
+            (entry) => entry.deletedAt === null && threadId.startsWith(`subagent:${entry.id}:`),
+          )
+          .toSorted((a, b) => b.id.length - a.id.length)[0];
+      if (parent !== undefined && parent !== null) return parent;
+      return yield* Effect.die(new Error(`Provider session owner is missing for ${threadId}`));
+    }
+    return thread;
+  });
+
+  // Provider lifecycle effects on a child share its parent's session. A fresh
+  // native fork additionally operates on its source session until it is bound.
+  const resolveProviderOperationOwner = Effect.fnUntraced(function* (threadId: string) {
+    const providerThread = yield* resolveProviderSessionThread(ThreadId.makeUnsafe(threadId));
+    if (providerThread?.forkSourceThreadId) {
+      // A projected starting session can be optimistic. Native presence, not
+      // that placeholder, determines whether ensureSession may fork the source.
+      const active = (yield* providerService.listSessions()).some(
+        (session) => session.threadId === providerThread.id,
+      );
+      if (!active || !hasBoundProviderSession(providerThread.session)) {
+        return (
+          (yield* resolveProviderSessionThread(providerThread.forkSourceThreadId))?.id ??
+          providerThread.forkSourceThreadId
+        );
+      }
+    }
+    return providerThread?.id ?? threadId;
+  });
 
   const withProviderSessionLease = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
     resolveProviderSessionThread(threadId).pipe(
@@ -2110,6 +2220,34 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
     }
+    // Multi-folder projects grant their extra folders natively; refuse the chats that
+    // could not honor them rather than silently dropping folders.
+    const workspaceProject = yield* projectionSnapshotQuery
+      .getProjectShellById(thread.projectId)
+      .pipe(
+        Effect.mapError(
+          () =>
+            new ProviderAdapterValidationError({
+              provider: preferredProvider,
+              operation: "thread.turn.start",
+              issue: "Could not load the project's folder access configuration. Retry the turn.",
+            }),
+        ),
+      );
+    const additionalDirectories = Option.getOrUndefined(workspaceProject)?.additionalFolders ?? [];
+    if (additionalDirectories.length > 0) {
+      const folderIssue = projectFoldersSessionIssue({
+        provider: preferredProvider,
+        worktree: workspaceState !== "local",
+      });
+      if (folderIssue !== null) {
+        return yield* new ProviderAdapterValidationError({
+          provider: preferredProvider,
+          operation: "thread.turn.start",
+          issue: folderIssue,
+        });
+      }
+    }
     // A group coordinator must not stall its turn on interactive approval for
     // the Synara group tools — the gateway authorizes every call server-side
     // anyway. File edits, shell, and every non-Synara tool still ask.
@@ -2135,6 +2273,7 @@ const make = Effect.gen(function* () {
       threadId,
       providerInstanceId: desiredProviderInstanceId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
       modelSelection: desiredRoutedModelSelection,
       providerOptions: resolvedProviderOptions,
       ...(options?.enableComputerControl !== undefined
@@ -2310,7 +2449,7 @@ const make = Effect.gen(function* () {
       // the runtime, never the projection: terminal-driven drains dispatch
       // the queued turn before the projector clears the session row, so a
       // projected running turn here is stale, not live.
-      if (
+      const computerControlOnlyChange =
         computerControlChanged &&
         !runtimeModeChanged &&
         !providerChanged &&
@@ -2318,18 +2457,18 @@ const make = Effect.gen(function* () {
         !providerOptionsChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !autoApproveSynaraToolsChanged &&
-        (yield* hasLiveProviderTurn(threadId))
-      ) {
-        return {
-          activeSessionBeforeEnsure,
-          activeSession: reusableSession,
-          nativeResumeSucceeded: false,
-          nativeResumeFailed: false,
-          nativeSessionRestarted: false,
-          computerControlRestartDeferred: true,
-          forkComputerControl: undefined,
-        };
+        !autoApproveSynaraToolsChanged;
+      const deferComputerControlRestart = {
+        activeSessionBeforeEnsure,
+        activeSession: reusableSession,
+        nativeResumeSucceeded: false,
+        nativeResumeFailed: false,
+        nativeSessionRestarted: false,
+        computerControlRestartDeferred: true,
+        forkComputerControl: undefined,
+      };
+      if (computerControlOnlyChange && (yield* hasLiveProviderTurn(threadId))) {
+        return deferComputerControlRestart;
       }
 
       if (currentProvider === "claudeAgent" && reusableSession.activeTurnId != null) {
@@ -2386,7 +2525,28 @@ const make = Effect.gen(function* () {
         resumeCursor,
         (workspaceChanged || providerChanged || shouldRestartForModelChange) &&
           shouldRegisterContextBootstrap,
+      ).pipe(
+        // The live-turn check above sees only turns. The adapter also refuses
+        // while background tasks, approvals or questions are open, before it
+        // touches the runtime. Switching Computer off can wait for that work
+        // like it waits for a turn; switching it on cannot, because the turn
+        // would run without the tools it asked for.
+        Effect.catchIf(
+          (error): error is ProviderAdapterValidationError =>
+            computerControlOnlyChange &&
+            requestedComputerControl === false &&
+            error instanceof ProviderAdapterValidationError &&
+            error.operation === "session/reconfigure",
+          (error) =>
+            Effect.logInfo("provider command reactor deferred computer-control restart", {
+              threadId,
+              issue: error.issue,
+            }).pipe(Effect.as(undefined)),
+        ),
       );
+      if (restartedOutcome === undefined) {
+        return deferComputerControlRestart;
+      }
       const restartedSession = restartedOutcome.session;
       if (
         shouldRegisterContextBootstrap &&
@@ -2786,11 +2946,23 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const projectContext = yield* (
+    const projectContextPacket = yield* (
       Option.isSome(projectAgentService)
         ? projectAgentService.value.formatContextPacketForTurn(input.threadId)
         : Effect.succeed("")
     ).pipe(Effect.catch(() => Effect.succeed("")));
+    // A multi-folder project lists its folders as ambient context too, so every input
+    // budget below already reserves room for it.
+    const threadProject = yield* resolveThreadWorkspaceProject(thread);
+    const projectFoldersPreamble = threadProject
+      ? buildProjectFoldersPreamble({
+          primaryFolder: threadProject.workspaceRoot,
+          additionalFolders: threadProject.additionalFolders ?? [],
+        })
+      : null;
+    const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]
+      .filter((block) => block.trim().length > 0)
+      .join("\n\n");
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
@@ -3422,55 +3594,153 @@ const make = Effect.gen(function* () {
           : providerService.sendTurn(turnInput);
       });
 
+    let baselineFailure: string | undefined;
+    let checkpointPreparation: "captured" | "not-applicable" | "unavailable" = "unavailable";
+    let hubPreparation: "completed" | "not-applicable" | "unavailable" = "unavailable";
+    let checkpointCaptureCwd: string | undefined;
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
+        checkpointPreparation = "not-applicable";
         return;
       }
 
       const currentThread = yield* resolveThread(input.threadId);
       if (!currentThread) {
+        checkpointPreparation = "not-applicable";
         return;
       }
 
       const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
       if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
+        checkpointPreparation = "not-applicable";
         return;
       }
 
+      checkpointCaptureCwd = cwd;
       // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not early provider edits. skipIfExists keeps
-      // a backup baseline from CheckpointReactor as the first-writer winner.
-      yield* checkpointStore.captureCheckpoint({
+      // the user's submit moment, not early provider edits. This hook is the
+      // sole source capturer; reactors may only alias refs already captured.
+      // Lease acquisition is inside capturePreTurnBaselines' bounded effect.
+      yield* turnCheckpointCoordinator.withWorkspaceLease(
         cwd,
-        checkpointRef: checkpointRefForThreadMessageStart(
-          input.threadId,
-          MessageId.makeUnsafe(input.messageId),
-        ),
-        skipIfExists: true,
-      });
+        checkpointStore.captureCheckpoint({
+          cwd,
+          checkpointRef: checkpointRefForThreadMessageStart(
+            input.threadId,
+            MessageId.makeUnsafe(input.messageId),
+          ),
+          skipIfExists: true,
+        }),
+      );
+      checkpointPreparation = "captured";
     }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to capture provider turn start checkpoint", {
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        baselineFailure = [baselineFailure, Cause.pretty(cause)].filter(Boolean).join("\n");
+        return Effect.logWarning("failed to capture provider turn start checkpoint", {
           threadId: input.threadId,
           messageId: input.messageId,
           cause: Cause.pretty(cause),
-        }),
-      ),
+        });
+      }),
     );
 
-    // Both Git and non-Git Studio baselines must finish before provider execution
-    // starts. Otherwise a fast command can write a file while the baseline scan is
-    // still running and make that output look unchanged at turn completion.
+    // Both owners stop before provider execution begins. The timeout interrupts
+    // their work and awaits cleanup, so a skipped baseline cannot publish late.
     const capturePreTurnBaselines = Effect.all(
       [
         captureMessageStartCheckpoint,
-        studioOutputReactor.captureBaselineBeforeTurn(input.threadId),
+        hubOutputReactor.captureBaselineBeforeTurn(input.threadId).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              if (result.status === "failed") {
+                baselineFailure = [baselineFailure, result.detail].filter(Boolean).join("\n");
+              } else {
+                hubPreparation = result.status;
+              }
+            }),
+          ),
+        ),
       ],
       { concurrency: 2, discard: true },
+    ).pipe(
+      Effect.timeoutOption(preTurnBaselineTimeout),
+      Effect.flatMap((captured) =>
+        Effect.gen(function* () {
+          // Publication may finish before interruption prevents the assignment above.
+          // Probe only this message's exact ref after capture cleanup; never recapture.
+          // Bound the new read independently so a queued probe cannot reopen the wait.
+          if (checkpointPreparation === "unavailable" && checkpointCaptureCwd !== undefined) {
+            const existing = yield* checkpointStore
+              .hasCheckpointRef({
+                cwd: checkpointCaptureCwd,
+                checkpointRef: checkpointRefForThreadMessageStart(
+                  input.threadId,
+                  MessageId.makeUnsafe(input.messageId),
+                ),
+              })
+              .pipe(
+                Effect.timeoutOption(PRE_TURN_BASELINE_REF_PROBE_TIMEOUT),
+                Effect.catch(() => Effect.succeed(Option.none())),
+              );
+            if (Option.isSome(existing) && existing.value) checkpointPreparation = "captured";
+          }
+          const checkpointUnavailable = checkpointPreparation === "unavailable";
+          const hubUnavailable = hubPreparation === "unavailable";
+          if (!checkpointUnavailable && !hubUnavailable) return;
+          if (Option.isSome(captured) && baselineFailure === undefined) return;
+          const unavailable =
+            checkpointUnavailable && hubUnavailable
+              ? "checkpoint and Hub baselines"
+              : checkpointUnavailable
+                ? "checkpoint baseline"
+                : "Hub baseline";
+          const consequence =
+            checkpointUnavailable && hubUnavailable
+              ? "Checkpoint diff, file undo and Hub output indexing may be unavailable."
+              : checkpointUnavailable
+                ? `Checkpoint diff and file undo may be unavailable. ${hubPreparation === "completed" ? "Completed Hub preparation is preserved." : "Hub preparation is not applicable to this workspace."}`
+                : `Hub output indexing may be unavailable. ${checkpointPreparation === "captured" ? "The independently prepared checkpoint is preserved." : "Checkpoint capture is not applicable to this workspace."}`;
+          const detail = `${Option.isNone(captured) ? `The pre-turn ${unavailable} did not finish within ${Duration.toMillis(preTurnBaselineTimeout)}ms.` : `The pre-turn ${unavailable} could not be prepared.`} The turn continued. ${consequence}${baselineFailure === undefined ? "" : ` ${baselineFailure}`}`;
+          return yield* (
+            hubPreparation !== "unavailable"
+              ? Effect.void
+              : hubOutputReactor.cancelPendingTurnBaseline(input.threadId)
+          ).pipe(
+            Effect.andThen(
+              orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId: serverCommandId("checkpoint-baseline-skipped"),
+                threadId: input.threadId,
+                activity: {
+                  id: EventId.makeUnsafe(
+                    `checkpoint-baseline-skipped:${checkpointRefForThreadMessageStart(input.threadId, MessageId.makeUnsafe(input.messageId))}`,
+                  ),
+                  tone: "info",
+                  kind: "checkpoint.baseline.skipped",
+                  summary: `Turn continued without ${unavailable}`,
+                  payload: {
+                    detail,
+                    messageId: input.messageId,
+                    checkpointBaseline: checkpointPreparation,
+                    // Keep the legacy key compatible with persisted activities.
+                    studioPreparation: hubPreparation,
+                  },
+                  turnId: null,
+                  createdAt: input.createdAt,
+                },
+                createdAt: input.createdAt,
+              }),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("failed to surface skipped pre-turn baseline", { error }),
+            ),
+            Effect.asVoid,
+          );
+        }),
+      ),
     );
-    const cancelPendingStudioBaseline = studioOutputReactor.cancelPendingTurnBaseline(
-      input.threadId,
-    );
+    const cancelPendingHubBaseline = hubOutputReactor.cancelPendingTurnBaseline(input.threadId);
     const priorTranscriptBootstrapRetiresOnAcceptedTurn =
       shouldBootstrapPriorTranscriptContext &&
       (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent);
@@ -3486,7 +3756,7 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           target: input.reviewTarget,
         })
-        .pipe(Effect.onError(() => cancelPendingStudioBaseline));
+        .pipe(Effect.onError(() => cancelPendingHubBaseline));
     } else if (input.dispatchMode === "steer") {
       if (input.claudeCompactionCancellation) {
         yield* cancelClaudeCompactionFromJournal(
@@ -3509,7 +3779,7 @@ const make = Effect.gen(function* () {
       yield* awaitClaudeCompactionPreparation(
         capturePreTurnBaselines,
         input.claudeCompactionCancellation,
-      ).pipe(Effect.onError(() => cancelPendingStudioBaseline));
+      ).pipe(Effect.onError(() => cancelPendingHubBaseline));
       const tracksDroidContextAcceptance =
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
@@ -3663,7 +3933,7 @@ const make = Effect.gen(function* () {
                 pendingContextBootstrapAttempts.delete(input.threadId);
               }
             });
-            yield* cancelPendingStudioBaseline;
+            yield* cancelPendingHubBaseline;
           }),
         ),
       );
@@ -4433,7 +4703,12 @@ const make = Effect.gen(function* () {
                               ? "starting"
                               : runtime.status,
                         activeTurnId: null,
-                        lastError: runtime.lastError ?? null,
+                        // The refused message never reached the provider, and its
+                        // turn-less failure activity stays out of the transcript.
+                        // The banner is the only place the user learns why.
+                        lastError: cancelledCompaction
+                          ? (runtime.lastError ?? null)
+                          : `Your message was not sent. ${failure.issue}`,
                         updatedAt: runtime.updatedAt,
                       },
                       expectedSession: {
@@ -7055,6 +7330,84 @@ const make = Effect.gen(function* () {
 
     const processOwner = `provider-command-reactor:${crypto.randomUUID()}`;
     let cursor = consumerState.value.lastAckedSequence;
+    // Source admission retains one durable range per thread, not one event
+    // per intent. A stalled thread cannot fill admission with its followers.
+    // The journal supplies FIFO payloads; only the earliest unsettled position
+    // of each bounded lane may fence the global acknowledgement prefix.
+    type ProviderSourceRange = {
+      readonly threadId: string;
+      readonly providerOwnerThreadId: string;
+      firstUnsettledSequence: number;
+      latestFence: number;
+      head: { readonly sequence: number; readonly priority: number } | undefined;
+    };
+    type ProviderSourceLane = {
+      readonly ownerThreadId: string;
+      readonly ranges: Map<string, ProviderSourceRange>;
+      priority: number;
+      reschedule: boolean;
+    };
+    // The slot budget counts logical ranges, including children sharing an owner.
+    const sourceLanes = new Map<string, ProviderSourceRange>();
+    const ownerLanes = new Map<string, ProviderSourceLane>();
+    const ownerAliases = new Map<string, { readonly ownerThreadId: string; users: number }>();
+    // A different lane can pin the global ACK below work already skipped here.
+    // Keep this quarantine fence separate from disposable runtime/session caches.
+    const quarantinedProcessedThrough = new Map<string, number>();
+    const intentPriority = (event: OrchestrationEvent) =>
+      isProviderIntentEvent(event) && isQuarantineExemptProviderIntent(event)
+        ? 0
+        : event.type === "thread.turn-start-requested"
+          ? 1
+          : 2;
+    const withOwnerLocks = <A, E, R>(owners: readonly string[], effect: Effect.Effect<A, E, R>) =>
+      [...new Set(owners)]
+        .toSorted()
+        .reduceRight((work, owner) => deliveryThreadLock.withLock(owner, work), effect);
+    const withDeliveryOwnerLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const providerOwner =
+          (yield* resolveProviderSessionThread(ThreadId.makeUnsafe(threadId)))?.id ?? threadId;
+        const operationOwner =
+          ownerAliases.get(providerOwner)?.ownerThreadId ??
+          (yield* resolveProviderOperationOwner(threadId));
+        return yield* withOwnerLocks([providerOwner, operationOwner], effect);
+      });
+    const readQuarantinedProcessedThrough = Effect.fnUntraced(function* (threadId: string) {
+      const cached = quarantinedProcessedThrough.get(threadId);
+      if (cached !== undefined) return Math.max(cursor, cached);
+      const state = yield* deliveryRepository.getConsumerState(
+        providerThreadProcessedConsumerName(threadId),
+      );
+      const through = Option.isSome(state) ? state.value.lastAckedSequence : 0;
+      // Cache absence too: ordinary traffic must not issue one SQL lookup per intent.
+      quarantinedProcessedThrough.set(threadId, through);
+      return Math.max(cursor, through);
+    });
+    const recordQuarantinedProcessed = Effect.fnUntraced(function* (event: OrchestrationEvent) {
+      if (!quarantinedProcessedThrough.has(event.aggregateId))
+        yield* readQuarantinedProcessedThrough(event.aggregateId);
+      if (
+        event.type !== "thread.deleted" &&
+        event.sequence <= (quarantinedProcessedThrough.get(event.aggregateId) ?? 0)
+      )
+        return;
+      if (
+        !(yield* deliveryRepository.recordThreadProcessedSequence({
+          threadId: event.aggregateId,
+          eventSequence: event.sequence,
+          updatedAt: new Date().toISOString(),
+        }))
+      )
+        return yield* Effect.die(
+          new Error(`Provider quarantine fence has no journal owner for event ${event.sequence}`),
+        );
+      if (event.type === "thread.deleted") quarantinedProcessedThrough.delete(event.aggregateId);
+      else quarantinedProcessedThrough.set(event.aggregateId, event.sequence);
+    });
+    const sourceLaneSlots = yield* Semaphore.make(256);
+    let admittedThroughSequence = cursor;
+    const cursorLock = yield* Semaphore.make(1);
     const refreshCursor = Effect.gen(function* () {
       const state = yield* deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER);
       if (Option.isSome(state)) cursor = Math.max(cursor, state.value.lastAckedSequence);
@@ -7070,13 +7423,80 @@ const make = Effect.gen(function* () {
       return advanced;
     });
 
-    const requireCursorAdvance = Effect.fnUntraced(function* (event: OrchestrationEvent) {
-      if (yield* advanceCursor(event)) return;
-      yield* refreshCursor;
-      if (cursor < event.sequence) {
-        return yield* Effect.die(
-          new Error(`Provider command cursor could not advance through event ${event.sequence}`),
+    const acknowledgementWake = yield* Queue.sliding<void>(1);
+    yield* Effect.addFinalizer(() => Queue.shutdown(acknowledgementWake));
+    let requestedAcknowledgement = 0;
+    let settledAcknowledgement = 0;
+    let acknowledgementIdle = yield* Deferred.make<void>();
+    yield* Deferred.succeed(acknowledgementIdle, undefined);
+    const requireCursorAdvance = Effect.fnUntraced(function* (
+      event: Pick<OrchestrationEvent, "sequence">,
+    ) {
+      // A normal source callback must not wait for the acknowledgement lock:
+      // the pump may be catching up a large prefix or waiting on persistence.
+      if (event.sequence > admittedThroughSequence) {
+        yield* cursorLock.withPermits(1)(
+          Effect.gen(function* () {
+            yield* refreshCursor;
+            if (cursor >= event.sequence) return;
+            return yield* Effect.die(new Error(`Unadmitted provider event ${event.sequence}`));
+          }),
         );
+      }
+      const nextIdle = yield* Deferred.make<void>();
+      yield* Effect.sync(() => {
+        if (requestedAcknowledgement === settledAcknowledgement) acknowledgementIdle = nextIdle;
+        requestedAcknowledgement += 1;
+        Queue.offerUnsafe(acknowledgementWake, undefined);
+      });
+    });
+    const drainAcknowledgements: Effect.Effect<void> = Effect.suspend(
+      function awaitAcknowledgements(): Effect.Effect<void> {
+        return Deferred.await(acknowledgementIdle).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              settledAcknowledgement >= requestedAcknowledgement
+                ? Effect.void
+                : awaitAcknowledgements(),
+            ),
+          ),
+        );
+      },
+    );
+    const advanceEligiblePrefix = Effect.gen(function* () {
+      while (true) {
+        const fullChunk = yield* cursorLock.withPermits(1)(
+          Effect.gen(function* () {
+            // Settlement belongs to lane readers. Source fast paths only wake
+            // this pump; neither telemetry nor an intermediate claim skips an intent.
+            let through = admittedThroughSequence;
+            for (const lane of sourceLanes.values()) {
+              through = Math.min(through, lane.firstUnsettledSequence - 1);
+            }
+            if (through <= cursor) return false;
+            let processed = 0;
+            yield* Stream.runForEach(
+              orchestrationEngine.readEventsThrough(cursor, through, 32),
+              (next) =>
+                Effect.gen(function* () {
+                  processed += 1;
+                  if (yield* advanceCursor(next)) return;
+                  yield* refreshCursor;
+                  if (cursor >= next.sequence) return;
+                  return yield* Effect.die(
+                    new Error(
+                      `Provider command cursor could not advance through event ${next.sequence}`,
+                    ),
+                  );
+                }),
+            );
+            // Count stored rows, not sequence numbers: deleted events can leave
+            // gaps, and an empty eligible range must not spin forever.
+            return processed === 32;
+          }),
+        );
+        if (!fullChunk) return;
+        yield* Effect.yieldNow;
       }
     });
 
@@ -7184,6 +7604,7 @@ const make = Effect.gen(function* () {
           );
         }
       }
+      yield* recordQuarantinedProcessed(input.event);
       yield* requireCursorAdvance(input.event);
     });
 
@@ -7196,6 +7617,10 @@ const make = Effect.gen(function* () {
         !(yield* isThreadQuarantined(event.payload.threadId))
       ) {
         return false;
+      }
+      if (event.sequence <= (yield* readQuarantinedProcessedThrough(event.aggregateId))) {
+        yield* requireCursorAdvance(event);
+        return true;
       }
       yield* Effect.logWarning("provider command skipped for quarantined thread", {
         eventType: event.type,
@@ -7241,6 +7666,7 @@ const make = Effect.gen(function* () {
           ),
         );
       }
+      yield* recordQuarantinedProcessed(event);
       yield* requireCursorAdvance(event);
       return true;
     });
@@ -7264,6 +7690,7 @@ const make = Effect.gen(function* () {
         }
         if (existing.value.state === "dead" || existing.value.state === "uncertain") {
           quarantinedThreads.add(threadId);
+          yield* recordQuarantinedProcessed(event);
           yield* requireCursorAdvance(event);
           return;
         }
@@ -7402,8 +7829,9 @@ const make = Effect.gen(function* () {
         const workerResult = yield* runBoundedProviderCall({
           label: `The provider command '${event.type}'`,
           // A cache choice owns a durable delivery outside the ordered source.
-          // Native compaction and its follow-up are not wall-clock failures.
-          timeout: cacheResponse ? Duration.infinity : commandEventTimeout,
+          // Native compaction and its follow-up get a longer finite deadline;
+          // a provider that never answers must still release its durable claim.
+          timeout: cacheResponse ? cacheResponseTimeout : commandEventTimeout,
           call:
             cacheResponse &&
             event.type === "thread.claude-cache-response-requested" &&
@@ -7573,7 +8001,8 @@ const make = Effect.gen(function* () {
       }
       if (
         event.type === "thread.claude-cache-response-requested" &&
-        event.payload.decision === "compact"
+        event.payload.decision === "compact" &&
+        !isRecoveringClaudeCompactions
       ) {
         const earlyTerminal = earlyClaudeCompactionTerminals.get(event.payload.threadId);
         earlyClaudeCompactionTerminals.delete(event.payload.threadId);
@@ -7604,6 +8033,26 @@ const make = Effect.gen(function* () {
 
     const processOrderedEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
       if (event.sequence <= cursor) return;
+      // Startup auto-heal must not resend already-skipped provider effects just
+      // because another thread held the global cursor below their private fence.
+      if (
+        isProviderIntentEvent(event) &&
+        isProviderSideEffectIntent(event) &&
+        !isQuarantineExemptProviderIntent(event) &&
+        event.sequence <= (yield* readQuarantinedProcessedThrough(event.aggregateId)) &&
+        Option.isNone(
+          yield* deliveryRepository.getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: event.sequence,
+          }),
+        )
+      ) {
+        // A fence proves this lane processed the source row, not completion of
+        // an asynchronous cache response. Existing deliveries must cross their
+        // durable state recovery boundary even while another lane pins ACK.
+        yield* requireCursorAdvance(event);
+        return;
+      }
       if (!isProviderIntentEvent(event)) {
         yield* requireCursorAdvance(event);
         return;
@@ -7635,23 +8084,47 @@ const make = Effect.gen(function* () {
       readonly threadId: string;
       readonly afterSequence: number;
     }) {
-      const replayThrough = cursor;
+      const replayThrough = yield* readQuarantinedProcessedThrough(input.threadId);
       if (replayThrough <= input.afterSequence) return;
-      yield* Stream.runForEach(
-        orchestrationEngine.readEventsThrough(input.afterSequence, replayThrough),
-        (event) => {
-          if (
-            !isProviderIntentEvent(event) ||
-            event.payload.threadId !== input.threadId ||
-            !isProviderSideEffectIntent(event)
-          ) {
-            return Effect.void;
-          }
-          return isClaimedProviderIntent(event)
-            ? processClaimedProviderIntentWithRecovery(event)
-            : processUnclaimedProviderIntent(event);
-        },
-      );
+      let after = input.afterSequence;
+      while (after < replayThrough) {
+        const page = yield* orchestrationEngine
+          .readThreadEventsThrough(
+            input.threadId,
+            after,
+            replayThrough,
+            providerIntentEventTypes,
+            32,
+          )
+          .pipe(Stream.runCollect);
+        if (page.length === 0) break;
+        yield* Effect.forEach(
+          page,
+          (event) => {
+            if (
+              !isProviderIntentEvent(event) ||
+              event.payload.threadId !== input.threadId ||
+              !isProviderSideEffectIntent(event)
+            ) {
+              return Effect.void;
+            }
+            return isClaimedProviderIntent(event)
+              ? processClaimedProviderIntentWithRecovery(event)
+              : processUnclaimedProviderIntent(event);
+          },
+          { discard: true },
+        );
+        after = page[page.length - 1]!.sequence;
+      }
+      if (
+        Option.isNone(
+          yield* deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: input.threadId,
+          }),
+        )
+      )
+        quarantinedProcessedThrough.delete(input.threadId);
     });
 
     const resumeRetryableDelivery = Effect.fnUntraced(function* (input: {
@@ -7685,161 +8158,166 @@ const make = Effect.gen(function* () {
       Effect.suspend(() => {
         let awaitCacheRetry: Effect.Effect<void, unknown> = Effect.void;
         return Effect.scoped(
-          deliverySourceLock
-            .withPermits(1)(
-              Effect.gen(function* () {
-                const reconciledAt = new Date().toISOString();
-                const delivery = yield* deliveryRepository.getDelivery({
-                  consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-                  eventSequence: input.eventSequence,
-                });
+          withDeliveryOwnerLock(
+            input.threadId,
+            Effect.gen(function* () {
+              const reconciledAt = new Date().toISOString();
+              const delivery = yield* deliveryRepository.getDelivery({
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: input.eventSequence,
+              });
+              if (
+                Option.isNone(delivery) ||
+                delivery.value.threadId !== input.threadId ||
+                delivery.value.state !== input.expectedState
+              )
+                return null;
+              const reconciledEvent = yield* readProviderIntentEvent(input.eventSequence);
+              const review =
+                reconciledEvent.type === "thread.claude-cache-response-requested"
+                  ? (yield* resolveThread(reconciledEvent.payload.threadId))?.claudeCacheReview
+                  : undefined;
+              const abandonsCompaction =
+                input.outcome === "abandon" &&
+                reconciledEvent.type === "thread.claude-cache-response-requested" &&
+                reconciledEvent.payload.decision === "compact" &&
+                review?.reviewId === reconciledEvent.payload.review.reviewId &&
+                review.compactionResponseEventSequence === input.eventSequence &&
+                review.compactionTurnId !== undefined;
+              if (abandonsCompaction) {
+                // Persist the hold before removing its delivery blocker. If the
+                // process exits between writes, startup can finish reconciliation.
+                yield* setClaudeCacheReview(
+                  reconciledEvent.payload.threadId,
+                  { ...review, status: "failed", error: LOST_CLAUDE_COMPACTION_ERROR },
+                  review.reviewId,
+                );
+              }
+              const reconciled = yield* deliveryRepository.reconcile({
+                reconciliationId: crypto.randomUUID(),
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: input.eventSequence,
+                threadId: input.threadId,
+                expectedState: input.expectedState,
+                outcome: input.outcome,
+                reconciledBy: input.reconciledBy,
+                ...(input.note === undefined ? {} : { note: input.note }),
+                reconciledAt,
+              });
+              if (Option.isNone(reconciled)) return null;
+
+              if (reconciledEvent.type === "thread.claude-cache-response-requested") {
+                const review = (yield* resolveThread(reconciledEvent.payload.threadId))
+                  ?.claudeCacheReview;
                 if (
-                  Option.isNone(delivery) ||
-                  delivery.value.threadId !== input.threadId ||
-                  delivery.value.state !== input.expectedState
-                )
-                  return null;
-                const reconciledEvent = yield* readProviderIntentEvent(input.eventSequence);
-                const review =
-                  reconciledEvent.type === "thread.claude-cache-response-requested"
-                    ? (yield* resolveThread(reconciledEvent.payload.threadId))?.claudeCacheReview
-                    : undefined;
-                const abandonsCompaction =
-                  input.outcome === "abandon" &&
-                  reconciledEvent.type === "thread.claude-cache-response-requested" &&
-                  reconciledEvent.payload.decision === "compact" &&
                   review?.reviewId === reconciledEvent.payload.review.reviewId &&
-                  review.compactionResponseEventSequence === input.eventSequence &&
-                  review.compactionTurnId !== undefined;
-                if (abandonsCompaction) {
-                  // Persist the hold before removing its delivery blocker. If the
-                  // process exits between writes, startup can finish reconciliation.
+                  !abandonsCompaction &&
+                  !(
+                    input.outcome === "accepted" &&
+                    reconciledEvent.payload.decision === "compact" &&
+                    review.compactionTurnId
+                  )
+                ) {
                   yield* setClaudeCacheReview(
                     reconciledEvent.payload.threadId,
-                    { ...review, status: "failed", error: LOST_CLAUDE_COMPACTION_ERROR },
+                    input.outcome === "safe_retry"
+                      ? { ...review, status: "responding", error: undefined }
+                      : null,
                     review.reviewId,
                   );
                 }
-                const reconciled = yield* deliveryRepository.reconcile({
-                  reconciliationId: crypto.randomUUID(),
+              }
+
+              if (input.outcome === "safe_retry") {
+                if (reconciledEvent.type === "thread.claude-cache-response-requested") {
+                  const previousWorker = pendingClaudeCacheResponses.get(input.eventSequence);
+                  if (previousWorker)
+                    yield* Deferred.await(previousWorker.settled).pipe(Effect.ignore);
+                  const settled = yield* Deferred.make<void, unknown>();
+                  awaitCacheRetry = Deferred.await(settled);
+                  yield* runClaudeCacheResponseDelivery(
+                    reconciledEvent,
+                    resumeRetryableDelivery(input).pipe(
+                      Effect.onExit((exit) => Deferred.done(settled, exit)),
+                    ),
+                  ).pipe(Scope.provide(providerIntentScope));
+                } else {
+                  yield* resumeRetryableDelivery(input);
+                }
+              } else {
+                quarantinedThreads.delete(input.threadId);
+                const currentReview = (yield* resolveThread(input.threadId))?.claudeCacheReview;
+                const revokedCompaction =
+                  reconciledEvent.type === "thread.claude-cache-response-requested" &&
+                  reconciledEvent.payload.decision === "compact" &&
+                  currentReview?.reviewId !== reconciledEvent.payload.review.reviewId;
+                // Settling a cancelled control is not permission to retry other
+                // sends that were rejected while this thread was quarantined.
+                if (!revokedCompaction) {
+                  yield* replayQuarantinedThreadSideEffects({
+                    threadId: input.threadId,
+                    afterSequence: input.eventSequence,
+                  });
+                }
+              }
+
+              return reconciledAt;
+            }),
+          ).pipe(
+            Effect.flatMap((reconciledAt) =>
+              Effect.gen(function* () {
+                if (reconciledAt === null) return null;
+                // The retry belongs to the reactor scope. Wait for its receipt outside
+                // the source permit so other chats and cancellation controls can run.
+                yield* awaitCacheRetry;
+                const finalDelivery = yield* deliveryRepository.getDelivery({
                   consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
                   eventSequence: input.eventSequence,
-                  threadId: input.threadId,
-                  expectedState: input.expectedState,
-                  outcome: input.outcome,
-                  reconciledBy: input.reconciledBy,
-                  ...(input.note === undefined ? {} : { note: input.note }),
-                  reconciledAt,
                 });
-                if (Option.isNone(reconciled)) return null;
-
-                if (reconciledEvent.type === "thread.claude-cache-response-requested") {
-                  const review = (yield* resolveThread(reconciledEvent.payload.threadId))
-                    ?.claudeCacheReview;
-                  if (
-                    review?.reviewId === reconciledEvent.payload.review.reviewId &&
-                    !abandonsCompaction &&
-                    !(
-                      input.outcome === "accepted" &&
-                      reconciledEvent.payload.decision === "compact" &&
-                      review.compactionTurnId
-                    )
-                  ) {
-                    yield* setClaudeCacheReview(
-                      reconciledEvent.payload.threadId,
-                      input.outcome === "safe_retry"
-                        ? { ...review, status: "responding", error: undefined }
-                        : null,
-                      review.reviewId,
-                    );
-                  }
+                if (Option.isNone(finalDelivery) || finalDelivery.value.state === "inflight") {
+                  return yield* Effect.die(
+                    new Error(
+                      `Provider delivery ${input.eventSequence} did not reach a reconciled state`,
+                    ),
+                  );
                 }
-
-                if (input.outcome === "safe_retry") {
-                  if (reconciledEvent.type === "thread.claude-cache-response-requested") {
-                    const previousWorker = pendingClaudeCacheResponses.get(input.eventSequence);
-                    if (previousWorker)
-                      yield* Deferred.await(previousWorker.settled).pipe(Effect.ignore);
-                    const settled = yield* Deferred.make<void, unknown>();
-                    awaitCacheRetry = Deferred.await(settled);
-                    yield* runClaudeCacheResponseDelivery(
-                      reconciledEvent,
-                      resumeRetryableDelivery(input).pipe(
-                        Effect.onExit((exit) => Deferred.done(settled, exit)),
-                      ),
-                    ).pipe(Scope.provide(providerIntentScope));
-                  } else {
-                    yield* resumeRetryableDelivery(input);
-                  }
-                } else {
-                  quarantinedThreads.delete(input.threadId);
-                  const currentReview = (yield* resolveThread(input.threadId))?.claudeCacheReview;
-                  const revokedCompaction =
-                    reconciledEvent.type === "thread.claude-cache-response-requested" &&
-                    reconciledEvent.payload.decision === "compact" &&
-                    currentReview?.reviewId !== reconciledEvent.payload.review.reviewId;
-                  // Settling a cancelled control is not permission to retry other
-                  // sends that were rejected while this thread was quarantined.
-                  if (!revokedCompaction) {
-                    yield* replayQuarantinedThreadSideEffects({
-                      threadId: input.threadId,
-                      afterSequence: input.eventSequence,
-                    });
-                  }
-                }
-
-                return reconciledAt;
+                return {
+                  eventSequence: input.eventSequence,
+                  threadId: input.threadId,
+                  outcome: input.outcome,
+                  state: finalDelivery.value.state,
+                  reconciledAt,
+                };
               }),
-            )
-            .pipe(
-              Effect.flatMap((reconciledAt) =>
-                Effect.gen(function* () {
-                  if (reconciledAt === null) return null;
-                  // The retry belongs to the reactor scope. Wait for its receipt outside
-                  // the source permit so other chats and cancellation controls can run.
-                  yield* awaitCacheRetry;
-                  const finalDelivery = yield* deliveryRepository.getDelivery({
-                    consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-                    eventSequence: input.eventSequence,
-                  });
-                  if (Option.isNone(finalDelivery) || finalDelivery.value.state === "inflight") {
-                    return yield* Effect.die(
-                      new Error(
-                        `Provider delivery ${input.eventSequence} did not reach a reconciled state`,
-                      ),
-                    );
-                  }
-                  return {
-                    eventSequence: input.eventSequence,
-                    threadId: input.threadId,
-                    outcome: input.outcome,
-                    state: finalDelivery.value.state,
-                    reconciledAt,
-                  };
-                }),
-              ),
             ),
+          ),
         );
       }) as ReturnType<ProviderCommandReactorShape["reconcileDelivery"]>;
 
     const countSkippedPrompts = (input: {
       readonly threadId: ThreadId;
       readonly afterSequence: number;
-    }) => {
-      if (cursor <= input.afterSequence) return Effect.succeed(0);
-      return orchestrationEngine.readEventsThrough(input.afterSequence, cursor).pipe(
-        Stream.runFold(
-          () => 0,
-          (count: number, event) =>
-            isProviderIntentEvent(event) &&
-            event.payload.threadId === input.threadId &&
-            (event.type === "thread.turn-start-requested" ||
-              event.type === "thread.message-edit-resend-requested")
-              ? count + 1
-              : count,
-        ),
-      );
-    };
+    }) =>
+      Effect.gen(function* () {
+        const through = yield* readQuarantinedProcessedThrough(input.threadId);
+        let after = input.afterSequence;
+        let count = 0;
+        while (after < through) {
+          const page = yield* orchestrationEngine
+            .readThreadEventsThrough(
+              input.threadId,
+              after,
+              through,
+              ["thread.turn-start-requested", "thread.message-edit-resend-requested"],
+              32,
+            )
+            .pipe(Stream.runCollect);
+          if (page.length === 0) break;
+          count += page.length;
+          after = page[page.length - 1]!.sequence;
+        }
+        return count;
+      });
 
     const isSettledQuitInterruptBlocker = Effect.fnUntraced(function* (
       blocker: ProviderBlockingDeliveryEvidence,
@@ -8052,40 +8530,311 @@ const make = Effect.gen(function* () {
     const retryableDeliveries = yield* deliveryRepository.listRetryableDeliveries(
       PROVIDER_COMMAND_REACTOR_CONSUMER,
     );
-    yield* deliverySourceLock.withPermits(1)(
-      Effect.forEach(
-        retryableDeliveries,
-        (delivery) =>
-          Effect.gen(function* () {
-            const event = yield* readProviderIntentEvent(delivery.eventSequence);
-            return yield* event.type === "thread.claude-cache-response-requested"
+    yield* Effect.forEach(
+      retryableDeliveries,
+      (delivery) =>
+        Effect.gen(function* () {
+          const event = yield* readProviderIntentEvent(delivery.eventSequence);
+          return yield* withDeliveryOwnerLock(
+            delivery.threadId,
+            event.type === "thread.claude-cache-response-requested"
               ? runClaudeCacheResponseDelivery(event, resumeRetryableDelivery(delivery))
-              : resumeRetryableDelivery(delivery);
-          }),
-        { discard: true },
-      ),
+              : resumeRetryableDelivery(delivery),
+          );
+        }),
+      { discard: true, concurrency: 4 },
     );
 
-    const processOrderedEventSerially = (event: OrchestrationEvent) =>
-      deliverySourceLock.withPermits(1)(
+    const processLaneEvent = (
+      event: OrchestrationEvent,
+      ownerThreadId: string,
+      providerOwnerThreadId: string,
+    ) =>
+      withOwnerLocks(
+        [ownerThreadId, providerOwnerThreadId],
         Effect.suspend(() =>
           event.sequence > cursor && event.type === "thread.claude-cache-response-requested"
             ? runClaudeCacheResponseDelivery(event, processOrderedEvent(event))
             : processOrderedEvent(event),
+        ).pipe(
+          Effect.tap(() =>
+            event.type === "thread.deleted" || quarantinedThreads.has(event.aggregateId)
+              ? recordQuarantinedProcessed(event)
+              : Effect.void,
+          ),
+          Effect.andThen(requireCursorAdvance(event)),
         ),
       );
+    const sourceFailure = yield* Deferred.make<never, Cause.Cause<unknown>>();
+    const stoppingLanes = yield* Deferred.make<void>();
+    let lanesStopping = false;
+    const stopProviderLanes = Effect.sync(() => {
+      lanesStopping = true;
+    }).pipe(Effect.andThen(Deferred.succeed(stoppingLanes, undefined)));
+    // One permanent consumer owns cursor IO. Wakeups coalesce, so neither
+    // event payloads nor one detached acknowledgement fiber per event accrue.
+    yield* Effect.forever(
+      Queue.take(acknowledgementWake).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const requested = requestedAcknowledgement;
+            yield* advanceEligiblePrefix;
+            const idle = yield* Effect.sync(() => {
+              settledAcknowledgement = Math.max(settledAcknowledgement, requested);
+              return settledAcknowledgement >= requestedAcknowledgement
+                ? acknowledgementIdle
+                : undefined;
+            });
+            if (idle !== undefined) yield* Deferred.succeed(idle, undefined);
+          }),
+        ),
+      ),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (Cause.hasInterruptsOnly(cause) && lanesStopping) return;
+          yield* Deferred.fail(sourceFailure, cause);
+          return yield* Effect.failCause(cause);
+        }),
+      ),
+      Effect.forkScoped,
+    );
+    const intentWorker = yield* makeKeyedDrainableWorker(
+      (lane: ProviderSourceLane) =>
+        Effect.gen(function* () {
+          lane.reschedule = false;
+          if (yield* Deferred.isDone(stoppingLanes)) return;
+          const processThreadRange = Effect.gen(function* () {
+            // Pages live only in this active quantum: <=32 retained payloads per
+            // worker. Between quanta every logical range keeps scalar head metadata.
+            // Owner FIFO may inspect up to 256 logical heads in a quantum;
+            // bounded payload retention does not imply a constant SQL query count.
+            const pages = new Map<ProviderSourceRange, OrchestrationEvent[]>();
+            let retained = 0;
+            let processed = 0;
+            const loadPage = Effect.fnUntraced(function* (
+              range: ProviderSourceRange,
+              headOnly = false,
+            ) {
+              const present = pages.get(range);
+              if (present && present.length > 0) return present;
+              if (retained >= 32) {
+                for (const [other, page] of pages) {
+                  if (other === range || page.length === 0) continue;
+                  retained -= page.length;
+                  pages.delete(other);
+                  break;
+                }
+              }
+              const through = range.latestFence;
+              const limit = headOnly
+                ? 1
+                : Math.min(32 - retained, Math.max(1, Math.floor(32 / lane.ranges.size)));
+              const page = Array.from(
+                yield* orchestrationEngine
+                  .readThreadEventsThrough(
+                    range.threadId,
+                    range.firstUnsettledSequence - 1,
+                    through,
+                    providerIntentEventTypes,
+                    limit,
+                  )
+                  .pipe(Stream.runCollect),
+              );
+              retained += page.length;
+              pages.set(range, page);
+              range.head = page[0]
+                ? { sequence: page[0].sequence, priority: intentPriority(page[0]) }
+                : undefined;
+              if (page.length === 0) {
+                const removed = yield* Effect.sync(() => {
+                  range.firstUnsettledSequence = Math.max(
+                    range.firstUnsettledSequence,
+                    through + 1,
+                  );
+                  if (range.firstUnsettledSequence <= range.latestFence) return false;
+                  lane.ranges.delete(range.threadId);
+                  sourceLanes.delete(range.threadId);
+                  const alias = ownerAliases.get(range.providerOwnerThreadId);
+                  if (alias !== undefined && --alias.users === 0)
+                    ownerAliases.delete(range.providerOwnerThreadId);
+                  return true;
+                });
+                if (removed) yield* sourceLaneSlots.release(1);
+              }
+              return page;
+            });
+            const resolveHead = Effect.fnUntraced(function* (headOnly = false) {
+              for (const range of lane.ranges.values()) {
+                if (range.head === undefined) yield* loadPage(range, headOnly);
+              }
+              let selected: ProviderSourceRange | undefined;
+              for (const range of lane.ranges.values()) {
+                if (
+                  range.head !== undefined &&
+                  (selected?.head === undefined || range.head.sequence < selected.head.sequence)
+                )
+                  selected = range;
+              }
+              return selected;
+            });
+            while (processed < 32) {
+              const range = yield* resolveHead();
+              if (range === undefined) break;
+              const page = yield* loadPage(range);
+              const event = page.shift();
+              if (event === undefined) continue;
+              retained -= 1;
+              yield* processLaneEvent(event, lane.ownerThreadId, range.providerOwnerThreadId);
+              yield* Effect.sync(() => {
+                range.firstUnsettledSequence = Math.max(
+                  range.firstUnsettledSequence,
+                  event.sequence + 1,
+                );
+                range.head = page[0]
+                  ? { sequence: page[0].sequence, priority: intentPriority(page[0]) }
+                  : undefined;
+              });
+              processed += 1;
+              yield* requireCursorAdvance(event);
+            }
+            const next = yield* resolveHead(true);
+            const finished = yield* Effect.sync(() => {
+              if (lane.ranges.size > 0) return false;
+              ownerLanes.delete(lane.ownerThreadId);
+              return true;
+            });
+            yield* requireCursorAdvance({ sequence: admittedThroughSequence });
+            if (finished) return;
+            lane.priority = next?.head?.priority ?? 2;
+            lane.reschedule = true;
+          });
+          yield* processThreadRange.pipe(
+            Effect.raceFirst(Deferred.await(stoppingLanes).pipe(Effect.andThen(Effect.interrupt))),
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                // Unfinished ranges stay behind the durable cursor for restart.
+                if (Cause.hasInterruptsOnly(cause) && (yield* Deferred.isDone(stoppingLanes)))
+                  return;
+                yield* Deferred.fail(sourceFailure, cause);
+                return yield* Effect.failCause(cause);
+              }),
+            ),
+          );
+        }),
+      {
+        key: (lane) => lane.ownerThreadId,
+        concurrency: 4,
+        capacity: 256,
+        // Only the next unsettled head determines priority. No continuation
+        // may overtake an earlier logical item within its own thread.
+        priority: (lane) => lane.priority,
+        shouldContinue: (lane) => lane.reschedule && !lanesStopping,
+      },
+    );
+    yield* Effect.addFinalizer(() =>
+      stopProviderLanes.pipe(
+        Effect.andThen(intentWorker.stop),
+        Effect.andThen(
+          Effect.sync(() => {
+            // Retained reconciliation callbacks must not keep a stopped source's
+            // ranges or aliases alive. Clear only after every worker has exited.
+            sourceLanes.clear();
+            ownerLanes.clear();
+            ownerAliases.clear();
+            quarantinedProcessedThrough.clear();
+          }),
+        ),
+      ),
+    );
+    const failOnSourceError = Deferred.await(sourceFailure).pipe(
+      Effect.catch((cause) => Effect.failCause(cause)),
+    );
+    const stopAfterSourceFailure = Effect.onExit((exit) =>
+      exit._tag === "Failure"
+        ? stopProviderLanes.pipe(Effect.andThen(intentWorker.stop))
+        : Effect.void,
+    );
+    const admitOrderedEvent = (event: OrchestrationEvent) =>
+      Effect.gen(function* () {
+        if (event.sequence <= admittedThroughSequence) return;
+        if (!isProviderIntentEvent(event)) {
+          admittedThroughSequence = event.sequence;
+          yield* requireCursorAdvance(event);
+          return;
+        }
+        const existing = sourceLanes.get(event.aggregateId);
+        if (existing !== undefined) {
+          existing.latestFence = event.sequence;
+          admittedThroughSequence = event.sequence;
+          return;
+        }
+        // Resolve once and pin the owner while this logical range is outstanding.
+        // Session binding changes cannot move an already-admitted FIFO item.
+        const providerOwnerThreadId =
+          (yield* resolveProviderSessionThread(ThreadId.makeUnsafe(event.aggregateId)))?.id ??
+          event.aggregateId;
+        const resolvedOperationOwner =
+          ownerAliases.get(providerOwnerThreadId)?.ownerThreadId ??
+          (yield* resolveProviderOperationOwner(event.aggregateId));
+        yield* sourceLaneSlots.take(1);
+        const alias = ownerAliases.get(providerOwnerThreadId);
+        const ownerThreadId = alias?.ownerThreadId ?? resolvedOperationOwner;
+        if (alias !== undefined) alias.users += 1;
+        else ownerAliases.set(providerOwnerThreadId, { ownerThreadId, users: 1 });
+        const range: ProviderSourceRange = {
+          threadId: event.aggregateId,
+          providerOwnerThreadId,
+          firstUnsettledSequence: event.sequence,
+          latestFence: event.sequence,
+          head: { sequence: event.sequence, priority: intentPriority(event) },
+        };
+        sourceLanes.set(range.threadId, range);
+        admittedThroughSequence = event.sequence;
+        const activeOwner = ownerLanes.get(ownerThreadId);
+        if (activeOwner !== undefined) {
+          activeOwner.ranges.set(range.threadId, range);
+          return;
+        }
+        const lane: ProviderSourceLane = {
+          ownerThreadId,
+          ranges: new Map([[range.threadId, range]]),
+          priority: intentPriority(event),
+          reschedule: false,
+        };
+        ownerLanes.set(ownerThreadId, lane);
+        if (!(yield* intentWorker.enqueue(lane))) {
+          return yield* Effect.die(new Error("Provider command lanes closed during admission"));
+        }
+      });
 
     const replayThrough = yield* orchestrationEngine.getEventHighWaterSequence;
+    // Startup recovery expects replay effects to settle before scanning pending
+    // compactions/goals; cross-thread execution remains bounded during replay.
+    // A failed lane must fail startup rather than leave a healthy-looking
+    // reactor whose durable source has already stopped.
     yield* Stream.runForEach(
       orchestrationEngine.readEventsThrough(cursor, replayThrough),
-      processOrderedEventSerially,
+      admitOrderedEvent,
+    ).pipe(
+      Effect.andThen(intentWorker.drain),
+      Effect.andThen(drainAcknowledgements),
+      Effect.raceFirst(failOnSourceError),
+      Effect.andThen(
+        Effect.gen(function* () {
+          if (yield* Deferred.isDone(sourceFailure)) yield* failOnSourceError;
+        }),
+      ),
+      stopAfterSourceFailure,
     );
-    yield* Stream.runForEach(liveEvents, processOrderedEventSerially).pipe(
+    yield* Stream.runForEach(liveEvents, admitOrderedEvent).pipe(
+      Effect.raceFirst(failOnSourceError),
       Effect.catchCause((cause) =>
         Effect.logError("provider command durable source stopped", {
           cause: Cause.pretty(cause),
         }).pipe(Effect.andThen(Effect.failCause(cause))),
       ),
+      stopAfterSourceFailure,
       Effect.forkScoped,
     );
   });
@@ -8383,11 +9132,34 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorLiveOptions) =>
-  Layer.effect(ProviderCommandReactor, make).pipe(
+export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorLiveOptions) => {
+  const preTurnBaselineTimeout =
+    options?.preTurnBaselineTimeout ?? Duration.millis(resolvePreTurnBaselineTimeoutMs());
+  const cacheResponseTimeout = options?.cacheResponseTimeout ?? PROVIDER_CACHE_RESPONSE_TIMEOUT;
+  const gatewayOperationCompletionWaitTimeout =
+    options?.gatewayOperationCompletionWaitTimeout ?? GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT;
+  const gatewayOperationCompletionNegativeCacheTtl =
+    options?.gatewayOperationCompletionNegativeCacheTtl ??
+    GATEWAY_OPERATION_COMPLETION_NEGATIVE_CACHE_TTL;
+  for (const [name, duration] of Object.entries({
+    preTurnBaselineTimeout,
+    cacheResponseTimeout,
+    gatewayOperationCompletionWaitTimeout,
+    gatewayOperationCompletionNegativeCacheTtl,
+  })) {
+    const timeoutMs = Duration.toMillis(duration);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new RangeError(`${name} must be positive and finite.`);
+    }
+  }
+  return Layer.effect(ProviderCommandReactor, make).pipe(
     Layer.provide(
       Layer.succeed(ProviderCommandReactorConfig, {
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,
+        preTurnBaselineTimeout,
+        cacheResponseTimeout,
+        gatewayOperationCompletionWaitTimeout,
+        gatewayOperationCompletionNegativeCacheTtl,
       }),
     ),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
@@ -8395,5 +9167,6 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
     Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
     Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
   );
+};
 
 export const ProviderCommandReactorLive = makeProviderCommandReactorLive();

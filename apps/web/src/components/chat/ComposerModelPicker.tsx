@@ -81,6 +81,7 @@ import {
 } from "./pickerPanelStyles";
 import {
   AVAILABLE_PROVIDER_OPTIONS,
+  findProviderStatusForInstance,
   type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
   resolveProviderModelLabel,
@@ -213,6 +214,14 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const usableStarredModels = starredModels.filter((entry) => {
     if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
     const instanceId = starredModelInstanceId(entry);
+    const status = findProviderStatusForInstance({
+      providers: props.providers,
+      provider: entry.provider,
+      instanceId,
+    });
+    if (status?.enabled === false) return false;
+    if (knownInstances?.some((instance) => instance.instanceId === instanceId && !instance.enabled))
+      return false;
     if (lockedProvider !== null && instanceId !== activeInstanceId) return false;
     const bound = props.boundProviderInstance;
     if (bound && entry.provider === bound.provider && instanceId !== bound.instanceId) {
@@ -302,11 +311,17 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     hiddenProviders: props.hiddenProviders,
     providerOrder: props.providerOrder,
   }).filter((option) => lockedProvider === null || option.value === lockedProvider);
-  // The composer's own provider keeps its tab even when none of its accounts can run,
-  // so the tab can say why instead of the picker listing models that will not start.
-  const activeProviderOption = AVAILABLE_PROVIDER_OPTIONS.find(
-    (option) => option.value === activeProvider,
-  );
+  // An enabled provider awaiting setup keeps its tab; a disabled provider is
+  // managed through the recovery list in Settings instead.
+  const activeProviderStatus = findProviderStatusForInstance({
+    providers: props.providers,
+    provider: activeProvider,
+    instanceId: activeInstanceId,
+  });
+  const activeProviderOption =
+    activeProviderStatus?.enabled === false
+      ? undefined
+      : AVAILABLE_PROVIDER_OPTIONS.find((option) => option.value === activeProvider);
   const providerTabs = resolveComposerModelPickerProviderTabs({
     options:
       activeProviderOption &&
@@ -334,20 +349,16 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       setTab(
         usableStarredModels.length > 0 && !activeProviderTab?.setupMessage
           ? STARRED_TAB
-          : activeInstanceId,
+          : (activeProviderTab?.instanceId ?? providerTabs[0]?.instanceId ?? STARRED_TAB),
       );
       setQuery("");
     }
   }
 
-  // The account a provider tab lists; a tab that is no longer offered falls back to the
-  // composer's own account.
+  // A tab that is no longer offered falls back to the first visible account.
   const openProviderTab = providerTabs.find((providerTab) => providerTab.instanceId === tab);
-  const tabAccount =
-    tab === STARRED_TAB
-      ? null
-      : (openProviderTab ?? { provider: activeProvider, instanceId: activeInstanceId });
-  const setupMessage = tab === STARRED_TAB ? null : (openProviderTab?.setupMessage ?? null);
+  const tabAccount = tab === STARRED_TAB ? null : (openProviderTab ?? providerTabs[0] ?? null);
+  const setupMessage = tab === STARRED_TAB ? null : (tabAccount?.setupMessage ?? null);
   const openProviderSettings = () => {
     setMenuOpen(false);
     appHistory.push("/settings?section=providers");
@@ -560,7 +571,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         {/* -m-1 bleeds over the popup body padding so headers/dividers run edge to edge. */}
         <div className="-m-1 flex flex-col">
           <ComposerModelPickerTabs
-            tab={tab}
+            tab={tab === STARRED_TAB ? STARRED_TAB : (tabAccount?.instanceId ?? STARRED_TAB)}
             providerTabs={providerTabs}
             onTabChange={setTab}
             onAddProviders={lockedProvider === null ? openProviderSettings : undefined}

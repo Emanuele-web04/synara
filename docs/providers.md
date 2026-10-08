@@ -36,6 +36,17 @@ Synara provides the shared operating surface around each provider:
 - Provider handoffs
 - Usage information where the provider exposes it
 
+Commands remain ordered within a task, while independent tasks use separate delivery lanes
+with bounded concurrency. A command receipt confirms durable acceptance; provider execution
+continues in the background. After restart, Synara resumes from the settled event prefix and
+the delivery journal, preserving completed deliveries and requiring reconciliation for ambiguous
+provider calls. A task waiting on a slow provider operation does not hold another task's lane.
+
+Checkpoint capture and undo remain ordered for tasks sharing the same physical workspace.
+Slow Git work in one workspace leaves other workspaces free to progress. Recovery preserves
+completed captures and undo outcomes; an interrupted operation with an uncertain outcome
+is reported for inspection instead of automatically changing the workspace again.
+
 Claude's readable reasoning appears as compact progress text between tool actions while it works.
 Open a reasoning row to read its available detail. This text comes from the running provider;
 Synara does not make another model request to generate it. Models that do not return readable
@@ -48,8 +59,46 @@ These rows use events already supplied by the provider and do not trigger extra 
 The Environment panel's Usage section shows enabled accounts for the active provider, with a
 separate row and detail menu for each account. Providers with multiple accounts show account names
 beside the provider label. Settings → Usage uses the same account-specific snapshots.
+In Settings → Usage → Sidebar, select up to two enabled accounts for the rail rings, including
+two accounts of the same provider (for example, personal and work Claude accounts). Each ring's
+hover card identifies the account and shows its own usage. The rings use the same account color
+dots as the model picker. Existing provider selections keep
+their default accounts selected. Temporarily disabled accounts keep their saved selection;
+only the first two available selected accounts appear in the rail.
 Usage checks follow each account's configured credentials; unassigned thread telemetry and
 provider-wide local totals are not used as a fallback for an individual account.
+
+## Keep Synara responsive
+
+Settings → Agent providers → **Keep Synara responsive** is enabled by default in Stable and Beta.
+Synara gives newly launched local agent processes a moderate CPU scheduling priority:
+nice +5 on macOS/Linux and Below Normal on Windows. Their children normally inherit it,
+including tests, compilers, and browsers. Processes that explicitly change their own priority
+can override that inheritance. This does not use background I/O or network throttling.
+Resolved native macOS/Linux executables and WSL workspaces adjust nice before executing the agent, so its initial threads
+and immediate children inherit the lower priority. Native launches preserve an already lower
+inherited priority. Windows applies Below Normal immediately after spawn; a launcher or `.cmd`
+shim that creates a child before that call can race the adjustment. The Effect runtime applies
+it when its spawner returns, after spawn-event and stream setup; that window remains a Windows
+limitation. Changing only the Windows launcher would not change WSL guest scheduling.
+
+The setting is read at process launch; already running agents and their children are not
+reprioritized. Restart existing sessions after changing it to apply consistently. Providers
+that launch a process per turn pick it up on the next launch. Pi's SDK runs inside the server,
+so its supervised shell commands receive the priority selected when that session started.
+An externally managed OpenCode server must be configured by its operator.
+
+The Synara server, terminals opened by the user, Git checkpoint helpers, and brief version,
+authentication, and dedicated Codex/Claude model-list probes keep their existing priority.
+ACP/OpenCode discovery uses the shared agent process/server and retains its agent priority.
+Auxiliary Codex/Claude model-generation processes use the agent priority. Priority changes are best effort: an OS
+failure is logged and the agent launch continues. Lower CPU priority improves scheduling
+under contention; it does not impose a CPU quota or guarantee response times under overload.
+Unresolved native executables launch directly to preserve startup errors such as ENOENT;
+if that direct launch succeeds, priority is adjusted after spawn as a best-effort fallback.
+If the native system `/bin/sh` is unavailable, Synara logs a warning and uses the same
+direct-spawn fallback. These fallback paths can race initial threads/children; actual shell-less
+Linux images and WSL guests without `/bin/sh` have not been verified.
 
 ## What remains provider-owned
 
@@ -82,6 +131,17 @@ provider feature is supported through Synara.
    installed CLI version, account, subscription, and provider configuration.
 5. **Start a small test task.** Use a harmless objective in a test repository before relying on a
    newly configured provider for important work.
+
+## Enable or disable providers
+
+In **Settings → Providers → Enabled providers**, turn a provider off to hide it
+from provider and model pickers, ordering, CLI tools, custom model settings, usage
+options, and the plugin library. Its accounts, saved configuration, custom models,
+starred models, and existing threads are preserved; running turns are not interrupted.
+
+Expand **Disabled providers** in the same section to turn it back on. Its saved
+preferences return, including its position and whether it was hidden from the
+provider picker. Enabling a provider does not install its CLI or sign it in.
 
 ## Models and effort options
 
@@ -201,6 +261,10 @@ session restoration, and automatic compaction. Resuming a saved conversation res
 it does not restore an expired server-side cache. An unchanged prefix can still be reused after a
 process restart while its cache remains valid. Leaving a process open does not refresh that cache.
 
+A fresh Claude session becomes resumable only after the runtime emits conversation output.
+If a handoff session needs a settings restart before its first message, Synara starts another
+fresh session and keeps the prior transcript queued for that message.
+
 The main-conversation cache policy applies to both CLI and SDK turns. The effective lifetime depends
 on the account and Claude settings; Synara does not force a lifetime or change the selected model,
 effort, or compaction threshold to reduce usage. See Anthropic's
@@ -224,6 +288,13 @@ Creating a hold and marking its session ready is one atomic operation: a stop, a
 or rollback recorded after the original request prevents a delayed cache check from restoring it.
 
 This check also covers long pauses in an existing process and model changes on the next send.
+Selecting a different model or provider from an existing Claude conversation shows a dismissible
+tip above the composer, using the same strip as Auto-fix CI. It appears only for a pending
+selection before sending, including follow-ups during an active turn. It disappears once the
+composer accepts the message for sending or queues it, or when switching back. A blocked
+handoff keeps it available for a later send. The wording distinguishes Claude model changes
+from context transferred to another provider; it does not predict a percentage of the
+subscription allowance or require confirmation. A pending large-context review takes precedence.
 A warm observation for the previous model cannot bypass the review for a different requested model;
 checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
 Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
@@ -362,6 +433,21 @@ same account as the login. Imported directories and explicit environment values 
 These account environments block ambient API credentials; explicitly configured secrets remain
 available to managed sessions and the selected login process, and are never written into terminal shims.
 
+On macOS, managed Claude accounts keep the system home and username for Keychain access.
+Separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` values isolate each account;
+login, chats, health checks, and usage use the same resolved account directories. Explicit home
+overrides remain supported, but a private home can select a different macOS Keychain. Prefer the
+system home with separate config and secure-storage directories. Existing credential files are
+left in place. If an older sign-in saved credentials under `unknown` or in a private Keychain,
+sign in again from the account settings; Synara does not copy or delete Keychain entries.
+
+Claude's account status says **Signed in locally** when the CLI reports stored authentication.
+This is not a guarantee that Anthropic will accept the next request. Usage authentication errors
+are shown on the matching account in Settings. Inference-only tokens, including tokens from
+`claude setup-token`, can run chats without the `user:profile` scope required for live usage.
+Tokens injected inside wrapper scripts are not visible to the usage reader.
+Restoring an account's appearance and enablement defaults preserves its display name.
+
 **Cancel / close** stops the login process and deletes its terminal history. Sign-in output is kept
 in memory while the window is active and is not persisted as a terminal log. Cancellation does not
 log out or remove credentials already saved by the provider. Closing errors stay visible and can be
@@ -499,3 +585,11 @@ they have no authenticated creating task.
 Delivery survives restart and duplicate events. An archived or deleted creator
 is not reopened; the result remains in the child and delivery is recorded as
 unavailable. Delivery is checked approximately once per second.
+
+## Keep Awake on macOS
+
+Keep Awake is off by default. On supported macOS hosts, Settings can keep the
+computer awake either for the server lifetime or while an agent turn is running.
+The server owns a `caffeinate -dims -w <server PID>` assertion; switching off or
+shutting down terminates it, deleting the last active thread releases its agent
+lease, and the native PID watch releases it if the server crashes. It does not change persistent macOS power settings.

@@ -159,6 +159,29 @@ function readStoredStars(): unknown {
 }
 
 describe("ComposerModelPicker", () => {
+  it("hides a globally disabled provider's tabs and starred models, including the active default", async () => {
+    const screen = await mountPicker(
+      {
+        providers: [
+          { ...readyProvider("codex"), enabled: false, available: false },
+          readyProvider("claudeAgent"),
+        ],
+        providerInstances: CODEX_ACCOUNTS.map((instance) => ({ ...instance, enabled: false })),
+      },
+      undefined,
+      [{ provider: "codex", model: GPT_5_5, effort: null, fastMode: null, thinking: null }],
+    );
+    try {
+      expect(page.getByRole("tab", { name: /^Codex/u }).elements()).toHaveLength(0);
+      await expect.element(page.getByRole("menuitem", { name: /Claude Sonnet/u })).toBeVisible();
+      await page.getByRole("tab", { name: "Starred", exact: true }).click();
+      expect(page.getByRole("menuitem", { name: /GPT-5\.5/u }).elements()).toHaveLength(0);
+      expect(readStoredStars()).toHaveLength(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("checks a cached account silently and shows progress only on retry", async () => {
     let finish!: () => void;
     const promise = new Promise<void>((resolve) => {

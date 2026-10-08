@@ -723,6 +723,29 @@ describe("Claude Synara harness policy", () => {
 });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("grants a multi-folder project's extra folders as additional directories", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        cwd: "/tmp/repos/web",
+        additionalDirectories: ["/tmp/repos/api", "/tmp/repos/shared"],
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.additionalDirectories, [
+        "/tmp/repos/web",
+        "/tmp/repos/api",
+        "/tmp/repos/shared",
+      ]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("passes provider instance environment to temporary command discovery", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -746,43 +769,46 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("keeps command discovery caches and homes isolated by provider instance id", () => {
-    const harness = makeMultiQueryHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      if (!adapter.listCommands) {
-        assert.fail("Expected ClaudeAdapter to expose command discovery");
-      }
-      const sharedInput = {
-        provider: "claudeAgent" as const,
-        cwd: "/tmp/claude-work",
-        environment: { ANTHROPIC_AUTH_TOKEN: "shared-token" },
-      };
-      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_a" });
-      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_b" });
+  it.effect(
+    "keeps command discovery caches and account directories isolated by provider instance id",
+    () => {
+      const harness = makeMultiQueryHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        if (!adapter.listCommands) {
+          assert.fail("Expected ClaudeAdapter to expose command discovery");
+        }
+        const sharedInput = {
+          provider: "claudeAgent" as const,
+          cwd: "/tmp/claude-work",
+          environment: { ANTHROPIC_AUTH_TOKEN: "shared-token" },
+        };
+        yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_a" });
+        yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_b" });
 
-      assert.equal(harness.createInputs.length, 2);
-      assert.equal(
-        harness.createInputs[0]?.options.env?.HOME,
-        claudeIsolatedHomePath({
-          isolationRootDir: "/tmp/userdata",
-          providerInstanceId: "claude_work_a",
-        }),
+        assert.equal(harness.createInputs.length, 2);
+        for (const [index, instanceId] of ["claude_work_a", "claude_work_b"].entries()) {
+          const env = harness.createInputs[index]?.options.env;
+          const accountHome = claudeIsolatedHomePath({
+            isolationRootDir: "/tmp/userdata",
+            providerInstanceId: instanceId,
+          });
+          if (process.platform === "darwin") {
+            assert.equal(env?.CLAUDE_CONFIG_DIR, path.join(accountHome, ".claude"));
+            assert.equal(env?.CLAUDE_SECURESTORAGE_CONFIG_DIR, env?.CLAUDE_CONFIG_DIR);
+            assert.notEqual(env?.HOME, accountHome);
+          } else {
+            assert.equal(env?.HOME, accountHome);
+          }
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
       );
-      assert.equal(
-        harness.createInputs[1]?.options.env?.HOME,
-        claudeIsolatedHomePath({
-          isolationRootDir: "/tmp/userdata",
-          providerInstanceId: "claude_work_b",
-        }),
-      );
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+    },
+  );
 
-  it.effect("starts an environment-only runtime in its Synara-scoped home", () => {
+  it.effect("starts an environment-only runtime with its Synara-scoped account directories", () => {
     const harness = makeHarness();
     return Effect.acquireUseRelease(
       Effect.sync(() => {
@@ -811,14 +837,18 @@ describe("ClaudeAdapterLive", () => {
           });
 
           const queryEnv = harness.getLastCreateQueryInput()?.options.env;
-          assert.equal(
-            queryEnv?.HOME,
-            claudeIsolatedHomePath({
-              isolationRootDir: "/tmp/userdata",
-              providerInstanceId: "claude_work",
-            }),
-          );
-          assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, undefined);
+          const accountHome = claudeIsolatedHomePath({
+            isolationRootDir: "/tmp/userdata",
+            providerInstanceId: "claude_work",
+          });
+          if (process.platform === "darwin") {
+            assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, path.join(accountHome, ".claude"));
+            assert.equal(queryEnv?.CLAUDE_SECURESTORAGE_CONFIG_DIR, queryEnv?.CLAUDE_CONFIG_DIR);
+            assert.notEqual(queryEnv?.HOME, accountHome);
+          } else {
+            assert.equal(queryEnv?.HOME, accountHome);
+            assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, undefined);
+          }
           assert.equal(queryEnv?.ANTHROPIC_AUTH_TOKEN, "work-token");
         }),
       (previous) =>
@@ -2755,6 +2785,7 @@ describe("ClaudeAdapterLive", () => {
         usage: { total_tokens: 123, tool_uses: 4, duration_ms: 987 },
         session_id: "sdk-session-subagent",
         uuid: "task-progress-subagent-1",
+        summary: "  Reviewing the migration.\n",
       } as unknown as SDKMessage);
 
       harness.query.emit({
@@ -2764,7 +2795,7 @@ describe("ClaudeAdapterLive", () => {
         tool_use_id: "tool-task-1",
         status: "completed",
         output_file: "/tmp/task-1-output.md",
-        summary: "Reviewed the migration.",
+        summary: "  Reviewed the migration.\n",
         session_id: "sdk-session-subagent",
         uuid: "task-notification-1",
       } as unknown as SDKMessage);
@@ -2840,6 +2871,17 @@ describe("ClaudeAdapterLive", () => {
           event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 123,
       );
       assert.equal(taskUsage?.type, "thread.token-usage.updated");
+
+      const taskProgress = runtimeEvents.find((event) => event.type === "task.progress");
+      assert.equal(taskProgress?.type, "task.progress");
+      if (taskProgress?.type === "task.progress") {
+        assert.equal(taskProgress.payload.summary, "Reviewing the migration.");
+      }
+      const taskCompleted = runtimeEvents.find((event) => event.type === "task.completed");
+      assert.equal(taskCompleted?.type, "task.completed");
+      if (taskCompleted?.type === "task.completed") {
+        assert.equal(taskCompleted.payload.summary, "Reviewed the migration.");
+      }
 
       const childTurnCompleted = childEvents.find((event) => event.type === "turn.completed");
       assert.equal(childTurnCompleted?.type, "turn.completed");
@@ -8250,32 +8292,61 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("uses an app-generated Claude session id for fresh sessions", () => {
-    const harness = makeHarness();
+  it.effect("restarts unused Claude sessions fresh before native history exists", () => {
+    const harness = makeMultiQueryHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-
-      const session = yield* adapter.startSession({
+      const startInput = {
         threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-
-      const createInput = harness.getLastCreateQueryInput();
+        provider: "claudeAgent" as const,
+        runtimeMode: "full-access" as const,
+      };
+      const session = yield* adapter.startSession(startInput);
+      const createInput = harness.createInputs[0];
       const sessionResumeCursor = session.resumeCursor as {
         threadId?: string;
         resume?: string;
         turnCount?: number;
       };
       assert.equal(sessionResumeCursor.threadId, THREAD_ID);
-      assert.equal(typeof sessionResumeCursor.resume, "string");
+      assert.equal(sessionResumeCursor.resume, undefined);
       assert.equal(sessionResumeCursor.turnCount, 0);
       assert.match(
-        sessionResumeCursor.resume ?? "",
+        createInput?.options.sessionId ?? "",
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
       );
       assert.equal(createInput?.options.resume, undefined);
-      assert.equal(createInput?.options.sessionId, sessionResumeCursor.resume);
+
+      const restartInput = {
+        ...startInput,
+        enableComputerControl: true,
+        resumeCursor: session.resumeCursor,
+      };
+      const restarted = yield* adapter.startSession(restartInput);
+      assert.equal(harness.queries[0]?.closeCalls, 1);
+      assert.equal(harness.createInputs[1]?.options.resume, undefined);
+      const nativeSessionId = harness.createInputs[1]?.options.sessionId;
+      assert.ok(nativeSessionId);
+      assert.notEqual(nativeSessionId, createInput?.options.sessionId);
+      assert.equal(adapter.didResumeSession?.(restartInput, restarted), false);
+
+      const completed = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "continue", attachments: [] });
+      const query = harness.queries[1]!;
+      emitAssistantUsage(query, nativeSessionId, "assistant-confirmed", "Hello", {});
+      emitSuccessResult(query, nativeSessionId, "result-confirmed", {});
+      yield* Fiber.join(completed);
+
+      const confirmed = (yield* adapter.listSessions())[0]!;
+      assert.equal((confirmed.resumeCursor as { resume: string }).resume, nativeSessionId);
+      const resumeInput = { ...restartInput, resumeCursor: confirmed.resumeCursor };
+      const resumed = yield* adapter.startSession(resumeInput);
+      assert.equal(harness.createInputs[2]?.options.resume, nativeSessionId);
+      assert.equal(harness.createInputs[2]?.options.sessionId, undefined);
+      assert.equal(adapter.didResumeSession?.(resumeInput, resumed), true);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -9849,6 +9920,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     { boundary: false, expected: ["item.updated", "item.completed"] },
   ])("publishes native compaction progress (boundary: $boundary)", ({ boundary, expected }) => {
     const harness = makeHarness();
+    const nativeSessionId = "550e8400-e29b-41d4-a716-446655440000";
     harness.query.supportedCommandList = [
       { name: "compact", description: "Compact context", argumentHint: "" },
     ];
@@ -9874,6 +9946,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
+        resumeCursor: { resume: nativeSessionId },
       });
       const turn = yield* adapter.sendTurn({
         threadId: session.threadId,
@@ -9884,13 +9957,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         type: "system",
         subtype: "status",
         status: "compacting",
-        session_id: "sdk-session-progress",
+        session_id: nativeSessionId,
         uuid: "status-compacting-progress",
       } as unknown as SDKMessage);
       if (boundary) {
-        emitCompactionBoundary(harness.query, "sdk-session-progress", "progress-boundary");
+        emitCompactionBoundary(harness.query, nativeSessionId, "progress-boundary");
       }
-      emitSuccessResult(harness.query, "sdk-session-progress", "progress-result", {
+      emitSuccessResult(harness.query, nativeSessionId, "progress-result", {
         total_tokens: 1,
         input_tokens: 1,
         output_tokens: 0,
@@ -9914,6 +9987,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   it.effect("invalidates compaction-call usage until the next assistant response", () => {
     const harness = makeHarness();
+    const nativeSessionId = "550e8400-e29b-41d4-a716-446655440000";
     harness.query.supportedCommandList = [
       { name: "compact", description: "Compact context", argumentHint: "" },
     ];
@@ -9925,6 +9999,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
+        resumeCursor: {
+          resume: nativeSessionId,
+          processedTokenTotal: 0,
+          tokenAccountingVersion: 1,
+        },
       });
       yield* adapter.sendTurn({
         threadId: session.threadId,
@@ -9934,7 +10013,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       emitAssistantUsage(
         harness.query,
-        "sdk-session-compact",
+        nativeSessionId,
         "assistant-before-compact",
         "Preparing to compact",
         { input_tokens: 1, cache_read_input_tokens: 149_999, output_tokens: 0 },
@@ -9943,26 +10022,24 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         type: "system",
         subtype: "status",
         status: "compacting",
-        session_id: "sdk-session-compact",
+        session_id: nativeSessionId,
         uuid: "status-compacting",
       } as unknown as SDKMessage);
-      emitCompactionBoundary(harness.query, "sdk-session-compact", "compact-boundary");
+      emitCompactionBoundary(harness.query, nativeSessionId, "compact-boundary");
+      emitAssistantUsage(harness.query, nativeSessionId, "assistant-compaction-call", "Compacted", {
+        input_tokens: 1,
+        cache_read_input_tokens: 189_999,
+        output_tokens: 0,
+      });
       emitAssistantUsage(
         harness.query,
-        "sdk-session-compact",
-        "assistant-compaction-call",
-        "Compacted",
-        { input_tokens: 1, cache_read_input_tokens: 189_999, output_tokens: 0 },
-      );
-      emitAssistantUsage(
-        harness.query,
-        "sdk-session-compact",
+        nativeSessionId,
         "another-compaction-block",
         "Compacted text block",
         { input_tokens: 1, cache_read_input_tokens: 189_999, output_tokens: 0 },
         "assistant-compaction-call",
       );
-      emitSuccessResult(harness.query, "sdk-session-compact", "result-compact", {
+      emitSuccessResult(harness.query, nativeSessionId, "result-compact", {
         total_tokens: 350_000,
         input_tokens: 2,
         cache_read_input_tokens: 339_998,
@@ -9977,7 +10054,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
       emitAssistantUsage(
         harness.query,
-        "sdk-session-compact",
+        nativeSessionId,
         "assistant-after-compact",
         "Fresh response",
         { input_tokens: 1, cache_read_input_tokens: 19_999, output_tokens: 0 },
@@ -10084,6 +10161,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   it.effect("does not promote partial accounting from a legacy resume cursor", () => {
     const harness = makeHarness();
+    const nativeSessionId = "550e8400-e29b-41d4-a716-446655440000";
     harness.query.supportedCommandList = [
       { name: "compact", description: "Compact context", argumentHint: "" },
     ];
@@ -10095,26 +10173,23 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
-        resumeCursor: { threadId: THREAD_ID, turnCount: 1, processedTokenTotal: 999_999 },
+        resumeCursor: {
+          threadId: THREAD_ID,
+          resume: nativeSessionId,
+          turnCount: 1,
+          processedTokenTotal: 999_999,
+        },
       });
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "/compact",
         attachments: [],
       });
-      emitCompactionBoundary(
-        harness.query,
-        "sdk-session-legacy-compact",
-        "legacy-compact-boundary",
-      );
-      emitAssistantUsage(
-        harness.query,
-        "sdk-session-legacy-compact",
-        "legacy-compaction-call",
-        "Compacted",
-        { total_tokens: 190_000 },
-      );
-      emitSuccessResult(harness.query, "sdk-session-legacy-compact", "legacy-result-compact", {
+      emitCompactionBoundary(harness.query, nativeSessionId, "legacy-compact-boundary");
+      emitAssistantUsage(harness.query, nativeSessionId, "legacy-compaction-call", "Compacted", {
+        total_tokens: 190_000,
+      });
+      emitSuccessResult(harness.query, nativeSessionId, "legacy-result-compact", {
         total_tokens: 190_000,
       });
 
@@ -10127,12 +10202,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
       emitAssistantUsage(
         harness.query,
-        "sdk-session-legacy-compact",
+        nativeSessionId,
         "legacy-fresh-assistant",
         "Fresh response",
         { total_tokens: 20_000 },
       );
-      emitSuccessResult(harness.query, "sdk-session-legacy-compact", "legacy-fresh-result", {
+      emitSuccessResult(harness.query, nativeSessionId, "legacy-fresh-result", {
         total_tokens: 50_000,
       });
 

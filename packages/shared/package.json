@@ -60,6 +60,10 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./KeyedSingleFlightCache": {
+      "types": "./src/KeyedSingleFlightCache.ts",
+      "import": "./src/KeyedSingleFlightCache.ts"
+    },
     "./errorMessages": {
       "types": "./src/errorMessages.ts",
       "import": "./src/errorMessages.ts"
@@ -139,6 +143,10 @@
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
+    },
+    "./KeyedDrainableWorker": {
+      "types": "./src/KeyedDrainableWorker.ts",
+      "import": "./src/KeyedDrainableWorker.ts"
     },
     "./DrainableWorker": {
       "types": "./src/DrainableWorker.ts",
@@ -235,6 +243,10 @@
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
+    },
+    "./projectFolders": {
+      "types": "./src/projectFolders.ts",
+      "import": "./src/projectFolders.ts"
     },
     "./threadHierarchy": {
       "types": "./src/threadHierarchy.ts",

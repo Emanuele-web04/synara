@@ -2,6 +2,10 @@ import { makeGitActionRunner } from "./git/gitActionRunner";
 import http from "node:http";
 
 import {
+  EventId,
+  ThreadId,
+  WsRpcError,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   WS_BOOTSTRAP_METHOD,
   WS_METHODS,
   WsGitRunStackedActionRpc,
@@ -17,7 +21,7 @@ import {
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
+import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,6 +48,8 @@ import {
   type WsConnectionSessionsShape,
 } from "./wsConnectionSessions";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
+import { bufferLiveUiStream } from "./wsStreamBackpressure";
+import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { ComputerEventInterests } from "./computer/computerEventInterests";
 
 const PingRpc = Rpc.make("test.ping", {
@@ -54,7 +60,13 @@ const SlowRpc = Rpc.make("test.slow", {
   payload: Schema.Struct({}),
   success: Schema.String,
 });
-const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc);
+const BudgetStreamRpc = Rpc.make("test.budget-stream", {
+  payload: Schema.Struct({ mode: Schema.Literals(["replay", "stalled", "healthy"]) }),
+  success: Schema.Number,
+  error: WsRpcError,
+  stream: true,
+});
+const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc, BudgetStreamRpc);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -64,6 +76,8 @@ interface RunningTestServer {
   readonly observedRpc: { decoderCalls: number; handlerCalls: number };
   readonly observedGitAction: { started: number; finalized: number };
   readonly releaseGitAction: () => Promise<void>;
+  readonly observedBudgetStream: { finalized: number };
+  readonly releaseBudgetStream: () => Promise<void>;
   readonly observedSlowRpc: { started: number; completed: number; finalized: number };
   readonly connectionSessions: WsConnectionSessionsShape;
   readonly observedConnectionSessionKeys: string[];
@@ -257,6 +271,8 @@ async function startTestServer(): Promise<RunningTestServer> {
   });
   const observedGitAction = { started: 0, finalized: 0 };
   const gitRelease = await Effect.runPromise(Deferred.make<void>());
+  const observedBudgetStream = { finalized: 0 };
+  const budgetRelease = await Effect.runPromise(Deferred.make<void>());
   const handlerLayer = PingRpcGroup.toLayer(
     Effect.gen(function* () {
       const runGitAction = yield* makeGitActionRunner((input, publish) =>
@@ -284,6 +300,72 @@ async function startTestServer(): Promise<RunningTestServer> {
       );
       return {
         [WS_METHODS.gitRunStackedAction]: runGitAction,
+        "test.budget-stream": ({
+          mode,
+        }: {
+          readonly mode: "replay" | "stalled" | "healthy";
+        }): Stream.Stream<number, WsRpcError> => {
+          if (mode === "healthy") return Stream.make(42);
+          if (mode === "stalled")
+            return bufferLiveUiStream(
+              Stream.concat(
+                Stream.make(1),
+                Stream.fromEffect(Deferred.await(budgetRelease)).pipe(
+                  Stream.flatMap(() => Stream.make(2, 3)),
+                  Stream.concat(Stream.never),
+                ),
+              ).pipe(
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    observedBudgetStream.finalized++;
+                  }),
+                ),
+              ),
+              { capacity: 2, overflowStrategy: "fail" },
+            );
+          return makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.succeed(Stream.never),
+            snapshot: Effect.succeed(0),
+            snapshotSequence: (snapshot) => snapshot,
+            getHighWaterSequence: Effect.succeed(1100),
+            replay: () =>
+              Stream.range(1, 1100).pipe(
+                Stream.map((sequence) => ({
+                  sequence,
+                  eventId: EventId.makeUnsafe(`replay-${sequence}`),
+                  aggregateKind: "thread" as const,
+                  aggregateId: ThreadId.makeUnsafe("rpc-replay"),
+                  occurredAt: "2026-10-06T00:00:00.000Z",
+                  commandId: null,
+                  causationEventId: null,
+                  correlationId: null,
+                  metadata: {},
+                  type: "thread.activity-appended" as const,
+                  payload: {
+                    threadId: ThreadId.makeUnsafe("rpc-replay"),
+                    activity: {
+                      id: EventId.makeUnsafe(`activity-${sequence}`),
+                      tone: "info" as const,
+                      kind: "tool.progress",
+                      summary: "progress",
+                      payload: null,
+                      turnId: null,
+                      createdAt: "2026-10-06T00:00:00.000Z",
+                    },
+                  },
+                })),
+              ),
+          }).pipe(
+            Stream.take(1101),
+            Stream.map((item) =>
+              item.kind === "snapshot"
+                ? item.snapshot
+                : item.kind === "event"
+                  ? item.event.sequence
+                  : item.events.length,
+            ),
+          );
+        },
         "test.ping": (_input: { readonly label: string }) =>
           Effect.sync(() => {
             observedRpc.handlerCalls += 1;
@@ -373,6 +455,9 @@ async function startTestServer(): Promise<RunningTestServer> {
     observedRpc,
     observedSlowRpc,
     observedGitAction,
+    observedBudgetStream,
+    releaseBudgetStream: () =>
+      Effect.runPromise(Deferred.succeed(budgetRelease, undefined).pipe(Effect.asVoid)),
     releaseGitAction: () =>
       Effect.runPromise(Deferred.succeed(gitRelease, undefined).pipe(Effect.asVoid)),
     connectionSessions,
@@ -887,6 +972,62 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       await server.close();
     }
   }, 4_000);
+
+  it("ACKs finite replay over real RPC and isolates a no-ACK live overflow", async () => {
+    const server = await startTestServer();
+    const pendingAcks = new Set<ReturnType<typeof setTimeout>>();
+    try {
+      const { socket } = await connectSession(server);
+      const replay: number[] = [];
+      const healthy: number[] = [];
+      const exits = new Map<string, unknown>();
+      let stalledBatch = false;
+      socket.on("message", (data: RawData) => {
+        const frame = JSON.parse(data.toString());
+        const id = String(frame.requestId);
+        if (frame._tag === "Exit") exits.set(id, frame.exit);
+        if (frame._tag !== "Chunk") return;
+        if (id === "510") {
+          stalledBatch = true;
+          return; // No ACK: the first live batch must remain budgeted.
+        }
+        if (id === "511") replay.push(...frame.values);
+        if (id === "512") healthy.push(...frame.values);
+        const timer = setTimeout(() => {
+          pendingAcks.delete(timer);
+          socket.send(JSON.stringify({ _tag: "Ack", requestId: frame.requestId }));
+        }, 1);
+        pendingAcks.add(timer);
+      });
+      const request = (id: string, mode: string) =>
+        socket.send(
+          JSON.stringify({
+            _tag: "Request",
+            id,
+            tag: "test.budget-stream",
+            payload: { mode },
+            headers: [],
+          }),
+        );
+      request("510", "stalled");
+      request("511", "replay");
+      await waitForObserved(() => stalledBatch);
+      await server.releaseBudgetStream();
+      await waitForObserved(() => server.observedBudgetStream.finalized === 1);
+      // Let RpcServer pull again to observe the already-failed subscription.
+      socket.send(JSON.stringify({ _tag: "Ack", requestId: "510" }));
+      await waitForObserved(() => exits.has("510") && exits.has("511"));
+      expect(JSON.stringify(exits.get("510"))).toContain(ORCHESTRATION_STREAM_OVERFLOW_CODE);
+      expect(replay).toEqual(Array.from({ length: 1101 }, (_, sequence) => sequence));
+      request("512", "healthy");
+      await waitForObserved(() => exits.has("512"));
+      expect(healthy).toEqual([42]);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      for (const timer of pendingAcks) clearTimeout(timer);
+      await server.close();
+    }
+  }, 5_000);
 
   it("reattaches to one Git action after the actual WebSocket closes", async () => {
     const server = await startTestServer();
