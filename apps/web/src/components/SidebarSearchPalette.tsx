@@ -23,6 +23,7 @@ import {
 } from "~/lib/icons";
 import {
   type FilesystemBrowseResult,
+  type ProjectEntry,
   ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT,
   ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH,
   type ProjectImportProvider,
@@ -36,8 +37,10 @@ import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } 
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
+import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { readNativeApi } from "~/nativeApi";
+import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 import { ShortcutKbd } from "./ui/kbd";
 import {
@@ -121,6 +124,10 @@ interface SidebarSearchPaletteProps {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
+  /** The focused chat workspace whose files can be opened from Cmd+K. */
+  activeProjectCwd?: string | null | undefined;
+  activeThreadId?: string | null | undefined;
+  onOpenFile?: ((relativePath: string) => void) | undefined;
   onOpenSettings: (section?: SettingsSectionId, options?: { target?: string }) => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
@@ -181,8 +188,11 @@ const ACTION_ICONS: Record<string, IconComponent> = {
 const BROWSE_STALE_TIME_MS = 10_000;
 const THREAD_SEARCH_DEBOUNCE_MS = 150;
 const THREAD_SEARCH_STALE_TIME_MS = 10_000;
+const FILE_SEARCH_LIMIT = 30;
+const FILE_SEARCH_STALE_TIME_MS = 10_000;
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
+const EMPTY_FILE_ENTRIES: readonly ProjectEntry[] = [];
 
 function expandHomeInPath(value: string, homeDir: string | null): string {
   if (!homeDir) return value;
@@ -378,6 +388,45 @@ function HighlightedText(props: { text: string; query: string; className?: strin
   );
 }
 
+function splitFileSearchPath(path: string): { base: string; directory: string } {
+  const separatorIndex = path.lastIndexOf("/");
+  if (separatorIndex < 0) return { base: path, directory: "" };
+  return { base: path.slice(separatorIndex + 1), directory: path.slice(0, separatorIndex) };
+}
+
+function FileSearchRow(props: {
+  entry: ProjectEntry;
+  query: string;
+  onOpenFile: (relativePath: string) => void;
+}) {
+  const { base, directory } = splitFileSearchPath(props.entry.path);
+  return (
+    <CommandItem
+      value={`file:${props.entry.path}`}
+      className={PALETTE_ITEM_CLASS}
+      onMouseDown={(event) => {
+        event.preventDefault();
+      }}
+      onClick={() => props.onOpenFile(props.entry.path)}
+    >
+      <FileEntryIcon
+        pathValue={props.entry.path}
+        kind="file"
+        colorMode="inherit"
+        className={PALETTE_ICON_CLASS}
+      />
+      <span className={PALETTE_TEXT_CLASS}>
+        <HighlightedText text={base} query={props.query} />
+      </span>
+      {directory ? (
+        <span className={PALETTE_META_CLASS} title={directory}>
+          {directory}
+        </span>
+      ) : null}
+    </CommandItem>
+  );
+}
+
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const { activeTheme, resolvedTheme, setCodeThemeId, setTheme, theme } = useTheme();
   const [query, setQuery] = useState("");
@@ -508,6 +557,25 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [debouncedThreadQuery] = useDebouncedValue(trimmedQuery, {
     wait: THREAD_SEARCH_DEBOUNCE_MS,
   });
+  const activeProjectFileSearch = useQuery(
+    projectSearchEntriesQueryOptions({
+      cwd: props.activeProjectCwd ?? null,
+      query: debouncedThreadQuery,
+      kind: "file",
+      limit: FILE_SEARCH_LIMIT,
+      enabled:
+        props.open &&
+        !isBrowsing &&
+        props.activeProjectCwd != null &&
+        props.activeThreadId != null &&
+        debouncedThreadQuery.length > 0,
+      staleTime: FILE_SEARCH_STALE_TIME_MS,
+    }),
+  );
+  const matchedFiles =
+    !isBrowsing && props.activeThreadId != null && props.activeProjectCwd != null
+      ? (activeProjectFileSearch.data?.entries ?? EMPTY_FILE_ENTRIES)
+      : EMPTY_FILE_ENTRIES;
   const { data: serverThreadSearch } = useQuery({
     queryKey: ["sidebar-palette-thread-search", debouncedThreadQuery],
     queryFn: async () => {
@@ -550,7 +618,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     matchedCurrentThemes.length > 0 ||
     matchedSettings.length > 0 ||
     matchedProjects.length > 0 ||
-    matchedThreads.length > 0;
+    matchedThreads.length > 0 ||
+    matchedFiles.length > 0;
   const importFieldLabel = importProvider === "codex" ? "Thread ID" : "Session ID";
   const importPlaceholder =
     importProvider === "claudeAgent"
@@ -1085,6 +1154,26 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         </CommandItem>
                       );
                     })}
+                  </CommandGroup>
+                ) : null}
+
+                {!isBrowsing && matchedFiles.length > 0 ? (
+                  <CommandGroup>
+                    <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
+                      <span>Files</span>
+                    </CommandGroupLabel>
+                    {matchedFiles.map((entry) => (
+                      <FileSearchRow
+                        key={entry.path}
+                        entry={entry}
+                        query={debouncedThreadQuery}
+                        onOpenFile={(relativePath) => {
+                          if (!props.activeThreadId || !props.onOpenFile) return;
+                          props.onOpenChange(false);
+                          props.onOpenFile(relativePath);
+                        }}
+                      />
+                    ))}
                   </CommandGroup>
                 ) : null}
 
