@@ -780,8 +780,17 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
               </span>
             );
             if (accountAvailability.disabled) {
+              const canOpenProviderSettings = accountAvailability.label === "Sign in";
               return (
-                <MenuItem key={account.instanceId} disabled>
+                <MenuItem
+                  key={account.instanceId}
+                  disabled={!canOpenProviderSettings}
+                  onClick={
+                    canOpenProviderSettings
+                      ? () => appHistory.push("/settings?section=providers")
+                      : undefined
+                  }
+                >
                   {accountIcon}
                   <span className="truncate">{accountLabel}</span>
                   <span className="ms-auto text-ui-sm text-muted-foreground/80">
@@ -808,8 +817,17 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         }
         const availability = resolveProviderOptionAvailability(option.value);
         if (availability.disabled) {
+          const canOpenProviderSettings = availability.label === "Sign in";
           return (
-            <MenuItem key={option.value} disabled>
+            <MenuItem
+              key={option.value}
+              disabled={!canOpenProviderSettings}
+              onClick={
+                canOpenProviderSettings
+                  ? () => appHistory.push("/settings?section=providers")
+                  : undefined
+              }
+            >
               <OptionIcon
                 aria-hidden="true"
                 className={cn(
