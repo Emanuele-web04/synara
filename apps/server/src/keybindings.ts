@@ -142,6 +142,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus" },
+  // Workspace search palette: file names and snippet content. Keep these off terminal focus
+  // so Ctrl+P/Ctrl+Shift+F remain available to the shell on Windows/Linux.
+  { key: "mod+p", command: "search.files", when: "!terminalFocus" },
+  { key: "mod+shift+f", command: "search.content", when: "!terminalFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   // Cycle models within the active provider (favorites first, then remaining list).
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },

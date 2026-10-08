@@ -15,43 +15,11 @@ function event(overrides: Partial<ShortcutEventLike> = {}): ShortcutEventLike {
 }
 
 describe("fixed shortcut context guards", () => {
-  it("keeps workspace search out of a focused non-Mac terminal", () => {
-    const context = { terminalFocus: true };
-
-    expect(matchesFixedShortcut(event({ ctrlKey: true }), "search.files", "Win32", context)).toBe(
-      false,
-    );
-    expect(
-      matchesFixedShortcut(
-        event({ key: "f", ctrlKey: true, shiftKey: true }),
-        "search.content",
-        "Win32",
-        context,
-      ),
-    ).toBe(false);
-  });
-
-  it("still opens workspace search outside terminal focus", () => {
-    const context = { terminalFocus: false };
-
-    expect(matchesFixedShortcut(event({ ctrlKey: true }), "search.files", "Win32", context)).toBe(
-      true,
-    );
-    expect(
-      matchesFixedShortcut(
-        event({ key: "f", ctrlKey: true, shiftKey: true }),
-        "search.content",
-        "Win32",
-        context,
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps terminal search available to the terminal surface", () => {
+  it.each([true, false])("matches terminal search only with terminalFocus=%s", (terminalFocus) => {
     expect(
       matchesFixedShortcut(event({ key: "f", ctrlKey: true }), "terminal.search", "Win32", {
-        terminalFocus: true,
+        terminalFocus,
       }),
-    ).toBe(true);
+    ).toBe(terminalFocus);
   });
 });

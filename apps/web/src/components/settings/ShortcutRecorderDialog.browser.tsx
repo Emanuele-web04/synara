@@ -92,6 +92,35 @@ it("says which command a shortcut is taken from before saving", async () => {
   ]);
 });
 
+it("records and moves the file-search chord instead of treating it as fixed", async () => {
+  const search: ResolvedKeybindingRule = {
+    ...modRule("search.files", "p"),
+    whenAst: { type: "not", node: { type: "identifier", name: "terminalFocus" } },
+  };
+  const source: ShortcutEditorSource = {
+    ...SOURCE,
+    keybindings: [...KEYBINDINGS, search],
+    defaultKeybindings: [...KEYBINDINGS, search],
+  };
+  const { onApply } = await renderRecorder("terminal.toggle", source);
+
+  await userEvent.keyboard("{Control>}p{/Control}");
+  await expect
+    .element(page.getByRole("status"))
+    .toHaveTextContent("Ctrl+P already runs “Search files”. Saving moves it here.");
+  await userEvent.keyboard("{Enter}");
+
+  await vi.waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
+  expect(onApply.mock.calls[0]?.[0]).toEqual([
+    { type: "remove", rule: { command: "search.files", key: "mod+p", when: "!terminalFocus" } },
+    {
+      type: "set",
+      rule: { command: "terminal.toggle", key: "mod+p" },
+      replacing: { command: "terminal.toggle", key: "mod+j" },
+    },
+  ]);
+});
+
 it("keeps a key that cannot be bound from being saved", async () => {
   const { onApply } = await renderRecorder("terminal.toggle");
 
