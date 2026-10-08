@@ -324,7 +324,8 @@ function applyNestedBidiOwners(node: BidiHastNode): void {
     } else if (
       node.tagName === "pre" ||
       node.tagName === "table" ||
-      (Array.isArray(node.properties?.className) && node.properties.className.includes("katex"))
+      (Array.isArray(node.properties?.className) && node.properties.className.includes("katex")) ||
+      node.properties?.className === "katex"
     ) {
       // Code, tables, and rendered math retain source/LTR ordering and must
       // not contribute their Latin text to an enclosing prose block's scan.

@@ -900,6 +900,11 @@ label:has(> select#reasoning-effort) select {
   unicode-bidi: isolate;
 }
 
+.chat-markdown[data-direction-mode="auto-blocks"] .katex {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 .chat-markdown hr {
   margin: 1.5rem 0;
   border: 0;
