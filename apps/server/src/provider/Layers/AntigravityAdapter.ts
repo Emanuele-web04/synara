@@ -72,7 +72,6 @@ import {
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
   type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
-import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "antigravity" as const;
@@ -81,7 +80,7 @@ const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
 const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 45_000;
-const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
+export const ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES = 128 * 1024;
 const WINDOWS_PROMPT_MAX_CHARS = 24_000;
 
 type TranscriptStep = {
@@ -422,9 +421,63 @@ export function buildAntigravityHookConfig(
   };
 }
 
-function appendBoundedOutput(current: string, chunk: unknown): string {
-  const next = current + String(chunk);
-  return next.length > HELPER_OUTPUT_MAX_CHARS ? next.slice(-HELPER_OUTPUT_MAX_CHARS) : next;
+type BoundedOutputStream = "stdout" | "stderr";
+
+type BoundedOutputChunk = {
+  readonly stream: BoundedOutputStream;
+  readonly text: string;
+  readonly bytes: number;
+};
+
+/**
+ * Keep diagnostics bounded across both pipes while preserving their original
+ * stream labels. A provider can write to stdout and stderr concurrently, so
+ * separate per-stream caps still allow unbounded aggregate retention.
+ */
+export function createBoundedProcessOutput(maxBytes = ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES) {
+  const chunks: BoundedOutputChunk[] = [];
+  let byteLength = 0;
+
+  const append = (stream: BoundedOutputStream, chunk: unknown): void => {
+    const text = String(chunk);
+    if (text.length === 0 || maxBytes <= 0) return;
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes > maxBytes) {
+      const tail = Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
+      chunks.push({ stream, text: tail, bytes: Buffer.byteLength(tail, "utf8") });
+      byteLength += chunks[chunks.length - 1]!.bytes;
+    } else {
+      chunks.push({ stream, text, bytes });
+      byteLength += bytes;
+    }
+    while (byteLength > maxBytes && chunks.length > 0) {
+      const first = chunks[0]!;
+      const overflow = byteLength - maxBytes;
+      if (first.bytes <= overflow) {
+        chunks.shift();
+        byteLength -= first.bytes;
+        continue;
+      }
+      const retained = Buffer.from(first.text, "utf8").subarray(overflow).toString("utf8");
+      chunks[0] = { ...first, text: retained, bytes: Buffer.byteLength(retained, "utf8") };
+      byteLength -= first.bytes - chunks[0].bytes;
+      break;
+    }
+  };
+
+  const read = (stream: BoundedOutputStream): string =>
+    chunks
+      .filter((chunk) => chunk.stream === stream)
+      .map((chunk) => chunk.text)
+      .join("");
+
+  return {
+    append,
+    snapshot: () => ({ stdout: read("stdout"), stderr: read("stderr") }),
+    get byteLength() {
+      return byteLength;
+    },
+  };
 }
 
 export async function runAntigravityHelperProcess(
@@ -450,9 +503,9 @@ export async function runAntigravityHelperProcess(
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,
     }) as AntigravityChildProcess;
-    let stdout = "";
-    let stderr = "";
+    const output = createBoundedProcessOutput();
     let settled = false;
+    let timedOut = false;
     const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
     const finish = (callback: () => void) => {
       if (settled) return;
@@ -461,23 +514,43 @@ export async function runAntigravityHelperProcess(
       callback();
     };
     const timer = setTimeout(() => {
-      // A bounded helper probe fails fast: force the (Windows: tree) kill and
-      // reject with the timeout, exactly as before the runtime migration.
-      signalOwnedChildProcess(child, "SIGKILL");
-      finish(() =>
-        reject(
-          new Error(
-            `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+      timedOut = true;
+      // Do not return until the supervised tree teardown has observed the
+      // root exit and verified captured descendants are gone. A direct signal
+      // can leave an updater/helper descendant alive on Windows.
+      void teardownChildProcessTree(child).then(
+        () =>
+          finish(() =>
+            reject(
+              new Error(
+                `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+              ),
+            ),
           ),
-        ),
+        (cause) =>
+          finish(() =>
+            reject(
+              new Error(
+                `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${messageFromCause(cause, "unknown teardown failure")}`,
+                { cause },
+              ),
+            ),
+          ),
       );
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout = appendBoundedOutput(stdout, chunk)));
-    child.stderr.on("data", (chunk) => (stderr = appendBoundedOutput(stderr, chunk)));
-    child.once("error", (cause) => finish(() => reject(cause)));
-    child.once("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1 })));
+    child.stdout.on("data", (chunk) => output.append("stdout", chunk));
+    child.stderr.on("data", (chunk) => output.append("stderr", chunk));
+    child.once("error", (cause) => {
+      if (timedOut) return;
+      finish(() => reject(cause));
+    });
+    child.once("close", (code) => {
+      if (timedOut) return;
+      const { stdout, stderr } = output.snapshot();
+      finish(() => resolve({ stdout, stderr, code: code ?? 1 }));
+    });
   });
 }
 
@@ -2556,16 +2629,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             context.harnessPolicyDelivered = true;
           }
         });
-        let stdout = "";
-        let stderr = "";
+        const output = createBoundedProcessOutput();
         const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
           outputParser.write(String(chunk));
-          stdout += chunk;
+          output.append("stdout", chunk);
         });
-        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.stderr.on("data", (chunk) => output.append("stderr", chunk));
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
         }, POLL_INTERVAL_MS);
@@ -2617,6 +2689,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
+            const { stdout, stderr } = output.snapshot();
             const printResult = outputParser.finish();
             const responseText = printResult?.response ?? stdout.trim();
             if (!context.sawAssistant && responseText) {

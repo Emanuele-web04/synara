@@ -24,6 +24,7 @@ import {
   buildAntigravityCaptureCommand,
   buildAntigravityHookConfig,
   buildAntigravityTurnProcessEnvironment,
+  createBoundedProcessOutput,
   buildAntigravityTurnPrompt,
   detectAntigravityBackgroundTaskStart,
   ensureCapturePlugin,
@@ -193,6 +194,21 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
 });
 
 describe("Antigravity CLI integration helpers", () => {
+  it("caps combined stdout and stderr diagnostics by UTF-8 byte length", () => {
+    const output = createBoundedProcessOutput(16);
+
+    output.append("stdout", "😀".repeat(4));
+    output.append("stderr", "x".repeat(16));
+
+    const snapshot = output.snapshot();
+    expect(output.byteLength).toBeLessThanOrEqual(16);
+    expect(
+      Buffer.byteLength(snapshot.stdout, "utf8") + Buffer.byteLength(snapshot.stderr, "utf8"),
+    ).toBeLessThanOrEqual(16);
+    expect(snapshot.stdout).toBe("");
+    expect(snapshot.stderr).toBe("x".repeat(16));
+  });
+
   it("rotates the gateway lease per print turn and rejects a retained prior bootstrap", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-turn-lease-"));
     const liveTokens = new Set<string>();
