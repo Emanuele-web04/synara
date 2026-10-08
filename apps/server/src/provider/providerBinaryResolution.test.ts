@@ -1,3 +1,47 @@
+describe("commandExistsOnPath", () => {
+  it.skipIf(process.platform === "win32")(
+    "rejects non-executable files and directories in PATH",
+    () => {
+      const home = mkdtempSync(join(tmpdir(), "synara-provider-cli-"));
+      const commandPath = join(home, "codex");
+      const options = { platform: "linux" as const, env: { PATH: home } };
+      try {
+        mkdirSync(commandPath);
+        expect(commandExistsOnPath("codex", options)).toBe(false);
+
+        rmSync(commandPath, { recursive: true });
+        writeFileSync(commandPath, "#!/bin/sh\\nexit 0\\n");
+        chmodSync(commandPath, 0o644);
+        expect(commandExistsOnPath("codex", options)).toBe(false);
+
+        chmodSync(commandPath, 0o755);
+        expect(commandExistsOnPath("codex", options)).toBe(true);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("respects an injected executable predicate over a permissive pathExists mock", () => {
+    expect(
+      commandExistsOnPath("cursor-agent", {
+        platform: "win32",
+        env: { Path: "C:\\Tools", PATHEXT: ".CMD" },
+        pathExists: () => true,
+        isExecutable: (path) => path.endsWith("cursor-agent.CMD"),
+      }),
+    ).toBe(true);
+    expect(
+      commandExistsOnPath("cursor-agent", {
+        platform: "win32",
+        env: { Path: "C:\\Tools", PATHEXT: ".CMD" },
+        pathExists: () => true,
+        isExecutable: () => false,
+      }),
+    ).toBe(false);
+  });
+});
+
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +50,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendDirectoriesToPathEnv,
+  commandExistsOnPath,
   buildOpenCodeServerProcessEnv,
   directoriesContainingCommand,
   openCodeBinarySearchDirectories,
