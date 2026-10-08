@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as OS from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,7 @@ import {
   checkDevinProviderStatus,
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
+  checkOmpProviderStatus,
   checkPiProviderStatus,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
@@ -2722,6 +2723,44 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         );
       }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
     );
+  });
+
+  describe("checkOmpProviderStatus", () => {
+    it.effect("probes the selected instance environment instead of ambient OMP", () => {
+      const isolationRoot = mkdtempSync(join(OS.tmpdir(), "synara-omp-health-"));
+      const binaryDir = join(isolationRoot, "bin");
+      mkdirSync(binaryDir, { recursive: true });
+      const binaryPath = join(binaryDir, "omp");
+      writeFileSync(binaryPath, "#!/bin/sh\n");
+      chmodSync(binaryPath, 0o755);
+      return Effect.gen(function* () {
+        try {
+          const status = yield* checkOmpProviderStatus(
+            "/tmp/omp-agent",
+            undefined,
+            { PATH: binaryDir, PROVIDER_TEST_INSTANCE: "omp-work" },
+            "omp_work",
+            { homeDir: OS.homedir(), isolationRootDir: isolationRoot },
+          );
+          assert.strictEqual(status.provider, "omp");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.available, true);
+        } finally {
+          rmSync(isolationRoot, { recursive: true, force: true });
+        }
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, binaryPath);
+            assertProviderInstanceEnv(env, "PATH", binaryDir);
+            assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "omp-work");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "omp 0.5.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
   });
 
   describe("checkAntigravityProviderStatus", () => {
