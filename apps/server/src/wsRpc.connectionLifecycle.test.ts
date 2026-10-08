@@ -357,7 +357,13 @@ async function startTestServer(): Promise<RunningTestServer> {
               ),
           }).pipe(
             Stream.take(1101),
-            Stream.map((item) => (item.kind === "snapshot" ? item.snapshot : item.event.sequence)),
+            Stream.map((item) =>
+              item.kind === "snapshot"
+                ? item.snapshot
+                : item.kind === "event"
+                  ? item.event.sequence
+                  : item.events.length,
+            ),
           );
         },
         "test.ping": (_input: { readonly label: string }) =>

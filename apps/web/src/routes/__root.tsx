@@ -1335,6 +1335,9 @@ function EventRouter() {
     let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
+    // Set while a batched cursor-resume replay is being queued: the batch ends
+    // with one synchronous flush, so no event inside it may flush on its own.
+    let queueingThreadReplayBatch = false;
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let shellSubscriptionGeneration = 0;
@@ -1959,9 +1962,15 @@ function EventRouter() {
           needsBroadGitInvalidation = true;
         }
       }
-      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
+      if (
+        shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds) &&
+        !queueingThreadReplayBatch
+      ) {
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
+        return;
+      }
+      if (queueingThreadReplayBatch) {
         return;
       }
       domainEventFlushThrottler.maybeExecute();
@@ -2247,6 +2256,51 @@ function EventRouter() {
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
       }
     });
+    const applyThreadStreamEvent = (event: OrchestrationEvent) => {
+      const threadId = ThreadId.makeUnsafe(String(event.aggregateId));
+      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
+      if (latestThreadSequence === undefined) {
+        const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
+        appendBounded(pendingThreadEvents, event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
+        pendingThreadEventsById.set(threadId, pendingThreadEvents);
+        if (
+          event.type === "thread.session-set" &&
+          isTerminalThreadSessionStatus(event.payload.session.status)
+        ) {
+          // Arm even while buffered: the immediate reconcile below may return a
+          // premature session-set snapshot, and the fence must outlive it (#548).
+          armThreadProjectionTerminalFence(threadId, event.sequence);
+        } else if (event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
+        }
+        if (subscribedThreadIds.has(threadId)) {
+          void reconcileThreadProjection(threadId).catch(() => undefined);
+        }
+        return;
+      }
+      if (event.sequence <= latestThreadSequence) {
+        return;
+      }
+      if (!applyFencedThreadEvent(threadId, event, "stream")) {
+        return;
+      }
+      if (
+        event.type === "thread.session-set" &&
+        isTerminalThreadSessionStatus(event.payload.session.status)
+      ) {
+        // Arm after the generic post-event schedule so the fast first-reconcile
+        // delay is not overwritten back to the slower cadence.
+        armThreadProjectionTerminalFence(threadId, event.sequence);
+      } else {
+        if (event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
+        }
+        nextThreadProjectionReconcileAtById.set(
+          threadId,
+          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+        );
+      }
+    };
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
       if (item.kind === "snapshot") {
         const threadId = item.snapshot.thread.id;
@@ -2287,49 +2341,23 @@ function EventRouter() {
         return;
       }
 
-      const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
-      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
-      if (latestThreadSequence === undefined) {
-        const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
-        appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
-        pendingThreadEventsById.set(threadId, pendingThreadEvents);
-        if (
-          item.event.type === "thread.session-set" &&
-          isTerminalThreadSessionStatus(item.event.payload.session.status)
-        ) {
-          // Arm even while buffered: the immediate reconcile below may return a
-          // premature session-set snapshot, and the fence must outlive it (#548).
-          armThreadProjectionTerminalFence(threadId, item.event.sequence);
-        } else if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
+      if (item.kind === "replay") {
+        // A cursor-resume gap delivered as one batch: queue every event through
+        // the per-event path, then commit them in a single store update so a
+        // stale cached turn does not flicker through its intermediate states.
+        queueingThreadReplayBatch = true;
+        try {
+          for (const event of item.events) {
+            applyThreadStreamEvent(event);
+          }
+        } finally {
+          queueingThreadReplayBatch = false;
         }
-        if (subscribedThreadIds.has(threadId)) {
-          void reconcileThreadProjection(threadId).catch(() => undefined);
-        }
+        domainEventFlushThrottler.cancel();
+        flushPendingDomainEvents();
         return;
       }
-      if (item.event.sequence <= latestThreadSequence) {
-        return;
-      }
-      if (!applyFencedThreadEvent(threadId, item.event, "stream")) {
-        return;
-      }
-      if (
-        item.event.type === "thread.session-set" &&
-        isTerminalThreadSessionStatus(item.event.payload.session.status)
-      ) {
-        // Arm after the generic post-event schedule so the fast first-reconcile
-        // delay is not overwritten back to the slower cadence.
-        armThreadProjectionTerminalFence(threadId, item.event.sequence);
-      } else {
-        if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
-        }
-        nextThreadProjectionReconcileAtById.set(
-          threadId,
-          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
-        );
-      }
+      applyThreadStreamEvent(item.event);
     });
     const unsubShellStreamFailure = onShellStreamFailure(() => {
       if (disposed) return;
