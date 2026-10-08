@@ -20,7 +20,9 @@ const platforms = [
     label: "Linux x64",
     runner: "ubuntu-24.04",
     platform: "linux",
-    target: "AppImage",
+    // Keep the Linux packaging on one runner so the prepared Cua artifact and
+    // native dependency build are shared by both installer formats.
+    target: "AppImage,deb",
     arch: "x64",
   },
   {
