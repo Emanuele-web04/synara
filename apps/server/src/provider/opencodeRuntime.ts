@@ -114,7 +114,9 @@ export function createOpenCodeApiCompatibleFetch(
       input instanceof Request ? new Request(input, init) : new Request(String(input), init);
     const response = await fetchImpl(request.clone() as unknown as Request);
     const contentType = response.headers.get("content-type")?.trim() ?? "";
-    if (!OPENCODE_HTML_RESPONSE_PATTERN.test(contentType)) return response;
+    // HTML error pages from a proxy or auth layer are not the successful
+    // OpenCode 2 SPA fallback; do not hide their status behind a second request.
+    if (!response.ok || !OPENCODE_HTML_RESPONSE_PATTERN.test(contentType)) return response;
 
     const url = new URL(request.url);
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return response;
