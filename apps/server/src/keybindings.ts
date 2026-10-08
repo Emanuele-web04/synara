@@ -1240,67 +1240,78 @@ const makeKeybindings = Effect.gen(function* () {
     }),
   );
 
-  const startWatcher = Effect.gen(function* () {
-    const keybindingsConfigDir = path.dirname(keybindingsConfigPath);
-    const keybindingsConfigFile = path.basename(keybindingsConfigPath);
-    const keybindingsConfigPathResolved = path.resolve(keybindingsConfigPath);
-
-    yield* fs.makeDirectory(keybindingsConfigDir, { recursive: true }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new KeybindingsConfigError({
-            configPath: keybindingsConfigPath,
-            detail: "failed to prepare keybindings config directory",
-            cause,
-          }),
-      ),
-    );
-
-    const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
-
-    yield* Stream.runForEach(fs.watch(keybindingsConfigDir), (event) => {
-      const isTargetConfigEvent =
-        event.path === keybindingsConfigFile ||
-        event.path === keybindingsConfigPath ||
-        path.resolve(keybindingsConfigDir, event.path) === keybindingsConfigPathResolved;
-      if (!isTargetConfigEvent) {
-        return Effect.void;
-      }
-      return revalidateAndEmitSafely;
-    }).pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(watcherScope), Effect.asVoid);
-  });
-
-  const start = startupSemaphore.withPermits(1)(
+  const startWatcher = (attemptScope: Scope.Scope) =>
     Effect.gen(function* () {
-      const alreadyStarted = yield* Ref.get(startedRef);
-      const startedDeferred = yield* Ref.get(startedDeferredRef);
+      const keybindingsConfigDir = path.dirname(keybindingsConfigPath);
+      const keybindingsConfigFile = path.basename(keybindingsConfigPath);
+      const keybindingsConfigPathResolved = path.resolve(keybindingsConfigPath);
+
+      yield* fs.makeDirectory(keybindingsConfigDir, { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new KeybindingsConfigError({
+              configPath: keybindingsConfigPath,
+              detail: "failed to prepare keybindings config directory",
+              cause,
+            }),
+        ),
+      );
+
+      const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
+
+      yield* Stream.runForEach(fs.watch(keybindingsConfigDir), (event) => {
+        const isTargetConfigEvent =
+          event.path === keybindingsConfigFile ||
+          event.path === keybindingsConfigPath ||
+          path.resolve(keybindingsConfigDir, event.path) === keybindingsConfigPathResolved;
+        if (!isTargetConfigEvent) {
+          return Effect.void;
+        }
+        return revalidateAndEmitSafely;
+      }).pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(attemptScope), Effect.asVoid);
+    });
+
+  const start = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      // Serialize admission only: callers arriving during an attempt share its
+      // result, including failure, rather than immediately starting another retry.
+      const { alreadyStarted, startedDeferred } = yield* startupSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const alreadyStarted = yield* Ref.get(startedRef);
+          const startedDeferred = yield* Ref.get(startedDeferredRef);
+          yield* Ref.set(startedRef, true);
+          return { alreadyStarted, startedDeferred };
+        }),
+      );
       if (alreadyStarted) {
-        return yield* Deferred.await(startedDeferred);
+        return yield* restore(Deferred.await(startedDeferred));
       }
 
-      yield* Ref.set(startedRef, true);
+      const attemptScope = yield* Scope.fork(watcherScope);
       const startup = Effect.gen(function* () {
         yield* syncDefaultKeybindingsOnStartup;
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         yield* loadConfigStateFromCacheOrDisk;
-        // Attach the watcher last so a failed sync/read attempt cannot leave a live
-        // watcher behind when the caller retries startup.
-        yield* startWatcher;
+        yield* startWatcher(attemptScope);
       });
 
-      const startupExit = yield* Effect.exit(startup);
+      const startupExit = yield* Effect.exit(restore(startup));
       if (startupExit._tag === "Failure") {
-        // Do not strand callers on a permanently failed deferred. Publish this attempt's
-        // failure, then install a fresh readiness gate so a later call can retry after a
-        // transient filesystem or permission error is repaired.
-        yield* Deferred.failCause(startedDeferred, startupExit.cause).pipe(Effect.orDie);
-        const retryDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
-        yield* Ref.set(startedDeferredRef, retryDeferred);
-        yield* Ref.set(startedRef, false);
+        // Finalization stays uninterruptible so cancellation also releases the
+        // attempt's watcher and publishes failure before installing a retry gate.
+        yield* Scope.close(attemptScope, startupExit);
+        yield* startupSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            yield* Deferred.failCause(startedDeferred, startupExit.cause);
+            const retryDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
+            yield* Ref.set(startedDeferredRef, retryDeferred);
+            yield* Ref.set(startedRef, false);
+          }),
+        );
         return yield* Effect.failCause(startupExit.cause);
       }
 
-      yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
+      yield* Deferred.succeed(startedDeferred, undefined);
     }),
   );
 
