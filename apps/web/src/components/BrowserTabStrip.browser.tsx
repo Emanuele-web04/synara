@@ -67,6 +67,8 @@ describe("browser tab mouse actions", () => {
     );
     try {
       const strip = page.getByTestId("browser-tab-strip").element() as HTMLElement;
+      expect(strip.className).toContain("overflow-y-hidden");
+      expect(strip.className).toContain("overscroll-contain");
       expect(strip.scrollWidth).toBeGreaterThan(strip.clientWidth);
       strip.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
       expect(strip.scrollLeft).toBeGreaterThan(0);

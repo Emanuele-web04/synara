@@ -61,7 +61,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
       <div
         ref={stripRef}
         data-testid="browser-tab-strip"
-        className="flex min-w-0 items-center gap-1 overflow-x-auto"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-contain"
       >
         {props.tabs.map((tab) => {
           const isActive = tab.id === activeTabId;

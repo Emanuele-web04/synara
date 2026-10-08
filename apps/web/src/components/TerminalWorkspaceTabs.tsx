@@ -44,7 +44,7 @@ export default function TerminalWorkspaceTabs({
       <div
         ref={stripRef}
         data-testid="terminal-workspace-tab-strip"
-        className="flex min-w-0 items-end gap-1.5 overflow-x-auto pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="flex min-w-0 items-end gap-1.5 overflow-x-auto overflow-y-hidden overscroll-contain pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <button
           type="button"

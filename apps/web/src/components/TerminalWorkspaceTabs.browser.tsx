@@ -22,6 +22,8 @@ describe("TerminalWorkspaceTabs wheel scrolling", () => {
     );
     try {
       const strip = page.getByTestId("terminal-workspace-tab-strip").element() as HTMLElement;
+      expect(strip.className).toContain("overflow-y-hidden");
+      expect(strip.className).toContain("overscroll-contain");
       expect(strip.scrollWidth).toBeGreaterThan(strip.clientWidth);
       strip.dispatchEvent(new WheelEvent("wheel", { deltaY: 24, bubbles: true }));
       expect(strip.scrollLeft).toBeGreaterThan(0);
