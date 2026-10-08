@@ -735,6 +735,19 @@ input {
   -webkit-app-region: no-drag;
 }
 
+/* Chromium does not clip native app regions to scrolling ancestors. Exclude the
+   visible content-tab viewport once, instead of letting offscreen chips and their
+   buttons subtract rectangles from neighboring window chrome. The strip fits its
+   content up to the available width, leaving unused header space draggable. */
+.surface-content-tabs {
+  -webkit-app-region: no-drag;
+}
+
+.surface-content-tabs [data-surface-tab],
+.surface-content-tabs [data-surface-tab] button {
+  -webkit-app-region: initial;
+}
+
 /* Scrollbar styling.
    The 2px transparent border + `background-clip: padding-box` insets the thumb so
    it floats with a small gap from the track edges instead of hugging them. Use
