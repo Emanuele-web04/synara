@@ -12,6 +12,20 @@ export type WorkspaceFileFindStepDirection = "next" | "previous";
 /** Window event used by the app-level keybinding dispatcher to target the focused preview. */
 export const WORKSPACE_FILE_PREVIEW_FIND_EVENT = "synara:file-preview-find";
 
+/** Whether a mounted preview should expose the in-preview finder. */
+export function workspaceFileFindEnabled(input: {
+  fileContentsReady: boolean;
+  fileIsImage: boolean;
+  editableDocument: boolean;
+  showMarkdownPreview: boolean;
+}): boolean {
+  return (
+    input.fileContentsReady &&
+    !input.fileIsImage &&
+    (!input.editableDocument || input.showMarkdownPreview)
+  );
+}
+
 /**
  * Return non-overlapping, case-insensitive matches in source order.
  *

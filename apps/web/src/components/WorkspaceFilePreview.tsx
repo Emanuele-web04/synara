@@ -91,6 +91,7 @@ import {
   collectWorkspaceFileFindMatches,
   stepWorkspaceFileFindIndex,
   WORKSPACE_FILE_PREVIEW_FIND_EVENT,
+  workspaceFileFindEnabled,
 } from "./chat/workspaceFileFind.logic";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
@@ -671,33 +672,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     setFileFindFocusNonce((current) => current + 1);
   }, []);
 
-  // The app-level keybinding dispatcher sends a targeted event after resolving
-  // configurable `file.find`/`chat.find` rules. The direct keyboard listener
-  // keeps standalone preview mounts (outside the chat route) equally useful.
-  useEffect(() => {
-    const onPreviewFind = (event: Event) => {
-      const target = (event as CustomEvent<{ target?: EventTarget }>).detail?.target;
-      if (!target || !(target instanceof Node) || !filePreviewRootRef.current?.contains(target)) {
-        return;
-      }
-      openFileFind();
-    };
-    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.key.toLowerCase() !== "f") return;
-      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
-      const target = event.target;
-      if (!(target instanceof Node) || !filePreviewRootRef.current?.contains(target)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      openFileFind();
-    };
-    window.addEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
-    window.addEventListener("keydown", onWindowKeyDown, { capture: true });
-    return () => {
-      window.removeEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
-      window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
-    };
-  }, [openFileFind]);
   // A workspace-relative reference that fails to read may actually live under
   // an ancestor of the workspace root (agents sometimes emit paths relative to
   // a parent folder, e.g. `Claude/Outbox/note.md` for a thread rooted at
@@ -891,6 +865,40 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     editor.readOnlyReason === null
       ? fileQuery.data
       : null;
+  const fileFindEnabled = workspaceFileFindEnabled({
+    fileContentsReady: fileQuery.data !== undefined,
+    fileIsImage,
+    editableDocument: editableDocument !== null,
+    showMarkdownPreview,
+  });
+  // The app-level keybinding dispatcher sends a targeted event after resolving
+  // configurable `file.find`/`chat.find` rules. The direct keyboard listener
+  // keeps standalone preview mounts (outside the chat route) equally useful.
+  useEffect(() => {
+    const onPreviewFind = (event: Event) => {
+      if (!fileFindEnabled) return;
+      const target = (event as CustomEvent<{ target?: EventTarget }>).detail?.target;
+      if (!target || !(target instanceof Node) || !filePreviewRootRef.current?.contains(target)) {
+        return;
+      }
+      openFileFind();
+    };
+    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!fileFindEnabled || event.defaultPrevented || event.key.toLowerCase() !== "f") return;
+      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const target = event.target;
+      if (!(target instanceof Node) || !filePreviewRootRef.current?.contains(target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openFileFind();
+    };
+    window.addEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
+    window.addEventListener("keydown", onWindowKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
+      window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
+    };
+  }, [fileFindEnabled, openFileFind]);
   const activeEditBuffer =
     editableDocument && editor.canEdit
       ? {
@@ -938,7 +946,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     return () => style.remove();
   }, [fileFindHighlightId]);
   useEffect(() => {
-    if (!fileFindOpen) {
+    if (!fileFindOpen || !fileFindEnabled) {
       setFileFindRenderedMatchCount(0);
       return;
     }
@@ -962,6 +970,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   }, [
     displayedFileContents,
     fileFindActiveIndex,
+    fileFindEnabled,
     fileFindHighlightId,
     fileFindOpen,
     fileFindQuery,
@@ -1274,6 +1283,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     <div
       ref={filePreviewRootRef}
       data-workspace-file-preview="true"
+      data-workspace-file-find-enabled={fileFindEnabled ? "true" : undefined}
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface"
     >
       <WorkspaceFilePreviewHeader
@@ -1303,12 +1313,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         readOnlyReason={readOnlyReason}
         reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
         onReload={workspaceRoot && filePath ? handleFileReload : undefined}
-        onFind={!editableDocument || showMarkdownPreview ? openFileFind : undefined}
+        onFind={fileFindEnabled ? openFileFind : undefined}
       />
       <div className="pointer-events-none absolute top-1 right-3 z-20">
         <div className="pointer-events-auto">
           <WorkspaceFileFindBar
-            open={fileFindOpen}
+            open={fileFindEnabled && fileFindOpen}
             focusNonce={fileFindFocusNonce}
             query={fileFindQuery}
             matchCount={Math.min(

@@ -7,7 +7,65 @@ import {
   collectWorkspaceFileFindMatches,
   lineIndexForWorkspaceFileFindOffset,
   stepWorkspaceFileFindIndex,
+  workspaceFileFindEnabled,
 } from "./workspaceFileFind.logic";
+
+describe("workspaceFileFindEnabled", () => {
+  it.each([
+    [
+      "loaded read-only source",
+      {
+        fileContentsReady: true,
+        fileIsImage: false,
+        editableDocument: false,
+        showMarkdownPreview: false,
+      },
+      true,
+    ],
+    [
+      "editable source",
+      {
+        fileContentsReady: true,
+        fileIsImage: false,
+        editableDocument: true,
+        showMarkdownPreview: false,
+      },
+      false,
+    ],
+    [
+      "editable Markdown preview",
+      {
+        fileContentsReady: true,
+        fileIsImage: false,
+        editableDocument: true,
+        showMarkdownPreview: true,
+      },
+      true,
+    ],
+    [
+      "image preview",
+      {
+        fileContentsReady: true,
+        fileIsImage: true,
+        editableDocument: false,
+        showMarkdownPreview: false,
+      },
+      false,
+    ],
+    [
+      "loading source",
+      {
+        fileContentsReady: false,
+        fileIsImage: false,
+        editableDocument: false,
+        showMarkdownPreview: false,
+      },
+      false,
+    ],
+  ] as const)("returns %s => %s", (_name, input, expected) => {
+    expect(workspaceFileFindEnabled(input)).toBe(expected);
+  });
+});
 
 describe("collectWorkspaceFileFindMatches", () => {
   it("matches case-insensitively without overlapping successive results", () => {

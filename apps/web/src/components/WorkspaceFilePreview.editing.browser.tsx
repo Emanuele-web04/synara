@@ -655,6 +655,24 @@ it("preserves unsaved Markdown edits across Preview and Source", async () => {
   }
 });
 
+it("leaves Ctrl/Cmd+F available to the editable source editor", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile());
+  const restore = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await editor.click();
+    await userEvent.keyboard(shortcut("f"));
+    await expect.element(page.getByTestId("workspace-file-find-bar")).not.toBeInTheDocument();
+  } finally {
+    restore();
+  }
+});
+
 it("preserves edits and focus when a save completes while typing", async () => {
   let complete!: (v: { relativePath: string; version: string }) => void;
   const pending = new Promise<{ relativePath: string; version: string }>((r) => (complete = r));

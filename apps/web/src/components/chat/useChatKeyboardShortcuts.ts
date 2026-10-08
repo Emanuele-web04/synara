@@ -39,7 +39,11 @@ function eventTargetsComposer(
 
 function eventTargetsWorkspaceFilePreview(event: globalThis.KeyboardEvent): boolean {
   const target = event.target;
-  return target instanceof Element && target.closest("[data-workspace-file-preview]") !== null;
+  return (
+    target instanceof Element &&
+    target.closest('[data-workspace-file-preview][data-workspace-file-find-enabled="true"]') !==
+      null
+  );
 }
 
 function canHandleComposerPickerShortcut(
