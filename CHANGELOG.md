@@ -91,6 +91,8 @@
 - Passed on Node 24 / Bun 1.4.2: format, lint, typecheck, release smoke, full build, Windows runtime boundary and migration lineage.
 - Full workspace suite: **15,860 passed / 37 skipped**, across six successful workspace test tasks.
 - Chromium: **16 passed** across multi-folder creation, Tasks navigation hints and Stable Inbox.
+- Main CI passed after rerunning one intermittent sidebar-hover geometry failure; all four variants passed locally without source changes.
+- The first publication attempt stopped before the Windows scan because its configured update source returned Defender definitions older than 24 hours. The qualification script now retries Microsoft's direct MMPC source and retains the same freshness, protection, exclusion, detection and unchanged-artifact checks.
 - Publication remains conditional on native build, signed/notarized macOS packaging, Linux/unsigned Windows packaging, provenance, startup smoke and the Windows Defender scan. A manual installed-app upgrade has not been exercised locally.
 - Multi-folder projects support Local mode with Codex and Claude; extra folders are outside primary-folder Git checkpoints and undo. Hubs and diagnostics remain Beta-only.
 - Windows x64 is published unsigned under the version-scoped release policy; packaging, provenance, startup smoke and Defender checks remain required.

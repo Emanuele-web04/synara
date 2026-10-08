@@ -328,7 +328,9 @@ Before startup smoke and artifact upload, the Windows job scans each final
 installer with Microsoft Defender. The guard enables protection and removes
 the hosted image's exclusions inside that disposable runner, updates security
 intelligence, verifies the actual file is not excluded, and requires an explicit
-clean scan plus unchanged installer bytes. Detection, remediation, stale
+clean scan plus unchanged installer bytes. If the configured update source returns
+definitions older than 24 hours, it retries Microsoft's direct MMPC source before
+applying the same freshness gate. Detection, remediation, stale
 intelligence, a missing file, or a scan error blocks publication. Scan evidence
 is retained as `windows-defender-x64`, including on failure. Cloud participation
 and sample-submission settings are not changed. This server scan does not replace
