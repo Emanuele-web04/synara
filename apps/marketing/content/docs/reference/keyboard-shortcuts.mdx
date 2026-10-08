@@ -24,8 +24,11 @@ description: The full default keymap, verified against the Synara source, plus J
 | `mod+p`                         | Search files by name in the active project         |
 | `mod+shift+f`                   | Search matching source lines in the active project |
 | `mod+f`                         | Find text in the current conversation              |
+| `mod+alt+s`                     | Toggle the side chat                               |
 
 Open thread tab shortcuts wrap at either end and apply while the horizontal tab strip is visible. On Windows and Linux they yield to a focused terminal; on macOS they also work from the terminal.
+
+On Windows and Linux, the side chat and active-thread action shortcuts yield to a focused terminal; on macOS they also work from the terminal. Active-thread actions apply only when a chat pane is focused.
 
 ## Create
 
@@ -69,6 +72,9 @@ Models without effort controls keep normal keyboard focus navigation.
 | `mod+t` / `mod+w`            | New / close terminal tab                                               | Terminal focused        |
 | `mod+shift+b`                | Toggle the browser preview                                             | Outside the terminal    |
 | `meta+ctrl+p` / `ctrl+alt+p` | Commit and push (macOS / Windows-Linux)                                | Outside the terminal    |
+| `mod+alt+shift+a`            | Archive the active thread                                              | Chat pane focused       |
+| `mod+alt+shift+s`            | Snooze the active thread                                               | Chat pane focused       |
+| `mod+alt+shift+u`            | Mark the active thread unread                                          | Chat pane focused       |
 
 Opening a file or source match sends it to the current task's file pane. Content search requires at least two characters and shows the matching path, line number, and source excerpt. The iOS Simulator exposes a customizable `device.toggle` command but has no default shortcut; open it from the right-dock add menu or assign a key in Settings.
 
