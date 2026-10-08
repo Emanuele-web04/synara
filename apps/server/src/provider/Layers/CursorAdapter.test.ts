@@ -10,7 +10,9 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { stampCursorTerminalEventInstance } from "./CursorAdapter.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
+
+import { cursorPromptUsageSnapshot, stampCursorTerminalEventInstance } from "./CursorAdapter.ts";
 
 describe("CursorAdapter terminal event identity", () => {
   it("keeps the stopped account identity after the thread is rebound to another account", () => {
@@ -29,5 +31,50 @@ describe("CursorAdapter terminal event identity", () => {
 
     expect(accountB).not.toBe(accountA);
     expect(stamped.providerInstanceId).toBe(accountA);
+  });
+});
+
+describe("CursorAdapter ACP usage", () => {
+  it("projects cumulative PromptResponse usage into profile token accounting", () => {
+    expect(
+      cursorPromptUsageSnapshot({
+        totalTokens: 1_234.9,
+        inputTokens: 900.2,
+        outputTokens: 200.8,
+        thoughtTokens: 100.4,
+        cachedReadTokens: 30.6,
+        cachedWriteTokens: 3.2,
+      } satisfies Acp.Usage),
+    ).toEqual({
+      usedTokens: 0,
+      totalProcessedTokens: 1_234,
+      inputTokens: 900,
+      outputTokens: 200,
+      reasoningOutputTokens: 100,
+      cachedInputTokens: 30,
+      cacheCreationInputTokens: 3,
+    });
+  });
+
+  it("ignores missing or invalid cumulative usage", () => {
+    expect(cursorPromptUsageSnapshot(undefined)).toBeUndefined();
+    expect(
+      cursorPromptUsageSnapshot({
+        totalTokens: Number.NaN,
+        inputTokens: 0,
+        outputTokens: 0,
+      } satisfies Acp.Usage),
+    ).toBeUndefined();
+    expect(
+      cursorPromptUsageSnapshot({
+        totalTokens: 10,
+        inputTokens: -1,
+        outputTokens: 2,
+      } satisfies Acp.Usage),
+    ).toEqual({
+      usedTokens: 0,
+      totalProcessedTokens: 10,
+      outputTokens: 2,
+    });
   });
 });
