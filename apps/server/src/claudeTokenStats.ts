@@ -78,6 +78,7 @@ export function claudeTokenActivityCtes(sql: SqlClient.SqlClient, scope?: TokenS
               th.source_turn_id IS NULL
               OR parent_activity.turn_id = th.source_turn_id
             )
+            AND json_valid(parent_activity.payload_json)
             AND json_extract(parent_activity.payload_json, '$.tokenAccountingVersion') = 1
             AND json_type(parent_activity.payload_json, '$.modelUsage') = 'object'
             AND LOWER(TRIM(CAST(parent_usage.key AS TEXT))) = LOWER(TRIM(CAST(
