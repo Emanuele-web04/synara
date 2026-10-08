@@ -890,6 +890,11 @@ label:has(> select#reasoning-effort) select {
   padding-inline: 1.25rem;
 }
 
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-markdown-task-checkbox {
+  margin-inline-start: -1.4em;
+  margin-inline-end: 0.4em;
+}
+
 .chat-markdown-technical-isolate {
   direction: ltr;
   unicode-bidi: isolate;
@@ -989,10 +994,37 @@ label:has(> select#reasoning-effort) select {
   border-bottom-right-radius: 0;
 }
 
+/* Find highlights can span several text fragments in either writing
+   direction. Reset the physical continuation edges above, then use logical
+   edges for transcript blocks so RTL matches keep their rounded ends. */
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match {
+  padding-inline: 0.2em;
+  border-radius: 0.45em;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-before {
+  padding-inline-start: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-after {
+  padding-inline-end: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
 .chat-markdown blockquote {
   border-left: 2px solid var(--border);
   padding-left: 0.8rem;
   color: var(--muted-foreground);
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] blockquote {
+  border-left: 0;
+  border-inline-start: 2px solid var(--border);
+  padding-left: 0;
+  padding-inline-start: 0.8rem;
 }
 
 /* GitHub `> [!NOTE]` alerts (tagged by remarkGithubAlerts). */
