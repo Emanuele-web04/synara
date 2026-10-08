@@ -519,6 +519,7 @@ const SKILL_ORIGIN_ROOTS = {
 } as const satisfies Record<SkillsHomeOrigin, SkillOriginRootSpec>;
 
 const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
+  muse: ["agents"],
   codex: ["codex", "agents"],
   claudeAgent: ["claude"],
   cursor: ["cursor", "agents", "claude", "codex"],

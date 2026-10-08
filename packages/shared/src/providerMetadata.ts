@@ -34,6 +34,14 @@ function defineProviderDescriptors<const Descriptors extends readonly ProviderDe
 
 export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
   {
+    kind: "muse",
+    displayName: PROVIDER_DISPLAY_NAMES.muse,
+    available: true,
+    setupDocsHref: "https://github.com/BrokkAi/muse-acp#quick-start",
+    supportsNativeTurnSteering: false,
+    usage: null,
+  },
+  {
     kind: "codex",
     displayName: PROVIDER_DISPLAY_NAMES.codex,
     available: true,

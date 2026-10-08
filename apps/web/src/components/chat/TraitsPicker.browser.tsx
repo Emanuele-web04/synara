@@ -28,6 +28,55 @@ import {
 
 const CLAUDE_THREAD_ID = ThreadId.makeUnsafe("thread-claude-traits");
 
+const MUSE_THREAD_ID = ThreadId.makeUnsafe("thread-muse-traits");
+function MuseTraitsHarness() {
+  const draft = useComposerThreadDraft(MUSE_THREAD_ID);
+  const selection = draft.modelSelectionByProvider.muse;
+  return (
+    <TraitsPicker
+      provider="muse"
+      threadId={MUSE_THREAD_ID}
+      model="muse-spark-1.3"
+      prompt=""
+      onPromptChange={() => {}}
+      modelOptions={selection?.provider === "muse" ? selection.options : undefined}
+      runtimeModel={{
+        slug: "muse-spark-1.3",
+        name: "Muse Spark 1.3",
+        defaultReasoningEffort: "default",
+        supportedReasoningEfforts: [
+          { value: "default", label: "Muse default" },
+          { value: "minimal", label: "Minimal" },
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+          { value: "max", label: "Max" },
+        ],
+      }}
+    />
+  );
+}
+
+it("selects and persists Muse reasoning effort for a non-default model", async () => {
+  const mounted = await render(<MuseTraitsHarness />);
+  try {
+    await page.getByRole("button").click();
+    await page.getByRole("menuitemradio", { name: "Max", exact: true }).click();
+    await expect.element(page.getByRole("button")).toHaveTextContent("Max");
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[MUSE_THREAD_ID]?.modelSelectionByProvider
+        .muse,
+    ).toMatchObject({
+      provider: "muse",
+      model: "muse-spark-1.3",
+      options: { reasoningEffort: "max" },
+    });
+  } finally {
+    await mounted.unmount();
+  }
+});
+
 function ClaudeTraitsPickerHarness(props: {
   model: string;
   fallbackModelSelection: ModelSelection | null;
@@ -46,6 +95,7 @@ function ClaudeTraitsPickerHarness(props: {
       devin: [],
       antigravity: [],
       grok: [],
+      muse: [],
       droid: [],
       opencode: [],
       pi: [],
@@ -593,6 +643,7 @@ function OpenCodeTraitsPickerHarness(props: {
       devin: [],
       antigravity: [],
       grok: [],
+      muse: [],
       droid: [],
       opencode: [],
       pi: [],

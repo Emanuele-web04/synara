@@ -3,6 +3,7 @@
 // Layer: Server provider process security
 
 export type ProviderChildKind =
+  | "muse"
   | "acp"
   | "antigravity"
   | "claude"
@@ -16,6 +17,7 @@ export type ProviderChildKind =
   | "omp";
 
 const PROVIDER_CREDENTIAL_KEYS = new Set([
+  "META_API_KEY",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
@@ -52,6 +54,7 @@ export function withoutProviderCredentialEnvironment(env: NodeJS.ProcessEnv): No
 }
 
 const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<string>> = {
+  muse: new Set(["META_API_KEY"]),
   antigravity: new Set(["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"]),
   claude: new Set([
     "ANTHROPIC_API_KEY",

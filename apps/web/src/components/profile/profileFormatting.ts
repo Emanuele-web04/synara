@@ -90,6 +90,8 @@ export function formatProviderLabel(provider: ProviderKind): string {
       return "Antigravity";
     case "grok":
       return "Grok";
+    case "muse":
+      return "Muse Code";
     case "droid":
       return "Droid";
     case "opencode":

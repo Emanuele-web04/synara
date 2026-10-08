@@ -34,6 +34,7 @@ const GPT_5_4 = "gpt-5.4" as ModelSlug;
 const SONNET = "claude-sonnet-4-6" as ModelSlug;
 
 const EMPTY_BY_PROVIDER: Record<ProviderKind, never[]> = {
+  muse: [],
   claudeAgent: [],
   codex: [],
   cursor: [],

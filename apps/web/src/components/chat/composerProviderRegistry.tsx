@@ -107,6 +107,11 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
       normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
+    case "muse": {
+      rawEffort = trimOrNull(modelOptions?.muse?.reasoningEffort);
+      normalizedOptions = rawEffort ? { reasoningEffort: rawEffort } : undefined;
+      break;
+    }
     case "droid": {
       const providerOptions = modelOptions?.droid;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);

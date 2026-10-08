@@ -22,6 +22,59 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+## Muse Code (ACP)
+
+Muse Code is a separate provider, using the community-maintained
+[`@brokkai/muse-acp`](https://github.com/BrokkAi/muse-acp) bridge over stdio.
+The bridge runs the locally installed Meta Muse Code CLI (`muse serve`, MSP).
+Install [Muse Code](https://dev.meta.ai/docs/muse-code), then run:
+
+```sh
+npm install -g @brokkai/muse-acp
+muse-acp login
+```
+
+In Settings → Providers, enable **Muse Code**. The binary override points to
+`muse-acp`, not `muse`. Set `MUSE_CLI` in the account environment when Muse
+is installed outside PATH. Synara does not install either executable automatically.
+
+Models are discovered from Muse. **Muse default** retains Muse's native model
+selection. Model and reasoning-effort changes are sent over ACP; Plan switches
+to the bridge's native read-only Plan mode. Tool approvals stay routed through
+Synara, including in Full Access, so Synara's Plan and computer-consent checks
+still apply. Native sessions can be resumed; rollback uses Synara's
+restart-session capability rather than pretending to rewind Muse history.
+
+Reasoning choices are discovered per model. **Use session setting** leaves the
+current native effort unchanged, including after resume. Synara sends only an
+explicitly selected tier; MSP cannot clear an effort already stored in a session
+by setting it to `default`. Choose a concrete tier to change it.
+
+The setup badge verifies the bridge version only. Authentication is checked on
+session start; no tokens or login files are parsed to guess an authenticated state.
+The first version does not advertise native steering, native rollback, plugin
+discovery, session import, or subscription usage reporting.
+
+Windows compatibility: stock muse-acp 0.10.0 strips the verbatim `\\?\` prefix
+from canonical MSP `workspaceRoots`. With Muse Code 1.4.3 this can reject the
+first turn after resume. A bridge build that preserves the canonical prefix
+is required; changing the Synara project path does not fix the bridge's serialization.
+The resume-and-send test below passes with that bridge correction.
+
+To repeat the live
+adapter check, set `SYNARA_LIVE_MUSE=1` (optionally `MUSE_ACP_TEST_BINARY` to the
+bridge executable) and run from the repository root:
+
+```sh
+bun run --cwd apps/server test src/provider/Layers/MuseAdapter.live.test.ts
+```
+
+This opt-in test sends two short model prompts across a restart in a temporary
+workspace, then interrupts a third prompt. It checks model discovery, streamed output,
+session shutdown, a completed reply after native resume, and cancellation.
+Another live check sets every advertised reasoning tier on the contributor model
+and verifies that an omitted effort or `default` preserves each selected tier.
+
 ## What Synara manages
 
 Synara provides the shared operating surface around each provider:

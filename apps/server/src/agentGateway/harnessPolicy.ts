@@ -83,6 +83,7 @@ const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
   "antigravity",
   "cursor",
   "grok",
+  "muse",
   "droid",
   "devin",
   "opencode",

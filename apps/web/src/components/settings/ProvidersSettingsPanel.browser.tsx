@@ -127,6 +127,27 @@ function activityRow(provider: string) {
     .closest('[data-slot="settings-row"]')!;
 }
 
+it("offers Muse Code separately with the ACP bridge and login action", async () => {
+  await page.viewport(1280, 900);
+  harness.statuses = harness.statuses.map((status) =>
+    status.provider === "muse"
+      ? {
+          ...status,
+          authStatus: "unknown" as const,
+          message: "Muse ACP bridge is installed. Sign in to Muse Code before starting a session.",
+        }
+      : status,
+  );
+  await render(<ProvidersSettingsPanel {...props} providerTarget="muse" />);
+  await expect
+    .element(page.getByRole("list", { name: "Muse Code accounts", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(page.getByRole("button", { name: "Sign in to Muse Code", exact: true }))
+    .toBeVisible();
+  await expect.element(page.getByText("Muse ACP bridge path", { exact: true })).toBeVisible();
+});
+
 it("saves provider CPU priority opt-out and exposes reset to the default", async () => {
   const updateSettings = vi.fn();
   const result = await render(

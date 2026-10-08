@@ -8,6 +8,20 @@ import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 
 import { normalizePersistedModelSelection } from "./modelSelectionCompatibility.ts";
 
+it("keeps Muse sessions on Muse after persistence normalization", () => {
+  const selection = {
+    provider: "muse",
+    instanceId: "muse_work",
+    model: "muse-spark-1.3",
+    options: { reasoningEffort: "max" },
+  };
+  assert.deepEqual(normalizePersistedModelSelection(selection), selection);
+  assert.deepEqual(
+    normalizePersistedModelSelection({ instanceId: "muse_work", model: "default" }),
+    { provider: "muse", instanceId: "muse_work", model: "default" },
+  );
+});
+
 it("preserves explicit provider instance ids during compatibility normalization", () => {
   assert.deepEqual(
     normalizePersistedModelSelection({

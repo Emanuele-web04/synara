@@ -36,6 +36,7 @@ import type {
 import { classifyProviderReasoningEffortSupport } from "./lib/codexReasoningEffort";
 
 export const COMPOSER_PROVIDER_KINDS = [
+  "muse",
   "codex",
   "claudeAgent",
   "cursor",
@@ -218,6 +219,15 @@ export function makeModelSelection(
 ): ModelSelection {
   const instance = normalizeProviderInstanceId(instanceId);
   switch (provider) {
+    case "muse":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options && "reasoningEffort" in options && options.reasoningEffort
+          ? { options: { reasoningEffort: options.reasoningEffort } }
+          : {}),
+      };
     case "antigravity":
       return {
         provider,
@@ -488,7 +498,17 @@ export function normalizeProviderModelOptions(
         }
       : undefined;
   const omp = normalizeOmpModelOptions(ompCandidate as OmpModelOptions | null | undefined);
+  const museCandidate = candidate?.muse;
+  const muse =
+    museCandidate &&
+    typeof museCandidate === "object" &&
+    "reasoningEffort" in museCandidate &&
+    typeof museCandidate.reasoningEffort === "string" &&
+    museCandidate.reasoningEffort.trim()
+      ? { reasoningEffort: museCandidate.reasoningEffort.trim() }
+      : undefined;
   if (
+    !muse &&
     !codex &&
     !claude &&
     !cursor &&
@@ -509,6 +529,7 @@ export function normalizeProviderModelOptions(
     ...(devin ? { devin } : {}),
     ...(antigravity ? { antigravity } : {}),
     ...(grok ? { grok } : {}),
+    ...(muse ? { muse } : {}),
     ...(droid ? { droid } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),

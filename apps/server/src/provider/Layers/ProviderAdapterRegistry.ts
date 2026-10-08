@@ -30,6 +30,7 @@ import { CursorAdapter } from "../Services/CursorAdapter.ts";
 import { DevinAdapter } from "../Services/DevinAdapter.ts";
 import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
+import { MuseAdapter } from "../Services/MuseAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
 import { OmpAdapter } from "../Services/OmpAdapter.ts";
@@ -217,6 +218,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* DevinAdapter,
             yield* AntigravityAdapter,
             yield* GrokAdapter,
+            yield* MuseAdapter,
             yield* DroidAdapter,
             yield* OpenCodeAdapter,
             yield* OmpAdapter,

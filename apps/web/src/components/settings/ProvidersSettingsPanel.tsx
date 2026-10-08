@@ -136,6 +136,7 @@ import {
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 type ProviderInstallTextKey =
+  | "museBinaryPath"
   | "claudeBinaryPath"
   | "claudeHomePath"
   | "codexBinaryPath"
@@ -194,6 +195,23 @@ const PROVIDER_VISIBILITY_OPTIONS = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor
 }));
 
 const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
+  {
+    provider: "muse",
+    docs: [
+      { label: "Install Muse Code", href: "https://dev.meta.ai/docs/muse-code" },
+      { label: "ACP bridge", href: "https://github.com/BrokkAi/muse-acp#quick-start" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "museBinaryPath",
+        label: "Muse ACP bridge path",
+        placeholder: "muse-acp",
+        description:
+          "Path to @brokkai/muse-acp. Leave blank to use muse-acp from PATH. Install and sign in to Muse Code first; set MUSE_CLI in this account's environment if Muse is installed elsewhere.",
+      },
+    ],
+  },
   {
     provider: "codex",
     docs: [

@@ -115,6 +115,7 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "cursor" &&
       input.provider !== "antigravity" &&
       input.provider !== "grok" &&
+      input.provider !== "muse" &&
       input.provider !== "droid" &&
       input.provider !== "opencode" &&
       input.provider !== "pi" &&

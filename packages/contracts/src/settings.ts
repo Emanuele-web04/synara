@@ -78,6 +78,11 @@ export const GrokServerProviderSettings = Schema.Struct({
 });
 export type GrokServerProviderSettings = typeof GrokServerProviderSettings.Type;
 
+export const MuseServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "muse-acp")),
+});
+
 export const DroidServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "droid")),
@@ -160,6 +165,7 @@ export const ServerSettings = Schema.Struct({
     })),
   ),
   providers: Schema.Struct({
+    muse: MuseServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     codex: CodexServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -241,6 +247,7 @@ export const ServerSettingsPatch = Schema.Struct({
       ),
       antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      muse: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       opencode: Schema.optionalKey(
         Schema.Struct({

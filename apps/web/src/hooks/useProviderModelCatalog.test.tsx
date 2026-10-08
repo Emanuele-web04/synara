@@ -91,6 +91,7 @@ const SETTINGS = {
   customCursorModels: ["cursor-custom"],
   customDroidModels: [],
   customGrokModels: [],
+  customMuseModels: [],
   customOpenCodeModels: [],
   customPiModels: [],
   droidBinaryPath: "",

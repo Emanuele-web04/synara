@@ -52,6 +52,7 @@ export type ProviderModelPrefetchSettings = Pick<
     Pick<
       AppSettings,
       | "claudeHomePath"
+      | "museBinaryPath"
       | "codexAccounts"
       | "codexBinaryPath"
       | "codexHomePath"
@@ -192,6 +193,14 @@ export function providerModelsPrefetchQueryOptions(input: {
   const optionString = (key: string) => readProviderOptionString(providerOptions, key);
 
   switch (provider) {
+    case "muse":
+      return providerModelsQueryOptions({
+        provider,
+        instanceId,
+        binaryPath: optionString("binaryPath"),
+        cwd,
+        priority,
+      });
     case "claudeAgent":
       return providerModelsQueryOptions({
         provider: "claudeAgent",

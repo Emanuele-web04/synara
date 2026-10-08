@@ -147,6 +147,7 @@ const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara setting
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
 
 const PROVIDERS = [
+  "muse",
   CODEX_PROVIDER,
   CLAUDE_AGENT_PROVIDER,
   CURSOR_PROVIDER,
@@ -879,7 +880,11 @@ function isAccountIsolatedProviderDriver(
   provider: ProviderChildKind,
 ): provider is Extract<ProviderProcessEnvDriver, ProviderChildKind> {
   return (
-    provider === "cursor" || provider === "grok" || provider === "opencode" || provider === "pi"
+    provider === "muse" ||
+    provider === "cursor" ||
+    provider === "grok" ||
+    provider === "opencode" ||
+    provider === "pi"
   );
 }
 
@@ -895,6 +900,7 @@ export const makeProviderUpdateEnv = (
     case "claudeAgent":
       return makeProviderProbeEnv("claude", environment);
     case "codex":
+    case "muse":
     case "cursor":
     case "devin":
     case "antigravity":
@@ -1658,6 +1664,44 @@ export const makeCheckGrokProviderStatus = (
   });
 
 export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
+
+export const checkMuseProviderStatus = (
+  binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const base = {
+      provider: "muse",
+      driver: "muse",
+      instanceId: "muse",
+      checkedAt: new Date().toISOString(),
+      authStatus: "unknown",
+    } as const;
+    const prepared = tryMakeProviderProbeEnv("muse", environment, instanceId, paths);
+    if (!prepared.ok) return providerHomePreparationFailure("muse", base.checkedAt, prepared.cause);
+    const probe = yield* probeProviderCliVersion(
+      runProviderCommand(binaryPath?.trim() || "muse-acp", ["--version"], { env: prepared.env }),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (probe.outcome !== "success")
+      return {
+        ...base,
+        status: "error",
+        available: false,
+        message:
+          "Muse ACP bridge could not run. Install Muse Code and @brokkai/muse-acp, or configure its binary path.",
+      } satisfies ServerProviderStatus;
+    return {
+      ...base,
+      status: "ready",
+      available: true,
+      version: parseGenericCliVersion(probe.result.stdout),
+      message:
+        "Muse ACP bridge is installed. Muse Code authentication is checked when starting a session; use Sign in if needed.",
+    } satisfies ServerProviderStatus;
+  });
 
 // ── Droid health check ─────────────────────────────────────────────
 
@@ -3275,6 +3319,16 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               instance,
               checkAntigravityProviderStatus(binaryPath, instance.environment),
             );
+          case "muse": {
+            const options = providerStartOptionsFromInstance(instance)?.muse;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              checkMuseProviderStatus(binaryPath, options?.environment, instance.instanceId, {
+                homeDir: serverConfig.homeDir,
+                isolationRootDir: serverConfig.stateDir,
+              }),
+            );
+          }
           case "grok": {
             const grokOptions = providerStartOptionsFromInstance(instance)?.grok;
             return checkProviderInstanceWhenEnabled(

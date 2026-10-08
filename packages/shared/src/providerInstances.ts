@@ -17,6 +17,7 @@ import { ProviderKind as ProviderKindSchema } from "@synara/contracts";
 import { Schema } from "effect";
 
 export const BUILT_IN_PROVIDER_KINDS = [
+  "muse",
   "codex",
   "claudeAgent",
   "cursor",
@@ -105,6 +106,8 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
     return "";
   }
   switch (provider) {
+    case "muse":
+      return trimmed === "muse-acp" ? "" : trimmed;
     case "codex":
       return trimmed === "codex" ? "" : trimmed;
     case "claudeAgent":
@@ -181,6 +184,7 @@ export function inferLegacyProviderKindFromInstanceId(
   )
     return "antigravity";
   if (lowerInstanceId.startsWith("grok")) return "grok";
+  if (lowerInstanceId.startsWith("muse")) return "muse";
   if (lowerInstanceId.startsWith("droid")) return "droid";
   if (
     lowerInstanceId.startsWith("opencode") ||
@@ -204,6 +208,7 @@ export function inferLegacyProviderKindFromModel(model: string | null | undefine
     return "claudeAgent";
   if (lowerModel.includes("gemini") || lowerModel.includes("antigravity")) return "antigravity";
   if (lowerModel.includes("grok")) return "grok";
+  if (lowerModel.startsWith("muse-")) return "muse";
   if (lowerModel.includes("droid")) return "droid";
   if (lowerModel.includes("devin")) return "devin";
   if (
@@ -604,6 +609,10 @@ export function providerStartOptionsFromInstance(
     case "grok":
       return binaryPath || environment.environment
         ? { grok: { ...environment, ...(binaryPath ? { binaryPath } : {}) } }
+        : undefined;
+    case "muse":
+      return binaryPath || environment.environment
+        ? { muse: { ...environment, ...(binaryPath ? { binaryPath } : {}) } }
         : undefined;
     case "droid":
       return binaryPath || environment.environment

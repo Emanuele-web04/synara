@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import NodePath from "node:path";
 
 export type ProviderProcessEnvDriver =
+  | "muse"
   | "cursor"
   | "gemini"
   | "grok"
@@ -358,6 +359,8 @@ function isModelProviderAccountEnvKey(key: string): boolean {
 function isProviderAccountEnvKey(driver: ProviderProcessEnvDriver, rawKey: string): boolean {
   const key = rawKey.toUpperCase();
   switch (driver) {
+    case "muse":
+      return key === "META_API_KEY" || key.startsWith("MUSE_");
     case "cursor":
       return CURSOR_ACCOUNT_ENV_KEYS.has(key) || key.startsWith("CURSOR_");
     case "gemini":

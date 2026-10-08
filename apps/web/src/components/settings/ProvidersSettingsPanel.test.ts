@@ -45,6 +45,7 @@ describe("createProviderInstallResetPatch", () => {
         "devinBinaryPath",
         "droidBinaryPath",
         "grokBinaryPath",
+        "museBinaryPath",
         "ompAgentDir",
         "ompBinaryPath",
         "openCodeBinaryPath",

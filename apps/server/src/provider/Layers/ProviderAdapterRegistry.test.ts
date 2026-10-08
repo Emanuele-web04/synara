@@ -19,6 +19,7 @@ import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts"
 import { DevinAdapter, DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
+import { MuseAdapter, type MuseAdapterShape } from "../Services/MuseAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
 import { OmpAdapter, OmpAdapterShape } from "../Services/OmpAdapter.ts";
@@ -216,6 +217,10 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
         Layer.succeed(DevinAdapter, fakeDevinAdapter),
         Layer.succeed(AntigravityAdapter, fakeAntigravityAdapter),
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
+        Layer.succeed(MuseAdapter, {
+          ...fakeGrokAdapter,
+          provider: "muse",
+        } satisfies MuseAdapterShape),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
         Layer.succeed(PiAdapter, fakePiAdapter),
@@ -277,6 +282,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "devin",
         "antigravity",
         "grok",
+        "muse",
         "droid",
         "opencode",
         "omp",

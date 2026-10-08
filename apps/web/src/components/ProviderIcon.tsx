@@ -6,6 +6,7 @@
  */
 import { type ProviderKind } from "@synara/contracts";
 import type { ReactNode, SVGProps } from "react";
+import { DelegateIcon } from "~/lib/icons";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
@@ -65,6 +66,7 @@ const OpenCodeProviderIcon = ({
 };
 
 export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
+  muse: DelegateIcon,
   codex: OpenAI,
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,

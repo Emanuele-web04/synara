@@ -196,6 +196,7 @@ export function useChatProviderModels({
       cursor: resolveHint("cursor"),
       antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
+      muse: resolveHint("muse"),
       droid: resolveHint("droid"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),

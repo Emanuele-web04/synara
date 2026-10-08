@@ -1052,6 +1052,7 @@ describe("PROVIDER_OPTIONS", () => {
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
     expect(PROVIDER_OPTIONS).toEqual([
+      { value: "muse", label: "Muse Code", available: true },
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "cursor", label: "Cursor", available: true },

@@ -10,6 +10,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     const settings = {
       ...DEFAULT_SERVER_SETTINGS,
       providers: {
+        muse: { ...DEFAULT_SERVER_SETTINGS.providers.muse, binaryPath: "" },
         codex: {
           ...DEFAULT_SERVER_SETTINGS.providers.codex,
           binaryPath: "",

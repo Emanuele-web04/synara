@@ -5,6 +5,7 @@
 import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 
 export const PROVIDER_CLI_COMMAND_BY_KIND = {
+  muse: "muse-acp",
   codex: "codex",
   claudeAgent: "claude",
   cursor: "cursor-agent",
@@ -64,6 +65,11 @@ export function providerCliCommandName(input: {
 // Login entry points verified against each CLI's authentication documentation.
 // Pi-family /login is a TUI command: never pass it as a model prompt argument.
 export const PROVIDER_AUTHENTICATION = {
+  muse: {
+    args: ["login"],
+    instructions:
+      "Complete Muse Code's browser authorization. Requires Muse Code and @brokkai/muse-acp.",
+  },
   codex: {
     args: ["login"],
     instructions: "Complete the browser sign-in. Synara will check this account afterward.",

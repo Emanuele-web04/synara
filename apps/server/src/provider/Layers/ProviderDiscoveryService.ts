@@ -110,6 +110,7 @@ const PROVIDER_DISCOVERY_OPTION_KEYS = {
   devin: ["binaryPath", "environment"],
   antigravity: ["binaryPath", "environment"],
   grok: ["binaryPath", "environment"],
+  muse: ["binaryPath", "environment"],
   droid: ["binaryPath", "environment"],
   opencode: ["binaryPath", "serverUrl", "serverPassword", "experimentalWebSockets", "environment"],
   pi: ["binaryPath", "agentDir", "environment"],

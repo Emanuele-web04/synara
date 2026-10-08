@@ -59,6 +59,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
+    case "muse":
+      return normalizeCustomBinaryPath(providerOptions?.muse?.binaryPath);
     case "droid":
       return normalizeCustomBinaryPath(providerOptions?.droid?.binaryPath);
     case "opencode":

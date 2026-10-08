@@ -15,6 +15,7 @@ export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "cursor",
   "antigravity",
   "grok",
+  "muse",
   "droid",
   "opencode",
   "pi",

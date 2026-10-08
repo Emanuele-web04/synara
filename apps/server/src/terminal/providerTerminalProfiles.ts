@@ -22,6 +22,7 @@ import { buildProviderProcessEnv } from "../provider/providerProcessEnv.ts";
 import type { ManagedTerminalProfile } from "./managedTerminalWrappers.ts";
 
 const GENERIC_DRIVER_BY_PROVIDER = {
+  muse: "muse",
   cursor: "cursor",
   antigravity: "gemini",
   grok: "grok",

@@ -540,6 +540,13 @@ export function buildModelSelection(
   const metadata =
     typeof supportsAutoModeOrMetadata === "object" ? supportsAutoModeOrMetadata : explicitMetadata;
   switch (provider) {
+    case "muse":
+      return attachModelSelectionMetadata(
+        options && "reasoningEffort" in options && options.reasoningEffort
+          ? { provider, model, options: { reasoningEffort: options.reasoningEffort } }
+          : { provider, model },
+        metadata,
+      );
     case "antigravity":
       return attachModelSelectionMetadata(
         options

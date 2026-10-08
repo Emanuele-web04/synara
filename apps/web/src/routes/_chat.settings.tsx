@@ -569,6 +569,7 @@ function SettingsRouteView() {
     settings.customCursorModels.length > 0 ||
     settings.customAntigravityModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
+    settings.customMuseModels.length > 0 ||
     settings.customDroidModels.length > 0 ||
     settings.customOpenCodeModels.length > 0 ||
     settings.customPiModels.length > 0

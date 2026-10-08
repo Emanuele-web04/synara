@@ -278,6 +278,7 @@ export function useProviderModelCatalog(input: {
   const cursorModelDiscoveryEnabled = shouldDiscoverProvider("cursor");
   const antigravityModelDiscoveryEnabled = shouldDiscoverProvider("antigravity");
   const grokModelDiscoveryEnabled = shouldDiscoverProvider("grok");
+  const museModelDiscoveryEnabled = shouldDiscoverProvider("muse");
   // ponytail: explicit prefetch only; picker surfaces stay cold (see droid query comment below).
   const droidPrefetchRequested = discoveryEnabled && (prefetchProviderSet?.has("droid") ?? false);
   const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", droidPrefetchRequested);
@@ -313,6 +314,7 @@ export function useProviderModelCatalog(input: {
     cursor: queryOptionsForProvider("cursor", cursorModelDiscoveryEnabled),
     antigravity: queryOptionsForProvider("antigravity", antigravityModelDiscoveryEnabled),
     grok: queryOptionsForProvider("grok", grokModelDiscoveryEnabled),
+    muse: queryOptionsForProvider("muse", museModelDiscoveryEnabled),
     droid: queryOptionsForProvider("droid", droidModelDiscoveryEnabled),
     opencode: queryOptionsForProvider("opencode", openCodeModelDiscoveryEnabled),
     pi: queryOptionsForProvider("pi", piModelDiscoveryEnabled),
@@ -325,6 +327,7 @@ export function useProviderModelCatalog(input: {
   const cursorDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.cursor);
   const antigravityModelsQuery = useQuery(modelQueryOptionsByProvider.antigravity);
   const grokDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.grok);
+  const museDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.muse);
   const droidDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.droid);
   const openCodeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.opencode);
   const piDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.pi);
@@ -500,6 +503,7 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.antigravity,
       ),
       grok: getAppModelOptions("grok", customModelsByProvider.grok, modelHintByProvider?.grok),
+      muse: getAppModelOptions("muse", customModelsByProvider.muse, modelHintByProvider?.muse),
       droid: getAppModelOptions("droid", customModelsByProvider.droid, modelHintByProvider?.droid),
       opencode: getAppModelOptions(
         "opencode",
@@ -523,6 +527,7 @@ export function useProviderModelCatalog(input: {
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
+      muse: museDynamicModelsQuery.data,
       droid: droidDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -535,6 +540,7 @@ export function useProviderModelCatalog(input: {
       "cursor",
       "antigravity",
       "grok",
+      "muse",
       "droid",
       "opencode",
       "pi",
@@ -585,6 +591,7 @@ export function useProviderModelCatalog(input: {
     customModelsByProvider,
     droidDynamicModelsQuery.data,
     grokDynamicModelsQuery.data,
+    museDynamicModelsQuery.data,
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
@@ -659,6 +666,7 @@ export function useProviderModelCatalog(input: {
       cursor: cursorRuntimeModels,
       antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
+      muse: museDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -672,6 +680,7 @@ export function useProviderModelCatalog(input: {
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
+      museDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
       devinDynamicModelsQuery.data?.models,
@@ -782,15 +791,17 @@ export function useProviderModelCatalog(input: {
             ? antigravityModelsQuery
             : selectedProvider === "grok"
               ? grokDynamicModelsQuery
-              : selectedProvider === "droid"
-                ? droidDynamicModelsQuery
-                : selectedProvider === "opencode"
-                  ? openCodeDynamicModelsQuery
-                  : selectedProvider === "pi"
-                    ? piDynamicModelsQuery
-                    : selectedProvider === "omp"
-                      ? ompDynamicModelsQuery
-                      : devinDynamicModelsQuery;
+              : selectedProvider === "muse"
+                ? museDynamicModelsQuery
+                : selectedProvider === "droid"
+                  ? droidDynamicModelsQuery
+                  : selectedProvider === "opencode"
+                    ? openCodeDynamicModelsQuery
+                    : selectedProvider === "pi"
+                      ? piDynamicModelsQuery
+                      : selectedProvider === "omp"
+                        ? ompDynamicModelsQuery
+                        : devinDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

@@ -150,6 +150,10 @@ function providerOptionRule(
 }
 
 const PROVIDER_TARGET_OPTION_RULES = {
+  muse: defineProviderOptionConfig<"muse">({
+    primaryOptionKey: "reasoningEffort",
+    options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
+  }),
   codex: defineProviderOptionConfig<"codex">({
     primaryOptionKey: "reasoningEffort",
     options: {

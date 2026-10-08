@@ -18,6 +18,7 @@ import { mergeDynamicModelOptions, type ProviderModelOption } from "../../provid
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
+  muse: [{ slug: "default", name: "Muse default" }],
   claudeAgent: [
     { slug: "claude-opus-4-6", name: "Claude Opus 4.6" },
     { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },

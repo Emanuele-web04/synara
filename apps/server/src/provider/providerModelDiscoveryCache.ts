@@ -150,6 +150,8 @@ export const serializeProviderModelDiscoveryCacheKey = (
     key.environmentKey,
     key.cwd,
     ...(key.runtimeVersion !== undefined ? [key.runtimeVersion] : []),
+    // Older Muse snapshots only carry effort choices for the default model.
+    ...(key.provider === "muse" ? ["per-model-efforts-v1"] : []),
   ]);
 
 /**

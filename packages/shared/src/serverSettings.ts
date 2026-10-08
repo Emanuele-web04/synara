@@ -114,6 +114,9 @@ export function providerStartOptionsFromServerSettings(
     grok: {
       ...(providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {}),
     },
+    muse: {
+      ...(providers.muse.binaryPath ? { binaryPath: providers.muse.binaryPath } : {}),
+    },
     droid: {
       ...(providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {}),
     },

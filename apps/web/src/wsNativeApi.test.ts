@@ -334,6 +334,7 @@ describe("wsNativeApi", () => {
           devin: { enabled: true, binaryPath: "devin", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
+          muse: { enabled: true, binaryPath: "muse-acp", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },
           opencode: {
             enabled: true,

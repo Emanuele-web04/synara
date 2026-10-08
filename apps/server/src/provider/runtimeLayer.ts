@@ -17,6 +17,7 @@ import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeAntigravityAdapterLive } from "./Layers/AntigravityAdapter";
 import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
+import { MuseAdapterLive } from "./Layers/MuseAdapter";
 import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
 import { makeOmpAdapterLive } from "./Layers/OmpAdapter";
@@ -99,6 +100,7 @@ export function makeServerProviderLayer(
       Layer.provide(devinAdapterLayer),
       Layer.provide(antigravityAdapterLayer),
       Layer.provide(grokAdapterLayer),
+      Layer.provide(MuseAdapterLive.pipe(Layer.provide(agentGatewayCredentialsLayer))),
       Layer.provide(droidAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provide(piAdapterLayer),

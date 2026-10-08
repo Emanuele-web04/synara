@@ -9,6 +9,7 @@ import { OMP_THINKING_LEVEL_OPTIONS, ProviderOptionDescriptor } from "./model";
 import { ProviderInstanceId } from "./providerInstance";
 
 const ProviderDiscoveryKind = Schema.Literals([
+  "muse",
   "codex",
   "claudeAgent",
   "cursor",

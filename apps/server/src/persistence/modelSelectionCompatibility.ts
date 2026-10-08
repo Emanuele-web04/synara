@@ -12,6 +12,7 @@ import { isProviderKind } from "@synara/shared/providerInstances";
 import { Schema } from "effect";
 
 type ModelProviderKind =
+  | "muse"
   | "codex"
   | "claudeAgent"
   | "cursor"
@@ -56,6 +57,7 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
 // Imported instance ids may be runtime names rather than Synara provider literals.
 function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
+  if (/(^|[^a-z0-9])muse([^a-z0-9]|$)/u.test(lowerLabel)) return "muse";
   // OMP must win over the `pi` token check: "Oh My Pi" and "OMP" labels would
   // otherwise attribute to Pi.
   if (
@@ -112,6 +114,7 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
 
 function inferLegacyModelProvider(provider: unknown, model: string): ModelProviderKind {
   if (
+    provider === "muse" ||
     provider === "codex" ||
     provider === "claudeAgent" ||
     provider === "cursor" ||
@@ -142,6 +145,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
 
 function inferSpecificModelProvider(model: string): ModelProviderKind | undefined {
   const lowerModel = model.toLowerCase();
+  if (lowerModel.startsWith("muse-")) return "muse";
   // Shared Claude/Gemini/OpenAI slugs remain ambiguous without an instance label;
   // only Factory-exclusive built-ins are safe to attribute to Droid.
   if (DROID_ONLY_MODEL_SLUGS.has(lowerModel)) {

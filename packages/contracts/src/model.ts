@@ -160,6 +160,11 @@ export const GrokModelOptions = Schema.Struct({
 });
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
+export const MuseModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type MuseModelOptions = typeof MuseModelOptions.Type;
+
 export const DroidModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
 });
@@ -184,6 +189,7 @@ export const ProviderModelOptions = Schema.Struct({
   devin: Schema.optional(DevinModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
+  muse: Schema.optional(MuseModelOptions),
   droid: Schema.optional(DroidModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -1169,6 +1175,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
   ],
   omp: [],
+  muse: [{ slug: "default", name: "Muse default", capabilities: EMPTY_MODEL_CAPABILITIES }],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -1178,6 +1185,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi" | "omp">;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
+  muse: "default",
   codex: "gpt-6-astra",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
@@ -1210,6 +1218,7 @@ export const GIT_TEXT_GENERATION_PROVIDERS = [
 export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDERS)[number];
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
+  muse: {},
   codex: {
     sol: "gpt-6-sol",
     luna: "gpt-6-luna",
@@ -1401,6 +1410,7 @@ Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
 // ── Provider display names ────────────────────────────────────────────
 
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
+  muse: "Muse Code",
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
