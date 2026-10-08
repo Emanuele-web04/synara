@@ -667,7 +667,7 @@ export function ChatHeader({
                     </span>
                   )}
                   <h2
-                    className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground"
+                    className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground [-webkit-app-region:no-drag]"
                     title={activeThreadTitle}
                     onDoubleClick={() => onRenameThread()}
                   >
