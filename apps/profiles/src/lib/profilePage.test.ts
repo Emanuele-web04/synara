@@ -9,6 +9,23 @@ import { parseFontFaces } from "./imageFonts";
 import { profileAccentStyle, resolveProfileAccent } from "./profileAccent";
 
 describe("resolveProfileAccent", () => {
+  it("keeps a custom profile color ahead of the theme, including share cards", () => {
+    expect(
+      resolveProfileAccent({
+        avatarColor: "#123456",
+        accentColor: "#AB12EF",
+        themeAccent: { light: "#ff6600", dark: "#ff8833" },
+      }),
+    ).toEqual({ light: "#AB12EF", dark: "#AB12EF" });
+    expect(
+      resolveProfileAccent({
+        avatarColor: "#123456",
+        accentColor: null,
+        themeAccent: { light: "#ff6600", dark: "#ff8833" },
+      }),
+    ).toEqual({ light: "#ff6600", dark: "#ff8833" });
+  });
+
   it("prefers the owner's theme accent per appearance", () => {
     expect(
       resolveProfileAccent({

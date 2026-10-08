@@ -12,6 +12,8 @@
 import { type ReactNode, useRef, useState } from "react";
 import type { AccountProfileAvatarSource, AccountProfileSocialLinks } from "@synara/contracts";
 import { Dialog, DialogClose, DialogPopup, DialogTitle } from "~/components/ui/dialog";
+import { ColorPill } from "~/components/ThemePackEditor";
+import { readProfileThemeAccent } from "~/hooks/useTheme";
 import { Button } from "~/components/ui/button";
 import {
   InputGroup,
@@ -57,8 +59,7 @@ interface EditProfileDialogProps {
    */
   readonly ssoImage?: string | null | undefined;
   /**
-   * The account-backed profile, when signed in with one. Its presence locks
-   * the handle (immutable server-side), reveals the "Public profile"
+   * The account-backed profile, when signed in with one. Reveals "Public profile"
    * visibility switch, and switches the avatar section from the local photo
    * to the account's three-way source choice.
    */
@@ -68,6 +69,7 @@ interface EditProfileDialogProps {
     readonly avatarSource?: AccountProfileAvatarSource | undefined;
     readonly avatarUrl?: string | null | undefined;
     readonly socialLinks?: AccountProfileSocialLinks | null | undefined;
+    readonly accentColor?: string | null | undefined;
   } | null;
   /**
    * Uploads a compressed photo (a `compressAvatarImage` data URL) to the
@@ -86,6 +88,7 @@ interface EditProfileDialogProps {
     isPublic?: boolean;
     avatarSource?: "sso" | "placeholder";
     socialLinks?: SocialLinks;
+    accentColor?: string | null;
   }) => Promise<void>;
 }
 
@@ -143,6 +146,10 @@ function EditProfileDialogContent({
   const [draftName, setDraftName] = useState(name);
   const [draftHandle, setDraftHandle] = useState(handle.replace(/^@+/, ""));
   const [draftColor, setDraftColor] = useState(avatarColor);
+  const [customAccent, setCustomAccent] = useState(accountProfile?.accentColor != null);
+  const [draftAccent, setDraftAccent] = useState(
+    accountProfile?.accentColor ?? readProfileThemeAccent().light,
+  );
   const [draftImage, setDraftImage] = useState<string | null>(accountProfile ? null : avatarImage);
   const [draftPublic, setDraftPublic] = useState(accountProfile?.public === true);
   // The avatar source selection while signed in. "sso" and "placeholder" are
@@ -234,6 +241,10 @@ function EditProfileDialogContent({
   };
 
   const handleSave = () => {
+    if (accountProfile && !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(draftHandle.toLowerCase())) {
+      setError("Use 3–30 letters, numbers or hyphens. Start and end with a letter or number.");
+      return Promise.resolve();
+    }
     const links = accountProfile ? parseSocialLinkDrafts(draftLinks) : null;
     if (links && links.invalid.length > 0) {
       setInvalidLinks(links.invalid);
@@ -250,7 +261,9 @@ function EditProfileDialogContent({
       handle: normalizeHandle(draftHandle),
       avatarColor: draftColor,
       avatarImage: draftImage,
-      ...(accountProfile ? { isPublic: draftPublic } : {}),
+      ...(accountProfile
+        ? { isPublic: draftPublic, accentColor: customAccent ? draftAccent : null }
+        : {}),
       // "uploaded" is never sent: the upload already claimed it server-side,
       // and PUT /profile deliberately refuses to.
       ...(accountProfile && draftSource !== "uploaded" ? { avatarSource: draftSource } : {}),
@@ -356,7 +369,11 @@ function EditProfileDialogContent({
           </Field>
           <Field
             label="Username"
-            hint={accountProfile ? "Handles can’t be changed once set." : undefined}
+            hint={
+              accountProfile && draftHandle !== accountProfile.handle
+                ? "Changing your handle changes your public link. The old link stops working."
+                : undefined
+            }
           >
             <InputGroup className={fieldControlClassName}>
               <InputGroupAddon>
@@ -364,20 +381,47 @@ function EditProfileDialogContent({
               </InputGroupAddon>
               <InputGroupInput
                 value={draftHandle}
-                disabled={accountProfile !== null}
                 onChange={(event) =>
-                  setDraftHandle(event.target.value.replace(/^@+/, "").replace(/\s+/g, ""))
+                  setDraftHandle(
+                    event.target.value.replace(/^@+/, "").replace(/\s+/g, "").toLowerCase(),
+                  )
                 }
                 placeholder="username"
               />
             </InputGroup>
           </Field>
           {accountProfile && (
+            <>
+              <Field
+                label="Use theme color"
+                hint="Turn off to choose a color just for your profile."
+              >
+                <div className="flex justify-end">
+                  <Switch
+                    checked={!customAccent}
+                    onCheckedChange={(follow) => setCustomAccent(!follow)}
+                    aria-label="Use theme color"
+                  />
+                </div>
+              </Field>
+              {customAccent && (
+                <Field label="Profile color">
+                  <ColorPill
+                    color={draftAccent}
+                    onChange={setDraftAccent}
+                    ariaLabel="Profile accent"
+                    immediate
+                  />
+                </Field>
+              )}
+            </>
+          )}
+          {accountProfile && (
             <Field
               label="Public profile"
               hint={
                 draftPublic
-                  ? `Anyone can see your profile at ${publicProfileDisplayUrl(accountProfile.handle)}.`
+                  ? `Anyone can see your profile at ${publicProfileDisplayUrl(draftHandle)}.`
                   : "Only you can see your profile."
               }
             >

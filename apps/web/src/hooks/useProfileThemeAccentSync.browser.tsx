@@ -77,6 +77,17 @@ afterEach(() => {
 });
 
 describe("profile theme sync", () => {
+  it("does not publish theme edits while the owner chose a custom profile color", async () => {
+    server = {
+      state: "signed-in",
+      me: { ...me(), profile: { ...me().profile!, accentColor: "#AB12EF" } },
+    };
+    await mount();
+    flushSync(() => theme.updateThemePack("light", { accent: "#112233" }));
+    await settleDebounce();
+    expect(transport.updateProfile).not.toHaveBeenCalled();
+  });
+
   it("coalesces theme edits and preserves identity, visibility, and avatar source", async () => {
     await mount();
     flushSync(() => {
@@ -146,7 +157,10 @@ describe("profile theme sync", () => {
       public: true,
     });
     await expect.poll(() => transport.updateProfile.mock.calls.length).toBe(1);
-    flushSync(() => theme.updateThemePack("dark", { accent: "#445566" }));
+    flushSync(() => {
+      theme.updateThemePack("light", { accent: "#112233" });
+      theme.updateThemePack("dark", { accent: "#445566" });
+    });
     await settleDebounce();
     expect(transport.updateProfile).toHaveBeenCalledTimes(1);
     finish();
@@ -156,7 +170,7 @@ describe("profile theme sync", () => {
       displayName: "New name",
       avatarColor: "#ffffff",
       public: true,
-      themeAccent: { light: "#0169cc", dark: "#445566" },
+      themeAccent: { light: "#112233", dark: "#445566" },
     });
   });
 

@@ -1,6 +1,10 @@
 import { Schema } from "effect";
 
-import { AccountProfileSocialLinks, AccountProfileThemeAccent } from "./account";
+import {
+  AccountProfileAvatarColor,
+  AccountProfileSocialLinks,
+  AccountProfileThemeAccent,
+} from "./account";
 
 import { boundedTrimmedNonEmptyString, EnvironmentId, NonNegativeInt } from "./baseSchemas";
 
@@ -156,6 +160,7 @@ export const PublicProfile = Schema.Struct({
    * Optional for wire compat with pre-accent servers; absent means null.
    */
   themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
+  accentColor: Schema.optional(Schema.NullOr(AccountProfileAvatarColor)),
   /** Optional published social usernames; absent is compatible with older servers. */
   socialLinks: Schema.optional(Schema.NullOr(AccountProfileSocialLinks)),
   /**

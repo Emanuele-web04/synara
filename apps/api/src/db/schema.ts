@@ -323,6 +323,8 @@ export const profiles = pgTable("profiles", {
   // Published together; NULL keeps profiles from pre-accent clients compatible.
   themeAccentLight: text("theme_accent_light"),
   themeAccentDark: text("theme_accent_dark"),
+  // Null follows the synced app theme; custom color survives theme updates.
+  accentColor: text("accent_color"),
   // Validated usernames only; NULL means no published social accounts.
   socialLinks: jsonb("social_links").$type<SocialLinks>(),
   // Opt-in, default private: a profile is served at trysynara.com/@handle

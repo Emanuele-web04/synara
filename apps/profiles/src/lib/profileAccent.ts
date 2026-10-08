@@ -12,8 +12,11 @@ export type ProfileAccent = { light: string; dark: string } | null;
 
 /** The owner's light/dark accent, or null to keep the page default. */
 export function resolveProfileAccent(
-  profile: Pick<PublicProfile, "themeAccent" | "avatarColor">,
+  profile: Pick<PublicProfile, "themeAccent" | "avatarColor" | "accentColor">,
 ): ProfileAccent {
+  if (profile.accentColor && HEX_COLOR.test(profile.accentColor)) {
+    return { light: profile.accentColor, dark: profile.accentColor };
+  }
   const theme = profile.themeAccent;
   if (theme && HEX_COLOR.test(theme.light) && HEX_COLOR.test(theme.dark)) {
     return { light: theme.light, dark: theme.dark };

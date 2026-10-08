@@ -169,6 +169,8 @@ export const AccountProfile = Schema.Struct({
    * Optional for wire compat with pre-accent servers; absent means null.
    */
   themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
+  /** Custom public-profile accent. Null follows theme; omission preserves it on PUT. */
+  accentColor: Schema.optional(Schema.NullOr(AccountProfileAvatarColor)),
   /** The owner's published social usernames; absent (older servers) means none. */
   socialLinks: Schema.optional(Schema.NullOr(AccountProfileSocialLinks)),
   /**
@@ -207,13 +209,12 @@ export const AccountMe = Schema.Struct({
 export type AccountMe = typeof AccountMe.Type;
 
 /**
- * The body of `PUT /api/v1/profile`. `handle` is sent on every update even
- * though V1 refuses to change it: the client always knows the handle it is
- * writing, and accepting it lets the server answer a mismatch explicitly
- * rather than silently ignoring the field.
+ * The body of `PUT /api/v1/profile`. Renames explicitly carry the previous
+ * handle so a stale client or background sync cannot rename the profile back.
  */
 export const UpdateProfileRequest = Schema.Struct({
   handle: AccountProfileHandle,
+  previousHandle: Schema.optional(AccountProfileHandle),
   displayName: AccountNameString,
   avatarColor: AccountProfileAvatarColor,
   /**
@@ -222,6 +223,8 @@ export const UpdateProfileRequest = Schema.Struct({
    * PUT, while null clears them.
    */
   themeAccent: Schema.optional(Schema.NullOr(AccountProfileThemeAccent)),
+  /** Custom public-profile accent. Null follows theme; omission preserves it on PUT. */
+  accentColor: Schema.optional(Schema.NullOr(AccountProfileAvatarColor)),
   /** Absent preserves stored links; null clears all; an object replaces the set. */
   socialLinks: Schema.optional(Schema.NullOr(AccountProfileSocialLinks)),
   /** Optional so pre-visibility clients keep writing profiles unchanged. */
