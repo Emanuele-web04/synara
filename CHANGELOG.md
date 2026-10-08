@@ -1,5 +1,100 @@
 # Changelog
 
+## 1.0.1 — 2026-10-08
+
+### Added
+
+#### OpenCode v2
+
+- Connect the new OpenCode v2 runtime while retaining support for existing v1 servers.
+- Synara detects the server API before sending work and uses the v2 client for models, agents, sessions, streaming, approvals, attachments, forks, rollback and compaction. Keep your OpenCode account and data when migrating. Standard questions appear in Synara; complex forms must be completed in OpenCode. Task-scoped MCP readiness is checked after registration.
+
+#### Multiple folders in one project
+
+- Bring a frontend, API and shared package together under one project and let the agent work across them.
+- Choose Source folders when creating a project, mark one as Primary and remove folders you do not need. Multi-folder chats currently require Local mode and Codex or Claude. The folder set is fixed at creation; Git actions, checkpoints and file undo cover the primary folder only. Review and recover extra-folder edits separately.
+
+#### Tasks comes to Stable
+
+- Keep to-dos in one list, plan your day in Inbox and hand a task to an agent when you are ready.
+- Edit notes, due dates, priority and project, then choose a provider, model, effort and a new or existing chat. Task cards show activity, questions, approvals and the reply to review. The List / Kanban switch keeps the board accessible, and a one-time navigation tip introduces Tasks. Older servers without Tasks fall back to Kanban. Hubs remain Beta-only.
+
+#### Find more with workspace search
+
+- Find conversations by their saved message text and use the palette to navigate or open settings.
+- Search reaches persisted messages beyond recently opened chats. File results resolve safely in the active workspace, including registered dot-folder projects. Workspace search can be remapped; shortcuts update without restarting and respect focused terminals.
+
+#### Faster chat actions
+
+- Archive, snooze or mark the active chat unread with configurable shortcuts, and undo marking a chat done.
+- Thread hovers preview unsent drafts and show current effort and Fast status. Mark all read includes chats returned from snooze. New threads created from older drafts receive their creation time instead of the draft’s old timestamp.
+
+#### Keep answered questions in view
+
+- Review the agent’s questions and your answers directly in the conversation after responding.
+- Press Enter to submit async answers. Stale provider questions settle durably so they do not keep chats waiting. Queued follow-ups explain their available actions, and a Claude tip explains model changes and provider handoffs during active work.
+
+#### Understand interrupted work
+
+- Open and copy thread error details, with failed-turn feedback preserved after recovery.
+- Reconnecting and busy waits use clearer shared status messages. Server stalls are monitored, buffering stays enabled during turns longer than an hour, and uncertain side effects are not silently replayed as successes.
+
+#### Choose accounts for usage rings
+
+- Pick the individual provider accounts shown in your sidebar usage rings.
+- Saved account-ring choices survive temporarily disabling an account. Disabled providers disappear from selectable surfaces; existing conversations remain readable. Provider sign-in actions open the appropriate settings, and OMP’s internal roles stay out of the model picker.
+
+#### Keep macOS awake during agent work
+
+- Choose whether to keep your Mac awake during agent work, all the time, or let it sleep normally.
+- Settings → System → Keep computer awake offers On, Agent and Off, defaulting to Off. Agent mode releases its assertion when work settles, its owner exits or the thread is deleted; On mode lasts while the server runs. This macOS feature does not promise uninterrupted work with the lid closed.
+
+#### Keep your place in files and tabs
+
+- File tabs remember scroll positions, the dock Explorer keeps its open file across chat switches, and horizontal tabs scroll with the mouse wheel.
+- Markdown file previews render sanitized HTML, assistant line breaks display correctly, and Markdown follows the selected typography. Project actions open in right-side terminals; independent right-dock terminal tabs are restored.
+
+### Changed
+
+#### Clearer Git and Kanban actions
+
+- Move Kanban cards from their context menu and use the full commit-and-push row to open Git actions.
+- Git dialogs expose their submit shortcuts. Branch creation avoids namespace conflicts, and checkpoint scheduling reserves capacity for reads and checkpoint work so unrelated workspaces can advance.
+
+#### Synara is the default theme
+
+- New installations start with the complete Synara theme, including the matching controls and workspace styling.
+- Sidebar text stays sharp after display changes, metadata glyphs align consistently, and the chat header remains draggable. Embedded browser pages retain an opaque backdrop and remain visible behind toolbar overlays.
+
+#### Smoother streaming and recovery
+
+- Reduce idle chat repaints, reopen flicker and repeated provider work while keeping cancellation and recovery predictable.
+- Codex reuses its app-server between completed turns. Independent sessions and workspaces no longer share avoidable delivery bottlenecks; replaceable progress is coalesced. Transcript follow survives turn updates, detached readers keep their place, and Pi assistant messages split at message_end.
+
+### Fixed
+
+#### More reliable provider setup
+
+- Provider discovery checks executable candidates and uses the selected account’s environment.
+- Claude accounts remain isolated without breaking macOS Keychain, idle Claude sessions stop without waiting for the SDK stream, and Computer-off restarts wait for background work. Codex continuation imports retain verified generation, managed MCP names avoid collisions, and provider usage works with compatible fake-IP DNS responses. Health probes do not auto-update Antigravity.
+
+#### More predictable startup and shutdown
+
+- Startup announcements appear one at a time, application bundles reveal in Finder, and signal-driven shutdown skips the interactive quit confirmation.
+- Keybindings load and watch at startup, with recovery after transient filesystem failures. Skills read YAML frontmatter correctly. Beta upload diagnostics and writable-failure handling are hardened with privacy redaction; Stable does not send Beta diagnostics.
+
+- Preserve resumed transcripts atomically, avoid sidebar feedback clicks leaking into dialogs, and place automatic handoffs before their triggering message.
+- Keep browser and dock controls usable across overlays, window dragging and provider changes.
+
+### Verification
+
+- Passed on Node 24 / Bun 1.4.2: format, lint, typecheck, release smoke, full build, Windows runtime boundary and migration lineage.
+- Full workspace suite: **15,860 passed / 37 skipped**, across six successful workspace test tasks.
+- Chromium: **16 passed** across multi-folder creation, Tasks navigation hints and Stable Inbox.
+- Publication remains conditional on native build, signed/notarized macOS packaging, Linux/unsigned Windows packaging, provenance, startup smoke and the Windows Defender scan. A manual installed-app upgrade has not been exercised locally.
+- Multi-folder projects support Local mode with Codex and Claude; extra folders are outside primary-folder Git checkpoints and undo. Hubs and diagnostics remain Beta-only.
+- Windows x64 is published unsigned under the version-scoped release policy; packaging, provenance, startup smoke and Defender checks remain required.
+
 ## Unreleased
 
 ## [1.0.0] — 2026-10-05
