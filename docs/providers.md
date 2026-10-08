@@ -215,9 +215,18 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
-If a Codex turn is aborted for inactivity and its gateway access was revoked, Synara renews
-the provider runtime and resumes the saved conversation before dispatching another turn.
-You can continue in the same task.
+After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
+Once native background work settles, it keeps the app-server process alive, unsubscribes the
+native conversation, verifies that Codex unloaded it, and resumes the same conversation with
+a fresh credential. The credential is sent through the app-server pipe as thread configuration;
+Synara does not put it in the shared Codex config or the child process environment.
+This avoids process startup and initialization between ordinary replies while preserving
+the rejection of stale tool requests. It still reloads the native conversation and its MCP clients.
+
+If additional native threads remain loaded, native unloading or resume cannot be verified, or
+a turn was interrupted, failed, or aborted for inactivity, Synara uses the full process-restart
+recovery path. You can continue in the same task. Idle provider processes still shut down after
+10 minutes by default.
 
 ### Claude Auto / 200k / 1M selection
 
