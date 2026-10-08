@@ -1023,6 +1023,7 @@ export function createV1Routes(deps: {
         ? { socialLinks: storedSocialLinks(parsed.socialLinks) }
         : {};
     let displacedAvatarKey: string | null = null;
+    let profileWritten = false;
     try {
       const clampedOffset =
         parsed.utcOffsetMinutes !== undefined
@@ -1051,7 +1052,7 @@ export function createV1Routes(deps: {
           locked.avatarSource === "uploaded" &&
           locked.avatarKey !== null;
 
-        await tx
+        const written = await tx
           .insert(profiles)
           .values({
             userId: session.userId,
@@ -1088,9 +1089,11 @@ export function createV1Routes(deps: {
             // Guard both stale renames and racing first-time inserts: a
             // rejected write must not change name, visibility or avatar.
             setWhere: sql`${profiles.handle} = ${parsed.previousHandle ?? parsed.handle}`,
-          });
+          })
+          .returning({ userId: profiles.userId });
 
-        return shouldClearAvatar ? locked.avatarKey : null;
+        profileWritten = written.length > 0;
+        return profileWritten && shouldClearAvatar ? locked.avatarKey : null;
       });
     } catch (error) {
       // The unique index on `handle` is the reservation; a violation here means
@@ -1101,28 +1104,19 @@ export function createV1Routes(deps: {
       throw error;
     }
 
-    // Deferred cleanup of the object this write actually displaced (read
-    // under the row lock), same as DELETE /profile/avatar — see
-    // scheduleAvatarObjectDelete for the cache-window reasoning. If the
-    // upsert was a no-op (handle mismatch), the fire-time re-check sees the
-    // key still current and leaves it alone.
-    if (displacedAvatarKey !== null) {
-      scheduleAvatarObjectDelete(session.userId, displacedAvatarKey);
-    }
-
-    // A compare-and-set no-op must be reported, not presented as a saved edit.
-    const [stored] = await db
-      .select({ handle: profiles.handle })
-      .from(profiles)
-      .where(eq(profiles.userId, session.userId))
-      .limit(1);
-    if (stored && stored.handle !== parsed.handle) {
+    // RETURNING distinguishes a committed edit from a compare-and-set no-op,
+    // even when another writer chose the very same new handle.
+    if (!profileWritten) {
       return errorResponse(
         c,
         400,
         "validation_failed",
         "Your profile handle changed. Reload your profile before saving.",
       );
+    }
+
+    if (displacedAvatarKey !== null) {
+      scheduleAvatarObjectDelete(session.userId, displacedAvatarKey);
     }
 
     return c.json(await accountMe(user, session.organization));

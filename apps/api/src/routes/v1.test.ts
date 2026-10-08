@@ -1325,6 +1325,58 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
     });
 
+    it("reports only the committed winner when two edits rename to the same handle", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const original = profileBody();
+      const put = (body: unknown) =>
+        app.request("/api/v1/profile", {
+          method: "PUT",
+          headers: authHeaders(token),
+          body: JSON.stringify(body),
+        });
+      expect((await put(original)).status).toBe(200);
+      const rename = {
+        ...original,
+        previousHandle: original.handle,
+        handle: `${original.handle}x`,
+      };
+      const bodies = [
+        { ...rename, displayName: "First writer", accentColor: "#112233" },
+        { ...rename, displayName: "Second writer", accentColor: "#445566" },
+      ];
+      // Hold the row until both requests have read the old handle and are
+      // waiting to write. This exercises the real PostgreSQL conflict path.
+      const blocker = await pool.connect();
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT user_id FROM profiles WHERE user_id = $1 FOR UPDATE", [userId]);
+      const pending = bodies.map(put);
+      try {
+        await vi.waitFor(
+          async () => {
+            const { rows } = await pool.query(
+              "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%profiles%'",
+            );
+            expect(rows[0].count).toBe(2);
+          },
+          { timeout: 3000 },
+        );
+      } finally {
+        await blocker.query("ROLLBACK");
+        blocker.release();
+        await Promise.allSettled(pending);
+      }
+      const responses = await Promise.all(pending);
+      expect(responses.map((response) => response.status).toSorted()).toEqual([200, 400]);
+      const winner = bodies[responses.findIndex((response) => response.status === 200)]!;
+      const [row] = await db.select().from(profiles).where(eq(profiles.userId, userId));
+      expect(row).toMatchObject({
+        handle: rename.handle,
+        displayName: winner.displayName,
+        accentColor: winner.accentColor,
+      });
+    });
+
     it("renames only from the current handle and keeps a custom accent across old-client writes", async () => {
       const { app, db } = buildApp();
       const first = await signIn();
