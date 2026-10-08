@@ -27,7 +27,7 @@ is cancelled, the task and its prompt remain available for retry.
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
-  is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Code review, Automations, Hubs (Beta), and
+  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs (Beta), and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
@@ -42,7 +42,7 @@ is cancelled, the task and its prompt remain available for retry.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
-- **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without
+- **Tasks** (Stable and Beta) — a to-do list for anything you need to do, with or without
   a project. Select a to-do to open its floating card, then hand it to an agent with **Start**: pick the
   provider, model, and effort, the project or folder it works in, and a new or existing chat. The
   agent receives the to-do's current title and note. The to-do then follows the chat's status — Running, Needs you, Review when the agent finishes, or
@@ -58,11 +58,11 @@ is cancelled, the task and its prompt remain available for retry.
   The `synara_*_kanban_*` gateway tools read and drive durable cards within the caller's
   ordinary project; local composer drafts remain client-only. Gateway draft creation uses
   the local checkout; isolated worktree callers can create a task instead. These tools do
-  not change the Beta-only Tasks to-do records.
+  not change the Tasks to-do records.
 - **Inbox** (Stable and Beta) — chats needing attention, running and finished work, review
-  requests, and the day’s agent recap, starting at 4am. Beta also shows today’s due and overdue
+  requests, and the day’s agent recap, starting at 4am. Inbox also shows today’s due and overdue
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
-  **All tasks** opens the complete backlog in Beta; Stable keeps these to-do controls hidden.
+  **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,

@@ -1180,7 +1180,7 @@ const makeWsRpcHandlersLayer = () =>
       const tasksEnabled = isServerBetaFeatureEnabled("tasks");
       const tasksUnavailableError = () =>
         new WsRpcError({
-          message: "Tasks is available in Synara Beta.",
+          message: "Tasks is unavailable on this server.",
           code: TASKS_UNAVAILABLE_ERROR_CODE,
           retryable: false,
         });
@@ -3045,7 +3045,7 @@ const makeWsRpcHandlersLayer = () =>
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
           ),
-        // Tasks is Beta-only; Stable refuses it here and keeps Kanban.
+        // Keep refusal handling for hosts that do not offer Tasks.
         [WS_METHODS.todoList]: () =>
           whenTasksEnabled(rpcEffect(todoService.list(), "Failed to list tasks")),
         [WS_METHODS.todoCreate]: (input) =>
