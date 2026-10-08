@@ -29,6 +29,7 @@ import {
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
 import { useStore } from "~/store";
 import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
+import { useAppSettings } from "~/appSettings";
 import {
   buildPluginSearchFields,
   buildSkillSearchFields,
@@ -389,6 +390,10 @@ export function PluginLibrary(props?: {
   const providerThreadId = focusedThreadId;
 
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const { settings } = useAppSettings();
+  const enabledProviderOrder = DEFAULT_PROVIDER_ORDER.filter(
+    (provider) => !settings.disabledProviders.includes(provider),
+  );
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
@@ -450,20 +455,25 @@ export function PluginLibrary(props?: {
   // tabs never renders an unsupported frame, and the user's own selection
   // resurfaces if its provider becomes capable again.
   const supportsSelectedTab =
-    selectedTab === "plugins"
+    !settings.disabledProviders.includes(selectedProvider) &&
+    (selectedTab === "plugins"
       ? providerCapabilities[selectedProvider].plugins
-      : providerCapabilities[selectedProvider].skills;
+      : providerCapabilities[selectedProvider].skills);
   const providerFallbackOrder =
     selectedTab === "plugins"
-      ? DEFAULT_PROVIDER_ORDER
-      : [preferredProvider, ...DEFAULT_PROVIDER_ORDER.filter((p) => p !== preferredProvider)];
+      ? enabledProviderOrder
+      : [preferredProvider, ...enabledProviderOrder.filter((p) => p !== preferredProvider)].filter(
+          (provider) => !settings.disabledProviders.includes(provider),
+        );
   const effectiveProvider = supportsSelectedTab
     ? selectedProvider
     : (providerFallbackOrder.find((provider) =>
         selectedTab === "plugins"
           ? providerCapabilities[provider].plugins
           : providerCapabilities[provider].skills,
-      ) ?? selectedProvider);
+      ) ??
+      providerFallbackOrder[0] ??
+      selectedProvider);
 
   const discoveryCwd = embedded
     ? (props?.cwd?.trim() ?? "") || null
@@ -473,9 +483,15 @@ export function PluginLibrary(props?: {
         serverCwd: serverConfigQuery.data?.cwd ?? null,
       });
 
-  const providerLabel = PROVIDER_DISPLAY_NAMES[effectiveProvider];
-  const canListPlugins = providerCapabilities[effectiveProvider].plugins;
-  const canListSkills = providerCapabilities[effectiveProvider].skills;
+  const providerLabel = enabledProviderOrder.includes(effectiveProvider)
+    ? PROVIDER_DISPLAY_NAMES[effectiveProvider]
+    : null;
+  const canListPlugins =
+    !settings.disabledProviders.includes(effectiveProvider) &&
+    providerCapabilities[effectiveProvider].plugins;
+  const canListSkills =
+    !settings.disabledProviders.includes(effectiveProvider) &&
+    providerCapabilities[effectiveProvider].skills;
 
   const pluginsQuery = useQuery(
     providerPluginsQueryOptions({
@@ -559,7 +575,7 @@ export function PluginLibrary(props?: {
       </div>
       <div className="flex-1" />
       <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-        {DEFAULT_PROVIDER_ORDER.map((provider) => {
+        {enabledProviderOrder.map((provider) => {
           const capabilities = providerCapabilities[provider];
           const label = PROVIDER_DISPLAY_NAMES[provider];
           return (
@@ -591,7 +607,7 @@ export function PluginLibrary(props?: {
       {!embedded ? (
         <div className="px-6 py-10 text-center">
           <h1 className="text-[28px] font-semibold text-foreground">
-            Make {providerLabel} work your way
+            {providerLabel ? `Make ${providerLabel} work your way` : "Plugins and skills"}
           </h1>
         </div>
       ) : null}
@@ -605,6 +621,7 @@ export function PluginLibrary(props?: {
             </InputGroupText>
           </InputGroupAddon>
           <InputGroupInput
+            disabled={enabledProviderOrder.length === 0}
             value={selectedTab === "plugins" ? pluginSearch : skillSearch}
             onChange={(e) => {
               if (selectedTab === "plugins") setPluginSearch(e.target.value);
@@ -648,8 +665,16 @@ export function PluginLibrary(props?: {
             {!canListPlugins ? (
               <div className="mx-auto max-w-2xl">
                 <EmptyPanel
-                  title={`Plugins unavailable for ${providerLabel}`}
-                  description="This provider does not expose plugin discovery."
+                  title={
+                    providerLabel
+                      ? `Plugins unavailable for ${providerLabel}`
+                      : "No enabled providers"
+                  }
+                  description={
+                    providerLabel
+                      ? "This provider does not expose plugin discovery."
+                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                  }
                 />
               </div>
             ) : pluginsQuery.isLoading && pluginEntries.length === 0 ? (
@@ -683,8 +708,16 @@ export function PluginLibrary(props?: {
             {!canListSkills ? (
               <div className="mx-auto max-w-2xl">
                 <EmptyPanel
-                  title={`Skills unavailable for ${providerLabel}`}
-                  description="This provider does not expose skill discovery."
+                  title={
+                    providerLabel
+                      ? `Skills unavailable for ${providerLabel}`
+                      : "No enabled providers"
+                  }
+                  description={
+                    providerLabel
+                      ? "This provider does not expose skill discovery."
+                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                  }
                 />
               </div>
             ) : skillsQuery.isLoading && discoveredSkills.length === 0 ? (

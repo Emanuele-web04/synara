@@ -43,7 +43,10 @@ import {
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
+import {
+  makeEffectProcessCommand,
+  spawnProviderProcess,
+} from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
 import { expandHomePath } from "@synara/shared/synaraHome";
@@ -1046,27 +1049,23 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         });
         childEnv.OPENCODE_SERVER_USERNAME = cliSpec.serverAuthUsername;
         childEnv.OPENCODE_SERVER_PASSWORD = serverPassword;
-        const child = yield* spawner
-          .spawn(
-            makeEffectProcessCommand(expandHomePath(input.binaryPath), args, {
-              env: childEnv,
-              ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
-              detached: false,
-              killSignal: "SIGKILL",
-              forceKillAfter: "1500 millis",
-            }),
-          )
-          .pipe(
-            Effect.provideService(Scope.Scope, runtimeScope),
-            Effect.mapError((cause) => {
-              const detail = openCodeRuntimeErrorDetail(cause);
-              return new OpenCodeRuntimeError({
-                operation: "startOpenCodeServerProcess",
-                detail: `Failed to spawn OpenCode server process: ${detail}${missingCliHint(cliSpec, detail)}`,
-                cause,
-              });
-            }),
-          );
+        const child = yield* spawnProviderProcess(spawner, expandHomePath(input.binaryPath), args, {
+          env: childEnv,
+          ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
+          detached: false,
+          killSignal: "SIGKILL",
+          forceKillAfter: "1500 millis",
+        }).pipe(
+          Effect.provideService(Scope.Scope, runtimeScope),
+          Effect.mapError((cause) => {
+            const detail = openCodeRuntimeErrorDetail(cause);
+            return new OpenCodeRuntimeError({
+              operation: "startOpenCodeServerProcess",
+              detail: `Failed to spawn OpenCode server process: ${detail}${missingCliHint(cliSpec, detail)}`,
+              cause,
+            });
+          }),
+        );
         yield* Scope.addFinalizer(
           runtimeScope,
           Effect.tryPromise({

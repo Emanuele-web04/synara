@@ -66,6 +66,7 @@ describe("CreateProjectDialog GitHub source", () => {
       source: "local",
       name: "My workspace",
       workspaceRoot: "/workspace",
+      additionalFolders: [],
       createIfMissing: false,
       spaceId: null,
     });
@@ -188,5 +189,95 @@ describe("CreateProjectDialog GitHub source", () => {
 
     expect(submittedSignals[0]?.aborted).toBe(true);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("CreateProjectDialog multi-folder projects", () => {
+  async function renderLocalDialog(onSubmit = vi.fn().mockResolvedValue(undefined)) {
+    await render(
+      <CreateProjectDialog
+        open
+        githubProvisioningAvailable={false}
+        spaces={[]}
+        activeSpaceId={null}
+        defaultCloneParent="/Users/test/Developer"
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+    return onSubmit;
+  }
+
+  async function addFolder(path: string) {
+    await page.getByLabelText("Additional folder path").fill(path);
+    await page.getByRole("button", { name: "Add folder" }).click();
+  }
+
+  it("submits the extra folders after the primary one", async () => {
+    const onSubmit = await renderLocalDialog();
+    await page.getByLabelText("Project folder path").fill("/repos/web");
+    await addFolder("/repos/api");
+    await addFolder("/repos/shared");
+
+    await expect.element(page.getByText("Primary", { exact: true })).toBeInTheDocument();
+    expect(document.body.textContent).toContain("run in Local mode with Codex or Claude");
+
+    await page.getByRole("button", { name: "Create project" }).click();
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      source: "local",
+      workspaceRoot: "/repos/web",
+      additionalFolders: ["/repos/api", "/repos/shared"],
+      createIfMissing: true,
+    });
+  });
+
+  it("moves a folder to primary and removes folders", async () => {
+    const onSubmit = await renderLocalDialog();
+    await page.getByLabelText("Project folder path").fill("/repos/web");
+    await addFolder("/repos/api");
+    await addFolder("/repos/shared");
+
+    await page.getByRole("button", { name: "Make api primary" }).click();
+    expect((page.getByLabelText("Project folder path").element() as HTMLInputElement).value).toBe(
+      "/repos/api",
+    );
+    await page.getByRole("button", { name: "Remove shared" }).click();
+
+    await page.getByRole("button", { name: "Create project" }).click();
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      workspaceRoot: "/repos/api",
+      additionalFolders: ["/repos/web"],
+      // The new primary was already checked when it was added, so it is never created.
+      createIfMissing: false,
+    });
+  });
+
+  it("keeps creating a typed primary folder after an extra folder is removed", async () => {
+    const onSubmit = await renderLocalDialog();
+    await page.getByLabelText("Project folder path").fill("/repos/new-app");
+    await addFolder("/repos/api");
+    await page.getByRole("button", { name: "Remove api" }).click();
+
+    await page.getByRole("button", { name: "Create project" }).click();
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      workspaceRoot: "/repos/new-app",
+      additionalFolders: [],
+      createIfMissing: true,
+    });
+  });
+
+  it("refuses a folder nested inside another one", async () => {
+    const onSubmit = await renderLocalDialog();
+    await page.getByLabelText("Project folder path").fill("/repos/web");
+    await addFolder("/repos/web/packages");
+
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("packages is inside web. Add only one of them.");
+    expect(page.getByRole("button", { name: "Remove packages" }).query()).toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

@@ -545,6 +545,26 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("hides disabled provider models even when an existing thread is locked to it", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      providers: [providerStatus("codex", { enabled: false, available: false })],
+    });
+    try {
+      await page.getByRole("button").click();
+      expect(
+        page.getByRole("menuitemradio", { name: "GPT-5 Codex", exact: true }).elements(),
+      ).toHaveLength(0);
+      expect(
+        page.getByRole("menuitemradio", { name: "GPT-5.3 Codex", exact: true }).elements(),
+      ).toHaveLength(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows models directly when the provider is locked mid-thread", async () => {
     const mounted = await mountPicker({
       provider: "claudeAgent",

@@ -157,7 +157,10 @@ export function resolveVisibleProviderOptions(input: {
       compareProvidersByOrder(input.providerOrder ?? [], left.value, right.value),
     ).filter((option) =>
       input.providers?.some(
-        (provider) => (provider.driver ?? provider.provider) === option.value && provider.available,
+        (provider) =>
+          (provider.driver ?? provider.provider) === option.value &&
+          provider.enabled !== false &&
+          provider.available,
       ),
     ),
     new Set<ProviderKind>(input.hiddenProviders ?? []),
@@ -730,6 +733,18 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   };
 
   if (props.lockedProvider !== null) {
+    const status = findProviderStatusForInstance({
+      providers: props.providers,
+      provider: props.lockedProvider,
+      instanceId: selectedProviderInstanceId,
+    });
+    if (status?.enabled === false) {
+      return (
+        <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
+          Enable a provider in Settings
+        </MenuItem>
+      );
+    }
     return (
       <>
         {renderProviderInstanceRadioGroup(props.lockedProvider)}

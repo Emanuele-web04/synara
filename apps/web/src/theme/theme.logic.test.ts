@@ -28,11 +28,61 @@ const PROVIDED_THEME_STRING =
   'codex-theme-v1:{"codeThemeId":"linear","theme":{"accent":"#606acc","contrast":30,"fonts":{"code":"\\"Jetbrains Mono\\"","ui":"Inter"},"ink":"#e3e4e6","opaqueWindows":true,"semanticColors":{"diffAdded":"#69c967","diffRemoved":"#ff7e78","skill":"#c2a1ff"},"surface":"#0f0f11"},"variant":"dark"}';
 
 describe("parseStoredThemeState", () => {
-  it("migrates the legacy mode-only value into the new theme store", () => {
-    expect(parseStoredThemeState("dark")).toEqual({
-      ...DEFAULT_THEME_STATE,
-      mode: "dark",
-    });
+  it.each([null, undefined, ""])("uses Synara for an absent stored theme (%j)", (raw) => {
+    const state = parseStoredThemeState(raw);
+    expect(state.codeThemeIds).toEqual({ dark: "synara", light: "synara" });
+    expect(state.chromeThemes.dark.accent).toBe("#f2612d");
+    expect(state.chromeThemes.light.accent).toBe("#c74614");
+    expect(state.mode).toBe("system");
+  });
+
+  it.each(["dark", "light", "system"] as const)(
+    "preserves Codex for a legacy mode-only value (%s)",
+    (mode) => {
+      for (const raw of [mode, JSON.stringify({ mode })]) {
+        const state = parseStoredThemeState(raw);
+        expect(state.mode).toBe(mode);
+        expect(state.codeThemeIds).toEqual({ dark: "codex", light: "codex" });
+        expect(state.chromeThemes.dark.accent).toBe("#0169cc");
+        expect(state.chromeThemes.light.accent).toBe("#0169cc");
+      }
+    },
+  );
+
+  it.each(["codex", "linear", "synara"])(
+    "preserves saved %s colors and preferences without reapplying the preset",
+    (codeThemeId) => {
+      const saved = {
+        ...DEFAULT_THEME_STATE,
+        mode: "dark",
+        codeThemeIds: { dark: codeThemeId, light: "codex" },
+        chromeThemes: {
+          dark: {
+            ...getCodeThemeSeed(codeThemeId, "dark"),
+            accent: "#6073cc",
+            contrast: 22,
+            fonts: { code: "Menlo", ui: "Inter" },
+            opaqueWindows: true,
+          },
+          light: getCodeThemeSeed("codex", "light"),
+        },
+        systemUiFont: false,
+        translucency: {
+          dark: { opacity: 72, blur: null, sidebarOnly: true },
+          light: { opacity: 38, blur: 64, sidebarOnly: false },
+        },
+      };
+      expect(parseStoredThemeState(JSON.stringify(saved))).toEqual(saved);
+    },
+  );
+
+  it("resets only the selected variant to Synara when explicitly requested", () => {
+    const saved = parseStoredThemeState("dark");
+    const reset = resetThemeVariant(saved, "dark");
+    expect(reset.codeThemeIds).toEqual({ dark: "synara", light: "codex" });
+    expect(reset.chromeThemes.dark.accent).toBe("#f2612d");
+    expect(reset.chromeThemes.light).toEqual(saved.chromeThemes.light);
+    expect(reset.mode).toBe("dark");
   });
 
   it("normalizes partial stored packs against the per-variant defaults", () => {
@@ -54,11 +104,11 @@ describe("parseStoredThemeState", () => {
           accent: "#606acc",
           contrast: 0,
         },
-        light: DEFAULT_THEME_STATE.chromeThemes.light,
+        light: getCodeThemeSeed("codex", "light"),
       },
       codeThemeIds: {
         dark: "linear",
-        light: DEFAULT_THEME_STATE.codeThemeIds.light,
+        light: "codex",
       },
       mode: "light",
     });
@@ -121,7 +171,7 @@ describe("theme share strings", () => {
     );
 
     expect(parseThemeShareString(shareString)).toEqual({
-      codeThemeId: "codex",
+      codeThemeId: "synara",
       theme: resolveThemePack(DEFAULT_THEME_STATE, "dark").theme,
       variant: "dark",
     });
@@ -302,7 +352,7 @@ describe("buildThemeCssVariables", () => {
       const state = setThemeCodeThemeId(DEFAULT_THEME_STATE, "light", "vercel");
       const vercel = buildThemeCssVariables(resolveThemePack(state, "light"), "light", platform);
       const codex = buildThemeCssVariables(
-        resolveThemePack(DEFAULT_THEME_STATE, "light"),
+        { codeThemeId: "codex", theme: getCodeThemeSeed("codex", "light") },
         "light",
         platform,
       );

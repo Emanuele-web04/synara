@@ -134,7 +134,7 @@ describe("planRestartTurnReconciliation", () => {
           interactionKind: "approval",
           requestId: ApprovalRequestId.makeUnsafe("approval-mixed"),
           lifecycleGeneration: null,
-          status: "uncertain",
+          status: "confirmed",
           createdAt: "2026-06-13T09:00:01.000Z",
         },
       ],
@@ -146,7 +146,7 @@ describe("planRestartTurnReconciliation", () => {
   it.each([
     ["pending", true],
     ["confirmed", false],
-    ["uncertain", false],
+    ["uncertain", true],
   ] as const)(
     "treats a %s projected approval according to restart callback state",
     (status, stale) => {
@@ -207,7 +207,7 @@ describe("planRestartTurnReconciliation", () => {
       name: "already stale current generation",
       generation: "generation-a",
       staleAt: "2026-06-13T09:00:02.000Z",
-      expected: 0,
+      expected: 1,
     },
     {
       name: "stale previous generation",
@@ -225,7 +225,7 @@ describe("planRestartTurnReconciliation", () => {
       name: "legacy failure after this request",
       generation: undefined,
       staleAt: "2026-06-13T09:00:02.000Z",
-      expected: 0,
+      expected: 1,
     },
   ])("reconciles uncertain user input with $name", ({ generation, staleAt, expected }) => {
     const requestId = ApprovalRequestId.makeUnsafe("uncertain-input");
@@ -272,7 +272,16 @@ describe("planRestartTurnReconciliation", () => {
       if (command.type !== "thread.activity.append") throw new Error("Expected stale cleanup");
       expect(
         planRestartTurnReconciliation({
-          threads: [{ ...thread, activities: [...(thread.activities ?? []), command.activity] }],
+          threads: [
+            {
+              ...thread,
+              pendingInteractions: thread.pendingInteractions?.map((row) => ({
+                ...row,
+                status: "confirmed",
+              })),
+              activities: [...(thread.activities ?? []), command.activity],
+            },
+          ],
           now: "2026-06-15T10:00:00.000Z",
         }),
       ).toEqual([]);
@@ -597,9 +606,7 @@ describe("planRestartTurnReconciliation", () => {
     });
     const pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction> = [
       makePendingInteraction("clean-thread", "userInput", "answered", "confirmed"),
-      // Already reported as unanswerable: re-reporting would duplicate the row's
-      // failure activity on every boot.
-      makePendingInteraction("clean-thread", "approval", "already-reported", "uncertain"),
+      makePendingInteraction("clean-thread", "approval", "already-reported", "confirmed"),
       makePendingInteraction("other-thread", "userInput", "elsewhere", "pending"),
     ];
 

@@ -349,6 +349,8 @@ import type {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetThreadDetailSnapshotInput,
+  OrchestrationSearchThreadsInput,
+  OrchestrationSearchThreadsResult,
   OrchestrationGetThreadDetailSnapshotResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
@@ -941,6 +943,7 @@ export type DesktopDiagnosticBreadcrumb = typeof DesktopDiagnosticBreadcrumb.Typ
 /** Handled failures carry fixed categories, never exception text or operation arguments. */
 export const DesktopDiagnosticIssue = Schema.Struct({
   code: Schema.Literals([
+    "server.event-loop.stall",
     "git.request.failed",
     "git.branch.failed",
     "git.commit.failed",
@@ -1402,6 +1405,9 @@ export interface NativeApi {
     getThreadDetailSnapshot: (
       input: OrchestrationGetThreadDetailSnapshotInput,
     ) => Promise<OrchestrationGetThreadDetailSnapshotResult>;
+    searchThreads: (
+      input: OrchestrationSearchThreadsInput,
+    ) => Promise<OrchestrationSearchThreadsResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     importThread: (
       input: OrchestrationImportThreadInput,

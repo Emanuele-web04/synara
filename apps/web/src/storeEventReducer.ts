@@ -20,7 +20,10 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { deriveThreadSummaryMetadata, resolveHumanMessageAt } from "@synara/shared/threadSummary";
-import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
+import {
+  createStalePendingInteractionMatcher,
+  isPendingInteractionResponseClaimable,
+} from "@synara/shared/pendingInteractions";
 
 import { isSessionRunningTurn } from "./session-logic";
 import {
@@ -180,22 +183,27 @@ function reconcilePendingInteractionsFromActivity(
     activity.kind === "provider.user-input.respond.failed"
   ) {
     const responseCommandId = payload?.responseCommandId;
-    if (typeof responseCommandId !== "string" || responseCommandId.length === 0) {
-      return pendingInteractions;
-    }
+    const hasResponseCommand =
+      typeof responseCommandId === "string" && responseCommandId.length > 0;
+    const isStale = createStalePendingInteractionMatcher([activity]);
     const settlementStatus: OrchestrationPendingInteraction["status"] =
       payload?.settlementStatus === "retryable" ? "retryable" : "uncertain";
     let changed = false;
     const next = existing.map((interaction) => {
       if (
         !matchesIdentity(interaction) ||
-        interaction.status !== "responding" ||
-        interaction.responseCommandId !== responseCommandId
+        interaction.status === "confirmed" ||
+        (hasResponseCommand
+          ? interaction.status !== "responding" ||
+            interaction.responseCommandId !== responseCommandId
+          : !isStale(interaction))
       ) {
         return interaction;
       }
       changed = true;
-      return { ...interaction, status: settlementStatus, resolvedAt: null };
+      return isStale(interaction)
+        ? { ...interaction, status: "confirmed" as const, resolvedAt: activity.createdAt }
+        : { ...interaction, status: settlementStatus, resolvedAt: null };
     });
     return changed ? next : pendingInteractions;
   }
@@ -852,6 +860,7 @@ function applyOrchestrationEvent(
           scripts: event.payload.scripts,
           isPinned: event.payload.isPinned ?? false,
           spaceId: event.payload.spaceId ?? null,
+          additionalFolders: event.payload.additionalFolders ?? [],
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
         },
@@ -882,6 +891,7 @@ function applyOrchestrationEvent(
             event.payload.spaceId !== undefined
               ? event.payload.spaceId
               : (existingProject.spaceId ?? null),
+          additionalFolders: existingProject.additionalFolders,
           createdAt: existingProject.createdAt ?? event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },

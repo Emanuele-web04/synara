@@ -3,10 +3,9 @@
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
 // Usage is fetched read-only from each CLI's stored credentials by the server.
 
-import type { ServerProviderUsageSnapshot } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import {
-  PROVIDER_USAGE_PROVIDERS,
   providerUsageDisplayName,
   providerUsageNeedsAuthDetail,
   selectVisibleProviderUsageSnapshots,
@@ -16,10 +15,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAppSettings, type RailUsageWindow } from "~/appSettings";
 import {
-  MAX_RAIL_USAGE_PROVIDERS,
-  resolveRailUsageProviders,
-  toggleRailUsageProvider,
+  MAX_RAIL_USAGE_ACCOUNTS,
+  getRailUsageAccounts,
+  resolveRailUsageAccounts,
+  toggleRailUsageAccount,
 } from "~/components/AppRailUsage.logic";
+import { ProviderAccountAvatar } from "~/components/ProviderAccountMark";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
@@ -162,18 +163,29 @@ function ProviderUsageCard({
 export function ProviderUsageSettingsPanel() {
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
-  const railUsageProviders = resolveRailUsageProviders(settings.railUsageProviders);
-  const railUsageFull = railUsageProviders.length >= MAX_RAIL_USAGE_PROVIDERS;
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const providerInstances = useMemo(
     () =>
       new Map(
-        (serverSettingsQuery.data ? deriveProviderInstances(serverSettingsQuery.data) : []).map(
+        deriveProviderInstances(serverSettingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW).map(
           (instance) => [instance.instanceId, instance],
         ),
       ),
     [serverSettingsQuery.data],
   );
+  const railUsageAccounts = getRailUsageAccounts(
+    [...providerInstances.values()],
+    settings.disabledProviders,
+  );
+  // Disabled accounts keep their saved choice; only deleted accounts are discarded.
+  const savedRailUsageInstanceIds = (
+    settings.railUsageInstanceIds ?? settings.railUsageProviders
+  ).filter((instanceId) => providerInstances.has(instanceId));
+  const railUsageInstanceIds = resolveRailUsageAccounts(
+    settings.railUsageInstanceIds ?? settings.railUsageProviders,
+    railUsageAccounts,
+  ).map((account) => account.instance.instanceId);
+  const railUsageFull = railUsageInstanceIds.length >= MAX_RAIL_USAGE_ACCOUNTS;
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const refreshMutation = useMutation({
     mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
@@ -197,7 +209,9 @@ export function ProviderUsageSettingsPanel() {
         return instance?.enabled === true && instance.driver === snapshot.provider;
       })
     : (usageQuery.data ?? []);
-  const cards = selectVisibleProviderUsageSnapshots(activeSnapshots);
+  const cards = selectVisibleProviderUsageSnapshots(
+    activeSnapshots.filter((snapshot) => !settings.disabledProviders.includes(snapshot.provider)),
+  );
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
@@ -205,33 +219,37 @@ export function ProviderUsageSettingsPanel() {
 
   return (
     <>
-      <SettingsSection title={`Sidebar · up to ${MAX_RAIL_USAGE_PROVIDERS}`}>
-        {PROVIDER_USAGE_PROVIDERS.map((provider) => {
-          const checked = railUsageProviders.includes(provider);
-          const name = providerUsageDisplayName(provider);
+      <SettingsSection title={`Sidebar · up to ${MAX_RAIL_USAGE_ACCOUNTS} accounts`}>
+        {railUsageAccounts.map(({ instance, label }) => {
+          const checked = railUsageInstanceIds.includes(instance.instanceId);
           return (
             <SettingsListRow
-              key={provider}
+              key={instance.instanceId}
               title={
                 <span className="flex items-center gap-2">
-                  <ProviderIcon provider={provider} className="size-4 shrink-0" />
-                  <span className="truncate">{name}</span>
+                  <ProviderAccountAvatar
+                    provider={instance.driver}
+                    accentColor={instance.raw.accentColor}
+                    className="size-6"
+                  />
+                  <span className="truncate">{label}</span>
                 </span>
               }
               actions={
                 <Switch
                   checked={checked}
-                  disabled={!checked && railUsageFull}
+                  disabled={serverSettingsQuery.isPending || (!checked && railUsageFull)}
                   onCheckedChange={(next) =>
                     updateSettings({
-                      railUsageProviders: toggleRailUsageProvider(
-                        railUsageProviders,
-                        provider,
+                      railUsageInstanceIds: toggleRailUsageAccount(
+                        savedRailUsageInstanceIds,
+                        instance.instanceId,
                         Boolean(next),
+                        railUsageAccounts,
                       ),
                     })
                   }
-                  aria-label={`Show ${name} usage at the bottom of the sidebar`}
+                  aria-label={`Show ${label} usage at the bottom of the sidebar`}
                 />
               }
             />
@@ -262,19 +280,21 @@ export function ProviderUsageSettingsPanel() {
             />
           }
         />
-        <SettingsListRow
-          title="Banked resets"
-          description="Include Codex banked resets in the details."
-          actions={
-            <Switch
-              checked={settings.usagePopoverShowResetCredits}
-              onCheckedChange={(next) =>
-                updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
-              }
-              aria-label="Show banked resets in usage popovers"
-            />
-          }
-        />
+        {!settings.disabledProviders.includes("codex") ? (
+          <SettingsListRow
+            title="Banked resets"
+            description="Include Codex banked resets in the details."
+            actions={
+              <Switch
+                checked={settings.usagePopoverShowResetCredits}
+                onCheckedChange={(next) =>
+                  updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
+                }
+                aria-label="Show banked resets in usage popovers"
+              />
+            }
+          />
+        ) : null}
         <SettingsListRow
           title="Credits and token totals"
           description="Include credit balances and recent token totals (24h, 7d, 30d) in the details."

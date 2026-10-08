@@ -1006,3 +1006,22 @@ describe("handled issue reports", () => {
     await diagnostics.dispose();
   });
 });
+
+it("passes stall reports through the shared issue allowlist and redaction pipeline", async () => {
+  const root = makeRoot();
+  const diagnostics = makeDiagnostics(root, "http://127.0.0.1:1");
+  const id = diagnostics.trackIssue("main", {
+    code: "server.event-loop.stall",
+    durationMs: 5200,
+    prompt: "private text",
+    stack: "/Users/person/private",
+  });
+  expect(id).not.toBeNull();
+  const queued = readFileSync(join(root, "diagnostics/events.jsonl"), "utf8");
+  expect(JSON.parse(queued).payload).toMatchObject({
+    message: "Handled issue: server.event-loop.stall (unknown)",
+    stack: "durationMs=5200",
+  });
+  expect(queued).not.toMatch(/private|person/);
+  await diagnostics.dispose();
+});

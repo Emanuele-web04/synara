@@ -3,7 +3,9 @@
 // Exports: Pure normalization and equality helpers consumed by projection and event reduction.
 
 import {
+  ApprovalRequestId,
   MessageId,
+  type OrchestrationPendingInteraction,
   type OrchestrationReadModel,
   type OrchestrationSpaceShell,
   type OrchestrationSessionStatus,
@@ -16,9 +18,13 @@ import {
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import { mergeAsyncUserInput } from "@synara/shared/asyncUserInput";
 import { normalizeModelSlug } from "@synara/shared/model";
-import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
+import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
+import {
+  deriveThreadSummaryMetadata,
+  isStalePendingRequestFailureDetail,
+  pendingRequestInstanceKey,
+} from "@synara/shared/threadSummary";
 
-import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
 import {
   countOutstandingBackgroundWork,
@@ -56,7 +62,7 @@ export type ProjectNormalizationInput = Pick<
   | "spaceId"
   | "createdAt"
   | "updatedAt"
->;
+> & { readonly additionalFolders?: ReadonlyArray<string> | undefined };
 
 export const MAX_THREAD_MESSAGES = 2_000;
 // Matches the server-side activity retention budget: a smaller client cap would
@@ -64,6 +70,17 @@ export const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 2_000;
 const LOCAL_USER_MESSAGE_RETENTION_MS = 10_000;
 const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-input.requested"]);
+const PENDING_INTERACTION_ACTIVITY_KINDS = new Set([
+  ...PENDING_INTERACTION_REQUEST_KINDS,
+  "approval.resolved",
+  "user-input.resolved",
+  "provider.approval.respond.failed",
+  "provider.user-input.respond.failed",
+]);
+type PendingInteractionIdentity = Pick<
+  OrchestrationPendingInteraction,
+  "interactionKind" | "requestId" | "lifecycleGeneration" | "createdAt"
+> & { readonly key: string };
 
 function basenameOfPath(value: string): string | null {
   const segments = value.split(/[/\\]/).filter((segment) => segment.length > 0);
@@ -391,6 +408,13 @@ export function normalizeProject(
       ? null
       : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
+  // Keep the previous array when nothing changed so a resync stays a no-op.
+  const incomingAdditionalFolders = incoming.additionalFolders ?? [];
+  const additionalFolders =
+    previous?.additionalFolders &&
+    deepEqualJson(previous.additionalFolders, incomingAdditionalFolders)
+      ? previous.additionalFolders
+      : incomingAdditionalFolders;
   const persistedProjectOrderIndex = rememberedUiState.projectOrderIndexForCwd(workspaceRootKey);
   const hasKnownLegacyExpansion =
     rememberedUiState.projectOrderCount === 0 &&
@@ -429,7 +453,8 @@ export function normalizeProject(
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
+    previous.scripts === scripts &&
+    previous.additionalFolders === additionalFolders
   ) {
     return previous;
   }
@@ -450,6 +475,7 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
+    additionalFolders,
   };
 }
 
@@ -1373,53 +1399,126 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
     activities,
     activities.length - MAX_THREAD_ACTIVITIES,
   );
-  const retainedIds = new Set(activities.slice(dropCount).map((activity) => activity.id));
-  const pendingRequestIds = pendingInteractionRequestIds(activities);
-  for (const activity of activities) {
-    const requestId = activityRequestId(activity);
-    if (
-      requestId !== null &&
-      pendingRequestIds.has(requestId) &&
-      PENDING_INTERACTION_REQUEST_KINDS.has(activity.kind)
-    ) {
-      retainedIds.add(activity.id);
+  const tail = activities.slice(dropCount);
+  const retainedIds = new Set(tail.map((activity) => activity.id));
+  const retainedRequests = new Map(
+    pendingInteractionsFromActivities(activities).map((request) => [request.key, request]),
+  );
+  // A request in the tail may already be closed by an older array entry:
+  // runtime and orchestration sequences are independent counters. Keep its
+  // settlement evidence alongside it so trimming cannot reopen the card.
+  for (const activity of tail) {
+    if (!PENDING_INTERACTION_REQUEST_KINDS.has(activity.kind)) continue;
+    const identity = pendingInteractionActivityIdentity(activity);
+    if (identity !== null) {
+      retainedRequests.set(identity.key, identity);
     }
+  }
+  if (retainedRequests.size === 0) return tail;
+  const oldestRetainedRequestAt = new Map<string, string>();
+  for (const request of retainedRequests.values()) {
+    const key = `${request.interactionKind}:${request.requestId}`;
+    const previous = oldestRetainedRequestAt.get(key);
+    if (previous === undefined || request.createdAt < previous) {
+      oldestRetainedRequestAt.set(key, request.createdAt);
+    }
+  }
+  const latestEvidence = new Map<string, TActivity>();
+  for (const activity of activities) {
+    const identity = pendingInteractionActivityIdentity(activity);
+    if (identity === null) continue;
+    const isRequest = PENDING_INTERACTION_REQUEST_KINDS.has(activity.kind);
+    const oldestRequestAt = oldestRetainedRequestAt.get(
+      `${identity.interactionKind}:${identity.requestId}`,
+    );
+    const keep =
+      identity.lifecycleGeneration !== null
+        ? retainedRequests.has(identity.key)
+        : isRequest
+          ? retainedRequests.get(identity.key)?.createdAt === identity.createdAt
+          : oldestRequestAt !== undefined && oldestRequestAt <= identity.createdAt;
+    if (!keep) continue;
+    if (isRequest) {
+      retainedIds.add(activity.id);
+      continue;
+    }
+    // Outside the normal window, keep only the latest failure and terminal
+    // evidence per instance. Repeated retries must not bypass the activity cap.
+    const detail = asActivityRecord(activity.payload)?.detail;
+    const stale =
+      (activity.kind === "provider.approval.respond.failed" ||
+        activity.kind === "provider.user-input.respond.failed") &&
+      isStalePendingRequestFailureDetail(typeof detail === "string" ? detail : undefined);
+    const key = `${identity.key}:${activity.kind}${stale ? ":stale" : ""}`;
+    const previous = latestEvidence.get(key);
+    if (previous === undefined || activity.createdAt >= previous.createdAt) {
+      latestEvidence.set(key, activity);
+    }
+  }
+  for (const activity of latestEvidence.values()) {
+    retainedIds.add(activity.id);
   }
   return activities.filter((activity) => retainedIds.has(activity.id));
 }
 
-function activityRequestId(activity: Thread["activities"][number]): string | null {
+function pendingInteractionActivityIdentity(
+  activity: Thread["activities"][number],
+): PendingInteractionIdentity | null {
+  if (!PENDING_INTERACTION_ACTIVITY_KINDS.has(activity.kind)) return null;
   const payload = asActivityRecord(activity.payload);
   const requestId = payload?.requestId;
-  return typeof requestId === "string" && requestId.trim().length > 0 ? requestId : null;
+  if (typeof requestId !== "string" || requestId.trim().length === 0) return null;
+  const interactionKind =
+    activity.kind.startsWith("approval.") || activity.kind.startsWith("provider.approval.")
+      ? "approval"
+      : "userInput";
+  const generation = payload?.lifecycleGeneration;
+  const lifecycleGeneration =
+    typeof generation === "string" && generation.length > 0 ? generation : null;
+  return {
+    interactionKind,
+    requestId: ApprovalRequestId.makeUnsafe(requestId),
+    lifecycleGeneration,
+    createdAt: activity.createdAt,
+    key: `${interactionKind}:${pendingRequestInstanceKey(requestId, lifecycleGeneration ?? undefined)}`,
+  };
 }
 
-function pendingInteractionRequestIds(
+function pendingInteractionsFromActivities(
   activities: readonly Thread["activities"][number][],
-): Set<string> {
-  const pendingRequestIds = new Set<string>();
+): PendingInteractionIdentity[] {
+  const openRequests = new Map<string, PendingInteractionIdentity>();
   for (const activity of activities) {
-    const requestId = activityRequestId(activity);
-    if (requestId === null) {
+    if (
+      !PENDING_INTERACTION_REQUEST_KINDS.has(activity.kind) &&
+      activity.kind !== "approval.resolved" &&
+      activity.kind !== "user-input.resolved"
+    )
+      continue;
+    const identity = pendingInteractionActivityIdentity(activity);
+    if (identity === null) {
       continue;
     }
+    const key = `${identity.interactionKind}:${identity.requestId}`;
     if (activity.kind === "approval.requested" || activity.kind === "user-input.requested") {
-      pendingRequestIds.add(requestId);
+      openRequests.set(key, identity);
       continue;
     }
     if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
-      pendingRequestIds.delete(requestId);
+      if (
+        identity.lifecycleGeneration === null ||
+        openRequests.get(key)?.lifecycleGeneration === identity.lifecycleGeneration
+      ) {
+        openRequests.delete(key);
+      }
       continue;
     }
-    if (
-      (activity.kind === "provider.approval.respond.failed" ||
-        activity.kind === "provider.user-input.respond.failed") &&
-      isStalePendingRequestFailureDetail(asActivityRecord(activity.payload)?.detail)
-    ) {
-      pendingRequestIds.delete(requestId);
-    }
   }
-  return pendingRequestIds;
+  // Apply invalidations after replay: a later failure can sort before its
+  // request when orchestration and runtime sequence counters are mixed.
+  if (openRequests.size === 0) return [];
+  const isStale = createStalePendingInteractionMatcher(activities);
+  return [...openRequests.values()].filter((request) => !isStale(request));
 }
 
 /** Dedupe specialized for the streaming hot path: when `activities` extends the previously
