@@ -146,6 +146,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults workspace search outside terminal focus", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "search.files"),
+        { key: "mod+p", command: "search.files", when: "!terminalFocus" },
+      );
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "search.content"),
+        { key: "mod+shift+f", command: "search.content", when: "!terminalFocus" },
+      );
+    }),
+  );
+
   it.effect("encodes resolved plus-key shortcuts", () =>
     Effect.gen(function* () {
       const encoded = yield* Schema.encodeEffect(ResolvedKeybindingFromConfig)({

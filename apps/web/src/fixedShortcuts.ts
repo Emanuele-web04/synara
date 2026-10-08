@@ -15,12 +15,7 @@ import {
 } from "./keybindings";
 import { isMacPlatform } from "./lib/utils";
 
-export type FixedShortcutId =
-  | "navigation.back"
-  | "navigation.forward"
-  | "search.files"
-  | "search.content"
-  | "terminal.search";
+export type FixedShortcutId = "navigation.back" | "navigation.forward" | "terminal.search";
 
 export interface FixedShortcut {
   readonly id?: FixedShortcutId;
@@ -96,18 +91,6 @@ export const FIXED_SHORTCUTS: readonly FixedShortcut[] = [
     shortcut: chord("arrowright", alt),
     reason: "always goes forward in the desktop app",
     platform: "other",
-  },
-  {
-    id: "search.files",
-    shortcut: chord("p"),
-    reason: "always opens file search",
-    whenAst: { type: "not", node: { type: "identifier", name: "terminalFocus" } },
-  },
-  {
-    id: "search.content",
-    shortcut: chord("f", { shiftKey: true }),
-    reason: "always opens search in files",
-    whenAst: { type: "not", node: { type: "identifier", name: "terminalFocus" } },
   },
   {
     id: "terminal.search",
