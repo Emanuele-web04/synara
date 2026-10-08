@@ -4954,10 +4954,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 );
               }
               const credentialProviderIDs =
-                yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
-                  client,
-                  adapterConfig.cliSpec,
-                );
+                protocol === "v2"
+                  ? []
+                  : yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
+                      client,
+                      adapterConfig.cliSpec,
+                    );
               return yield* fn({
                 client,
                 protocol,
@@ -5007,9 +5009,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 protocol,
               }),
           ).pipe(Effect.exit);
-          const [cliModels, inventoryExit] = yield* Effect.all([cliModelsEffect, inventoryEffect], {
-            concurrency: "unbounded",
-          });
+          const inventoryExit = yield* inventoryEffect;
 
           if (Exit.isSuccess(inventoryExit)) {
             const { inventory, credentialProviderIDs, protocol } = inventoryExit.value;
@@ -5020,6 +5020,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             });
             // V2 already returns the enabled catalog. CLI merging can reintroduce
             // disabled models or providers that the server deliberately omitted.
+            const cliModels = protocol === "v2" ? [] : yield* cliModelsEffect;
             const models =
               protocol === "v2"
                 ? inventoryModels
@@ -5048,6 +5049,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           // Keep OpenCode's authoritative CLI list usable even if the local server
           // cannot start; otherwise the web picker falls back to one static model.
+          const cliModels = yield* cliModelsEffect;
           if (cliModels.length > 0) {
             const models = mergeOpenCodeCliModelDescriptors({
               inventory: emptyOpenCodeModelInventory(),

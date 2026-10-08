@@ -349,6 +349,18 @@ export function providerModelDiscoveryRetry(provider: ProviderKind): number {
   return provider === "cursor" ? 0 : provider === "droid" ? 2 : 3;
 }
 
+export function needsProviderModelCatalogRecovery(
+  provider: ProviderKind,
+  result: ProviderListModelsResult | undefined,
+): boolean {
+  return (
+    Boolean(result?.error) ||
+    (provider === "opencode" &&
+      (result?.source === "opencode" || result?.source === "opencode-cli") &&
+      result.models.length === 0)
+  );
+}
+
 export function providerComposerCapabilitiesQueryOptions(
   provider: ProviderKind,
   instanceId?: ProviderInstanceId | null,
@@ -504,6 +516,11 @@ export function providerModelsQueryOptions(input: {
   apiEndpoint?: string | null;
   agentDir?: string | null;
   cwd?: string | null;
+  /**
+   * OpenCode only: the same account's catalog from the directory this thread just
+   * left, shown while the new directory loads instead of an empty catalog.
+   */
+  placeholderCatalog?: ProviderListModelsResult | undefined;
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
@@ -563,21 +580,25 @@ export function providerModelsQueryOptions(input: {
     // re-resolved per request, so role/config edits must reach the adapter on
     // the ordinary focus/mount refetch cadence.
     staleTime:
-      input.provider === "devin"
-        ? (query) => (query.state.data?.error ? 0 : 15 * 60_000)
+      input.provider === "devin" || input.provider === "opencode"
+        ? (query) =>
+            needsProviderModelCatalogRecovery(input.provider, query.state.data) ? 0 : 15 * 60_000
         : input.provider === "droid"
           ? 30 * 60_000
           : input.provider === "omp"
             ? 30_000
             : 15 * 60_000,
-    // Devin deliberately returns a usable static catalog when CLI discovery
-    // fails. Keep it visible, but retry while observed instead of treating the
+    // Devin and OpenCode return fallback catalogs when discovery fails.
+    // Keep them visible, but retry while observed instead of treating the
     // degraded result as fresh — a failed refresh retains healthy data, so the
-    // query error must also keep recovery polling alive.
-    ...(input.provider === "devin"
+    // query error must also keep recovery polling alive. An empty OpenCode API
+    // catalog can be a startup snapshot; honor it now and revalidate until populated.
+    ...(input.provider === "devin" || input.provider === "opencode"
       ? {
           refetchInterval: (query) =>
-            query.state.data?.error || query.state.error ? 30_000 : false,
+            needsProviderModelCatalogRecovery(input.provider, query.state.data) || query.state.error
+              ? 30_000
+              : false,
         }
       : {}),
     // Droid discovery starts a disposable ACP session, so it must not refetch
@@ -598,9 +619,16 @@ export function providerModelsQueryOptions(input: {
     // ~3s discovery. Omit placeholderData for OMP so React Query reports a
     // genuine `isLoading` pending state and the catalog renders the loading
     // skeleton instead. Other providers keep the placeholder to suppress
-    // refetch flicker against their static catalogs.
+    // refetch flicker against their static catalogs. OpenCode uses an empty
+    // placeholder on key changes so another account/project's catalog cannot leak;
+    // the caller may supply the same thread and account's catalog instead.
     ...(input.provider !== "omp"
-      ? { placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT }
+      ? {
+          placeholderData: (previous) =>
+            input.provider === "opencode"
+              ? (input.placeholderCatalog ?? EMPTY_MODELS_RESULT)
+              : (previous ?? EMPTY_MODELS_RESULT),
+        }
       : {}),
   });
 }

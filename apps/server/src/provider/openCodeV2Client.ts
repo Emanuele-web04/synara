@@ -1,4 +1,5 @@
 import { createOpenCodeV2McpClient } from "./openCodeV2TransportMcp.ts";
+import { createOpenCodeV2CatalogClient } from "./openCodeV2TransportCatalog.ts";
 import {
   grantOpenCodeV2SessionPermission,
   type OpenCodeV2SessionPermissionState,
@@ -11,7 +12,6 @@ import {
   normalizeOpenCodeV2FormAnswers,
   normalizeOpenCodeV2Path,
   normalizeOpenCodeV2Permissions,
-  normalizeOpenCodeV2ProviderList,
   normalizeOpenCodeV2Questions,
 } from "./openCodeV2Data.ts";
 import { subscribeOpenCodeV2Events } from "./openCodeV2Events.ts";
@@ -100,27 +100,7 @@ export function createOpenCodeV2Client(input: OpenCodeV2ClientOptions): OpenCode
   };
   return {
     session: createOpenCodeV2SessionClient(http, input.directory, sessionPermissions),
-    provider: {
-      list: async (parameters, options) => {
-        const models = await requestOpenCodeV2(
-          http,
-          "/api/model",
-          "GET",
-          undefined,
-          options?.signal,
-          parameters?.directory,
-        );
-        const providers = await requestOpenCodeV2(
-          http,
-          "/api/provider",
-          "GET",
-          undefined,
-          options?.signal,
-          parameters?.directory,
-        );
-        return { data: normalizeOpenCodeV2ProviderList(models, providers) };
-      },
-    },
+    provider: createOpenCodeV2CatalogClient(http),
     app: {
       agents: async (parameters, options) => ({
         data: normalizeOpenCodeV2Agents(

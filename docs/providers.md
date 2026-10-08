@@ -249,8 +249,17 @@ keys and OAuth credentials; Synara does not verify those credentials in its
 installation health check.
 
 OpenCode V2 model discovery uses the server's `/api/model` catalog and excludes
-models marked `enabled: false`. It does not add entries from the broader CLI
-catalog. Enabled models may still require provider credentials, credits, or
+models marked `enabled: false`. Successful V2 discovery does not wait for the
+broader CLI catalog or add its entries; CLI discovery is a fallback if the server
+inventory fails. A new V2 server can report healthy before its model catalog is
+ready, so discovery checks a raw empty catalog up to five times, two seconds apart,
+within a bounded, cancelable wait. Disabled models do not trigger that wait.
+The picker revalidates transient discovery failures and empty startup catalogs and
+honors a successfully loaded empty catalog instead of adding a static default.
+An open chat warms each enabled OpenCode account's catalog for its own project or
+worktree, so the picker reads the cache and shows its loading state only while an
+account has no models yet.
+Enabled models may still require provider credentials, credits, or
 account attestations; appearing in the picker does not verify those requirements.
 Model selections retain their full `provider/model` IDs, so similarly named
 OpenCode Zen and OpenRouter entries remain separate routes.

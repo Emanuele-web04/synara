@@ -5,7 +5,12 @@
 // Layer: Web lib tests
 
 import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
-import type { ProviderInstanceId, ProviderKind, ServerProviderStatus } from "@synara/contracts";
+import type {
+  NativeApi,
+  ProviderInstanceId,
+  ProviderKind,
+  ServerProviderStatus,
+} from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +23,7 @@ import {
   type ProviderModelPrefetchSettings,
 } from "./providerModelPrefetch";
 import { providerDiscoveryQueryKeys as rawProviderDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+import * as nativeApi from "../nativeApi";
 
 const providerDiscoveryQueryKeys = {
   ...rawProviderDiscoveryQueryKeys,
@@ -290,7 +296,13 @@ describe("prefetchModelsForNewThread", () => {
       providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/project"),
     );
     // Warm results stay fresh for 30 minutes, so repeated hovers do not re-probe.
-    expect(prefetchQuery.mock.calls[0]?.[0].staleTime).toBe(30 * 60_000);
+    const staleTime = prefetchQuery.mock.calls[0]?.[0].staleTime;
+    expect(typeof staleTime).toBe("function");
+    if (typeof staleTime !== "function") throw new Error("Expected recovery freshness policy");
+    const query = queryClient.getQueryCache().build<unknown, unknown>(queryClient, {
+      queryKey: modelKeys[0]!,
+    });
+    expect(staleTime(query)).toBe(30 * 60_000);
     expect(modelKeys).toHaveLength(9);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
@@ -503,6 +515,62 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
 });
 
 describe("prefetchModelsForNewThread — warm-option invariants", () => {
+  it.each(["fallback", "empty"])(
+    "retries an initial OpenCode %s prefetch on the next new-thread intent",
+    async (initial) => {
+      const listModels = vi
+        .fn()
+        .mockResolvedValueOnce({
+          models: initial === "fallback" ? [{ slug: "gpt-5", name: "GPT-5" }] : [],
+          source: initial === "fallback" ? "static" : "opencode",
+          cached: false,
+          ...(initial === "fallback" ? { error: "OpenCode is still starting" } : {}),
+        })
+        .mockResolvedValue({
+          models: [{ slug: "opencode/muse-spark", name: "Muse Spark" }],
+          source: "opencode",
+          cached: false,
+        });
+      vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+        provider: {
+          listModels,
+          listAgents: vi.fn().mockResolvedValue({ agents: [], source: "opencode", cached: false }),
+          getComposerCapabilities: vi.fn().mockResolvedValue({}),
+        },
+      } as unknown as NativeApi);
+      const client = new QueryClient();
+      const key = providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/project");
+      const input = {
+        settings: makeSettings(),
+        projectCwd: "/tmp/project",
+        projectDefaultProvider: "opencode" as const,
+        providerStatuses: availableStatuses(
+          NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter((provider) => provider !== "opencode"),
+        ),
+        statusesReconciled: true,
+      };
+      try {
+        prefetchModelsForNewThread(client, input);
+        await vi.waitFor(() =>
+          expect(client.getQueryData(key)).toMatchObject({
+            source: initial === "fallback" ? "static" : "opencode",
+          }),
+        );
+        prefetchModelsForNewThread(client, input);
+        await vi.waitFor(() =>
+          expect(client.getQueryData(key)).toMatchObject({
+            models: [{ slug: "opencode/muse-spark" }],
+          }),
+        );
+        prefetchModelsForNewThread(client, input);
+        await Promise.resolve();
+        expect(listModels).toHaveBeenCalledTimes(2);
+      } finally {
+        client.clear();
+      }
+    },
+  );
+
   it("preserves model retry policies while keeping ancillary warming fail-fast", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);

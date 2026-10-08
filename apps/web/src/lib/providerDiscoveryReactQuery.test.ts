@@ -8,8 +8,11 @@ import type {
   ProviderListAgentsResult,
   ProviderListModelsResult,
 } from "@synara/contracts";
-import { hashKey, QueryClient } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashKey, QueryClient, QueryObserver } from "@tanstack/react-query";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+// QueryObserver only schedules recovery polling in a browser environment.
+vi.hoisted(() => vi.stubGlobal("window", new EventTarget()));
 
 import {
   isInitialModelDiscoveryPending,
@@ -30,7 +33,10 @@ function mockListModels(listModels: ReturnType<typeof vi.fn>) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
+
+afterAll(() => vi.unstubAllGlobals());
 
 describe("isInitialModelDiscoveryPending", () => {
   it("is pending only for the first fetch (loading or placeholder fetch)", () => {
@@ -282,6 +288,167 @@ describe("providerModelsQueryOptions", () => {
     expect(refetchInterval({ state: { data: healthy } })).toBe(false);
   });
 
+  it.each(["fallback", "rejected", "empty"] as const)(
+    "automatically recovers a cold OpenCode %s into both upstream catalogs and stops polling",
+    async (failure) => {
+      vi.useFakeTimers();
+      const healthy: ProviderListModelsResult = {
+        models: [
+          { slug: "opencode/muse-spark", name: "Muse Spark", upstreamProviderName: "OpenCode Zen" },
+          { slug: "openrouter/muse-spark", name: "Muse Spark", upstreamProviderName: "OpenRouter" },
+        ],
+        source: "opencode",
+        cached: false,
+      };
+      const listModels = mockListModels(vi.fn());
+      if (failure === "fallback") {
+        listModels.mockResolvedValueOnce({
+          models: [{ slug: "gpt-5", name: "GPT-5" }],
+          source: "static",
+          cached: false,
+          error: "OpenCode is still starting",
+        });
+      } else if (failure === "rejected") {
+        listModels.mockRejectedValueOnce(new Error("OpenCode is still starting"));
+      } else {
+        listModels.mockResolvedValueOnce({ models: [], source: "opencode", cached: false });
+      }
+      listModels.mockResolvedValue(healthy);
+      const client = new QueryClient();
+      const options = { ...providerModelsQueryOptions({ provider: "opencode" }), retry: false };
+      const observer = new QueryObserver(client, options);
+      const unsubscribe = observer.subscribe(() => undefined);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(listModels).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(listModels).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(listModels).toHaveBeenCalledTimes(2);
+        expect(observer.getCurrentResult().data).toEqual(healthy);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(listModels).toHaveBeenCalledTimes(2);
+      } finally {
+        unsubscribe();
+        client.clear();
+      }
+    },
+  );
+
+  it("keeps a good OpenCode catalog through a failed refresh but accepts authoritative removals", async () => {
+    vi.useFakeTimers();
+    const healthy = {
+      models: [{ slug: "opencode/muse-spark", name: "Muse Spark" }],
+      source: "opencode",
+      cached: false,
+    };
+    const empty = { models: [], source: "opencode", cached: false };
+    const listModels = mockListModels(
+      vi
+        .fn()
+        .mockResolvedValueOnce(healthy)
+        .mockResolvedValueOnce({
+          models: [],
+          source: "static",
+          cached: false,
+          error: "Temporary discovery failure",
+        })
+        .mockResolvedValueOnce(empty)
+        .mockResolvedValue(healthy),
+    );
+    const client = new QueryClient();
+    const options = { ...providerModelsQueryOptions({ provider: "opencode" }), retry: false };
+    const observer = new QueryObserver(client, options);
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await observer.refetch();
+      expect(observer.getCurrentResult().data).toEqual(healthy);
+      expect(observer.getCurrentResult().error?.message).toBe("Temporary discovery failure");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(observer.getCurrentResult().data).toEqual(empty);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(observer.getCurrentResult().data).toEqual(healthy);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(listModels).toHaveBeenCalledTimes(4);
+    } finally {
+      unsubscribe();
+      client.clear();
+    }
+  });
+
+  it.each(["disabled", "unsupported"])(
+    "does not poll an empty OpenCode %s catalog",
+    async (source) => {
+      vi.useFakeTimers();
+      const empty = { models: [], source, cached: false };
+      const listModels = mockListModels(vi.fn().mockResolvedValue(empty));
+      const client = new QueryClient();
+      const observer = new QueryObserver(
+        client,
+        providerModelsQueryOptions({ provider: "opencode" }),
+      );
+      const unsubscribe = observer.subscribe(() => undefined);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(observer.getCurrentResult().data).toEqual(empty);
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(listModels).toHaveBeenCalledTimes(1);
+      } finally {
+        unsubscribe();
+        client.clear();
+      }
+    },
+  );
+
+  it.each([
+    { instanceId: "opencode_work" },
+    { cwd: "/another-project" },
+    { binaryPath: "/another-opencode" },
+    { homePath: "/another-home" },
+  ])("does not leak a cached OpenCode catalog across discovery keys: %j", async (change) => {
+    const healthy = {
+      models: [{ slug: "opencode/muse-spark", name: "Muse Spark" }],
+      source: "opencode",
+      cached: false,
+    };
+    let finish!: (result: ProviderListModelsResult) => void;
+    mockListModels(
+      vi
+        .fn()
+        .mockResolvedValueOnce(healthy)
+        .mockImplementationOnce(
+          () =>
+            new Promise<ProviderListModelsResult>((resolve) => {
+              finish = resolve;
+            }),
+        ),
+    );
+    const client = new QueryClient();
+    const options = providerModelsQueryOptions({ provider: "opencode", instanceId: "opencode" });
+    await client.fetchQuery(options);
+    const observer = new QueryObserver(client, options);
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      observer.setOptions(
+        providerModelsQueryOptions({
+          provider: "opencode",
+          instanceId: "opencode",
+          ...change,
+        }),
+      );
+      expect(observer.getCurrentResult().data?.models).toEqual([]);
+      await vi.waitFor(() => expect(finish).toBeDefined());
+      finish({ models: [], source: "disabled", cached: false });
+      await vi.waitFor(() => expect(observer.getCurrentResult().isFetching).toBe(false));
+      expect(observer.getCurrentResult().data?.source).toBe("disabled");
+      expect(client.getQueryData(options.queryKey)).toEqual(healthy);
+    } finally {
+      unsubscribe();
+      client.clear();
+    }
+  });
+
   it.each([
     ["opencode", "opencode"],
     ["pi", "pi.sdk+extensions"],
@@ -337,6 +504,24 @@ describe("providerModelsQueryOptions", () => {
     expect(providerModelsQueryOptions({ provider: "pi" }).placeholderData).toBeDefined();
   });
 
+  it("shows only the caller's OpenCode placeholder catalog on a key change", () => {
+    const leaked = { models: [{ slug: "other/model", name: "Other" }], source: "opencode" };
+    const carried = { models: [{ slug: "opencode/muse", name: "Muse" }], source: "opencode" };
+    const placeholderOf = (placeholderCatalog?: typeof carried) =>
+      (
+        providerModelsQueryOptions({
+          provider: "opencode",
+          cwd: "/new",
+          ...(placeholderCatalog ? { placeholderCatalog } : {}),
+        }).placeholderData as (previous: unknown) => unknown
+      )(leaked);
+
+    // Another account or project's previous data never leaks into a new key.
+    expect(placeholderOf()).toMatchObject({ models: [] });
+    // The same thread and account's catalog bridges a move into a new directory.
+    expect(placeholderOf(carried)).toBe(carried);
+  });
+
   it("preserves the cached catalog when a background refetch fails", async () => {
     const catalog = {
       models: [{ slug: "auto", name: "Auto" }],
@@ -356,7 +541,7 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
   });
 
-  it.each(["devin", "codex", "claudeAgent"] as const)(
+  it.each(["devin", "opencode", "codex", "claudeAgent"] as const)(
     "preserves a cached %s catalog when refresh returns a degraded fallback",
     async (provider) => {
       const catalog = {
@@ -384,7 +569,7 @@ describe("providerModelsQueryOptions", () => {
       expect(queryClient.getQueryState(options.queryKey)?.error).toEqual(
         new Error("Provider temporarily failed"),
       );
-      if (provider === "devin") {
+      if (provider === "devin" || provider === "opencode") {
         const interval = options.refetchInterval;
         if (typeof interval !== "function") throw new Error("Expected recovery polling");
         const query = queryClient
@@ -395,7 +580,7 @@ describe("providerModelsQueryOptions", () => {
             ProviderListModelsResult,
             Parameters<typeof interval>[0]["queryKey"]
           >(hashKey(options.queryKey));
-        if (!query) throw new Error("Missing Devin query");
+        if (!query) throw new Error("Missing provider query");
         expect(interval(query)).toBe(30_000);
         listModels.mockResolvedValue(catalog);
         await queryClient.refetchQueries({ queryKey: options.queryKey });

@@ -16,6 +16,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import {
+  useCallback,
   useDeferredValue,
   useEffect,
   useEffectEvent,
@@ -175,6 +176,12 @@ function groupRowElements(
 export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const { onOpenChange, open, lockedProvider, threadId } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const [refreshingInstanceId, setRefreshingInstanceId] = useState<ProviderInstanceId | null>(null);
+  const onCatalogPendingChange = useCallback((instanceId: ProviderInstanceId, pending: boolean) => {
+    setRefreshingInstanceId((current) =>
+      pending ? instanceId : current === instanceId ? null : current,
+    );
+  }, []);
   const isMenuOpen = open ?? uncontrolledOpen;
   const activeProvider = lockedProvider ?? props.provider;
   const effortControl = props.effortControl ?? "menu";
@@ -508,7 +515,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const shortcutModifierLabel = isMacNavigatorPlatform() ? "⌘" : "Ctrl ";
   const isTabLoading =
     tabAccount !== null &&
-    (props.loadingModelProviders?.[tabAccount.provider] ?? false) &&
+    ((props.loadingModelProviders?.[tabAccount.provider] ?? false) ||
+      refreshingInstanceId === tabAccount.instanceId) &&
     rows.length === 0;
   const discoveryError =
     tabAccount === null ? undefined : props.discoveryErrorsByProvider?.[tabAccount.provider];
@@ -662,7 +670,9 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               key={tabAccount.instanceId}
               provider={tabAccount.provider}
               instanceId={tabAccount.instanceId}
+              hasModels={modelOptionsFor(tabAccount.provider, tabAccount.instanceId).length > 0}
               onRefresh={props.onRefreshModels}
+              onPendingChange={onCatalogPendingChange}
             />
           ) : null}
           <ComposerModelPickerTraitRows

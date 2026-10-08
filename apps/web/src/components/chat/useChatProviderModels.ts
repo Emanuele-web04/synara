@@ -7,9 +7,9 @@ import {
 } from "@synara/contracts";
 import { normalizeModelSlug } from "@synara/shared/model";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveUnsentComposerProvider } from "~/lib/providerAvailability";
+import { findProviderStatus, resolveUnsentComposerProvider } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   hasReconciledServerProviderStatuses,
@@ -39,6 +39,7 @@ import {
 import { getComposerProviderState } from "./composerProviderRegistry";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
+const OPENCODE_WARM_PROVIDERS: ReadonlyArray<ProviderKind> = ["opencode"];
 interface ChatProviderModelsInput {
   threadId: ThreadId;
   activeThread: Thread | undefined;
@@ -214,6 +215,22 @@ export function useChatProviderModels({
     activeProjectCwd: activeProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
+  // A thread's first send can move it into a new worktree or chat folder. Remember
+  // where its catalog last loaded so the composer keeps that account's models
+  // while the new directory loads, instead of falling back to a loading control.
+  const [loadedCatalogCwd, setLoadedCatalogCwd] = useState<{
+    threadId: ThreadId;
+    cwd: string | null;
+  } | null>(null);
+  const placeholderCwd =
+    loadedCatalogCwd?.threadId === threadId && loadedCatalogCwd.cwd !== providerModelDiscoveryCwd
+      ? loadedCatalogCwd.cwd
+      : null;
+  // OpenCode catalogs are cwd-scoped and slow on a cold server, so warm this
+  // chat's accounts now; a confirmed-missing CLI would only produce failing spawns.
+  const warmOpenCodeModels =
+    !providerStatusesReconciled ||
+    findProviderStatus(localProviderStatuses, "opencode")?.available !== false;
   const {
     customModelsByProvider,
     modelOptionsByProvider,
@@ -224,6 +241,7 @@ export function useChatProviderModels({
     runtimeModelsByProvider,
     runtimeModelsByProviderInstance,
     selectedRuntimeAgents: dynamicAgents,
+    selectedProviderModelsLoaded,
     selectedProviderModelsLoading,
     selectedProviderRuntimeModelDiscoveryPending,
   } = useProviderModelCatalog({
@@ -232,9 +250,19 @@ export function useChatProviderModels({
     // Browsing a provider tab requests just that account through refreshModels.
     discoveryEnabled: false,
     cwd: providerModelDiscoveryCwd,
+    placeholderCwd,
     modelHintByProvider: composerModelHintByProvider,
     agentDiscoveryPolicy: "eager-core",
+    warmProviders: warmOpenCodeModels ? OPENCODE_WARM_PROVIDERS : undefined,
   });
+  useEffect(() => {
+    if (!selectedProviderModelsLoaded) return;
+    setLoadedCatalogCwd((current) =>
+      current?.threadId === threadId && current.cwd === providerModelDiscoveryCwd
+        ? current
+        : { threadId, cwd: providerModelDiscoveryCwd },
+    );
+  }, [providerModelDiscoveryCwd, selectedProviderModelsLoaded, threadId]);
   const selectedInstanceModelOptionsByProvider = useMemo(
     () => ({
       ...modelOptionsByProvider,

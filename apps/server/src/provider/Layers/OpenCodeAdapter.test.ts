@@ -144,6 +144,11 @@ function createMockOpenCodeRuntime(options?: {
   readonly connectError?: OpenCodeRuntimeError;
   readonly cliModelsError?: OpenCodeRuntimeError;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
+  readonly cliModelsEffect?: Effect.Effect<
+    ReadonlyArray<OpenCodeCliModelDescriptor>,
+    OpenCodeRuntimeError
+  >;
+  readonly credentialProviderIDsEffect?: Effect.Effect<ReadonlyArray<string>>;
   readonly events?: AsyncIterable<unknown>;
   readonly eventSubscriptions?: ReadonlyArray<AsyncIterable<unknown>>;
   readonly prompt?: (input: Record<string, unknown>) => Promise<unknown>;
@@ -354,9 +359,11 @@ function createMockOpenCodeRuntime(options?: {
         if (options?.cliModelsError) {
           return yield* options.cliModelsError;
         }
+        if (options?.cliModelsEffect) return yield* options.cliModelsEffect;
         return options?.cliModels ?? [];
       }),
-    loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
+    loadOpenCodeCredentialProviderIDs: () =>
+      options?.credentialProviderIDsEffect ?? Effect.succeed([]),
   };
 
   return {
@@ -1128,8 +1135,45 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     );
     expect(runtime.connectCalls).toHaveLength(1);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
-    expect(runtime.cliModelCalls).toHaveLength(1);
-    expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
+    expect(runtime.cliModelCalls).toHaveLength(protocol === "v2" ? 0 : 1);
+    if (protocol === "v1") {
+      expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
+    }
+  });
+
+  it("returns the V2 catalog without waiting for unused CLI or credential discovery", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      protocol: "v2",
+      cliModelsEffect: Effect.never,
+      credentialProviderIDsEffect: Effect.never,
+      inventory: {
+        providerList: {
+          connected: ["opencode", "openrouter"],
+          default: {},
+          all: ["opencode", "openrouter"].map(
+            (id) =>
+              ({
+                id,
+                name: id,
+                models: { muse: { id: "muse", name: "Muse Spark" } },
+              }) as unknown as Provider,
+          ),
+        },
+        agents: [],
+        consoleState: null,
+      },
+    });
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        return yield* adapter.listModels!({ provider: "opencode", cwd: "/repo/v2-catalog" });
+      }).pipe(
+        Effect.timeout("1 second"),
+        Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime)),
+      ),
+    );
+    expect(result.models.map((model) => model.slug)).toEqual(["opencode/muse", "openrouter/muse"]);
+    expect(runtime.cliModelCalls).toHaveLength(0);
   });
 
   it.each([
@@ -1644,8 +1688,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             modelSelection: { provider: "opencode", model: "openai/gpt-5" },
           })
           .pipe(Effect.forkChild);
-        yield* Effect.sleep(20);
-        expect(runtime.promptCalls).toHaveLength(2);
+        yield* Effect.promise(() => vi.waitFor(() => expect(runtime.promptCalls).toHaveLength(2)));
         expect(
           runtime.mcpAddCalls.filter(
             (call) => (call.config as { enabled?: boolean } | undefined)?.enabled !== false,

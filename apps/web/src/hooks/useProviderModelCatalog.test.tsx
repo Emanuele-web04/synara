@@ -123,6 +123,11 @@ function readCatalogRenders(
   return results;
 }
 
+// The selected-account priority effect depends on [queryKey, enabled].
+function readForegroundEffectCalls() {
+  return mocks.useEffect.mock.calls.filter(([, deps]) => Array.isArray(deps) && deps.length === 2);
+}
+
 function readAgentQueryEnabled(provider: ProviderKind): boolean | undefined {
   const call = mocks.useQuery.mock.calls.find(([value]) => {
     const queryKey = (value as QueryOptionsLike).queryKey;
@@ -402,6 +407,159 @@ describe("useProviderModelCatalog", () => {
     );
   });
 
+  it.each(["opencode", "opencode-cli", "disabled", "unsupported"])(
+    "honors an empty OpenCode %s catalog without restoring built-ins",
+    (source) => {
+      mocks.useAppSettings.mockReturnValue({
+        settings: { ...SETTINGS, customOpenCodeModels: ["private/model"] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+      const query = { ...EMPTY_QUERY, data: { models: [], source, cached: false } };
+      modelQueries.set("opencode", query);
+      instanceModelQueries.set("opencode", query);
+
+      const [catalog] = readCatalogRenders({
+        selectedProvider: "opencode",
+        discoveryEnabled: true,
+        modelHintByProvider: { opencode: MODEL_OPTIONS_BY_PROVIDER.opencode[0]?.slug },
+      });
+
+      expect(catalog?.modelOptionsByProvider.opencode.map((model) => model.slug)).toEqual([
+        "private/model",
+      ]);
+      expect(catalog?.modelOptionsByProviderInstance.opencode?.map((model) => model.slug)).toEqual([
+        "private/model",
+      ]);
+    },
+  );
+
+  it("shows both qualified OpenCode routes after a degraded catalog recovers", () => {
+    modelQueries.set("opencode", {
+      ...EMPTY_QUERY,
+      data: { models: [], source: "static", error: "OpenCode is still starting", cached: false },
+    });
+    const [degraded] = readCatalogRenders({ selectedProvider: "opencode", discoveryEnabled: true });
+    expect(degraded?.discoveryErrorsByProvider.opencode).toBe("OpenCode is still starting");
+
+    const models = [
+      {
+        slug: "opencode/muse-spark",
+        name: "Muse Spark",
+        upstreamProviderId: "opencode",
+        upstreamProviderName: "OpenCode Zen",
+      },
+      {
+        slug: "openrouter/muse-spark",
+        name: "Muse Spark",
+        upstreamProviderId: "openrouter",
+        upstreamProviderName: "OpenRouter",
+      },
+    ];
+    const recovered = { ...EMPTY_QUERY, data: { models, source: "opencode", cached: false } };
+    modelQueries.set("opencode", recovered);
+    instanceModelQueries.set("opencode", recovered);
+    const [healthy] = readCatalogRenders({ selectedProvider: "opencode", discoveryEnabled: true });
+    for (const options of [
+      healthy?.modelOptionsByProvider.opencode,
+      healthy?.modelOptionsByProviderInstance.opencode,
+    ]) {
+      expect(options?.map((model) => [model.slug, model.upstreamProviderName])).toEqual([
+        ["opencode/muse-spark", "OpenCode Zen"],
+        ["openrouter/muse-spark", "OpenRouter"],
+      ]);
+    }
+    expect(healthy?.discoveryErrorsByProvider.opencode).toBeUndefined();
+  });
+
+  it("warms every enabled OpenCode account at the chat cwd", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: {
+        ...SETTINGS,
+        providerInstances: {
+          opencode_work: { driver: "opencode", displayName: "Work", config: {} },
+          opencode_off: { driver: "opencode", displayName: "Off", enabled: false, config: {} },
+        },
+      },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue();
+    readCatalogRenders({
+      selectedProvider: "codex",
+      discoveryEnabled: false,
+      cwd: "/repo/worktree",
+      warmProviders: ["opencode"],
+    });
+    const warmEffect = mocks.useEffect.mock.calls.find(([, deps]) =>
+      (deps as unknown[]).includes("opencode"),
+    );
+    warmEffect?.[0]();
+
+    const warmed = prefetchQuery.mock.calls.map(([options]) => options.queryKey);
+    expect(warmed.map((queryKey) => [queryKey[2], queryKey[3], queryKey[7]])).toEqual([
+      ["opencode", "opencode", "/repo/worktree"],
+      ["opencode", "opencode_work", "/repo/worktree"],
+    ]);
+  });
+
+  it("bridges a thread's move into a new directory with its previous OpenCode catalog", () => {
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const previous = { models: [{ slug: "opencode/muse", name: "Muse" }], source: "opencode" };
+    queryClient.setQueryData(
+      providerModelsQueryOptions({ provider: "opencode", instanceId: "opencode", cwd: "/chats" })
+        .queryKey,
+      previous,
+    );
+    const readPlaceholder = (placeholderCwd: string | null) => {
+      mocks.useQuery.mockClear();
+      readCatalogRenders({
+        selectedProvider: "opencode",
+        discoveryEnabled: false,
+        cwd: "/chats/2026-10-08/hi",
+        placeholderCwd,
+      });
+      const options = mocks.useQuery.mock.calls
+        .map(([value]) => value as QueryOptionsLike & { placeholderData?: unknown })
+        .find(({ queryKey }) => queryKey[1] === "models" && queryKey[2] === "opencode");
+      const placeholderData = options!.placeholderData as (previous: unknown) => unknown;
+      return placeholderData(undefined);
+    };
+
+    expect(readPlaceholder("/chats")).toBe(previous);
+    expect(readPlaceholder(null)).toMatchObject({ models: [] });
+  });
+
+  it("does not warm OpenCode when the provider is disabled or hidden", () => {
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue();
+    for (const appSettings of [
+      {
+        settings: SETTINGS,
+        serverSettings: {
+          ...DEFAULT_SERVER_SETTINGS,
+          providers: {
+            ...DEFAULT_SERVER_SETTINGS.providers,
+            opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
+          },
+        },
+      },
+      {
+        settings: { ...SETTINGS, hiddenProviders: ["opencode"] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      },
+    ]) {
+      mocks.useEffect.mockClear();
+      mocks.useAppSettings.mockReturnValue(appSettings);
+      readCatalogRenders({
+        selectedProvider: "codex",
+        discoveryEnabled: false,
+        warmProviders: ["opencode"],
+      });
+      for (const [effect] of mocks.useEffect.mock.calls) effect();
+    }
+    expect(prefetchQuery).not.toHaveBeenCalled();
+  });
+
   it("keeps the last Codex catalog when a background refresh fails", () => {
     modelQueries.set("codex", {
       ...EMPTY_QUERY,
@@ -422,12 +580,12 @@ describe("useProviderModelCatalog", () => {
 
   it("keeps the foreground effect dependency stable across unrelated renders", () => {
     readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: true });
-    const [first, second] = mocks.useEffect.mock.calls;
+    const [first, second] = readForegroundEffectCalls();
     // React uses Object.is on each dependency: an equal-but-new query key
     // would release/reacquire ownership and reorder split-view selections.
     expect(first?.[1][0]).toBe(second?.[1][0]);
     expect(first?.[1][1]).toBe(second?.[1][1]);
-    expect(mocks.useEffect).toHaveBeenCalledTimes(2);
+    expect(readForegroundEffectCalls()).toHaveLength(2);
   });
 
   it.each([
@@ -438,7 +596,7 @@ describe("useProviderModelCatalog", () => {
       { selectedProvider: "pi", discoveryEnabled: true, cwd: "/first" },
       nextInput,
     );
-    const [first, second] = mocks.useEffect.mock.calls;
+    const [first, second] = readForegroundEffectCalls();
     expect(first?.[1][0]).not.toEqual(second?.[1][0]);
   });
 

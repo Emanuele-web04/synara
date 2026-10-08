@@ -11,7 +11,7 @@ import type {
   ProviderListModelsResult,
   ProviderModelDescriptor,
 } from "@synara/contracts";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
 
 import {
@@ -65,6 +65,8 @@ export interface ProviderModelCatalog {
   selectedRuntimeAgents: ReadonlyArray<ProviderAgentDescriptor>;
   /** Loading state used by the selected provider's bootstrap skeleton. */
   selectedProviderModelsLoading: boolean;
+  /** Whether the selected account's catalog for the current cwd has loaded (not a placeholder). */
+  selectedProviderModelsLoaded: boolean;
   /** Whether the selected provider requires and is still waiting on runtime models. */
   selectedProviderRuntimeModelDiscoveryPending: boolean;
   /** Discovery failure detail per provider (268 passthrough). */
@@ -104,13 +106,18 @@ function modelQueryOptionsForProviderInstance(input: {
   readonly provider: ProviderKind;
   readonly instanceId: ProviderInstanceId;
   readonly cwd: string | null;
+  /** Where this thread's catalog was last loaded, when its cwd has since changed. */
+  readonly placeholderCwd?: string | null;
+  readonly queryClient?: QueryClient;
   readonly enabled: boolean;
   readonly refresh?: "if-stale" | "now";
 }) {
   const providerOptions = getProviderStartOptions(input.settings, input.instanceId)?.[
     input.provider
   ];
-  return providerModelsQueryOptions({
+  const scopedCwd = (cwd: string | null) =>
+    CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS.has(input.provider) ? cwd : null;
+  const keyInput = {
     provider: input.provider,
     instanceId: input.instanceId,
     binaryPath: readProviderOptionString(providerOptions, "binaryPath"),
@@ -119,7 +126,23 @@ function modelQueryOptionsForProviderInstance(input: {
     accountId: readProviderOptionString(providerOptions, "accountId"),
     apiEndpoint: readProviderOptionString(providerOptions, "apiEndpoint"),
     agentDir: readProviderOptionString(providerOptions, "agentDir"),
-    cwd: CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS.has(input.provider) ? input.cwd : null,
+  };
+  // The same account's catalog from the thread's previous directory, e.g. before
+  // its first send created the worktree or chat folder it now runs in.
+  const placeholderCatalog =
+    input.provider === "opencode" &&
+    input.queryClient &&
+    input.placeholderCwd &&
+    input.placeholderCwd !== input.cwd
+      ? input.queryClient.getQueryData<ProviderListModelsResult>(
+          providerModelsQueryOptions({ ...keyInput, cwd: scopedCwd(input.placeholderCwd) })
+            .queryKey,
+        )
+      : undefined;
+  return providerModelsQueryOptions({
+    ...keyInput,
+    cwd: scopedCwd(input.cwd),
+    placeholderCatalog,
     enabled: input.enabled,
     ...(input.refresh ? { refresh: input.refresh, priority: "foreground" } : {}),
   });
@@ -138,6 +161,17 @@ function modelDiscoveryError(
   return typeof queryError === "string" ? queryError : undefined;
 }
 
+function isAuthoritativeOpenCodeCatalog(result: ProviderListModelsResult | undefined): boolean {
+  return (
+    result !== undefined &&
+    result.error === undefined &&
+    (result.source === "opencode" ||
+      result.source === "opencode-cli" ||
+      result.source === "disabled" ||
+      result.source === "unsupported")
+  );
+}
+
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
   selectedProviderInstanceId?: ProviderInstanceId | null;
@@ -149,6 +183,11 @@ export function useProviderModelCatalog(input: {
   discoveryEnabled: boolean;
   /** Effective cwd for providers whose model catalog can be extended by project resources. */
   cwd?: string | null;
+  /**
+   * The cwd this surface's thread last loaded its catalog at, if `cwd` has since
+   * changed. OpenCode shows that catalog while the new directory loads.
+   */
+  placeholderCwd?: string | null | undefined;
   /** Per-provider selected-model hints so an unknown selection still lists itself. */
   modelHintByProvider?: Partial<Record<ProviderKind, string | null>>;
   /**
@@ -159,11 +198,17 @@ export function useProviderModelCatalog(input: {
   prefetchProviders?: ReadonlyArray<ProviderKind> | undefined;
   /** Preserve eager Claude/Codex agent discovery on surfaces that already prefetch both. */
   agentDiscoveryPolicy?: "selected" | "eager-core";
+  /**
+   * Warm every configured account of these providers at `cwd` on mount, so the
+   * picker reads a cached catalog instead of starting discovery when it opens.
+   */
+  warmProviders?: ReadonlyArray<ProviderKind> | undefined;
 }): ProviderModelCatalog {
   const { selectedProvider, selectedProviderInstanceId, discoveryEnabled, modelHintByProvider } =
     input;
   const agentDiscoveryPolicy = input.agentDiscoveryPolicy ?? "selected";
   const discoveryCwd = input.cwd ?? null;
+  const placeholderCwd = input.placeholderCwd ?? null;
   const { settings, serverSettings } = useAppSettings();
   const queryClient = useQueryClient();
   const refreshModels = useCallback<ProviderModelCatalog["refreshModels"]>(
@@ -211,6 +256,8 @@ export function useProviderModelCatalog(input: {
         provider: instance.provider,
         instanceId: instance.instanceId,
         cwd: discoveryCwd,
+        placeholderCwd,
+        queryClient,
         // Keep the closed picker scoped to the active account. Enabling every
         // instance would fan model discovery out across all configured accounts.
         enabled: discoveryEnabled || effectiveSelectedInstanceId === instance.instanceId,
@@ -239,6 +286,37 @@ export function useProviderModelCatalog(input: {
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],
   );
+  const warmProviderKey = input.warmProviders?.join(",") ?? "";
+  // Warm through the same keys the account queries and refreshModels read. The
+  // shared discovery queue keeps these behind the selected account's foreground read.
+  useEffect(() => {
+    if (!warmProviderKey) return;
+    const warmProviders = new Set(warmProviderKey.split(",") as ProviderKind[]);
+    for (const instance of providerInstances) {
+      const { provider } = instance;
+      if (!warmProviders.has(provider) || !instance.enabled || !instance.supported) continue;
+      if (serverSettings?.providers[provider]?.enabled === false) continue;
+      if (provider !== selectedProvider && hiddenProviderSet.has(provider)) continue;
+      void queryClient.prefetchQuery(
+        modelQueryOptionsForProviderInstance({
+          settings,
+          provider,
+          instanceId: instance.instanceId,
+          cwd: discoveryCwd,
+          enabled: true,
+        }),
+      );
+    }
+  }, [
+    discoveryCwd,
+    hiddenProviderSet,
+    providerInstances,
+    queryClient,
+    selectedProvider,
+    serverSettings,
+    settings,
+    warmProviderKey,
+  ]);
   const selectedInstanceQueryOption = (
     provider: ProviderKind,
   ): { readonly instanceId: ProviderInstanceId } => {
@@ -303,6 +381,8 @@ export function useProviderModelCatalog(input: {
       provider,
       instanceId: instance?.instanceId ?? provider,
       cwd: discoveryCwd,
+      placeholderCwd,
+      queryClient,
       enabled,
     });
   };
@@ -547,6 +627,14 @@ export function useProviderModelCatalog(input: {
         provider === "codex" &&
         discovery?.source === "codex-app-server" &&
         discovery.error === undefined;
+      if (
+        provider === "opencode" &&
+        isAuthoritativeOpenCodeCatalog(discovery) &&
+        dynamicModels?.length === 0
+      ) {
+        result.opencode = staticOptions.opencode.filter((option) => option.isCustom === true);
+        continue;
+      }
       if (dynamicModels && (dynamicModels.length > 0 || hasCodexCatalog)) {
         result[provider] = mergeDynamicModelOptions({
           provider,
@@ -610,6 +698,16 @@ export function useProviderModelCatalog(input: {
         instance.provider === "codex" &&
         discovery?.source === "codex-app-server" &&
         discovery.error === undefined;
+      if (
+        instance.provider === "opencode" &&
+        isAuthoritativeOpenCodeCatalog(discovery) &&
+        dynamicModels?.length === 0
+      ) {
+        byInstance[instance.instanceId] = staticOptions.filter(
+          (option) => option.isCustom === true,
+        );
+        continue;
+      }
       byInstance[instance.instanceId] =
         dynamicModels && (dynamicModels.length > 0 || hasCodexCatalog)
           ? mergeDynamicModelOptions({
@@ -797,6 +895,9 @@ export function useProviderModelCatalog(input: {
       (selectedProviderModelsQuery.isLoading ||
         (selectedProviderModelsQuery.isFetching &&
           selectedProviderModelsQuery.data === undefined)));
+  const selectedProviderModelsLoaded =
+    selectedProviderModelsQuery.data !== undefined &&
+    !selectedProviderModelsQuery.isPlaceholderData;
 
   return useMemo(
     () => ({
@@ -810,6 +911,7 @@ export function useProviderModelCatalog(input: {
       selectedRuntimeModel,
       selectedRuntimeAgents,
       selectedProviderModelsLoading,
+      selectedProviderModelsLoaded,
       selectedProviderRuntimeModelDiscoveryPending,
       discoveryErrorsByProvider,
     }),
@@ -822,6 +924,7 @@ export function useProviderModelCatalog(input: {
       modelOptionsByProviderInstance,
       runtimeModelsByProvider,
       runtimeModelsByProviderInstance,
+      selectedProviderModelsLoaded,
       selectedProviderModelsLoading,
       selectedProviderRuntimeModelDiscoveryPending,
       selectedRuntimeAgents,

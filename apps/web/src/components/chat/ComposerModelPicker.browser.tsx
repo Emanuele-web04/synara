@@ -159,7 +159,7 @@ function readStoredStars(): unknown {
 }
 
 describe("ComposerModelPicker", () => {
-  it("checks the viewed account silently and offers retry only after failure", async () => {
+  it("checks a cached account silently and shows progress only on retry", async () => {
     let finish!: () => void;
     const promise = new Promise<void>((resolve) => {
       finish = resolve;
@@ -190,6 +190,7 @@ describe("ComposerModelPicker", () => {
       const retryButton = page.getByRole("button", { name: "Retry" });
       await retryButton.click();
       await expect.element(retryButton).toBeDisabled();
+      await expect.element(page.getByText("Loading models…")).toBeVisible();
       expect(onRefreshModels).toHaveBeenLastCalledWith("claudeAgent", "claudeAgent", "now");
       finishRetry();
       await expect.element(retryButton).not.toBeInTheDocument();
@@ -216,6 +217,44 @@ describe("ComposerModelPicker", () => {
       expect(page.getByRole("status").elements()).toHaveLength(0);
       finish();
       expect(onRefreshModels).toHaveBeenCalledTimes(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows loading for an empty account and stays quiet for a cached one", async () => {
+    let finishOpenCode!: () => void;
+    let finishClaude!: () => void;
+    const onRefreshModels = vi.fn((provider: ProviderKind) => {
+      if (provider === "opencode") {
+        return new Promise<void>((resolve) => {
+          finishOpenCode = resolve;
+        });
+      }
+      if (provider === "claudeAgent") {
+        return new Promise<void>((resolve) => {
+          finishClaude = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    const screen = await mountPicker({
+      providers: [readyProvider("codex"), readyProvider("opencode"), readyProvider("claudeAgent")],
+      onRefreshModels,
+    });
+    try {
+      await page.getByRole("tab", { name: "OpenCode" }).click();
+      await expect.element(page.getByText("Loading models…")).toBeVisible();
+      await expect.element(page.getByLabelText("Loading models")).toBeVisible();
+      expect(page.getByText("No models found").elements()).toHaveLength(0);
+      await page.getByRole("tab", { name: "Claude" }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: /Claude Sonnet/u }).first())
+        .toBeVisible();
+      expect(page.getByText("Loading models…").elements()).toHaveLength(0);
+      finishOpenCode();
+      finishClaude();
+      expect(page.getByText("Loading models…").elements()).toHaveLength(0);
     } finally {
       await screen.unmount();
     }

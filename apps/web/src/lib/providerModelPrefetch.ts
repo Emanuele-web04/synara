@@ -24,6 +24,7 @@ import type { DraftThreadEnvMode } from "../composerDraftDomain";
 import { findProviderStatus, resolveAvailableProviderPreference } from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
+  needsProviderModelCatalogRecovery,
   prioritizeProviderModelDiscovery,
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
@@ -341,8 +342,11 @@ export function prefetchProviderModelsForNewThread(
           ? 0
           : providerModelDiscoveryRetry(provider),
       staleTime:
-        provider === "devin"
-          ? (query) => (query.state.data?.error ? 0 : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS)
+        provider === "devin" || provider === "opencode"
+          ? (query) =>
+              needsProviderModelCatalogRecovery(provider, query.state.data)
+                ? 0
+                : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS
           : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
       gcTime: NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS,
     });
