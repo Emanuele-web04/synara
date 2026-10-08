@@ -6706,7 +6706,231 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
+  it("follows the final text batch when the assistant turn settles", async () => {
+    let snapshot = createSnapshotWithLongAssistantResponse();
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    const messageId = MessageId.makeUnsafe("msg-final-text-batch");
+    const turnId = TurnId.makeUnsafe("turn-final-text-batch");
+    const syncReply = (text: string, streaming: boolean) => {
+      snapshot = {
+        ...snapshot,
+        snapshotSequence: snapshot.snapshotSequence + 1,
+        threads: snapshot.threads.map((thread) =>
+          thread.id !== THREAD_ID
+            ? thread
+            : {
+                ...thread,
+                session: thread.session
+                  ? {
+                      ...thread.session,
+                      status: streaming ? "running" : "ready",
+                      activeTurnId: streaming ? turnId : null,
+                    }
+                  : null,
+                latestTurn: {
+                  turnId,
+                  state: streaming ? "running" : "completed",
+                  requestedAt: isoAt(1_200),
+                  startedAt: isoAt(1_201),
+                  completedAt: streaming ? null : isoAt(1_204),
+                  assistantMessageId: messageId,
+                },
+                messages: [
+                  ...thread.messages.filter((message) => message.id !== messageId),
+                  {
+                    id: messageId,
+                    role: "assistant",
+                    source: "native",
+                    text,
+                    turnId,
+                    streaming,
+                    createdAt: isoAt(1_202),
+                    updatedAt: isoAt(1_203),
+                    ...(streaming ? {} : { completedAt: isoAt(1_204) }),
+                  },
+                ],
+              },
+        ),
+      };
+      fixture = { ...fixture, snapshot };
+      useStore.getState().syncServerReadModel(snapshot);
+    };
+    try {
+      const container = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Transcript did not mount.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+      syncReply("The reply starts.", true);
+      await vi.waitFor(() => expect(container.textContent).toContain("The reply starts."));
+      await waitForTranscriptLayoutToSettle(container);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+      syncReply(
+        `${Array.from(
+          { length: 40 },
+          (_, index) => `Paragraph ${index}. ${"Delivered assistant output. ".repeat(8)}`,
+        ).join("\n\n")}\n\nEnd of reply.`,
+        false,
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("End of reply."));
+      await waitForTranscriptLayoutToSettle(container);
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps following work after assistant text finishes streaming", async () => {
+    let snapshot = createSnapshotWithInlineToolOverflow({ active: true });
+    const messageId = MessageId.makeUnsafe("msg-assistant-inline-tools");
+    const turnId = TurnId.makeUnsafe("turn-inline-tools");
+    snapshot = {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, text: "I will check the transcript layout.", streaming: true }
+            : message,
+        ),
+      })),
+    };
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    const syncThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      snapshot = {
+        ...snapshot,
+        snapshotSequence: snapshot.snapshotSequence + 1,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      fixture = { ...fixture, snapshot };
+      useStore.getState().syncServerReadModel(snapshot);
+    };
+    const appendWork = (index: number) =>
+      syncThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe(`activity-after-commentary-${index}`),
+            createdAt: isoAt(1_110 + index),
+            kind: "tool.started",
+            summary: `Checking transcript layout ${index}`,
+            tone: "tool",
+            turnId,
+            payload: {
+              itemType: "command_execution",
+              status: "inProgress",
+              title: "Run transcript checks",
+              detail: `bun run test transcript-layout-${index}`,
+            },
+          },
+        ],
+      }));
+    try {
+      const container = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Transcript did not mount.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+      syncThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, streaming: false, completedAt: isoAt(1_110) }
+            : message,
+        ),
+      }));
+      await waitForTranscriptLayoutToSettle(container);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+      const beforeWorkHeight = container.scrollHeight;
+      for (let index = 0; index < 4; index += 1) {
+        appendWork(index);
+        await waitForLayout();
+      }
+      await waitForTranscriptLayoutToSettle(container);
+      expect(container.scrollHeight).toBeGreaterThan(beforeWorkHeight + 20);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+
+      // Reading earlier output releases follow even between text messages.
+      await userEvent.wheel(container, { delta: { y: -350 } });
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThan(100),
+      );
+      await waitForTranscriptLayoutToSettle(container);
+      const readerTop = container.scrollTop;
+      appendWork(4);
+      syncThread((thread) => ({
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            id: MessageId.makeUnsafe("msg-after-commentary-work"),
+            role: "assistant",
+            source: "native",
+            text: "The layout checks have completed.",
+            turnId,
+            streaming: false,
+            createdAt: isoAt(1_120),
+            updatedAt: isoAt(1_120),
+            completedAt: isoAt(1_120),
+          },
+        ],
+      }));
+      await waitForTranscriptLayoutToSettle(container);
+      expect(container.scrollTop).toBeCloseTo(readerTop, 0);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThan(100);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the previous turn folded while a follow-up send awaits its new turn", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithInlineToolOverflow({ active: false }),
+    });
+    let releaseSend!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
+    try {
+      const findDisclosure = () =>
+        Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find(
+          (button) => button.textContent?.includes("Worked for"),
+        );
+      await vi.waitFor(() => expect(findDisclosure()?.getAttribute("aria-expanded")).toBe("false"));
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Thanks");
+      (await waitForSendButton()).click();
+      await vi.waitFor(() => expect(hasDispatchedCommandType("thread.turn.start")).toBe(true));
+      // Inspect the whole pending-send window: an unfold followed by a fold
+      // changes transcript height even if the final settled state looks right.
+      for (let frame = 0; frame < 20; frame += 1) {
+        await nextFrame();
+        expect(findDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+        expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
+        expect(document.body.textContent).not.toContain("Used 6 tools");
+      }
+    } finally {
+      releaseSend();
+      restoreApi();
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not rearm detached reading for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
       targetText: "auto-follow wiring target",
@@ -6772,8 +6996,15 @@ describe("ChatView transcript geometry (full app)", () => {
       }
       scrollSpy.calls.length = 0;
 
-      // Buffering/connecting state changes generic turn chrome, but does not add a
-      // transcript message and therefore must not re-stick the transcript.
+      await userEvent.wheel(scrollContainer, { delta: { y: -350 } });
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(100),
+      );
+      await waitForTranscriptLayoutToSettle(scrollContainer);
+      scrollSpy.calls.length = 0;
+
+      // Buffering/connecting changes turn chrome but must not reclaim the
+      // viewport from someone reading earlier messages.
       syncActiveThread((thread) => ({
         ...thread,
         session: thread.session
@@ -6786,7 +7017,6 @@ describe("ChatView transcript geometry (full app)", () => {
         updatedAt: isoAt(1_201),
       }));
       await waitForLayout();
-      await expect.element(page.getByText("Starting Codex…", { exact: true })).toBeInTheDocument();
       expect(scrollSpy.calls).toHaveLength(0);
 
       for (const status of ["error", "starting", "ready"] as const) {
@@ -6802,11 +7032,6 @@ describe("ChatView transcript geometry (full app)", () => {
         }));
         await waitForLayout();
         expect(scrollSpy.calls).toHaveLength(0);
-        if (status !== "starting") {
-          await expect
-            .element(page.getByText("Starting Codex…", { exact: true }))
-            .not.toBeInTheDocument();
-        }
       }
 
       const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
