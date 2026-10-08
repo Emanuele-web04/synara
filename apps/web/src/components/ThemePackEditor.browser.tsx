@@ -12,7 +12,7 @@ vi.mock("~/lib/utils", async (importOriginal) => ({
 }));
 
 import { ThemePackEditor } from "./ThemePackEditor";
-import { DEFAULT_THEME_STATE, parseStoredThemeState } from "~/theme/theme.logic";
+import { DEFAULT_THEME_STATE, getCodeThemeSeed, parseStoredThemeState } from "~/theme/theme.logic";
 
 const root = document.documentElement;
 let previousTheme: string | null;
@@ -32,11 +32,21 @@ async function selectLightPreset(label: string) {
   await page.getByRole("option", { name: label, exact: true }).click();
 }
 
-it("applies and persists Vercel light colors on an opaque desktop, then restores Codex", async () => {
-  localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "light" }));
+it("preserves saved Codex on mount, applies and persists Vercel, then restores Codex", async () => {
+  const stored = JSON.stringify({
+    ...DEFAULT_THEME_STATE,
+    codeThemeIds: { dark: "codex", light: "codex" },
+    chromeThemes: {
+      dark: getCodeThemeSeed("codex", "dark"),
+      light: getCodeThemeSeed("codex", "light"),
+    },
+    mode: "light",
+  });
+  localStorage.setItem("synara:theme", stored);
   await render(<ThemePackEditor variant="light" />);
   await expect.poll(() => root.getAttribute("data-code-theme-id")).toBe("codex");
   expect(root.getAttribute("data-window-material")).toBe("opaque");
+  expect(localStorage.getItem("synara:theme")).toBe(stored);
 
   await selectLightPreset("Vercel");
   await expect.poll(() => root.style.getPropertyValue("--codex-base-accent")).toBe("#006aff");
@@ -60,7 +70,7 @@ it("previews an inactive light preset and applies it only when the user chooses 
   await selectLightPreset("Vercel");
 
   expect(root.getAttribute("data-theme-variant")).toBe("dark");
-  expect(root.getAttribute("data-code-theme-id")).toBe("codex");
+  expect(root.getAttribute("data-code-theme-id")).toBe("synara");
   const preview = page.getByRole("img", { name: "Light theme preview: Vercel" });
   expect(getComputedStyle(preview.element()).backgroundColor).toBe("rgb(255, 255, 255)");
   expect(getComputedStyle(preview.element()).color).toBe("rgb(23, 23, 23)");
@@ -70,6 +80,6 @@ it("previews an inactive light preset and applies it only when the user chooses 
   expect(root.getAttribute("data-code-theme-id")).toBe("vercel");
   const saved = parseStoredThemeState(localStorage.getItem("synara:theme"));
   expect(saved.mode).toBe("light");
-  expect(saved.codeThemeIds.dark).toBe("codex");
+  expect(saved.codeThemeIds.dark).toBe("synara");
   expect(saved.systemUiFont).toBe(true);
 });

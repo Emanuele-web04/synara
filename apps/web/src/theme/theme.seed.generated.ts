@@ -128,36 +128,36 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   },
   synara: {
     dark: {
-      accent: "#6073cc",
+      accent: "#f2612d",
       contrast: 0,
       fonts: {
         code: null,
         ui: null,
       },
-      ink: "#f5f5f5",
-      opaqueWindows: false,
-      semanticColors: {
-        diffAdded: "#40c977",
-        diffRemoved: "#fa423e",
-        skill: "#ad7bf9",
-      },
-      surface: "#0e0e0e",
-    },
-    light: {
-      accent: "#526fff",
-      contrast: 0,
-      fonts: {
-        code: null,
-        ui: null,
-      },
-      ink: "#262626",
+      ink: "#fcfcfc",
       opaqueWindows: false,
       semanticColors: {
         diffAdded: "#00a240",
-        diffRemoved: "#ba2623",
-        skill: "#924ff7",
+        diffRemoved: "#e02e2a",
+        skill: "#b06dff",
       },
-      surface: "#fcfcfc",
+      surface: "#111111",
+    },
+    light: {
+      accent: "#c74614",
+      contrast: 0,
+      fonts: {
+        code: null,
+        ui: null,
+      },
+      ink: "#0d0d0d",
+      opaqueWindows: false,
+      semanticColors: {
+        diffAdded: "#00a240",
+        diffRemoved: "#e02e2a",
+        skill: "#751ed9",
+      },
+      surface: "#ffffff",
     },
   },
   dracula: {
