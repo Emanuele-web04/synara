@@ -5075,7 +5075,7 @@ export default function Sidebar() {
       slotOccupied: Boolean(input.threadJumpLabel),
     });
     return (
-      <div className="relative flex min-w-0 items-center justify-end gap-[3px] group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
+      <div className="relative flex min-w-0 items-center justify-end gap-2 group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
         {input.rightMetaChips.length > 0 ? (
           <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
