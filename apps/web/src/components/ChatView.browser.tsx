@@ -3934,7 +3934,8 @@ describe("ChatView transcript geometry (full app)", () => {
               ...pendingThread,
               pendingInteractions: pendingThread.pendingInteractions.map((row) => ({
                 ...row,
-                status: "uncertain" as const,
+                status: "confirmed" as const,
+                resolvedAt: NOW_ISO,
               })),
               activities: [
                 ...pendingThread.activities,
@@ -4112,7 +4113,7 @@ describe("ChatView transcript geometry (full app)", () => {
     ).toBeLessThan(2.5);
   });
 
-  it("cancels a multi-question prompt with choices through the orchestration command", async () => {
+  it.each(["confirmed", "stale"])("cancels a multi-question (%s)", async (settlement) => {
     const requestId = ApprovalRequestId.makeUnsafe("question-cancel");
     const lifecycleGeneration = "cancel-generation";
     const questions = [1, 2].map((id) => ({
@@ -4168,14 +4169,37 @@ describe("ChatView transcript geometry (full app)", () => {
         if (command.type !== "thread.user-input.respond") {
           throw new Error("Unexpected command in the cancellation fixture.");
         }
-        // Model provider-confirmed cancellation in the server fixture. The client
-        // must fetch this settlement; command acceptance alone is not confirmation.
+        // Both a provider-confirmed cancellation and an invalidated callback
+        // settle durably. Acceptance alone is not settlement.
         fixture.snapshot = {
           ...fixture.snapshot,
           snapshotSequence: fixture.snapshot.snapshotSequence + 1,
           threads: [
             {
               ...pendingThread,
+              ...(settlement === "stale"
+                ? {
+                    activities: [
+                      ...pendingThread.activities,
+                      {
+                        id: EventId.makeUnsafe("question-cancel-expired"),
+                        createdAt: NOW_ISO,
+                        kind: "provider.user-input.respond.failed",
+                        summary: "Questions expired",
+                        tone: "error" as const,
+                        turnId: null,
+                        sequence: 2,
+                        payload: {
+                          requestId,
+                          lifecycleGeneration,
+                          responseCommandId: command.commandId,
+                          settlementStatus: "uncertain",
+                          detail: buildStalePendingRequestFailureDetail("user-input", requestId),
+                        },
+                      },
+                    ],
+                  }
+                : {}),
               pendingInteractions: pendingThread.pendingInteractions.map((interaction) =>
                 Object.assign({}, interaction, {
                   status: "confirmed" as const,
@@ -4192,7 +4216,10 @@ describe("ChatView transcript geometry (full app)", () => {
     );
     Object.defineProperty(window, "nativeApi", {
       configurable: true,
-      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand, subscribeThread } },
+      value: {
+        ...api,
+        orchestration: { ...api.orchestration, dispatchCommand, subscribeThread },
+      },
     });
     try {
       setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
@@ -4213,6 +4240,16 @@ describe("ChatView transcript geometry (full app)", () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
       await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
       await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
+      // A later snapshot can omit the failure and all terminal rows. The old
+      // request activity must not bring the question card back.
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: [{ ...pendingThread, pendingInteractions: [] }],
+      };
+      await api.orchestration.subscribeThread({ threadId: THREAD_ID });
+      await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
+      expect(await waitForComposerEditor()).toBeDefined();
     } finally {
       if (previousNativeApi)
         Object.defineProperty(window, "nativeApi", {

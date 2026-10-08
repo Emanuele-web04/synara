@@ -20794,18 +20794,18 @@ describe("ProviderCommandReactor", () => {
       );
     });
     expect(harness.respondToRequest).not.toHaveBeenCalled();
-    const retryableApproval = await Effect.runPromise(
+    const expiredApproval = await Effect.runPromise(
       harness.pendingInteractionRepository.getByIdentity({
         threadId: ThreadId.makeUnsafe("thread-1"),
         interactionKind: "approval",
         requestId: asApprovalRequestId("approval-request-stopped"),
       }),
     );
-    expect(Option.getOrUndefined(retryableApproval)).toMatchObject({
-      status: "uncertain",
+    expect(Option.getOrUndefined(expiredApproval)).toMatchObject({
+      status: "confirmed",
       responseCommandId: "cmd-approval-respond-stopped",
       decision: "accept",
-      resolvedAt: null,
+      resolvedAt: expect.any(String),
     });
   });
 
@@ -20882,10 +20882,10 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     expect(Option.getOrUndefined(expiredUserInput)).toMatchObject({
-      status: "uncertain",
+      status: "confirmed",
       responseCommandId: "cmd-user-input-respond-stopped",
       decision: null,
-      resolvedAt: null,
+      resolvedAt: expect.any(String),
     });
   });
 
@@ -21039,18 +21039,18 @@ describe("ProviderCommandReactor", () => {
       settlementStatus: "uncertain",
       detail: expect.stringContaining("Stale pending approval request: approval-request-1"),
     });
-    const uncertainApproval = await Effect.runPromise(
+    const expiredApproval = await Effect.runPromise(
       harness.pendingInteractionRepository.getByIdentity({
         threadId: ThreadId.makeUnsafe("thread-1"),
         interactionKind: "approval",
         requestId: asApprovalRequestId("approval-request-1"),
       }),
     );
-    expect(Option.getOrUndefined(uncertainApproval)).toMatchObject({
-      status: "uncertain",
+    expect(Option.getOrUndefined(expiredApproval)).toMatchObject({
+      status: "confirmed",
       responseCommandId: "cmd-approval-respond-stale",
       decision: "acceptForSession",
-      resolvedAt: null,
+      resolvedAt: failureActivity?.createdAt,
     });
     const responseEvents = await Effect.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
@@ -21280,18 +21280,18 @@ describe("ProviderCommandReactor", () => {
         settlementStatus: "uncertain",
         detail: expect.stringContaining("Stale pending user-input request: user-input-request-1"),
       });
-      const uncertainUserInput = await Effect.runPromise(
+      const expiredUserInput = await Effect.runPromise(
         harness.pendingInteractionRepository.getByIdentity({
           threadId: ThreadId.makeUnsafe("thread-1"),
           interactionKind: "userInput",
           requestId: asApprovalRequestId("user-input-request-1"),
         }),
       );
-      expect(Option.getOrUndefined(uncertainUserInput)).toMatchObject({
-        status: "uncertain",
+      expect(Option.getOrUndefined(expiredUserInput)).toMatchObject({
+        status: "confirmed",
         responseCommandId: "cmd-user-input-respond-stale",
         decision: null,
-        resolvedAt: null,
+        resolvedAt: failureActivity?.createdAt,
       });
 
       const resolvedActivity = thread?.activities.find(
@@ -21317,23 +21317,24 @@ describe("ProviderCommandReactor", () => {
           createdAt: new Date().toISOString(),
         }),
       );
-      await waitFor(
-        async () =>
-          (await readHarnessThread(harness))?.activities.filter(
-            (activity) => activity.kind === "provider.user-input.respond.failed",
-          ).length === 2,
-      );
+      await harness.drain();
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ),
+      ).toHaveLength(1);
       expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
-      const reclaimedUserInput = await Effect.runPromise(
+      const settledUserInputAfterRetry = await Effect.runPromise(
         harness.pendingInteractionRepository.getByIdentity({
           threadId: ThreadId.makeUnsafe("thread-1"),
           interactionKind: "userInput",
           requestId: asApprovalRequestId("user-input-request-1"),
         }),
       );
-      expect(Option.getOrUndefined(reclaimedUserInput)).toMatchObject({
-        status: "uncertain",
+      expect(Option.getOrUndefined(settledUserInputAfterRetry)).toMatchObject({
+        status: "confirmed",
         responseCommandId: "cmd-user-input-respond-stale",
+        resolvedAt: failureActivity?.createdAt,
       });
     },
   );

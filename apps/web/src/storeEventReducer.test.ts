@@ -36,8 +36,90 @@ import {
   threadsOf,
 } from "./storeTestFixtures";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
+import { derivePendingApprovals, derivePendingUserInputs } from "./pendingInteractionDerivation";
 
 describe("store event reducer", () => {
+  it.each(["approval", "userInput"] as const)(
+    "closes stale %s rows without depending on retained failure activities",
+    (interactionKind) => {
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const requestId = ApprovalRequestId.makeUnsafe("request-stale");
+      const requestKind = interactionKind === "approval" ? "approval" : "user-input";
+      const createdAt = "2026-10-06T19:53:00.000Z";
+      const resolvedAt = "2026-10-06T22:16:27.000Z";
+      const request = makeActivity({
+        id: "request-stale",
+        kind: `${requestKind}.requested`,
+        createdAt,
+        sequence: 2_479_474,
+        payload: {
+          requestId,
+          lifecycleGeneration: "stale-generation",
+          requestKind: "command",
+          questions: [{ id: "next", header: "Next", question: "Continue?", options: [] }],
+        },
+      });
+      for (const status of ["pending", "responding", "uncertain"] as const) {
+        for (const reduce of [applyOrchestrationEvents, applyOrchestrationEventsHotPath]) {
+          const responseCommandId =
+            status === "responding" ? CommandId.makeUnsafe("response-stale") : null;
+          const initial = makeState(
+            makeThread({
+              activities: [request],
+              pendingInteractions: [
+                {
+                  interactionKind,
+                  requestId,
+                  threadId,
+                  lifecycleGeneration: "stale-generation",
+                  turnId: null,
+                  status,
+                  decision: null,
+                  responseCommandId,
+                  responseRequestedAt: null,
+                  createdAt,
+                  resolvedAt: null,
+                },
+              ],
+            }),
+          );
+          const next = reduce(initial, [
+            makeDomainEvent("thread.activity-appended", {
+              threadId,
+              activity: makeActivity({
+                id: "failure-stale",
+                kind: `provider.${requestKind}.respond.failed`,
+                createdAt: resolvedAt,
+                sequence: 874_284,
+                payload: {
+                  requestId,
+                  lifecycleGeneration: "stale-generation",
+                  ...(responseCommandId ? { responseCommandId } : {}),
+                  settlementStatus: "uncertain",
+                  detail: `Stale pending ${requestKind} request: ${requestId}. Restart the turn to continue.`,
+                },
+              }),
+            }),
+          ]);
+          const thread = threadsOf(next)[0]!;
+          expect(thread.pendingInteractions?.[0]).toMatchObject({
+            status: "confirmed",
+            resolvedAt,
+          });
+          const derive =
+            interactionKind === "approval" ? derivePendingApprovals : derivePendingUserInputs;
+          expect(
+            derive([request], thread.pendingInteractions, {
+              authoritativeHasPending: false,
+              latestTurnId: undefined,
+              responseClaimReferenceAt: resolvedAt,
+            }),
+          ).toEqual([]);
+        }
+      }
+    },
+  );
+
   it("projects durable cache review transitions and clears them without touching the draft message", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const messageId = MessageId.makeUnsafe("held-message");

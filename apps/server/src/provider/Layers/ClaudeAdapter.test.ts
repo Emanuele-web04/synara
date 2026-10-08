@@ -2785,6 +2785,7 @@ describe("ClaudeAdapterLive", () => {
         usage: { total_tokens: 123, tool_uses: 4, duration_ms: 987 },
         session_id: "sdk-session-subagent",
         uuid: "task-progress-subagent-1",
+        summary: "  Reviewing the migration.\n",
       } as unknown as SDKMessage);
 
       harness.query.emit({
@@ -2794,7 +2795,7 @@ describe("ClaudeAdapterLive", () => {
         tool_use_id: "tool-task-1",
         status: "completed",
         output_file: "/tmp/task-1-output.md",
-        summary: "Reviewed the migration.",
+        summary: "  Reviewed the migration.\n",
         session_id: "sdk-session-subagent",
         uuid: "task-notification-1",
       } as unknown as SDKMessage);
@@ -2870,6 +2871,17 @@ describe("ClaudeAdapterLive", () => {
           event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 123,
       );
       assert.equal(taskUsage?.type, "thread.token-usage.updated");
+
+      const taskProgress = runtimeEvents.find((event) => event.type === "task.progress");
+      assert.equal(taskProgress?.type, "task.progress");
+      if (taskProgress?.type === "task.progress") {
+        assert.equal(taskProgress.payload.summary, "Reviewing the migration.");
+      }
+      const taskCompleted = runtimeEvents.find((event) => event.type === "task.completed");
+      assert.equal(taskCompleted?.type, "task.completed");
+      if (taskCompleted?.type === "task.completed") {
+        assert.equal(taskCompleted.payload.summary, "Reviewed the migration.");
+      }
 
       const childTurnCompleted = childEvents.find((event) => event.type === "turn.completed");
       assert.equal(childTurnCompleted?.type, "turn.completed");

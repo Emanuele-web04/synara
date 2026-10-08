@@ -2048,7 +2048,7 @@ describe("ProviderRuntimeIngestion", () => {
       harness.readProjectedThread,
       (thread) => thread.hasPendingUserInput === false,
     );
-    expect(pendingInteractionStatus(settledThread, "req-interrupted-user-input")).toBe("uncertain");
+    expect(pendingInteractionStatus(settledThread, "req-interrupted-user-input")).toBeUndefined();
     const failures = userInputFailureActivities(settledThread);
     expect(failures).toHaveLength(1);
     expect(failures[0]?.payload).toMatchObject({
@@ -2148,7 +2148,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     const settledThread = await waitForProjectedThread(
       harness.readProjectedThread,
-      (thread) => pendingInteractionStatus(thread, "req-overlap-turn-a") === "uncertain",
+      (thread) => pendingInteractionStatus(thread, "req-overlap-turn-a") === undefined,
     );
     expect(pendingInteractionStatus(settledThread, "req-overlap-turn-b")).toBe("pending");
     expect(settledThread.hasPendingUserInput).toBe(true);
@@ -2197,7 +2197,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     const settledThread = await waitForProjectedThread(
       harness.readProjectedThread,
-      (thread) => pendingInteractionStatus(thread, "req-turnless-approval") === "uncertain",
+      (thread) => pendingInteractionStatus(thread, "req-turnless-approval") === undefined,
     );
     expect(settledThread.hasPendingApprovals).toBe(false);
     const failures = approvalFailureActivities(settledThread);
@@ -2263,7 +2263,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     const settledThread = await waitForProjectedThread(
       harness.readProjectedThread,
-      (thread) => pendingInteractionStatus(thread, "req-turnless-overlap") === "uncertain",
+      (thread) => pendingInteractionStatus(thread, "req-turnless-overlap") === undefined,
     );
     expect(approvalFailureActivities(settledThread)).toHaveLength(1);
   });
@@ -2342,7 +2342,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     const settledThread = await waitForProjectedThread(
       harness.readProjectedThread,
-      (thread) => pendingInteractionStatus(thread, "req-exit-generation-a") === "uncertain",
+      (thread) => pendingInteractionStatus(thread, "req-exit-generation-a") === undefined,
     );
     expect(settledThread.hasPendingUserInput).toBe(false);
     expect(userInputFailureActivities(settledThread)).toHaveLength(1);
