@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isWorkspaceSearchFilesystemPathQuery,
-  resolveWorkspaceSearchFilesystemPath,
+  resolveWorkspaceSearchFilesystemTarget,
 } from "./WorkspaceSearchPalette.logic";
 
 describe("isWorkspaceSearchFilesystemPathQuery", () => {
@@ -23,55 +23,50 @@ describe("isWorkspaceSearchFilesystemPathQuery", () => {
   });
 });
 
-describe("resolveWorkspaceSearchFilesystemPath", () => {
+describe("resolveWorkspaceSearchFilesystemTarget", () => {
   const cwd = "/Users/tester/project";
-
-  it("maps in-workspace absolute paths to workspace-relative form", () => {
-    expect(resolveWorkspaceSearchFilesystemPath(`${cwd}/src/app.ts:42`, cwd, "/Users/tester")).toBe(
+  it.each([
+    [
+      "workspace absolute with position",
+      `${cwd}/src/app.ts:42`,
+      cwd,
+      "/Users/tester",
       "src/app.ts",
-    );
-  });
-
-  it("keeps out-of-workspace absolute paths absolute", () => {
-    expect(
-      resolveWorkspaceSearchFilesystemPath("/Users/tester/notes/todo.md", cwd, "/Users/tester"),
-    ).toBe("/Users/tester/notes/todo.md");
-  });
-
-  it("expands home-relative paths using the explicit server home", () => {
-    expect(resolveWorkspaceSearchFilesystemPath("~/notes/todo.md", cwd, "/Users/tester")).toBe(
+    ],
+    [
+      "outside workspace",
       "/Users/tester/notes/todo.md",
-    );
-    expect(resolveWorkspaceSearchFilesystemPath("~/project/src/app.ts", cwd, "/Users/tester")).toBe(
-      "src/app.ts",
-    );
-  });
-
-  it("supports custom homes that cannot be inferred from cwd", () => {
-    expect(
-      resolveWorkspaceSearchFilesystemPath(
-        "~/notes/todo.md",
-        "/srv/synara/workspace",
-        "/srv/synara-user",
-      ),
-    ).toBe("/srv/synara-user/notes/todo.md");
+      cwd,
+      "/Users/tester",
+      "/Users/tester/notes/todo.md",
+    ],
+    ["home relative", "~/notes/todo.md", cwd, "/Users/tester", "/Users/tester/notes/todo.md"],
+    ["home inside workspace", "~/project/src/app.ts", cwd, "/Users/tester", "src/app.ts"],
+    [
+      "custom server home",
+      "~/notes/todo.md",
+      "/srv/synara/workspace",
+      "/srv/synara-user",
+      "/srv/synara-user/notes/todo.md",
+    ],
+    [
+      "Windows home and position",
+      "~\\notes\\todo.md:12",
+      "C:\\Users\\tester\\project",
+      "C:\\Users\\tester",
+      "C:\\Users\\tester\\notes\\todo.md",
+    ],
+  ])("resolves %s", (_name, query, root, home, expected) => {
+    expect(resolveWorkspaceSearchFilesystemTarget(query!, root!, home!)).toEqual({
+      kind: "file",
+      path: expected,
+    });
   });
 
   it("returns null when a home-relative path has no server home", () => {
-    expect(resolveWorkspaceSearchFilesystemPath("~/notes/todo.md", cwd, null)).toBeNull();
+    expect(resolveWorkspaceSearchFilesystemTarget("~/notes/todo.md", cwd, null)).toBeNull();
   });
-
-  it("delegates Windows path normalization to the shared dock resolver", () => {
-    expect(
-      resolveWorkspaceSearchFilesystemPath(
-        "~\\notes\\todo.md:12",
-        "C:\\Users\\tester\\project",
-        "C:\\Users\\tester",
-      ),
-    ).toBe("C:\\Users\\tester\\notes\\todo.md");
-  });
-
   it("returns null for non-path queries", () => {
-    expect(resolveWorkspaceSearchFilesystemPath("Composer", cwd, "/Users/tester")).toBeNull();
+    expect(resolveWorkspaceSearchFilesystemTarget("Composer", cwd, "/Users/tester")).toBeNull();
   });
 });

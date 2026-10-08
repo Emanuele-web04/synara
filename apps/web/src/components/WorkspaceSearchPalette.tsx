@@ -1,8 +1,8 @@
 // FILE: WorkspaceSearchPalette.tsx
 // Purpose: Minimal command-style palette for searching the current project's
 //          files/directories by name and its contents (grep-style snippets).
-//          Deliberately compact: a bare 44px input row, 28px result rows, 13px
-//          type, and a single 14px column inset shared by input, label, icons.
+//          Deliberately compact: a bare 44px input row, 28px result rows, scalable
+//          UI type, and a single 14px column inset shared by input, label, icons.
 // Layer: Web UI components
 //
 // Structure: the exported component is a thin dialog shell; all query state
@@ -40,7 +40,7 @@ import {
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import {
   isWorkspaceSearchFilesystemPathQuery,
-  resolveWorkspaceSearchFilesystemPath,
+  resolveWorkspaceSearchFilesystemTarget,
 } from "./WorkspaceSearchPalette.logic";
 
 export type WorkspaceSearchPaletteMode = "files" | "snippets";
@@ -200,7 +200,7 @@ const FileResultRow = memo(function FileResultRow(props: {
   onOpenFile: (relativePath: string) => void;
   onOpenDirectory: (relativePath: string) => void;
 }) {
-  const { base, dir } = splitPath(props.entry.path);
+  const { base, dir } = splitPath(props.entry.path.replace(/\\/g, "/"));
   return (
     <CommandItem
       index={props.index}
@@ -219,7 +219,7 @@ const FileResultRow = memo(function FileResultRow(props: {
         className={ICON_CLASS}
       />
       <span className="min-w-0 flex-1 truncate text-ui-lg">
-        <FileNameText text={base} query={props.highlightQuery} />
+        <FileNameText text={base || "Workspace root"} query={props.highlightQuery} />
       </span>
       {dir ? <DirectoryText className="max-w-[45%] shrink-0" dir={dir} /> : null}
     </CommandItem>
@@ -264,37 +264,6 @@ const SnippetResultRow = memo(function SnippetResultRow(props: {
   );
 });
 
-// Exact path input gets a dedicated row so a pasted absolute or home-relative
-// path is never sent through fuzzy search. The resolved path is already in the
-// format expected by the dock opener.
-const OpenPathResultRow = memo(function OpenPathResultRow(props: {
-  path: string;
-  index: number;
-  onOpenFile: (path: string) => void;
-}) {
-  const displayPath = props.path.replace(/\\/g, "/");
-  const { base, dir } = splitPath(displayPath);
-  return (
-    <CommandItem
-      index={props.index}
-      value={`open-path:${props.path}`}
-      className={`items-center ${ITEM_CLASS}`}
-      onClick={() => props.onOpenFile(props.path)}
-    >
-      <FileEntryIcon
-        pathValue={props.path}
-        kind="file"
-        colorMode="inherit"
-        className={ICON_CLASS}
-      />
-      <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">
-        {base || displayPath}
-      </span>
-      {dir ? <DirectoryText className="max-w-[55%] shrink-0" dir={dir} /> : null}
-    </CommandItem>
-  );
-});
-
 // Thin shell: dialog + popup only. All state lives in the content component
 // below, which Base UI keeps mounted through the exit transition and then
 // unmounts — resetting the palette without ever blanking it mid-animation.
@@ -335,7 +304,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
     if (props.mode !== "files" || trimmedQuery.length === 0) {
       return null;
     }
-    return resolveWorkspaceSearchFilesystemPath(trimmedQuery, props.cwd, props.homeDir);
+    return resolveWorkspaceSearchFilesystemTarget(trimmedQuery, props.cwd, props.homeDir);
   }, [props.mode, props.cwd, props.homeDir, trimmedQuery]);
   const isFilesystemPathQuery =
     props.mode === "files" && isWorkspaceSearchFilesystemPathQuery(trimmedQuery);
@@ -392,7 +361,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
     () =>
       props.mode === "files"
         ? [
-            ...(openPathTarget ? [`open-path:${openPathTarget}`] : []),
+            ...(openPathTarget ? [`${openPathTarget.kind}:${openPathTarget.path}`] : []),
             ...fileEntries.map((entry) => `${entry.kind}:${entry.path}`),
           ]
         : snippetMatches.map((match) => `snippet:${match.path}:${match.lineNumber}`),
@@ -475,7 +444,13 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
         {props.mode === "files" && openPathTarget ? (
           <CommandGroup>
             <CommandGroupLabel className={GROUP_LABEL_CLASS}>Open path</CommandGroupLabel>
-            <OpenPathResultRow path={openPathTarget} index={0} onOpenFile={handleOpenFile} />
+            <FileResultRow
+              entry={openPathTarget}
+              index={0}
+              highlightQuery=""
+              onOpenFile={handleOpenFile}
+              onOpenDirectory={handleOpenDirectory}
+            />
           </CommandGroup>
         ) : null}
         {props.mode === "files" && fileEntries.length > 0 ? (
