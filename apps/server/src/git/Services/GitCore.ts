@@ -218,20 +218,31 @@ export interface GitCoreShape {
   ) => Effect.Effect<A, E | GitCommandError, R>;
   /**
    * Execute a raw Git command.
+   * Instances in the same loaded module share four general finite slots, two finite
+   * CheckpointStore.* slots and two long/network slots (eight total).
+   * Long/network includes unlimited commands and commit, push, pull, fetch or clone.
+   * Each FIFO class admits at most 128 queued callers; overload fails with GitCommandError.
+   * Queue time precedes the command deadline, but counts toward enclosing caller deadlines.
+   * Slots stay owned through process cleanup; push/fetch/pull/clone disable Git terminal prompting.
+   * Background status refresh uses immediate admission and skips busy slots without enqueueing.
    */
   readonly execute: (input: ExecuteGitInput) => Effect.Effect<ExecuteGitResult, GitCommandError>;
 
   /**
-   * Read Git status for a repository.
+   * Read Git status from local refs; opportunistic background refresh may update a later read.
    */
   readonly status: (input: GitStatusInput) => Effect.Effect<GitStatusResult, GitCommandError>;
 
   /**
-   * Read detailed working tree / branch status for a repository.
+   * Read detailed working tree / branch status from local refs. Opportunistic background
+   * refresh may update a later read; this response does not guarantee latest remote state.
    */
   readonly statusDetails: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
 
-  /** Read action preconditions without collecting file paths, contents, or diff statistics. */
+  /**
+   * Read action preconditions from local refs without collecting paths, contents or diff stats.
+   * Opportunistic background refresh may update a later read, without delaying this response.
+   */
   readonly readActionStatus: (cwd: string) => Effect.Effect<GitActionStatus, GitCommandError>;
 
   /** Read only branch identity, without diff stats or remote refresh work. */

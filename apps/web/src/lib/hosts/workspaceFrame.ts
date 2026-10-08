@@ -40,6 +40,7 @@ export interface WorkspaceNavigation {
   createProject(input: {
     name: string;
     workspaceRoot: string;
+    additionalFolders?: ReadonlyArray<string>;
     createIfMissing: boolean;
   }): Promise<string>;
   openProject(projectId: string): Promise<string>;

@@ -74,6 +74,53 @@ it.each(["codex", "claudeAgent", "pi"] as const)(
     expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
   },
 );
+it("persists terminal error identity and announced retry state in chat activities", () => {
+  const error = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "runtime.error",
+      eventId: "error",
+      turnId: TURN_ID,
+      payload: {
+        message: "Temporarily unavailable",
+        class: "provider_error",
+        errorCode: "server_overloaded",
+      },
+    }),
+  )[0]!;
+  expect(error.payload).toMatchObject({
+    errorCode: "server_overloaded",
+    message: "Temporarily unavailable",
+  });
+  const completion = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "turn.completed",
+      eventId: "completion",
+      turnId: TURN_ID,
+      payload: {
+        state: "failed",
+        errorMessage: "Temporarily unavailable",
+        errorCode: "server_overloaded",
+      },
+    }),
+  )[0]!;
+  expect(completion.payload).toMatchObject({ errorCode: "server_overloaded", state: "failed" });
+  const warning = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "runtime.warning",
+      eventId: "retry",
+      turnId: TURN_ID,
+      payload: { message: "Temporarily unavailable", willRetry: true },
+    }),
+  )[0]!;
+  expect(warning).toMatchObject({
+    summary: "Provider retrying",
+    turnId: TURN_ID,
+    payload: { willRetry: true },
+  });
+  for (const activity of [error, completion, warning]) {
+    expect(() => decodeActivityAppendCommand(activity)).not.toThrow();
+  }
+});
 
 it("projects tool summaries with stable group identity and no empty rows", () => {
   const event = runtimeEvent({

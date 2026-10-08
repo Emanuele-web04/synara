@@ -42,6 +42,7 @@ import {
   isoFromString,
   needsAuthSnapshot,
   titleCase,
+  unsupportedSnapshot,
 } from "../parse";
 import { createRateLimitResilience } from "../rateLimitResilience";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
@@ -387,12 +388,27 @@ export function __resetClaudeUsageRateLimitState(): void {
 export const claudeUsageFetcher: ProviderUsageFetcher = {
   provider: "claudeAgent",
   async cacheKey(ctx) {
+    if (ctx.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
+      return `environment:${credentialFingerprint(ctx.env.CLAUDE_CODE_OAUTH_TOKEN)}`;
+    }
     return claudeCredentialsCacheKey(ctx, await resolveClaudeCredCandidates(ctx));
   },
   async fetch(ctx) {
+    if (ctx.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
+      return unsupportedSnapshot(
+        "claudeAgent",
+        ctx.nowMs,
+        SOURCE,
+        "Live usage is unavailable for environment-token authentication. Tokens from `claude setup-token` support chats but do not include the user:profile scope needed for usage.",
+      );
+    }
     const candidates = await resolveClaudeCredCandidates(ctx);
     if (candidates.length === 0) {
-      return needsAuthSnapshot("claudeAgent", ctx.nowMs, SOURCE);
+      return {
+        ...needsAuthSnapshot("claudeAgent", ctx.nowMs, SOURCE),
+        detail:
+          "No Claude usage credentials were found. A token supplied by a wrapper may support chats without access to usage. Sign in with `claude auth login` for this account to enable usage.",
+      };
     }
 
     // At most one CLI nudge per fetch, shared by the proactive (near-expiry) and reactive (401)
@@ -417,8 +433,10 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
         inferenceOnlySnapshot = buildSnapshot({
           provider: "claudeAgent",
           nowMs: ctx.nowMs,
-          status: "ok",
+          status: "unsupported",
           source: SOURCE,
+          detail:
+            "This Claude login cannot report usage: its token lacks the user:profile scope. Tokens from `claude setup-token` can still be used for chats.",
           ...(planName ? { planName } : {}),
         });
         continue;

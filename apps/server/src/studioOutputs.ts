@@ -2,7 +2,7 @@
 // Purpose: Resolve the files a single Studio chat produced anywhere under the Studio
 //          workspace root, from checkpoint summaries (Git roots), persisted file-change
 //          activities, and captured per-turn output activities (non-Git roots). Also owns
-//          the bounded workspace tree scan the StudioOutputReactor diffs per turn.
+//          the bounded workspace tree scan the HubOutputReactor diffs per turn.
 // Layer: Server workspace helper
 // Exports: Pure attribution/scan-diff helpers + listStudioThreadOutputs (Effect I/O).
 

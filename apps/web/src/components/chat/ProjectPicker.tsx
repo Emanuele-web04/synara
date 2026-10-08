@@ -194,7 +194,7 @@ export const ProjectPicker = memo(function ProjectPicker({
 
     for (const project of projects.filter((project) => project.kind === "project")) {
       const folderName = basenameOfPath(project.cwd) ?? project.folderName ?? project.name;
-      if (!folderName || folderName.startsWith(".") || seen.has(project.cwd)) {
+      if (!folderName || seen.has(project.cwd)) {
         continue;
       }
       seen.add(project.cwd);
@@ -218,7 +218,6 @@ export const ProjectPicker = memo(function ProjectPicker({
       !isProjectSelectionMode &&
       selectedWorkspaceRoot &&
       selectedFolderName &&
-      !selectedFolderName.startsWith(".") &&
       !seen.has(selectedWorkspaceRoot)
     ) {
       nextOptions.unshift({

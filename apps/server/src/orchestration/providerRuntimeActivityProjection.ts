@@ -792,6 +792,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             message: truncateDetail(message, 500),
             ...(errorClass ? { class: errorClass } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -808,6 +809,8 @@ export function projectProviderRuntimeActivities(
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
       const isClaudeRetry = event.provider === "claudeAgent" && detailSubtype === "api_retry";
+      const willRetry =
+        event.payload.willRetry === true || asObject(event.payload.detail)?.willRetry === true;
       const isPiInfoNotification =
         event.provider === "pi" &&
         raw?.method === "extension/ui/notify" &&
@@ -824,18 +827,21 @@ export function projectProviderRuntimeActivities(
           kind: "runtime.warning",
           summary: isPiInfoNotification
             ? "Pi extension"
-            : isClaudeRetry
-              ? message
-              : isBackgroundMove
-                ? "Moved to background"
-                : event.provider === "opencode" &&
-                    (nativeType === "session.next.retried" || nativeType === "session.status")
-                  ? "OpenCode retrying"
-                  : "Runtime warning",
+            : willRetry
+              ? "Provider retrying"
+              : isClaudeRetry
+                ? message
+                : isBackgroundMove
+                  ? "Moved to background"
+                  : event.provider === "opencode" &&
+                      (nativeType === "session.next.retried" || nativeType === "session.status")
+                    ? "OpenCode retrying"
+                    : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
             detail: message,
+            ...(willRetry ? { willRetry: true } : {}),
             ...(isBackgroundMove || isClaudeRetry
               ? { nativeEventType: detailSubtype }
               : nativeType
@@ -1289,6 +1295,7 @@ export function projectProviderRuntimeActivities(
               ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
             ...(errorMessage ? { errorMessage } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

@@ -1,5 +1,5 @@
 // FILE: useSidebarThreadActions.ts
-// Purpose: Owns Sidebar thread pinning, snooze, archive/undo, deletion, and project-batch actions.
+// Purpose: Owns Sidebar thread pinning, Done/undo, snooze, archive/undo, deletion, and project-batch actions.
 // Layer: Web Sidebar controller hook
 // Exports: useSidebarThreadActions
 
@@ -432,28 +432,57 @@ export function useSidebarThreadActions(input: {
       // The command is durable, so the override only bridges the gap until the
       // projection push lands. Expiring it keeps a lost or reordered push from
       // pinning the row to a stale state forever.
-      if (!isLatestRequest()) return;
+      if (!isLatestRequest()) return false;
       const expiry = window.setTimeout(() => {
         settleOverrideExpiryTimeoutsRef.current.delete(threadId);
         if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
       }, SETTLE_OVERRIDE_MAX_LIFETIME_MS);
       settleOverrideExpiryTimeoutsRef.current.set(threadId, expiry);
       if (isSettled) await navigateAfterThreadClosed(threadId, routeVersionAtDispatch);
+      return isLatestRequest();
     },
     [clearOptimisticThreadSettled, navigateAfterThreadClosed],
   );
 
   const setThreadSettledWithToast = useCallback(
     (threadId: ThreadId, isSettled: boolean) => {
-      void setThreadSettled(threadId, isSettled).catch((error) => {
-        console.error("Failed to update settled thread state", { threadId, error });
+      const returnToThreadOnUndo = routeThreadId === threadId;
+      const updateSettled = (settled: boolean) =>
+        setThreadSettled(threadId, settled).catch((error) => {
+          console.error("Failed to update settled thread state", { threadId, error });
+          toastManager.add({
+            type: "error",
+            title: settled ? "Unable to mark thread as done" : "Unable to undo done",
+          });
+          return false;
+        });
+      void updateSettled(isSettled).then((confirmed) => {
+        if (!confirmed || !isSettled) return;
         toastManager.add({
-          type: "error",
-          title: isSettled ? "Unable to mark thread as done" : "Unable to undo done",
+          id: `done-undo:${threadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+            archiveUndo: {
+              message: "Marked as done",
+              onUndo: async () => {
+                const restored = await updateSettled(false);
+                if (restored && returnToThreadOnUndo) {
+                  void navigate({
+                    to: "/$threadId",
+                    params: { threadId },
+                    replace: true,
+                  });
+                }
+                return restored;
+              },
+            },
+          },
         });
       });
     },
-    [setThreadSettled],
+    [navigate, routeThreadId, setThreadSettled],
   );
 
   const setThreadSnoozedUntil = dispatchThreadSnoozedUntil;

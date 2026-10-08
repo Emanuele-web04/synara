@@ -5,7 +5,7 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { SidechatExpiryReactor } from "../Services/SidechatExpiryReactor.ts";
-import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
+import { HubOutputReactor } from "../Services/HubOutputReactor.ts";
 import { ThreadGitMetadataReactor } from "../Services/ThreadGitMetadataReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
@@ -79,8 +79,8 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
-          Layer.succeed(StudioOutputReactor, {
-            captureBaselineBeforeTurn: () => Effect.void,
+          Layer.succeed(HubOutputReactor, {
+            captureBaselineBeforeTurn: () => Effect.succeed({ status: "not-applicable" as const }),
             cancelPendingTurnBaseline: () => Effect.void,
             start: Effect.acquireRelease(
               Effect.sync(() => {

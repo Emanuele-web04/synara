@@ -35,6 +35,7 @@ export interface ThreadTerminalState {
   runningTerminalIds: string[];
   activeTerminalId: string;
   retiredTerminalIds?: string[];
+  dockTerminalIdsByPaneId?: Record<string, string>;
 }
 
 const TERMINAL_STATE_STORAGE_KEY = "synara:terminal-state:v1";
@@ -223,7 +224,8 @@ function threadTerminalStateEqual(left: ThreadTerminalState, right: ThreadTermin
     JSON.stringify(left.terminalAttentionStatesById) ===
       JSON.stringify(right.terminalAttentionStatesById) &&
     arraysEqual(left.runningTerminalIds, right.runningTerminalIds) &&
-    arraysEqual(left.retiredTerminalIds ?? [], right.retiredTerminalIds ?? [])
+    arraysEqual(left.retiredTerminalIds ?? [], right.retiredTerminalIds ?? []) &&
+    JSON.stringify(left.dockTerminalIdsByPaneId) === JSON.stringify(right.dockTerminalIdsByPaneId)
   );
 }
 
@@ -264,15 +266,16 @@ function normalizeThreadTerminalState(state: ThreadTerminalState): ThreadTermina
   const activeTerminalId = terminalIds.includes(state.activeTerminalId)
     ? state.activeTerminalId
     : (terminalIds[0] ?? DEFAULT_THREAD_TERMINAL_ID);
-  const nextTerminalIds = [activeTerminalId];
-  // Keep retired identities until the server acknowledges their close. Their
-  // history remains on disk; only the last active session is reattached.
+  const dockTerminalIdsByPaneId = state.dockTerminalIdsByPaneId;
+  const nextTerminalIds = dockTerminalIdsByPaneId ? terminalIds : [activeTerminalId];
+  // Legacy nested sessions retire only after the server acknowledges an idle close.
+  // Dock panes keep their independently owned sessions.
   const retiredTerminalIds = [
     ...new Set([
       ...(state.retiredTerminalIds ?? []),
-      ...terminalIds.filter((id) => id !== activeTerminalId),
+      ...terminalIds.filter((id) => !nextTerminalIds.includes(id)),
     ]),
-  ].filter((id) => id !== activeTerminalId);
+  ].filter((id) => !nextTerminalIds.includes(id));
   const terminalLabelsById = normalizeTerminalLabels(
     (state as Partial<ThreadTerminalState>).terminalLabelsById,
     nextTerminalIds,
@@ -312,6 +315,7 @@ function normalizeThreadTerminalState(state: ThreadTerminalState): ThreadTermina
     runningTerminalIds,
     activeTerminalId,
     ...(retiredTerminalIds.length > 0 ? { retiredTerminalIds } : {}),
+    ...(dockTerminalIdsByPaneId ? { dockTerminalIdsByPaneId } : {}),
   };
   const hasLegacyLayout =
     "terminalGroups" in state || "activeTerminalGroupId" in state || "terminalHeight" in state;
@@ -622,6 +626,30 @@ function newThreadTerminal(state: ThreadTerminalState, terminalId: string): Thre
   });
 }
 
+function ensureDockTerminal(
+  state: ThreadTerminalState,
+  paneId: string,
+  openedTerminalId?: string,
+): ThreadTerminalState {
+  const normalized = normalizeThreadTerminalState(state);
+  const existingId = normalized.dockTerminalIdsByPaneId?.[paneId];
+  if (existingId && (!openedTerminalId || existingId === openedTerminalId)) return normalized;
+  const terminalId =
+    openedTerminalId ??
+    (normalized.dockTerminalIdsByPaneId ? randomTerminalId() : normalized.activeTerminalId);
+  if (!isValidTerminalId(terminalId)) return normalized;
+  return normalizeThreadTerminalState({
+    ...normalized,
+    terminalOpen: true,
+    hasSession: true,
+    terminalIds: [
+      ...new Set([...(normalized.hasSession ? normalized.terminalIds : []), terminalId]),
+    ],
+    activeTerminalId: terminalId,
+    dockTerminalIdsByPaneId: { ...normalized.dockTerminalIdsByPaneId, [paneId]: terminalId },
+  });
+}
+
 function setThreadActiveTerminal(
   state: ThreadTerminalState,
   terminalId: string,
@@ -630,7 +658,11 @@ function setThreadActiveTerminal(
   if (!normalized.terminalIds.includes(terminalId)) {
     return normalized;
   }
-  if (normalized.terminalAttentionStatesById[terminalId] !== "review") return normalized;
+  if (
+    normalized.activeTerminalId === terminalId &&
+    normalized.terminalAttentionStatesById[terminalId] !== "review"
+  )
+    return normalized;
   return {
     ...normalized,
     activeTerminalId: terminalId,
@@ -645,6 +677,21 @@ function closeThreadTerminal(state: ThreadTerminalState, terminalId: string): Th
   const normalized = normalizeThreadTerminalState(state);
   if (!normalized.terminalIds.includes(terminalId)) {
     return normalized;
+  }
+
+  const remainingIds = normalized.terminalIds.filter((id) => id !== terminalId);
+  if (remainingIds.length > 0) {
+    return normalizeThreadTerminalState({
+      ...normalized,
+      terminalIds: remainingIds,
+      activeTerminalId:
+        normalized.activeTerminalId === terminalId ? remainingIds[0]! : normalized.activeTerminalId,
+      dockTerminalIdsByPaneId: Object.fromEntries(
+        Object.entries(normalized.dockTerminalIdsByPaneId ?? {}).filter(
+          ([, id]) => id !== terminalId,
+        ),
+      ),
+    });
   }
 
   // Late exit/close requests belong to the old PTY, including across reloads.
@@ -662,7 +709,7 @@ function closeThreadTerminal(state: ThreadTerminalState, terminalId: string): Th
   });
 }
 
-export type TerminalExitDisposition = "ignored" | "final";
+export type TerminalExitDisposition = "ignored" | "closed" | "final";
 
 function closeExitedThreadTerminal(
   state: ThreadTerminalState,
@@ -674,7 +721,7 @@ function closeExitedThreadTerminal(
   }
   return {
     state: closeThreadTerminal(normalized, terminalId),
-    disposition: "final",
+    disposition: normalized.terminalIds.length > 1 ? "closed" : "final",
   };
 }
 
@@ -805,6 +852,7 @@ interface TerminalStateStoreState {
     titleOverride: string | null | undefined,
   ) => void;
   newTerminal: (threadId: ThreadId, terminalId: string) => void;
+  ensureDockTerminal: (threadId: ThreadId, paneId: string, openedTerminalId?: string) => void;
   openNewFullWidthTerminal: (threadId: ThreadId) => void;
   closeWorkspaceChat: (threadId: ThreadId) => void;
   setActiveTerminal: (threadId: ThreadId, terminalId: string) => void;
@@ -885,6 +933,8 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
           updateTerminal(threadId, (state) =>
             setThreadTerminalTitleOverride(state, terminalId, titleOverride),
           ),
+        ensureDockTerminal: (threadId, paneId, openedTerminalId) =>
+          updateTerminal(threadId, (state) => ensureDockTerminal(state, paneId, openedTerminalId)),
         newTerminal: (threadId, terminalId) =>
           updateTerminal(threadId, (state) => newThreadTerminal(state, terminalId)),
         openNewFullWidthTerminal: (threadId) =>

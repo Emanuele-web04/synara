@@ -1,27 +1,33 @@
 /**
- * StudioOutputReactor - Studio output capture service interface.
+ * HubOutputReactor - Hub output capture service interface.
  *
- * Owns pre-provider snapshots of the Studio workspace tree and the background
+ * Owns pre-provider snapshots of the Hub workspace tree and the background
  * worker that diffs them at turn end, attributing produced files to the thread.
  * Complements Git checkpoints, which intentionally do not run in the
- * (typically non-Git) Studio root.
+ * (typically non-Git) Hub root.
  *
- * @module StudioOutputReactor
+ * @module HubOutputReactor
  */
 import type { ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
+export type HubBaselinePreparation =
+  | { readonly status: "completed" | "not-applicable" }
+  | { readonly status: "failed"; readonly detail: string };
+
 /**
- * StudioOutputReactorShape - Service API for Studio output capture lifecycle.
+ * HubOutputReactorShape - Service API for Hub output capture lifecycle.
  */
-export interface StudioOutputReactorShape {
+export interface HubOutputReactorShape {
   /**
-   * Capture a non-Git Studio workspace baseline before provider execution begins.
+   * Capture a non-Git Hub workspace baseline before provider execution begins.
    * ProviderCommandReactor awaits this immediately before starting a new turn so
-   * fast shell writes cannot race into the baseline.
+   * fast shell writes cannot race into the baseline. Returns whether a baseline
+   * was prepared, no Hub workspace applies, or preparation failed. Cancellation
+   * still propagates so provider dispatch waits for preparation cleanup.
    */
-  readonly captureBaselineBeforeTurn: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly captureBaselineBeforeTurn: (threadId: ThreadId) => Effect.Effect<HubBaselinePreparation>;
 
   /**
    * Drop a prepared baseline when provider dispatch fails before a turn starts.
@@ -29,7 +35,7 @@ export interface StudioOutputReactorShape {
   readonly cancelPendingTurnBaseline: (threadId: ThreadId) => Effect.Effect<void>;
 
   /**
-   * Start the Studio output reactor.
+   * Start the Hub output reactor.
    *
    * The returned effect must be run in a scope so the worker fiber can be
    * finalized on shutdown.
@@ -48,9 +54,8 @@ export interface StudioOutputReactorShape {
 }
 
 /**
- * StudioOutputReactor - Service tag for the Studio output capture worker.
+ * HubOutputReactor - Service tag for the Hub output capture worker.
  */
-export class StudioOutputReactor extends ServiceMap.Service<
-  StudioOutputReactor,
-  StudioOutputReactorShape
->()("synara/orchestration/Services/StudioOutputReactor") {}
+export class HubOutputReactor extends ServiceMap.Service<HubOutputReactor, HubOutputReactorShape>()(
+  "synara/orchestration/Services/HubOutputReactor",
+) {}

@@ -32,9 +32,14 @@ is cancelled, the task and its prompt remain available for retry.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
+  The command palette searches titles, project metadata, and settled user/assistant messages
+  across saved chats, including chats not recently opened. Archived, deleted, and subagent
+  chats stay out of message results. Every search word must match the message body;
+  the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
   across projects, ordered by its last human message (or creation time). If none remains, New
   thread reopens an unsent draft. Actions on other threads keep the current chat open.
+  Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without
@@ -60,6 +65,13 @@ is cancelled, the task and its prompt remain available for retry.
   **All tasks** opens the complete backlog in Beta; Stable keeps these to-do controls hidden.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
+  A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
+  including when no final assistant reply arrives. The notice survives reopening and session
+  recovery; a ready connection does not mean the task finished or is being retried. An explicitly
+  announced provider retry remains active and shows **Provider retrying**. **Continue task** sends
+  a new instruction in the same conversation to verify prior operations and resume remaining work;
+  **Change model** opens the existing composer picker before sending. Earlier failure notices stay
+  in the transcript after later turns. User cancellation keeps its interrupted meaning.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
@@ -74,7 +86,9 @@ Desktop quit requests ask for confirmation even when no chats are running. On ma
 ⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
 application and its running chats stay active. Quitting with no open window uses a
 native confirmation. With an open window and running chats, the quit dialog lists the work that
-will stop and offers to resume it automatically on the next launch.
+will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
+or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
+asking.
 
 ## Projects
 
@@ -110,6 +124,22 @@ Git repositories unlock the complete delivery workflow:
 Non-Git folders can still be useful for simpler work, but they do not provide the same isolation and
 review guarantees.
 
+A project can also span several folders, such as a frontend, an API, and a shared package that
+change together. Add them under **Source folders** when you create the project. One folder is the
+primary folder: it is the project's working directory and keeps every single-folder behavior. The
+agent can read and edit the other folders too.
+
+Multi-folder projects have two limits for now:
+
+- Chats run in Local mode. Worktree mode would isolate only the primary folder while the others
+  are edited live, so Synara refuses it.
+- Only Codex and Claude can be granted the extra folders. Other providers refuse the chat instead
+  of silently working without them.
+
+The folder set is fixed when the project is created. Git actions, checkpoint diffs, and file undo
+cover only the primary folder. Edits in additional folders must be reviewed and
+recovered in those folders separately.
+
 ## Tasks and turns
 
 A task is the durable container for one objective.
@@ -133,6 +163,11 @@ older servers retain their existing error handling. If recovery reaches a server
 Synara reports that delivery is still unknown; reconnect to an updated server and check the conversation
 before sending again. Socket recovery restores active subscriptions
 and reports the connection as open only after the feature socket answers.
+
+Thread runtime errors appear above the transcript. Use **Show details** to read the full error
+or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
+quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
+not offer a generic Retry because an error message alone cannot prove that resending is safe.
 
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
@@ -314,6 +349,27 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
+Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
+queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;
+invalid values use the default and positive values are clamped to that range. When preparation fails
+or the combined budget expires, Synara reports unavailable baselines and preserves independently
+completed results. The Hub output worker reports completed, not-applicable and failed preparation separately;
+failed or inapplicable preparation is never presented as a preserved baseline. The provider starts
+after cancellation cleanup finishes, which can extend beyond the preparation budget; an absolute process-cleanup bound has not been verified. A bounded exact-ref
+check after cleanup recognizes a checkpoint published just before cancellation. Initial and later
+baseline notices share one message or turn identity. A stored initial notice suppresses redundant
+later notices; concurrently published native notices may retain the latest owner's detail in that row.
+
+Synara never reconstructs the initial state from files the provider may already have changed.
+Native provider turns, including native child turns, may begin without Synara's pre-send preparation;
+Synara never takes a replacement capture. Expected missing-baseline notices for native children are
+suppressed when they have no independent send, while failures of their own sends and actual capture
+errors remain visible. Diff and file undo that require an exact initial checkpoint remain unavailable,
+and Hub output discovery is unavailable for turns without a prepared Hub baseline. File Undo
+also refuses an earlier turn when a later managed checkpoint has no initial baseline, before changing
+files or checkpoint refs. The worker is named `HubOutputReactor`; legacy `studio.*` RPC and
+activity keys remain unchanged for client and persisted-history compatibility.
+
 ## Hubs
 
 A hub is a coordinated home for related work. You talk to one coordinator conversation, and it
@@ -398,12 +454,17 @@ navigation rather than full Obsidian support.
 
 ### Terminal panels
 
-Each chat has one terminal panel, shown in the main view or in its right dock.
-Terminals have no nested tabs, groups, splits, or bottom drawer. Opening the
-terminal again focuses the existing session. Project actions replace an idle
-session with the requested working directory and environment; a busy terminal
-must be stopped before another action runs in that chat. On upgrade, the last
-active terminal is retained. Retired nested sessions are closed only when the
+Each chat has one main-view terminal panel and can have multiple independent
+terminal tabs in its right dock. Every **+ → Terminal** creates a new dock tab
+with its own shell session. Switching tabs preserves their sessions; closing or
+exiting one terminal leaves the others running. Dock tabs and session identities
+are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
+drawer. Opening the main-view terminal again focuses its existing session.
+Project actions open a fresh session in the right dock with the requested working
+directory and environment, keeping the center chat unchanged, including in split
+chats. They replace only the selected idle dock terminal; its busy command must
+be stopped before another action runs there. Other dock sessions remain running.
+On upgrade, the last active terminal is retained. Retired nested sessions are closed only when the
 server verifies they are idle, preserving their saved history. Busy sessions or
 sessions whose activity cannot be checked remain pending for the next mount.
 Project actions use the same server check, including after reloading the app.

@@ -14,6 +14,7 @@ import {
   resolveActivityDateBucket,
   resolveActivityScope,
   resolveActivitySectionRows,
+  resolveActivityThreadReadAt,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
@@ -785,6 +786,23 @@ describe("collectUnreadActivityThreads", () => {
     expect(collectUnreadActivityThreads([unread, read, archivedUnread]).map((t) => t.id)).toEqual([
       "unread",
     ]);
+  });
+
+  it("reads a chat back from snooze at the reminder, or at a later completion", () => {
+    const returned = {
+      ...makeThread({
+        id: "returned",
+        latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+        lastVisitedAt: "2026-08-01T09:45:00.000Z",
+      }),
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-01T11:00:00.000Z",
+    };
+    // A turn left running when the chat was snoozed can finish after the reminder.
+    const finishedLater = { ...returned, latestTurn: completedTurn("2026-08-01T11:30:00.000Z") };
+
+    expect(resolveActivityThreadReadAt(returned)).toBe("2026-08-01T11:00:00.000Z");
+    expect(resolveActivityThreadReadAt(finishedLater)).toBe("2026-08-01T11:30:00.000Z");
   });
 
   it("does not light the bell for the thread currently being read", () => {
