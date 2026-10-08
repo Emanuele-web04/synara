@@ -35,5 +35,11 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
   capabilities: ExecutionEnvironmentCapabilities,
+  /**
+   * An anonymous id of the physical computer (its hardware id, salted and hashed), shared
+   * by every Synara install on it. Lets a client recognize two pairings of the same Mac
+   * while two Macs with the same name stay apart. Absent when the platform will not say.
+   */
+  machineId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

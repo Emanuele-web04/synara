@@ -10,6 +10,7 @@ import packageJson from "../../../package.json" with { type: "json" };
 import { ServerConfig } from "../../config";
 import { createFileStringExclusively } from "../../atomicWrite";
 import { ServerEnvironment, type ServerEnvironmentShape } from "../Services/ServerEnvironment";
+import { readMachineId } from "../machineId";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel";
 
 function platformOs(): ExecutionEnvironmentDescriptor["platform"]["os"] {
@@ -78,6 +79,7 @@ export const makeServerEnvironment = Effect.fn(function* () {
   });
 
   const environmentId = EnvironmentId.makeUnsafe(environmentIdRaw);
+  const machineId = yield* Effect.promise(() => readMachineId());
   const remoteUnavailableReason = remoteConnectionsUnavailableReason(serverConfig.stateDir);
   const flavor = desktopFlavorFromBundleId(process.env.SYNARA_DESKTOP_BUNDLE_ID);
   const descriptor: ExecutionEnvironmentDescriptor = {
@@ -101,6 +103,7 @@ export const makeServerEnvironment = Effect.fn(function* () {
       remoteResources: remoteUnavailableReason === undefined,
       ...(remoteUnavailableReason ? { remoteUnavailableReason } : {}),
     },
+    ...(machineId ? { machineId } : {}),
   };
 
   return {
