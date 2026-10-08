@@ -1968,6 +1968,35 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("prewarms a stopped runtime from its binding and leaves a live one alone", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-prewarm");
+      const prewarm = provider.prewarmSession!;
+
+      assert.strictEqual(yield* prewarm({ threadId }), false);
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const startsAfterLaunch = routing.codex.startSession.mock.calls.length;
+      assert.strictEqual(yield* prewarm({ threadId }), false);
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, startsAfterLaunch);
+
+      // An idle stop leaves the binding behind; opening the chat resumes it.
+      yield* routing.codex.stopSession(threadId);
+      assert.strictEqual(yield* prewarm({ threadId }), true);
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, startsAfterLaunch + 1);
+      const prewarmStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.strictEqual(prewarmStart?.threadId, threadId);
+      assert.deepStrictEqual(prewarmStart?.resumeCursor, { opaque: `resume-${threadId}` });
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("carries autoApproveSynaraTools through session recovery", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
