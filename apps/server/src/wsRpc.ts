@@ -1502,7 +1502,10 @@ const makeWsRpcHandlersLayer = () =>
                         snapshot: item.snapshot,
                       }),
                     )
-                  : toShellStreamEvent(item.event),
+                  : item.kind === "event"
+                    ? toShellStreamEvent(item.event)
+                    : // The shell stream never opts into batched replay.
+                      Effect.succeed(Option.none<OrchestrationShellStreamItem>()),
               ),
               Stream.flatMap((item) =>
                 Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
@@ -1528,6 +1531,10 @@ const makeWsRpcHandlersLayer = () =>
               // gap. Out-of-range cursors (negative or overflowing gap) fall
               // back to the snapshot inside the stream factory.
               resumeFromSequence: input.afterSequence,
+              // Opted-in clients get the whole gap as one item and apply it in a
+              // single store update, so a stale cached turn does not replay its
+              // intermediate states on screen.
+              batchReplay: input.batchReplay,
               // A hard-purged thread leaves no rows to replay while the journal
               // head stays above the cursor, so the gap check alone would
               // accept the resume and stream nothing. Falling through to the
@@ -1597,6 +1604,12 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "event",
                     event: item.event,
+                  });
+                }
+                if (item.kind === "replay") {
+                  return Stream.succeed<OrchestrationThreadStreamItem>({
+                    kind: "replay",
+                    events: item.events,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever
