@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,9 @@ function checkpoint(
   const assetsDirectory = mkdtempSync(join(tmpdir(), "synara-checkpoint-"));
   roots.push(assetsDirectory);
   const version = flavor === "beta" ? "1.2.3-beta.1" : "1.2.3";
-  const stem = `${flavor === "beta" ? "Synara-Beta" : "Synara"}-${version}-x64`;
+  // Electron Builder's AppImage target emits x86_64 while provenance records x64.
+  const nativeFileArch = platform === "linux" ? "x86_64" : "x64";
+  const stem = `${flavor === "beta" ? "Synara-Beta" : "Synara"}-${version}-${nativeFileArch}`;
   const payload = `${stem}.${platform === "mac" ? "dmg" : platform === "win" ? "exe" : "AppImage"}`;
   const updater =
     platform === "mac"
@@ -135,13 +137,25 @@ describe("same-run release artifact checkpoint", () => {
     ["win", "production"],
     ["win", "beta"],
   ] as const)(
-    "accepts the unchanged %s %s payload and its full inventory",
+    "accepts the native producer's %s %s payload and its full inventory",
     async (platform, flavor) => {
       const { input } = checkpoint(platform, flavor);
       const verified = await verifyReleaseArtifactCheckpoint(input);
       expect(verified.source.commit).toBe(input.sourceCommit);
     },
   );
+
+  it("rejects a Linux AppImage using the manifest architecture alias", async () => {
+    const { input, payloadPath, changeManifest } = checkpoint();
+    const incorrectFileName = "Synara-1.2.3-x64.AppImage";
+    renameSync(payloadPath, join(input.assetsDirectory, incorrectFileName));
+    changeManifest((manifest) => {
+      manifest.artifacts[0].fileName = incorrectFileName;
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
 
   it.each([
     ["source commit", { sourceCommit: "c".repeat(40) }],

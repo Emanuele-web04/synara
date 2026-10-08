@@ -155,7 +155,9 @@ export async function verifyReleaseArtifactCheckpoint(
   equal("source tag", source.tag, input.sourceTag);
   equal("lockfile", source.lockfileSha256, input.lockfileSha256.toLowerCase());
 
-  const stem = `${input.flavor === "beta" ? "Synara-Beta" : "Synara"}-${input.version}-${input.arch}`;
+  // AppImage names use the native x86_64 alias; provenance keeps the matrix arch x64.
+  const fileArch = input.platform === "linux" ? "x86_64" : input.arch;
+  const stem = `${input.flavor === "beta" ? "Synara-Beta" : "Synara"}-${input.version}-${fileArch}`;
   const payloads =
     input.platform === "mac"
       ? [`${stem}.dmg`, `${stem}.zip`]
