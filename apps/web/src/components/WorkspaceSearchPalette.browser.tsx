@@ -16,6 +16,7 @@ import { render } from "vitest-browser-react";
 import { WorkspaceSearchPalette, type WorkspaceSearchPaletteMode } from "./WorkspaceSearchPalette";
 
 const WORKSPACE_ROOT = "/Users/tester/project";
+const HOME_DIR = "/Users/tester";
 
 function installNativeApi(api: NativeApi): () => void {
   const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
@@ -48,6 +49,7 @@ async function renderPalette(mode: WorkspaceSearchPaletteMode) {
         open
         mode={mode}
         cwd={WORKSPACE_ROOT}
+        homeDir={HOME_DIR}
         onOpenChange={handlers.onOpenChange}
         onOpenFile={handlers.onOpenFile}
         onOpenDirectory={handlers.onOpenDirectory}
@@ -225,6 +227,98 @@ it("renders snippet rows and gates short queries behind the prompt", async () =>
     await page.getByText("utils.ts").click();
     expect(handlers.onOpenFile).toHaveBeenCalledWith("apps/web/src/lib/utils.ts");
     expect(handlers.onOpenChange).toHaveBeenCalledWith(false);
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("offers an Open path row for an in-workspace absolute path without fuzzy search", async () => {
+  const searchEntries = vi.fn().mockResolvedValue({ entries: [], truncated: false });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      prewarmSearchIndex: vi.fn().mockResolvedValue({ started: true }),
+      searchEntries,
+    },
+  } as unknown as NativeApi);
+
+  try {
+    const handlers = await renderPalette("files");
+    await page.getByPlaceholder("Search files").fill(`${WORKSPACE_ROOT}/src/notes/todo.md`);
+
+    await expect.element(page.getByText("Open path")).toBeVisible();
+    await expect.element(page.getByText("todo.md")).toBeVisible();
+    expect(searchEntries).not.toHaveBeenCalled();
+
+    await page.getByText("todo.md").click();
+    expect(handlers.onOpenFile).toHaveBeenCalledWith("src/notes/todo.md");
+    expect(handlers.onOpenChange).toHaveBeenCalledWith(false);
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("expands ~/ paths from the server home directory and opens them with Enter", async () => {
+  const searchEntries = vi.fn().mockResolvedValue({ entries: [], truncated: false });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      prewarmSearchIndex: vi.fn().mockResolvedValue({ started: true }),
+      searchEntries,
+    },
+  } as unknown as NativeApi);
+
+  try {
+    const handlers = await renderPalette("files");
+    await page.getByPlaceholder("Search files").fill("~/notes/todo.md:12:3");
+
+    await expect.element(page.getByText("Open path")).toBeVisible();
+    await expect.element(page.getByText("todo.md")).toBeVisible();
+    expect(searchEntries).not.toHaveBeenCalled();
+
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() =>
+      expect(handlers.onOpenFile).toHaveBeenCalledWith("/Users/tester/notes/todo.md"),
+    );
+    expect(handlers.onOpenChange).toHaveBeenCalledWith(false);
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("uses a custom server home for home-relative paths outside conventional home roots", async () => {
+  const searchEntries = vi.fn().mockResolvedValue({ entries: [], truncated: false });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      prewarmSearchIndex: vi.fn().mockResolvedValue({ started: true }),
+      searchEntries,
+    },
+  } as unknown as NativeApi);
+
+  try {
+    const handlers = {
+      onOpenChange: vi.fn<(open: boolean) => void>(),
+      onOpenFile: vi.fn<(relativePath: string) => void>(),
+      onOpenDirectory: vi.fn<(relativePath: string) => void>(),
+    };
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceSearchPalette
+          open
+          mode="files"
+          cwd="/srv/synara/workspace"
+          homeDir="/srv/synara-user"
+          onOpenChange={handlers.onOpenChange}
+          onOpenFile={handlers.onOpenFile}
+          onOpenDirectory={handlers.onOpenDirectory}
+        />
+      </QueryClientProvider>,
+    );
+    await page.getByPlaceholder("Search files").fill("~/notes/todo.md");
+    await expect.element(page.getByText("todo.md")).toBeVisible();
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() =>
+      expect(handlers.onOpenFile).toHaveBeenCalledWith("/srv/synara-user/notes/todo.md"),
+    );
+    expect(searchEntries).not.toHaveBeenCalled();
   } finally {
     restoreNativeApi();
   }

@@ -71,6 +71,7 @@ import {
   useSplitViewStore,
 } from "../../splitViewStore";
 import { useStore } from "../../store";
+import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import {
   createProjectSelector,
   createSidebarThreadSummariesSelector,
@@ -221,6 +222,7 @@ export function SingleChatSurface(props: {
     threadWorkingDirectory:
       threadWorkspaceMetadata.workingDirectory ?? draftThread?.workingDirectory ?? null,
   });
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const dockGitRepositoryQuery = useQuery(gitBranchesQueryOptions(workspaceRoot));
   const hasGitRepository = dockGitRepositoryQuery.data?.isRepo === true;
   const dockDiffTotals = useRepoDiffTotals({
@@ -1245,6 +1247,7 @@ export function SingleChatSurface(props: {
           mode={searchPaletteMode}
           onOpenChange={setSearchPaletteOpen}
           cwd={workspaceRoot}
+          homeDir={homeDir}
           onOpenFile={handleOpenWorkspaceSearchFile}
           onOpenDirectory={handleOpenWorkspaceSearchDirectory}
         />
