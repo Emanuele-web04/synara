@@ -47,6 +47,11 @@ Slow Git work in one workspace leaves other workspaces free to progress. Recover
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
 is reported for inspection instead of automatically changing the workspace again.
 
+Pi preserves separate assistant messages within a turn, including progress before tool calls
+and the final response. Reasoning items also end with their SDK message. Retries start new
+message items while the overall turn remains active until Pi settles. This applies to newly
+received messages; previously stored concatenated replies are not rewritten.
+
 Claude's readable reasoning appears as compact progress text between tool actions while it works.
 Open a reasoning row to read its available detail. This text comes from the running provider;
 Synara does not make another model request to generate it. Models that do not return readable
