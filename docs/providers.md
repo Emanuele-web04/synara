@@ -61,9 +61,12 @@ show their attempt count and reported delay. Authentication displays its latest 
 between turns, with a Settings hint when attention is required; raw login output is not shown.
 These rows use events already supplied by the provider and do not trigger extra model requests.
 
-The Environment panel's Usage section shows enabled accounts for the active provider, with a
+The Environment panel's Usage section shows accounts across all enabled providers, with a
 separate row and detail menu for each account. Providers with multiple accounts show account names
 beside the provider label. Settings → Usage uses the same account-specific snapshots.
+Rows with no meaningful usage or account status stay hidden, and an empty Usage section is omitted.
+The panel shares its initial batch request; account-specific recovery requests wait for that
+batch to settle and never use another account's snapshot.
 In Settings → Usage → Sidebar, select up to two enabled accounts for the rail rings, including
 two accounts of the same provider (for example, personal and work Claude accounts). Each ring's
 hover card identifies the account and shows its own usage. The rings use the same account color
