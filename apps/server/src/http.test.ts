@@ -2,7 +2,7 @@ import { ServerEventLoopMonitor, unavailableEventLoopStatus } from "./eventLoopM
 import { ProjectId, type ServerRuntimeStatus } from "@synara/contracts";
 import { createHash } from "node:crypto";
 import http from "node:http";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -887,6 +887,20 @@ describe("production Effect HTTP routes", () => {
       });
     },
   );
+
+  it("rejects oversized project icons without attempting an unbounded body read", async () => {
+    const workspaceRoot = makeTempDir("synara-favicon-size-");
+    const iconPath = path.join(workspaceRoot, "favicon.svg");
+    // Sparse file: the response must refuse a large asset before loading its bytes.
+    writeFileSync(iconPath, "");
+    truncateSync(iconPath, 4 * 1024 * 1024 + 1);
+    await withEffectServer(makeConfig(), { kind: "favicon", workspaceRoot }, async (origin) => {
+      const response = await fetch(`${origin}/api/project-favicon?projectId=known-project`);
+      expect(response.status).toBe(204);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.text()).toBe("");
+    });
+  });
 
   it("refuses an unsupported image type even if the resolver nominates it", async () => {
     const workspaceRoot = makeTempDir("synara-favicon-mime-");
