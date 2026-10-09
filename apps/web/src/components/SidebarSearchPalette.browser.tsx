@@ -1,6 +1,7 @@
 import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { NativeApi } from "@synara/contracts";
 import { page, userEvent } from "vitest/browser";
 import { describe, expect, it, vi } from "vitest";
 import { type ComponentProps, useState } from "react";
@@ -16,6 +17,21 @@ vi.mock("~/nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/nativeApi")>()),
   readNativeApi: () => ({ orchestration: { searchThreads }, projects: { searchEntries } }),
 }));
+
+function installNativeApi(api: NativeApi): () => void {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
+  Object.defineProperty(window, "nativeApi", {
+    configurable: true,
+    value: api,
+  });
+  return () => {
+    if (previousDescriptor) {
+      Object.defineProperty(window, "nativeApi", previousDescriptor);
+    } else {
+      Reflect.deleteProperty(window, "nativeApi");
+    }
+  };
+}
 
 const thread: SidebarSearchThread = {
   id: "thread-1",
@@ -94,27 +110,34 @@ it("searches active project files and opens the selected file", async () => {
     entries: [{ path: "src/auth/session.ts", kind: "file" }],
     truncated: false,
   });
+  const restoreNativeApi = installNativeApi({
+    projects: { searchEntries },
+  } as unknown as NativeApi);
   const onOpenFile = vi.fn();
-  const { onOpenChange } = await renderPalette(thread, {
-    activeProjectCwd: "/workspace/project",
-    activeThreadId: thread.id,
-    onOpenFile,
-  });
+  try {
+    const { onOpenChange } = await renderPalette(thread, {
+      activeProjectCwd: "/workspace/project",
+      activeThreadId: thread.id,
+      onOpenFile,
+    });
 
-  await page.getByPlaceholder("Search chats or run a command").fill("session");
-  const result = page.getByRole("option", { name: /session.ts/ });
-  await expect.element(result).toBeVisible();
-  await expect.element(result).toHaveTextContent("src/auth");
-  await result.click();
+    await page.getByPlaceholder("Search chats or run a command").fill("session");
+    const result = page.getByRole("option", { name: /session.ts/ });
+    await expect.element(result).toBeVisible();
+    await expect.element(result).toHaveTextContent("src/auth");
+    await result.click();
 
-  expect(onOpenFile).toHaveBeenCalledWith("src/auth/session.ts");
-  expect(onOpenChange).toHaveBeenCalledWith(false);
-  expect(searchEntries).toHaveBeenCalledWith({
-    cwd: "/workspace/project",
-    query: "session",
-    limit: 30,
-    kind: "file",
-  });
+    expect(onOpenFile).toHaveBeenCalledWith("src/auth/session.ts");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(searchEntries).toHaveBeenCalledWith({
+      cwd: "/workspace/project",
+      query: "session",
+      limit: 30,
+      kind: "file",
+    });
+  } finally {
+    restoreNativeApi();
+  }
 });
 
 it("runs a space command and closes the palette", async () => {
