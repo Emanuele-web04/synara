@@ -582,7 +582,7 @@ describe("provider runtime activity projection", () => {
       toolUseId: "toolu_outer",
       subagentTitle: "Outer worker",
     });
-    expect(projectProviderRuntimeActivities(taskProgress)[0]?.summary).toBe("Task progress");
+    expect(projectProviderRuntimeActivities(taskProgress)[0]?.summary).toBe("Reasoning update");
     expect(projectProviderRuntimeActivities(codexReasoning)[0]?.summary).toBe("Reasoning update");
   });
 
