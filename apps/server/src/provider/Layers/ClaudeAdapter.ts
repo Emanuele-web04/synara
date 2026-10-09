@@ -356,6 +356,10 @@ interface ClaudeSubagentRun {
   // The launching Task tool call (final input once its tool_result arrived).
   launchTool: ToolInFlight | undefined;
   title: string | undefined;
+  // The last brief surfaced on the child thread. A foreground spawn forwards
+  // its prompt as a user message; a background spawn or resume does not, so
+  // the launching call supplies it and a later forwarded copy is skipped.
+  lastBrief: string | undefined;
 }
 
 type ClaudeTokenUsageState = "current" | "skip-compaction-call" | "awaiting-fresh-assistant";
@@ -3652,6 +3656,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         background: launchTool?.input.run_in_background === true,
         launchTurnId: launcher.turnState?.turnId,
         launchTool,
+        lastBrief: undefined,
         title:
           typeof launchTool?.input.description === "string"
             ? nonEmptyTrimmed(launchTool.input.description)
@@ -4164,39 +4169,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         // A subagent conversation's user turns are what its launcher sent it:
-        // the brief, or a later message on resume. Surface them on the child
-        // thread; ingestion records them as a message from the parent agent.
+        // the brief, or a later message on resume.
+        const subagentRoot = subagentRootContext(context);
         const subagentBrief = context.subagentRefs ? subagentUserMessageText(message) : undefined;
-        if (subagentBrief !== undefined) {
-          const briefStamp = yield* makeEventStamp();
-          yield* offerRuntimeEvent(context, {
-            type: "item.completed",
-            eventId: briefStamp.eventId,
-            provider: PROVIDER,
-            createdAt: briefStamp.createdAt,
-            threadId: context.session.threadId,
-            ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
-            itemId: asRuntimeItemId(
-              typeof message.uuid === "string" && message.uuid.length > 0
-                ? message.uuid
-                : briefStamp.eventId,
-            ),
-            payload: {
-              itemType: "user_message",
-              status: "completed",
-              title: "Subagent brief",
-              detail: subagentBrief,
-            },
-            providerRefs: nativeProviderRefs(context),
-            raw: {
-              source: "claude.sdk.message",
-              method: "claude/user",
-              payload: message,
-            },
-          });
+        const briefRun = context.subagentRefs
+          ? subagentRoot.subagentRunHistory.get(context.subagentRefs.providerThreadId)
+          : undefined;
+        if (subagentBrief !== undefined && briefRun) {
+          yield* emitSubagentBrief(briefRun, subagentBrief, message);
         }
 
-        const subagentRoot = subagentRootContext(context);
         for (const toolResult of toolResultBlocksFromUserMessage(message)) {
           const toolEntry = Array.from(context.inFlightTools.entries()).find(
             ([, tool]) => tool.itemId === toolResult.toolUseId,
@@ -4400,6 +4382,45 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (launchStatus === "completed" || toolResult.isError) {
           yield* settleSubagentRun(root, run, toolResult.isError ? "failed" : "completed");
         }
+      });
+
+    // Surfaces what a subagent was told (its brief, or a resume message) on its
+    // child thread; ingestion records it as a message from the launching agent.
+    const emitSubagentBrief = (
+      run: ClaudeSubagentRun,
+      text: string,
+      rawPayload: unknown,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (run.lastBrief === text) {
+          return;
+        }
+        run.lastBrief = text;
+        yield* ensureSyntheticTurn(run.context);
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent(run.context, {
+          type: "item.completed",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: run.context.session.threadId,
+          ...(run.context.turnState
+            ? { turnId: asCanonicalTurnId(run.context.turnState.turnId) }
+            : {}),
+          itemId: asRuntimeItemId(stamp.eventId),
+          payload: {
+            itemType: "user_message",
+            status: "completed",
+            title: "Subagent brief",
+            detail: text,
+          },
+          providerRefs: nativeProviderRefs(run.context),
+          raw: {
+            source: "claude.sdk.message",
+            method: "claude/user",
+            payload: rawPayload,
+          },
+        });
       });
 
     // A queued steer is only delivered on the subagent's next tool call. When
@@ -5304,6 +5325,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               }
               if (resumed) {
                 run.launchTurnId = subagentLauncherContext(context, run).turnState?.turnId;
+              }
+              // Background spawns and resumes do not forward what the subagent
+              // was told; take it from the launching call (Agent prompt, or the
+              // SendMessage message on resume).
+              if (message.is_backgrounded === true || resumed) {
+                const launchInput = resumed
+                  ? findInFlightTool(
+                      subagentLauncherContext(context, run),
+                      message.tool_use_id ?? startedToolUseId,
+                    )?.input
+                  : run.launchTool?.input;
+                const briefSource = resumed ? launchInput?.message : launchInput?.prompt;
+                const brief =
+                  typeof briefSource === "string" ? nonEmptyTrimmed(briefSource) : undefined;
+                if (brief !== undefined) {
+                  yield* emitSubagentBrief(run, brief, message);
+                }
               }
               // A stop that raced the spawn window fires now that the task id exists.
               if (context.pendingSubagentStops.delete(startedToolUseId)) {
