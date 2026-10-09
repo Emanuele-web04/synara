@@ -350,6 +350,7 @@ import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import { ChatThreadFindHost } from "./chat/ThreadFindBar";
 import { resolveTraitsTriggerSummary } from "./chat/TraitsPicker";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
+import { AssistantSelectionInlineMarkers } from "./chat/AssistantSelectionInlineMarkers";
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import {
@@ -714,6 +715,7 @@ export default function ChatView({
     removeComposerImageFromDraft,
     clearComposerAssistantSelectionsFromDraft,
     removeComposerAssistantSelectionFromDraft,
+    updateComposerAssistantSelectionCommentInDraft,
     clearComposerFileCommentsFromDraft,
     removeComposerTerminalContextFromDraft,
     removeComposerPastedTextFromDraft,
@@ -722,6 +724,7 @@ export default function ChatView({
     removeComposerBrowserAnnotationFromDraft,
     showComposerPastedTextInField,
   } = useChatComposerDraft({ threadId });
+  const [transcriptPaneElement, setTranscriptPaneElement] = useState<HTMLDivElement | null>(null);
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
@@ -6537,7 +6540,18 @@ export default function ChatView({
 
             {shouldRenderChatPaneContent && !isCenteredEmptyLanding ? (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div
+                  ref={setTranscriptPaneElement}
+                  className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+                >
+                  {!isInactiveSplitPane && !isSidechatExpired ? (
+                    <AssistantSelectionInlineMarkers
+                      container={transcriptPaneElement}
+                      selections={composerAssistantSelections}
+                      onUpdateComment={updateComposerAssistantSelectionCommentInDraft}
+                      onRemove={removeComposerAssistantSelectionFromDraft}
+                    />
+                  ) : null}
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}

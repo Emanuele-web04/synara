@@ -1,5 +1,5 @@
-// Purpose: Floating composer that retains a transcript quote while the user writes a new prompt
-// or a comment to attach next to the quote in the current chat.
+// Purpose: Floating composer that retains a transcript quote while the user writes a new prompt,
+// a comment to attach next to the quote in the current chat, or edits that comment later.
 
 import type { ThreadEnvironmentMode } from "@synara/contracts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -36,13 +36,20 @@ type SelectionNewChatComposerProps = {
       variant: "comment";
       onAddComment: (comment: string) => void;
     }
+  | {
+      variant: "edit-comment";
+      initialComment: string;
+      onSaveComment: (comment: string) => void;
+      onRemove: () => void;
+    }
 );
 
 export function SelectionNewChatComposer(props: SelectionNewChatComposerProps) {
   const { action, onClose } = props;
-  const isComment = props.variant === "comment";
-  const [prompt, setPrompt] = useState("");
-  const [cursor, setCursor] = useState(0);
+  const isComment = props.variant !== "new-chat";
+  const initialComment = props.variant === "edit-comment" ? props.initialComment : "";
+  const [prompt, setPrompt] = useState(initialComment);
+  const [cursor, setCursor] = useState(initialComment.length);
   const [envMode, setEnvMode] = useState(
     props.variant === "new-chat" && props.canUseWorktree ? props.defaultEnvMode : "local",
   );
@@ -117,6 +124,11 @@ export function SelectionNewChatComposer(props: SelectionNewChatComposerProps) {
     if (props.variant === "comment") {
       // An empty comment still adds the bare quote, like the old one-click Add to Chat.
       props.onAddComment(nextPrompt);
+      onClose();
+      return;
+    }
+    if (props.variant === "edit-comment") {
+      props.onSaveComment(nextPrompt);
       onClose();
       return;
     }
@@ -227,7 +239,24 @@ export function SelectionNewChatComposer(props: SelectionNewChatComposerProps) {
                     }}
                   />
                 ) : null}
-                {isComment ? (
+                {props.variant === "edit-comment" ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => {
+                        props.onRemove();
+                        onClose();
+                      }}
+                    >
+                      Remove
+                    </Button>
+                    <Button type="submit" variant="prominent" size="xs">
+                      Save
+                    </Button>
+                  </>
+                ) : isComment ? (
                   <Button type="submit" variant="prominent" size="xs">
                     Add to Chat
                   </Button>

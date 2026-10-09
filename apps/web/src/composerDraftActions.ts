@@ -1574,6 +1574,30 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    updateAssistantSelectionComment: (threadId, selectionId, comment) => {
+      if (threadId.length === 0 || selectionId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        const target = current?.assistantSelections.find((entry) => entry.id === selectionId);
+        const nextSelection = target ? normalizeAssistantSelection({ ...target, comment }) : null;
+        if (!current || !nextSelection || nextSelection.comment === target?.comment) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...current,
+              assistantSelections: current.assistantSelections.map((entry) =>
+                entry.id === selectionId ? nextSelection : entry,
+              ),
+            },
+          },
+        };
+      });
+    },
     clearAssistantSelections: (threadId) => {
       if (threadId.length === 0) {
         return;

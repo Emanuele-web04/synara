@@ -392,6 +392,11 @@ export interface ComposerDraftStoreState {
     selection: ComposerAssistantSelectionAttachment,
   ) => boolean;
   removeAssistantSelection: (threadId: ThreadId, selectionId: string) => void;
+  updateAssistantSelectionComment: (
+    threadId: ThreadId,
+    selectionId: string,
+    comment: string,
+  ) => void;
   clearAssistantSelections: (threadId: ThreadId) => void;
   addBrowserAnnotation: (
     threadId: ThreadId,
