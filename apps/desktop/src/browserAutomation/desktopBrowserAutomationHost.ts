@@ -228,6 +228,8 @@ interface TabToolExecution {
   readonly output: unknown;
   readonly openedTabId: string | null;
   readonly oauthPopup: boolean;
+  // Tabs that existed before the action; null when unknown.
+  readonly tabIdsBefore: ReadonlySet<string> | null;
 }
 
 function uncorrelatedExecution(output: unknown): TabToolExecution {
@@ -235,6 +237,7 @@ function uncorrelatedExecution(output: unknown): TabToolExecution {
     output,
     openedTabId: null,
     oauthPopup: false,
+    tabIdsBefore: null,
   };
 }
 
@@ -394,17 +397,22 @@ export class DesktopBrowserAutomationHost {
     const unsubscribeHumanControl =
       request.name === "browser_status" || request.name === "browser_tabs"
         ? undefined
-        : this.browserManager.subscribeAutomationHumanControl(request.threadId, () => {
-            interruptByHuman(
-              new BrowserAutomationHostError({
-                code: "BrowserInterruptedByHuman",
-                retryable: true,
-                phase: "runtime",
-                effectMayHaveCommitted: !definition.annotations.readOnlyHint,
-                ...(requestedTabId ? { tabId: requestedTabId as BrowserTabId } : {}),
-              }),
-            );
-          });
+        : this.browserManager.subscribeAutomationHumanControl(
+            request.threadId,
+            () => {
+              interruptByHuman(
+                new BrowserAutomationHostError({
+                  code: "BrowserInterruptedByHuman",
+                  retryable: true,
+                  phase: "runtime",
+                  effectMayHaveCommitted: !definition.annotations.readOnlyHint,
+                  ...(requestedTabId ? { tabId: requestedTabId as BrowserTabId } : {}),
+                }),
+              );
+            },
+            // Input in another tab is the user's own work, not a reason to stop.
+            requestedTabId ?? undefined,
+          );
 
     const run = (): Promise<unknown> => {
       const operation = (async () => {
@@ -679,7 +687,7 @@ export class DesktopBrowserAutomationHost {
     interrupt: (error: BrowserAutomationHostError) => void,
     action: () => Promise<T> | T,
   ): Promise<T> {
-    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId);
+    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId, tabId);
     const humanError = new BrowserAutomationHostError({
       code: "BrowserInterruptedByHuman",
       retryable: true,
@@ -690,19 +698,19 @@ export class DesktopBrowserAutomationHost {
     try {
       if (
         this.browserManager.isHumanBrowserOperationActive() ||
-        this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch
+        this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch
       ) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       const result = await action();
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       return result;
     } catch (error) {
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       if (signal.aborted) throw abortReason(signal);
@@ -1079,6 +1087,9 @@ export class DesktopBrowserAutomationHost {
   ): Promise<TabToolExecution> {
     let openedTabId: string | null = null;
     let oauthPopup = false;
+    const tabIdsBefore = new Set(
+      this.browserManager.getState({ threadId: affinity.threadId }).tabs.map((tab) => tab.id),
+    );
     if (!BROWSER_TOOL_DEFINITIONS_BY_NAME[request.name].annotations.readOnlyHint) {
       this.options.vaultCapture?.noteAgentActivity(runtime);
     }
@@ -1135,7 +1146,7 @@ export class DesktopBrowserAutomationHost {
           browserHostError({ code: "BrowserInputUnsupported" });
       }
     });
-    return { output, openedTabId, oauthPopup };
+    return { output, openedTabId, oauthPopup, tabIdsBefore };
   }
 
   private reconcileTabToolExecution(
@@ -1160,7 +1171,13 @@ export class DesktopBrowserAutomationHost {
           }
         : result;
     const state = this.browserManager.getState({ threadId: affinity.threadId });
-    const openedTabId = execution.openedTabId ?? state.activeTabId;
+    // The active-tab fallback only adopts a tab this action created: the user can
+    // now be working in another existing tab while the agent runs in its own.
+    const fallbackTabId =
+      state.activeTabId && !execution.tabIdsBefore?.has(state.activeTabId)
+        ? state.activeTabId
+        : null;
+    const openedTabId = execution.openedTabId ?? fallbackTabId;
     if (
       !openedTabId ||
       openedTabId === targetTabId ||
