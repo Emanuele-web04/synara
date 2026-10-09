@@ -5219,6 +5219,35 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("does not snap to the end when reading down from a transcript moved off its end", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithInlineToolOverflow({ active: false }),
+    });
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(4),
+      );
+      // Layout, not a reader gesture, moves the following transcript to the top.
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForTranscriptLayoutToSettle(scrollContainer);
+      expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight * 2);
+
+      await userEvent.wheel(scrollContainer, { delta: { y: 40 } });
+      await waitForTranscriptLayoutToSettle(scrollContainer);
+      expect(scrollContainer.scrollTop).toBeGreaterThan(0);
+      expect(scrollContainer.scrollTop).toBeLessThan(scrollContainer.clientHeight);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each([false, true])(
     "flushes editor changes before sending and preserves the prompt on failure=%s",
     async (failSave) => {
