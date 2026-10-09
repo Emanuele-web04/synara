@@ -411,6 +411,11 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
       return isToolLifecycleItemType(itemType) || itemType === "context_compaction";
     }
     case "runtime.warning":
+      // A Claude Monitor event is dated before the reply it woke, so it may be
+      // read back mid-reply but never renders inside it.
+      return (
+        (event.payload.detail as { subtype?: unknown } | undefined)?.subtype !== "monitor_event"
+      );
     case "user-input.requested":
     case "user-input.resolved":
       return true;

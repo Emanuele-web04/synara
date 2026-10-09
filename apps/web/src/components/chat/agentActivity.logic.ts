@@ -54,6 +54,7 @@ export function isPlainRuntimeNoticeWorkEntry(
     entry.activityKind === "auth.status" ||
     (entry.activityKind === "runtime.warning" &&
       entry.nativeEventType !== "background_tasks_changed" &&
+      entry.nativeEventType !== "monitor_event" &&
       !entry.providerContextLifecycle)
   );
 }

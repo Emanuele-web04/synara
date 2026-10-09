@@ -11,6 +11,7 @@ import {
 import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
+import { isPlainRuntimeNoticeWorkEntry } from "./components/chat/agentActivity.logic";
 
 describe("deriveWorkLogEntries", () => {
   it("pairs an answered question with its answers in one exchange row", () => {
@@ -571,6 +572,38 @@ describe("deriveWorkLogEntries", () => {
       taskType: "local_agent",
       description: "Server startup",
     });
+  });
+
+  it("shows a Claude Monitor event as the row that starts the response it woke", () => {
+    const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "monitor-event",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Monitor event",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message,
+          detail: message,
+          nativeEventType: "monitor_event",
+          data: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+    expect(entry).toMatchObject({
+      id: "monitor-event",
+      label: "Monitor event",
+      detail: message,
+      nativeEventType: "monitor_event",
+      backgroundTaskCompletion: { taskId: "bu336ro2k", taskType: "monitor", description: null },
+    });
+    expect(isPlainRuntimeNoticeWorkEntry(entry!)).toBe(false);
   });
 
   it("collapses task-list snapshots into one progressing row per turn", () => {
