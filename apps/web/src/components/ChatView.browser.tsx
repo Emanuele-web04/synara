@@ -11308,6 +11308,49 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("keeps composer edits made while New thread reopens a stored draft", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("stored-draft-reopen"),
+        targetText: "Stored draft reopen",
+      }),
+    });
+
+    try {
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID);
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Older stored draft");
+      const newThreadButton = page.getByLabelText("Create new thread in Project").element();
+      (newThreadButton as HTMLElement).click();
+      // Type into the reopened draft as soon as its route is active, while the
+      // New thread navigation is still settling.
+      await new Promise<void>((resolve) => {
+        let microtaskChecks = 0;
+        const editWhenRouted = () => {
+          if (mounted.router.state.location.pathname === `/${OTHER_THREAD_ID}`) {
+            useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Newer typed text");
+            resolve();
+            return;
+          }
+          microtaskChecks += 1;
+          if (microtaskChecks < 10_000) queueMicrotask(editWhenRouted);
+          else window.setTimeout(editWhenRouted, 0);
+        };
+        editWhenRouted();
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull(),
+      );
+      await waitForLayout();
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+        "Newer typed text",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("explains a second send instead of ignoring it while the first is in flight", async () => {
     let releaseTurnStart!: () => void;
     const turnGate = new Promise<void>((resolve) => {
