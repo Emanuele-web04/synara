@@ -1,3 +1,4 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 import {
   type AutomationCreateInput,
   type AutomationDefinition,
@@ -668,6 +669,25 @@ export function rollbackAutomationDefinitionPatch(
   };
 }
 
+/** One live cache subscription per execution shell, including remote frames without a sidebar. */
+export function useAutomationList() {
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: automationQueryKey,
+    queryFn: () => ensureNativeApi().automation.list({}),
+  });
+  useEffect(
+    () =>
+      ensureNativeApi().automation.onEvent((event) => {
+        queryClient.setQueryData<AutomationListResult>(automationQueryKey, (previous) =>
+          applyAutomationEvent(previous, event),
+        );
+      }),
+    [queryClient],
+  );
+  return query;
+}
+
 export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
   const queryClient = useQueryClient();
 
@@ -973,6 +993,7 @@ export function reconcileAutomationFormAutoModeSupport(
 }
 
 export function AutomationDialog({
+  computerPicker,
   open,
   form,
   projects,
@@ -986,6 +1007,7 @@ export function AutomationDialog({
   busy,
 }: {
   readonly open: boolean;
+  readonly computerPicker?: import("react").ReactNode;
   readonly form: AutomationFormState;
   readonly projects: ReturnType<typeof useStore.getState>["projects"];
   readonly threads: ReadonlyArray<
@@ -1166,6 +1188,19 @@ export function AutomationDialog({
             <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-ui leading-snug text-amber-700 dark:text-amber-300">
               {fastIntervalLimitMessage}
             </div>
+          ) : null}
+        </div>
+
+        <div className="px-5 pb-3 text-ui-sm text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <span>Run on</span>
+            {computerPicker ?? (
+              <span>{readExecutionContext()?.execution.label ?? "This computer"}</span>
+            )}
+          </div>
+          <p>This computer must stay awake with Synara running. Other computers can be closed.</p>
+          {projects.length === 0 ? (
+            <p>Add a project on this computer before creating an automation.</p>
           ) : null}
         </div>
 

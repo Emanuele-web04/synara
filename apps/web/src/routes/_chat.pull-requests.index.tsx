@@ -22,6 +22,7 @@ import {
 } from "~/components/githubInbox/githubInbox.logic";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { RouteSurfaceHeader } from "~/components/RouteSurface";
+import { WorkspaceSurfaceComputerPicker } from "~/components/hosts/ComputerPicker";
 import { useGitHubInboxSidechat } from "~/components/githubInbox/useGitHubInboxSidechat";
 import { cn } from "~/lib/utils";
 
@@ -50,15 +51,14 @@ function GitHubInboxRouteView() {
             CHAT_BACKGROUND_CLASS_NAME,
           )}
         >
-          {/* Like Settings: the title lives at the top of the list column, so this strip only
-              holds the sidebar toggle (shown while the sidebar is collapsed) and stays a drag
-              region. */}
+          {/* Review filters and project IDs stay inside their owning computer's workspace. */}
           <RouteSurfaceHeader
             divider={false}
             className="app-top-bar shrink-0"
-            // Keeps the shell band's height even though the strip holds only the toggle.
             rowClassName="h-[var(--app-top-strip-height)]"
-          />
+          >
+            <WorkspaceSurfaceComputerPicker path="/pull-requests" />
+          </RouteSurfaceHeader>
           <GitHubInbox
             search={search}
             onSearchChange={updateSearch}

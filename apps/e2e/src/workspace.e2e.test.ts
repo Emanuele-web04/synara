@@ -2,7 +2,13 @@ import { verifyRemoteMcp } from "./harness/remoteMcp";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import type { HostConnection, OrchestrationThreadDetailSnapshot } from "@synara/contracts";
+import type {
+  AutomationListResult,
+  HostConnection,
+  OrchestrationThreadDetailSnapshot,
+  OrchestrationGetSnapshotResult,
+  TodoListResult,
+} from "@synara/contracts";
 import { workspaceRpc } from "./harness/rpc";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,9 +19,11 @@ import { startWorkspace } from "./harness/workspace";
 import { requestLocalRemoteAccess } from "../../server/src/remotePairing/cli";
 
 // Explicit build-dependent qualification; the ordinary transport suite remains build-independent.
-it.skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")(
-  "keeps local and remote chats in one browser with independent execution and recovery",
-  async () => {
+it
+  .skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")
+  .each(["chats", "automations", "surfaces"] as const)(
+  "keeps local and remote %s in one browser with independent execution and recovery",
+  async (scenario) => {
     if (!process.env.TEST_DATABASE_URL)
       throw new Error("An isolated TEST_DATABASE_URL is required");
     await using fixture = await createE2eFixture(process.env.TEST_DATABASE_URL);
@@ -180,14 +188,17 @@ it.skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")(
         await button.click();
       },
     );
+    await page.addLocatorHandler(
+      page.getByRole("button", { name: "Skip tour", exact: true }),
+      async (button) => {
+        await button.click();
+      },
+    );
     try {
       // Startup announcements can dismiss an open menu. Use the public route
       // and exercise the real connection control after those dialogs settle.
       await page.goto(`${controller.origin}/settings?section=connections`);
-      await page
-        .getByRole("button", { name: /This computer.*Connected/ })
-        .first()
-        .waitFor();
+      await page.getByRole("radio", { name: "Control other devices", exact: true }).click();
       await page.evaluate(() => {
         (globalThis as unknown as { workspaceSentinel: string }).workspaceSentinel =
           "same-renderer";
@@ -200,6 +211,185 @@ it.skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")(
       await page.getByText("REMOTE checkout", { exact: true }).first().waitFor();
       await page.getByText(/^Opening E2E host/).waitFor({ state: "hidden" });
       await page.getByText("LOCAL checkout", { exact: true }).first().waitFor();
+      if (scenario === "surfaces") {
+        await using local = await workspaceRpc(controller.origin);
+        const remotePage = page.frameLocator('iframe[title^="Synara workspace on"]');
+        // Browse owner-scoped surfaces through their actual UI, never a handcrafted remote URL.
+        for (const [label, route] of [
+          ["Inbox", "/inbox"],
+          ["Code review", "/pull-requests"],
+          ["Tasks", "/tasks"],
+        ] as const) {
+          await page.getByRole("button", { name: label, exact: true }).click();
+          await page.getByRole("button", { name: "Computer: This computer", exact: true }).click();
+          await page.getByRole("menuitem", { name: /E2E host/ }).click();
+          await remotePage.getByRole("button", { name: /^Computer: E2E host/ }).waitFor();
+          await expect.poll(() => new URL(page.url()).searchParams.get("path")).toBe(route);
+          expect(new URL(page.url()).searchParams.get("environment")).toBe(
+            linked.row.environmentId,
+          );
+          await remotePage.getByRole("button", { name: /^Computer: E2E host/ }).click();
+          await remotePage.getByRole("menuitem", { name: /This computer/ }).click();
+          await page
+            .getByRole("button", { name: "Computer: This computer", exact: true })
+            .waitFor();
+          expect(new URL(page.url()).pathname).toBe(route);
+        }
+        await page.getByRole("button", { name: "Computer: This computer", exact: true }).click();
+        await page.getByRole("menuitem", { name: /E2E host/ }).click();
+        await remotePage
+          .getByRole("textbox", { name: "New task", exact: true })
+          .fill("Remote owner todo");
+        await remotePage.getByRole("textbox", { name: "New task", exact: true }).press("Enter");
+        await expect
+          .poll(async () =>
+            (await initialRemote.request<TodoListResult>("todo.list")).todos.map(
+              (todo) => todo.title,
+            ),
+          )
+          .toEqual(["Remote owner todo"]);
+        expect((await local.request<TodoListResult>("todo.list")).todos).toEqual([]);
+        // The list/board switch must keep the execution host, including project IDs that collide.
+        await remotePage.getByRole("button", { name: "Kanban", exact: true }).click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("path")).toBe("/kanban");
+        await remotePage.getByRole("button", { name: "New task", exact: true }).click();
+        await remotePage
+          .getByRole("dialog")
+          .locator('[contenteditable="true"]')
+          .fill("Remote board execution fixture");
+        await remotePage.getByRole("button", { name: "Create task", exact: true }).click();
+        await remotePage.getByRole("dialog").waitFor({ state: "hidden" });
+        const readThreads = async (rpc: typeof local) =>
+          (await rpc.request<OrchestrationGetSnapshotResult>("orchestration.getSnapshot")).threads;
+        await expect
+          .poll(async () =>
+            (await readThreads(initialRemote)).some(
+              (thread) => thread.title === "Remote board execution fixture",
+            ),
+          )
+          .toBe(true);
+        const task = (await readThreads(initialRemote)).find(
+          (thread) => thread.title === "Remote board execution fixture",
+        )!;
+        expect(task.projectId).toBe(projectId);
+        expect((await readThreads(local)).some((thread) => thread.id === task.id)).toBe(false);
+        await expect
+          .poll(
+            async () =>
+              JSON.stringify(
+                await initialRemote.request("orchestration.getThreadDetailSnapshot", {
+                  threadId: task.id,
+                }),
+              ),
+            { timeout: 20_000 },
+          )
+          .toContain("REMOTE STREAM STARTED");
+        if (process.env.SYNARA_E2E_EVIDENCE)
+          await page.screenshot({
+            path: path.join(process.env.SYNARA_E2E_EVIDENCE, "workspace-remote-tasks.png"),
+          });
+        await controller.stop();
+        await fs.writeFile(path.join(host.baseDir, "finish-fixture-turn"), "finish");
+        await expect
+          .poll(
+            async () =>
+              JSON.stringify(
+                await initialRemote.request("orchestration.getThreadDetailSnapshot", {
+                  threadId: task.id,
+                }),
+              ),
+            { timeout: 20_000 },
+          )
+          .toContain("COMPLETED WHILE CONTROLLER WAS STOPPED");
+        return;
+      }
+      if (scenario === "automations") {
+        await using automationLocal = await workspaceRpc(controller.origin);
+        const remotePage = page.frameLocator('iframe[title^="Synara workspace on"]');
+        // Create through the controller UI, but persist on the selected computer.
+        await page.getByRole("button", { name: "Automations", exact: true }).click();
+        await page.getByRole("button", { name: "New automation", exact: true }).last().click();
+        await page
+          .getByRole("textbox", { name: "Automation title", exact: true })
+          .fill("Remote scheduled fixture");
+        await page
+          .getByRole("textbox", { name: "Automation prompt", exact: true })
+          .fill("Check the isolated remote checkout.");
+        await page.getByRole("button", { name: "Run on: This computer", exact: true }).click();
+        await page.getByRole("menuitem", { name: /E2E host/ }).click();
+        await remotePage.getByRole("button", { name: /^Run on: E2E host/ }).waitFor();
+        expect(
+          await remotePage
+            .getByRole("textbox", { name: "Automation prompt", exact: true })
+            .inputValue(),
+        ).toBe("Check the isolated remote checkout.");
+        expect(page.url()).not.toContain("checkout");
+        // Returning to local and back must keep the draft without restoring the previous host's project.
+        await remotePage.getByRole("button", { name: /^Run on: E2E host/ }).click();
+        await remotePage.getByRole("menuitem", { name: /This computer/ }).click();
+        await page.getByRole("button", { name: "Run on: This computer", exact: true }).waitFor();
+        expect(
+          await page.getByRole("textbox", { name: "Automation prompt", exact: true }).inputValue(),
+        ).toBe("Check the isolated remote checkout.");
+        await page.getByRole("button", { name: "Run on: This computer", exact: true }).click();
+        await page.getByRole("menuitem", { name: /E2E host/ }).click();
+        await remotePage.getByRole("button", { name: /^Run on: E2E host/ }).waitFor();
+        await remotePage.getByRole("button", { name: "Create", exact: true }).click();
+        await remotePage.getByRole("dialog").waitFor({ state: "hidden" });
+        const listAutomations = (rpc: typeof automationLocal) =>
+          rpc.request<AutomationListResult>("automation.list");
+        await expect
+          .poll(async () => (await listAutomations(initialRemote)).definitions.length)
+          .toBe(1);
+        const scheduled = (await listAutomations(initialRemote)).definitions[0]!;
+        expect(scheduled).toMatchObject({
+          name: "Remote scheduled fixture",
+          projectId,
+          prompt: "Check the isolated remote checkout.",
+        });
+        expect((await listAutomations(automationLocal)).definitions).toEqual([]);
+        await page.getByRole("button", { name: /Remote scheduled fixture/ }).waitFor();
+        await page.getByRole("button", { name: /Remote scheduled fixture/ }).click();
+        await remotePage.getByText(/Keep Synara running on that computer/).waitFor();
+        expect(new URL(page.url()).searchParams.get("environment")).toBe(linked.row.environmentId);
+        // Bring the one-shot deadline forward without waiting for a wall-clock UI minute.
+        await initialRemote.request("automation.update", {
+          id: scheduled.id,
+          schedule: { type: "once", runAt: new Date(Date.now() + 10_000).toISOString() },
+          worktreeMode: "local",
+          modelSelection: { provider: "codex", model: "gpt-6-astra" },
+          acknowledgedRisks: ["local-checkout"],
+        });
+        expect((await listAutomations(initialRemote)).runs).toEqual([]);
+        if (process.env.SYNARA_E2E_EVIDENCE)
+          await page.screenshot({
+            path: path.join(process.env.SYNARA_E2E_EVIDENCE, "workspace-remote-automation.png"),
+          });
+        await controller.stop();
+        expect((await listAutomations(initialRemote)).runs).toEqual([]);
+        await fs.writeFile(path.join(host.baseDir, "finish-fixture-turn"), "finish");
+        // Only the host remains alive. Its real scheduler, database and provider adapter run the job.
+        await expect
+          .poll(
+            async () =>
+              (await listAutomations(initialRemote)).runs.find(
+                (run) => run.automationId === scheduled.id,
+              )?.status,
+            { timeout: 30_000 },
+          )
+          .toBe("succeeded");
+        const scheduledRuns = (await listAutomations(initialRemote)).runs.filter(
+          (run) => run.automationId === scheduled.id,
+        );
+        expect(scheduledRuns).toHaveLength(1);
+        const scheduledThread = await initialRemote.request<OrchestrationThreadDetailSnapshot>(
+          "orchestration.getThreadDetailSnapshot",
+          { threadId: scheduledRuns[0]!.threadId },
+        );
+        expect(scheduledThread.thread.projectId).toBe(projectId);
+        expect(JSON.stringify(scheduledThread)).toContain("COMPLETED WHILE CONTROLLER WAS STOPPED");
+        return;
+      }
       await verifyRemoteMcp({ controller, host, projectId });
       const providerEvidenceOffset = (
         await fs.readFile(path.join(host.baseDir, "fixture-provider.jsonl"), "utf8")
@@ -285,7 +475,7 @@ it.skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")(
         await page.getByRole("dialog", { name: "Create project", exact: true }).screenshot({
           path: path.join(process.env.SYNARA_E2E_EVIDENCE, "create-project-computer.png"),
         });
-      await page.getByRole("button", { name: "Add folder", exact: true }).click();
+      await page.getByRole("button", { name: "Source folder", exact: true }).click();
       await page.getByRole("textbox", { name: "Folder path", exact: true }).fill(addedRoot);
       await page.getByRole("button", { name: "Go", exact: true }).click();
       await expect

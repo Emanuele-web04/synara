@@ -15,6 +15,7 @@ import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
 import { useTasksSurfaceEnabled } from "../../tasksSurface";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
+import { WorkspaceSurfaceComputerPicker } from "../hosts/ComputerPicker";
 import { TaskCardSurface, useTaskSelection } from "./TaskCardSurface";
 import { TaskListItem } from "./TaskListItem";
 import { TaskQuickAdd } from "./TaskQuickAdd";
@@ -74,6 +75,7 @@ export default function TasksView() {
     <RouteInsetSurface>
       <RouteSurface>
         <RouteSurfaceHeader>
+          <WorkspaceSurfaceComputerPicker path="/tasks" />
           <div className="ml-auto">
             <TasksViewSwitch current="list" />
           </div>

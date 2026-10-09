@@ -40,6 +40,85 @@ Authorization polls have ±10% jitter around ten seconds and account requests ha
 
 Device revocation closes RPC/resources before durable tombstone/ACK. Missing ACK is retried by later snapshots. Host unlink, replaced keys, owner removal and hard proof denial fence old admission. Ordinary network loss retains the allocation. Explicit remote disable retires it, and the account sweeper removes DNS/tunnel resources in bounded batches. Failed cleanup retains resource ownership evidence. Retired names are revisited hourly to catch a provider create that completes after a timeout; cleanup never uses a newer generation's name.
 
+## Automations on another computer
+
+In builds with remote connections enabled (Beta/Dev), open
+**Automations → New automation → Run on** and select a connected computer,
+then choose its project, provider/model and schedule. Switching computers carries
+only the title, prompt and scheduling/options draft; project, target chat and model
+are selected from the destination's own state. The draft stays in renderer memory,
+not in the navigation URL. An unavailable computer cannot accept a new automation.
+
+The selected host owns the saved automation, its scheduler and its runs. Once
+saved on a Mac Mini, it runs there with the MacBook/controller closed. Keep the
+execution host awake with Synara running, the project available and its provider
+authenticated. Cloudflare supplies connectivity, not execution or automatic
+failover. Existing automations keep their original host; selecting a computer
+while creating one does not migrate earlier automations or their history.
+
+The Automations panel combines local and connected-host entries with computer
+names. Opening a remote entry edits and runs it on that host; disconnecting the
+controller does not stop the host scheduler. Revoking access prevents further
+management from that controller, without deleting the owner's scheduled jobs.
+
+Qualification (2026-10-09): the dedicated `remote automations` case in
+`apps/e2e/src/workspace.e2e.test.ts` passes with two built servers, an isolated
+PostgreSQL database and Chromium. It verifies computer selection in both directions,
+private draft transfer, host-only persistence, shared-panel navigation, and exactly
+one successful scheduled run after the controller process exits. Cloudflare/WorkOS
+and the provider executable are fixtures; this is not a new live-provider or physical
+Mac sleep/wake qualification.
+
+The earlier chat/MCP failure was investigated and fixed during the surface audit
+below. The workspace-wide build still hits the existing contracts declaration-emission
+limit (`rpc.ts`, TS7056); direct web and CLI builds succeed. See the latest
+[qualification ledger](implementation/cloudflare-remote/STATUS.md) for test results
+and remaining gaps rather than treating a focused pass as a clean full-suite run.
+
+## Remote surface audit (2026-10-09)
+
+Tasks, Kanban, Inbox and Code review now expose the existing **Computer** picker.
+Selecting a computer opens its own overview, stores and authenticated RPC client;
+project IDs, thread IDs and review filters are not copied between computers. The
+List/Kanban view switch retains the selected owner. A task created there belongs
+to that computer, and its agent uses that computer's projects and provider login.
+Existing tasks and cards are not migrated by changing the picker.
+
+Six read-only audit lanes covered tasks/boards, scheduling, projects/Git, runtime
+tools, Hubs/Inbox/reviews and agent MCP. Confirmed remaining limitations:
+
+| Area                                         | Current boundary                                                                                                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Terminal, project scripts, Git and worktrees | Execute inside the selected owner's workspace; no controller fallback.                                                                                                                           |
+| Scheduled automations / CI auto-fix          | Owner-server work; keep that server awake and running. No automatic failover.                                                                                                                    |
+| Remote project creation                      | Existing remote folders work. GitHub clone/provisioning has no remote dialog flow yet.                                                                                                           |
+| Hubs                                         | Existing remote hub chats are accessible; the controller does not aggregate their coordinator/attention metadata or provide a dedicated remote Hubs landing picker.                              |
+| Dev-server Run and preview                   | Tracked lifecycle RPCs remain unavailable remotely. Preview needs authenticated port forwarding; opening an owner's localhost URL on the controller is incorrect. Terminal scripts are separate. |
+| Native computer/browser/device actions       | Explicitly unavailable remotely; require a separate capability/permission and resource design.                                                                                                   |
+| Agent MCP delegation                         | Remote project/thread tools work. Remote automation and Kanban tools are not delegated; use the destination workspace UI or an agent running there.                                              |
+
+The previously failing MCP fixture read a credential from the child environment,
+although production now deliberately sends it only in thread-scoped app-server
+configuration. The fixture now reads that private protocol field without logging
+it or restoring the secret to the process environment. No production authentication
+guard was weakened.
+
+The authenticated MCP test then exposed a real creation bug: the destination tried
+to resolve the foreign caller's synthetic replay ID as a local thread. Creation
+now skips that local-only principal lookup for authenticated remote callers, whose
+roles are checked at the source. Hub coordinator/worker restrictions, explicit
+destination project selection, runtime privilege checks and durable replay remain
+in place. The existing two-server MCP test failed before this fix and passes after
+it; the complete chat continuity scenario also passes (33.45 seconds).
+
+The new `remote surfaces` browser case reproduces the missing picker against the
+previous build, then passes with the changes. It selects Inbox, Code review and
+Tasks in both directions, creates a remote-only todo, switches to Kanban without
+changing owner, and starts a task that finishes after the controller process exits.
+The fixture deliberately uses the same project ID on both servers to detect wrong-host
+writes. These checks use real application servers and a deterministic provider,
+not a new live-provider or physical-device qualification.
+
 ## Local and live evidence
 
 The Beta Inbox's **Save privately** action uploads an explicit snapshot to the

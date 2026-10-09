@@ -471,3 +471,42 @@ returned HTTP 503; a fresh negotiation succeeded without reconnecting or re-pair
 That transient transport failure remains an observation, not a claim of seamless reconnect.
 The physical RPC check and provider-fixture MCP check establish different parts of the path;
 they do not qualify a signed release or every live provider.
+
+### Automation and remote surface audit — 2026-10-09
+
+Six focused read-only audits reviewed tasks/boards, automation scheduling, projects/Git,
+runtime tools, Hubs/Inbox/reviews and the agent gateway. The implementation reuses the
+existing computer picker and per-owner workspace frames:
+
+- Automation creation selects the execution host; its project, model and persisted scheduler
+  stay on that host. The combined automation panel retains owner-qualified navigation.
+- Tasks, Kanban, Inbox and Code review expose a computer selector. Selection opens that
+  owner's overview, without copying foreign project/thread IDs or filters. List/board
+  navigation preserves ownership; existing tasks are not transferred.
+- Remote MCP creation no longer attempts a host-local principal lookup for the foreign
+  replay identity. The source server still checks coordinator/worker restrictions;
+  destination project, privilege, active-turn and replay checks remain in force.
+- The Codex fixture now reads its thread-scoped MCP credential from the private protocol
+  config, not a removed environment variable. Credentials are not logged or re-exported.
+
+Qualification uses two built servers, disposable PostgreSQL, Chromium and deterministic
+provider/Cloudflare/WorkOS fixtures. All three browser scenarios pass in their final runs:
+remote chats (33.45 s), automations, and Tasks/Kanban surfaces. The last two explicitly
+finish host-owned work after the controller process exits. Project IDs deliberately
+collide across the servers. The surface test fails on the previous build at the missing
+picker, and the real MCP creation test failed before the principal-lookup repair.
+
+The long chat scenario also required updating a stale folder-button accessible name in
+the test; no production UI was changed to make that assertion pass. Direct web/server
+builds, formatting, lint (950 warnings, zero errors) and all 12 typecheck tasks pass.
+The repository-wide test command remains recorded as failed: a desktop driver test hit
+its two-second timeout and interrupted the server package. That exact desktop test
+passes alone (518 ms); the completed web package passed 5,286 tests. The separate full
+server run passes all 8,372 tests (609 files, 27 tests intentionally skipped) in
+480.41 seconds. These follow-up passes do not rewrite the original full-command failure.
+
+No production migration, deployment, signed build or physical-Mac installation is part
+of this audit. The temporary PostgreSQL server is stopped. Remaining feature gaps are
+documented in [Remote surface audit](../../cloudflare-remote.md#remote-surface-audit-2026-10-09):
+remote GitHub provisioning, aggregate Hub status/navigation, tracked dev-server preview,
+native computer/browser/device control, and remote MCP automation/Kanban delegation.

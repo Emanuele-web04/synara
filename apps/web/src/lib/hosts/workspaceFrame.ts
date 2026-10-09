@@ -1,3 +1,4 @@
+import type { WorkspaceAutomationDraft } from "./automationWorkspace";
 import type {
   DesktopCustomTitleBarState,
   ExecutionEnvironmentDescriptor,
@@ -25,6 +26,13 @@ export interface WorkspaceSummary {
     readonly status: ThreadStatusPill | null;
     readonly terminalEntryPoint?: boolean;
   })[];
+  readonly automations?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly enabled: boolean;
+    readonly detail: string;
+    readonly unread: boolean;
+  }[];
   readonly path: string;
   readonly activeProjectId?: string;
   readonly state: WsTransportState;
@@ -32,6 +40,7 @@ export interface WorkspaceSummary {
 
 export interface WorkspaceNavigation {
   readonly sidebar?: WorkspaceSidebarActions;
+  prepareAutomation?(draft?: WorkspaceAutomationDraft): string;
   navigate(path: string): void;
   newChat(projectId?: string): Promise<string>;
   createChat(command: WorkspaceChatCreationCommand): Promise<void>;
@@ -93,6 +102,7 @@ export interface WorkspaceFrameBinding {
     subscribe(listener: () => void): () => void;
     newChat(): Promise<string>;
     createProject(): void;
+    prepareAutomation?(draft?: WorkspaceAutomationDraft): string;
     navigate(path: string): void;
     sidebarKeydown(
       event: KeyboardEvent,

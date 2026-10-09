@@ -13,6 +13,7 @@ const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
 const record = (value) =>
   fs.appendFileSync(path.join(root, "fixture-provider.jsonl"), `${JSON.stringify(value)}\n`);
 let threadId = "fixture-thread";
+let gatewayAuthorization;
 let turnId;
 let ticker;
 const notify = (method, params) => send({ method, params: { threadId, turnId, ...params } });
@@ -40,6 +41,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       nextCursor: null,
     });
   if (request.method.startsWith("thread/")) {
+    if (request.method === "thread/start" || request.method === "thread/resume") {
+      gatewayAuthorization =
+        request.params?.config?.mcp_servers?.synara?.http_headers?.Authorization;
+    }
     threadId = request.params?.threadId ?? threadId;
     return reply({ thread: { id: threadId, cwd: request.params?.cwd, turns: [] } });
   }
@@ -68,7 +73,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
               method: "POST",
               headers: {
                 "content-type": "application/json",
-                authorization: `Bearer ${process.env.SYNARA_AGENT_GATEWAY_TOKEN}`,
+                authorization: gatewayAuthorization,
               },
               body: JSON.stringify({
                 jsonrpc: "2.0",
@@ -79,7 +84,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
             });
             results.push({ status: response.status, body: await response.json() });
           }
-          // Only tool results are recorded. The process-scoped bearer never leaves memory.
+          // Only tool results are recorded. The thread-scoped bearer never leaves memory.
           fs.writeFileSync(path.join(root, "mcp-fixture-results.json"), JSON.stringify(results));
         })().catch(() =>
           fs.writeFileSync(

@@ -52,6 +52,7 @@ import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 import { ProviderIcon } from "../ProviderIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurfaceHeader } from "../RouteSurface";
+import { WorkspaceSurfaceComputerPicker } from "../hosts/ComputerPicker";
 import { resolvePullRequestReviewBadge } from "../Sidebar.logic";
 import {
   collectUnreadActivityThreads,
@@ -727,7 +728,9 @@ export default function InboxView() {
           SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
         )}
       >
-        <RouteSurfaceHeader divider={false} className="shrink-0" rowClassName="sm:gap-2" />
+        <RouteSurfaceHeader divider={false} className="shrink-0" rowClassName="sm:gap-2">
+          <WorkspaceSurfaceComputerPicker path="/inbox" />
+        </RouteSurfaceHeader>
         <TaskCardSurface
           selection={taskSelection}
           now={now}

@@ -1155,7 +1155,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
                   const interactionMode = interactionModeForGatewayTarget(entry.target);
                   yield* context.assertAuthority();
-                  if (context.kind !== "external-client" && assertCreateTargetProject) {
+                  // Remote caller roles were checked by their owning server. Their replay
+                  // identity is not a local thread and must not resolve against this DB.
+                  if (
+                    context.kind !== "external-client" &&
+                    !(context.kind === "provider-session" && context.remoteCaller) &&
+                    assertCreateTargetProject
+                  ) {
                     yield* assertCreateTargetProject({
                       callerThreadId: context.callerThreadId,
                       targetProjectId: entry.projectId,

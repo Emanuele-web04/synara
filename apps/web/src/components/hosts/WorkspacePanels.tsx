@@ -1,3 +1,10 @@
+import { prepareWorkspaceAutomation } from "../../lib/hosts/automationWorkspace";
+import {
+  useAutomationList,
+  formatCadenceLong,
+  runStatusLabel,
+} from "../../routes/-automations.shared";
+import { hasUnreadResult } from "../../routes/-automations.list";
 import {
   derivePinnedProjectIdsForSidebar,
   resolveThreadStatusPill,
@@ -23,7 +30,7 @@ import {
   threadJumpIndexFromCommand,
 } from "../../keybindings";
 import { useLocation, useParams } from "@tanstack/react-router";
-import { MAX_PINNED_PROJECTS, ProjectId, ThreadId } from "@synara/contracts";
+import { MAX_PINNED_PROJECTS, ProjectId, ThreadId, type AutomationRun } from "@synara/contracts";
 import { appHistory } from "../../appNavigation";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
 import { useAppSettings } from "../../appSettings";
@@ -169,6 +176,7 @@ function WorkspacePanel({
           subscribe: subscribeWorkspaceSessions,
           newChat: newLocalChat,
           createProject: () => window.dispatchEvent(new Event(OPEN_CREATE_PROJECT_EVENT)),
+          prepareAutomation: prepareWorkspaceAutomation,
           navigate: (path) => {
             if (isWorkspacePath(path)) appHistory.push(path);
           },
@@ -346,6 +354,30 @@ export function WorkspacePanels() {
 /** Runs inside the host's own router, stores, query client, event router, and transport. */
 export function WorkspaceFrameNavigation() {
   const frame = readWorkspaceFrame();
+  const { data: automationData } = useAutomationList();
+  const automations = useMemo(() => {
+    const latestRuns = new Map<string, AutomationRun>();
+    for (const run of automationData?.runs ?? []) {
+      const previous = latestRuns.get(run.automationId);
+      if (!previous || run.scheduledFor > previous.scheduledFor)
+        latestRuns.set(run.automationId, run);
+    }
+    return automationData?.definitions.map((definition) => {
+      const latestRun = latestRuns.get(definition.id) ?? null;
+      return {
+        id: definition.id,
+        name: definition.name,
+        enabled: definition.enabled,
+        detail: [
+          formatCadenceLong(definition.schedule),
+          latestRun ? runStatusLabel(latestRun.status) : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        unread: hasUnreadResult(latestRun),
+      };
+    });
+  }, [automationData]);
   const projects = useStore((state) => state.projects);
   const shell = useStore((state) => state.sidebarThreadSummaryById);
   const hydrated = useStore((state) => state.threadsHydrated);
@@ -503,6 +535,10 @@ export function WorkspaceFrameNavigation() {
       return actions();
     };
     const navigation: WorkspaceNavigation = {
+      prepareAutomation: (draft) => {
+        actions();
+        return prepareWorkspaceAutomation(draft);
+      },
       sidebar: {
         renameThread: (threadId, title) => threadExists(threadId).renameThread(threadId, title),
         setThreadPinned: (threadId, isPinned) =>
@@ -597,6 +633,7 @@ export function WorkspaceFrameNavigation() {
       ? (shell[threadId]?.projectId ?? drafts[threadId]?.projectId)
       : undefined;
     frame.publish({
+      ...(automations ? { automations } : {}),
       projects: projects.map((project) => ({
         id: project.id,
         kind: project.kind,
@@ -618,6 +655,7 @@ export function WorkspaceFrameNavigation() {
       state,
     });
   }, [
+    automations,
     drafts,
     frame,
     hydrated,

@@ -1,3 +1,5 @@
+import { AutomationComputerPicker } from "~/components/automation/AutomationComputerPicker";
+import type { WorkspaceAutomationDraft } from "~/lib/hosts/automationWorkspace";
 // FILE: -automations.list.tsx
 // Purpose: The automation list pieces shared by the Automations page and the rail layout's
 //          Automations panel: the list row, its subtitle and unread rules, the countdown
@@ -231,19 +233,26 @@ export function AutomationCreateDialog({
   onOpenChange,
   createAutomation,
   busy,
+  initialDraft,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly createAutomation: (input: AutomationCreateInput, onCreated: () => void) => void;
   readonly busy: boolean;
+  readonly initialDraft?: WorkspaceAutomationDraft | undefined;
 }) {
   const { settings } = useAppSettings();
   const projects = useStore((state) => state.projects);
   const threads = useStore(selectAllThreads);
   const fallbackProjectId = projects[0]?.id ?? "";
-  const [form, setForm] = useState<AutomationFormState>(() =>
-    formFromDefinition(null, fallbackProjectId, projectModelSelection(projects, fallbackProjectId)),
-  );
+  const [form, setForm] = useState<AutomationFormState>(() => ({
+    ...formFromDefinition(
+      null,
+      fallbackProjectId,
+      projectModelSelection(projects, fallbackProjectId),
+    ),
+    ...initialDraft,
+  }));
   const [warnings, setWarnings] = useState<readonly AutomationDraftWarning[]>([]);
   const [acknowledgedWarningIds, setAcknowledgedWarningIds] = useState<
     ReadonlySet<AutomationDraftWarningId>
@@ -254,11 +263,14 @@ export function AutomationCreateDialog({
   if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
-      const nextForm = formFromDefinition(
-        null,
-        fallbackProjectId,
-        projectModelSelection(projects, fallbackProjectId),
-      );
+      const nextForm = {
+        ...formFromDefinition(
+          null,
+          fallbackProjectId,
+          projectModelSelection(projects, fallbackProjectId),
+        ),
+        ...initialDraft,
+      };
       setForm(nextForm);
       setWarnings(buildAutomationFormWarnings(nextForm));
       setAcknowledgedWarningIds(new Set());
@@ -306,6 +318,9 @@ export function AutomationCreateDialog({
       onFormChange={updateForm}
       onSubmit={submit}
       busy={busy}
+      computerPicker={
+        <AutomationComputerPicker form={form} disabled={busy} onMoved={() => onOpenChange(false)} />
+      }
     />
   );
 }
