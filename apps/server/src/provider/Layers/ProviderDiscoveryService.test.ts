@@ -415,6 +415,33 @@ describe("ProviderDiscoveryService.getComposerCapabilities", () => {
 });
 
 describe("ProviderDiscoveryService.listModels", () => {
+  it("keeps OMP discovery on the adapter-owned cache cadence", async () => {
+    let calls = 0;
+    const results = await runDiscovery({
+      adapter: {
+        listModels: () =>
+          Effect.sync(() => ({
+            models: [{ slug: `upstream/model-${++calls}`, name: "Model" }],
+            source: "omp-cli",
+            cached: false,
+          })),
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const first = yield* discovery.listModels({ provider: "omp", cwd });
+        const second = yield* discovery.listModels({ provider: "omp", cwd: homeDir });
+        return { first, second };
+      }),
+    });
+
+    expect(results.first.models[0]?.slug).toBe("upstream/model-1");
+    expect(results.second.models[0]?.slug).toBe("upstream/model-2");
+    expect(calls).toBe(2);
+    expect(existsSync(path.join(baseDir, "userdata", "provider-models", "catalogs.json"))).toBe(
+      false,
+    );
+  });
+
   it("honors an explicit refresh through the decoded discovery request", async () => {
     let now = Date.now();
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);

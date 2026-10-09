@@ -269,136 +269,177 @@ describe.skipIf(!LIVE)("OmpAdapter live E2E against real `omp acp`", () => {
 // `omp` binary and is not gated on SYNARA_LIVE_OMP.
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value) + "\n");
 
-describe("OmpAdapter late session/update attribution (in-memory ACP)", () => {
-  it("attributes a post-settlement agent_message_chunk to the settled turn", async () => {
-    const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
-    const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
-    const sessionUpdate = (text: string) =>
-      encode({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
+describe("OmpAdapter model selection and late updates (in-memory ACP)", () => {
+  it.each(["late update", "stale role at startup", "stale role at send"] as const)(
+    "handles %s without substituting a model or prompting after rejection",
+    async (scenario) => {
+      const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+      const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+      const sessionUpdate = (text: string) =>
+        encode({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-omp-session",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text },
+            },
+          },
+        });
+
+      let agentConnection: { close(error?: unknown): void } | undefined;
+      let prompts = 0;
+      const configWrites: unknown[] = [];
+      const agentApp = OfficialAcp.agent({ name: "fake-omp" })
+        .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+          protocolVersion: 1,
+          agentInfo: { name: "fake-omp", version: "0.0.0" },
+          agentCapabilities: {},
+          authMethods: [{ id: "agent", name: "Agent authentication" }],
+        }))
+        .onRequest(OfficialAcp.methods.agent.authenticate, () => ({}))
+        .onRequest(OfficialAcp.methods.agent.session.new, () => ({
           sessionId: "fake-omp-session",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text },
-          },
-        },
-      });
-
-    let agentConnection: { close(error?: unknown): void } | undefined;
-    const agentApp = OfficialAcp.agent({ name: "fake-omp" })
-      .onRequest(OfficialAcp.methods.agent.initialize, () => ({
-        protocolVersion: 1,
-        agentInfo: { name: "fake-omp", version: "0.0.0" },
-        agentCapabilities: {},
-        authMethods: [{ id: "agent", name: "Agent authentication" }],
-      }))
-      .onRequest(OfficialAcp.methods.agent.authenticate, () => ({}))
-      .onRequest(OfficialAcp.methods.agent.session.new, () => ({
-        sessionId: "fake-omp-session",
-        // currentValue already matches the test's modelSelection, so the
-        // adapter's set_config_option calls short-circuit without an RPC.
-        configOptions: [
-          {
-            id: "model",
-            name: "Model",
-            type: "select",
-            category: "model",
-            currentValue: FAST_MODEL,
-            options: [{ value: FAST_MODEL, name: FAST_MODEL }],
-          },
-          {
-            id: "thinking",
-            name: "Thinking",
-            type: "select",
-            category: "thinking",
-            currentValue: "off",
-            options: [{ value: "off", name: "Off" }],
-          },
-        ],
-      }))
-      .onRequest(OfficialAcp.methods.agent.session.prompt, () => {
-        // The turn's normal chunk is written before the response so the one
-        // offered after turn.completed below is the straggler under test.
-        Effect.runPromise(Queue.offer(agentToClient, sessionUpdate("EARLY")));
-        return { stopReason: "end_turn" };
-      });
-    const spawnerLayer = Layer.succeed(
-      ChildProcessSpawner.ChildProcessSpawner,
-      ChildProcessSpawner.make(() =>
-        Effect.sync(() => {
-          const input = new ReadableStream<Uint8Array>({
-            pull: (controller) =>
-              Effect.runPromise(Queue.take(clientToAgent))
-                .then((chunk) => {
-                  try {
-                    controller.enqueue(chunk);
-                  } catch {
-                    // Stream already closed during teardown.
-                  }
-                })
-                .catch(() => undefined),
-          });
-          const output = new WritableStream<Uint8Array>({
-            write: (chunk) =>
-              Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined),
-          });
-          agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
-          return ChildProcessSpawner.makeHandle({
-            // Must be a pid no real process can have: stopAll runs the real
-            // process-tree teardown, which captures every descendant of this
-            // pid and signals it — a small pid like 1 (launchd) makes teardown
-            // SIGTERM the whole user session, killing the vitest worker.
-            pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
-            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-            isRunning: Effect.succeed(true),
-            kill: () => Effect.void,
-            stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
-            stdout: Stream.fromQueue(agentToClient),
-            stderr: Stream.never,
-            all: Stream.never,
-            getInputFd: () => Sink.drain,
-            getOutputFd: () => Stream.never,
-          });
-        }),
-      ),
-    );
-
-    try {
-      await withAdapter(
-        {},
-        (adapter, events) =>
-          Effect.gen(function* () {
-            const threadId = ThreadId.makeUnsafe(crypto.randomUUID());
-            yield* startSession(adapter, threadId);
-            const turn = yield* sendTurn(adapter, threadId, "hi");
-            yield* waitForEvent(
-              events,
-              (e) => e.type === "turn.completed" && e.turnId === turn.turnId,
-              30_000,
-              "turn completion",
-            );
-            // Settlement has fully finished: activeTurnId is cleared and the
-            // drain is closed. This chunk can only land via the late path.
-            yield* Queue.offer(agentToClient, sessionUpdate("LATE-CHUNK"));
-            yield* waitForEvent(
-              events,
-              (e) =>
-                e.type === "content.delta" &&
-                e.turnId === turn.turnId &&
-                JSON.stringify(e.payload).includes("LATE-CHUNK"),
-              10_000,
-              "late content.delta attribution",
-            );
-            yield* adapter.stopAll();
+          // currentValue already matches the test's modelSelection, so the
+          // adapter's set_config_option calls short-circuit without an RPC.
+          configOptions: [
+            {
+              id: "model",
+              name: "Model",
+              type: "select",
+              category: "model",
+              currentValue: FAST_MODEL,
+              options: [{ value: FAST_MODEL, name: FAST_MODEL }],
+            },
+            {
+              id: "thinking",
+              name: "Thinking",
+              type: "select",
+              category: "thinking",
+              currentValue: "off",
+              options: [{ value: "off", name: "Off" }],
+            },
+          ],
+        }))
+        .onRequest(OfficialAcp.methods.agent.session.setConfigOption, (params) => {
+          configWrites.push(params);
+          return { configOptions: [] };
+        })
+        .onRequest(OfficialAcp.methods.agent.session.prompt, () => {
+          prompts += 1;
+          // The turn's normal chunk is written before the response so the one
+          // offered after turn.completed below is the straggler under test.
+          Effect.runPromise(Queue.offer(agentToClient, sessionUpdate("EARLY")));
+          return { stopReason: "end_turn" };
+        });
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.sync(() => {
+            const input = new ReadableStream<Uint8Array>({
+              pull: (controller) =>
+                Effect.runPromise(Queue.take(clientToAgent))
+                  .then((chunk) => {
+                    try {
+                      controller.enqueue(chunk);
+                    } catch {
+                      // Stream already closed during teardown.
+                    }
+                  })
+                  .catch(() => undefined),
+            });
+            const output = new WritableStream<Uint8Array>({
+              write: (chunk) =>
+                Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined),
+            });
+            agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
+            return ChildProcessSpawner.makeHandle({
+              // Must be a pid no real process can have: stopAll runs the real
+              // process-tree teardown, which captures every descendant of this
+              // pid and signals it — a small pid like 1 (launchd) makes teardown
+              // SIGTERM the whole user session, killing the vitest worker.
+              pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+              isRunning: Effect.succeed(true),
+              kill: () => Effect.void,
+              stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
+              stdout: Stream.fromQueue(agentToClient),
+              stderr: Stream.never,
+              all: Stream.never,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.never,
+            });
           }),
-        spawnerLayer,
+        ),
       );
-    } finally {
-      agentConnection?.close();
-      await Effect.runPromise(Queue.shutdown(clientToAgent));
-      await Effect.runPromise(Queue.shutdown(agentToClient));
-    }
-  }, 45_000);
+
+      try {
+        await withAdapter(
+          {},
+          (adapter, events) =>
+            Effect.gen(function* () {
+              const threadId = ThreadId.makeUnsafe(crypto.randomUUID());
+              if (scenario !== "late update") {
+                const staleSelection = { ...modelSelection, model: " role:smol " };
+                if (scenario === "stale role at send") {
+                  yield* startSession(adapter, threadId);
+                }
+                const error = yield* Effect.flip(
+                  scenario === "stale role at startup"
+                    ? adapter.startSession({
+                        threadId,
+                        provider: "omp",
+                        cwd: "/tmp",
+                        runtimeMode: "full-access",
+                        modelSelection: staleSelection,
+                      })
+                    : adapter.sendTurn({
+                        threadId,
+                        input: "Must not send",
+                        modelSelection: staleSelection,
+                      }),
+                );
+                expect(error).toMatchObject({
+                  provider: "omp",
+                  detail:
+                    "This saved OMP role is no longer supported. Choose an OMP model before sending.",
+                });
+                expect(prompts).toBe(0);
+                expect(configWrites).toEqual([]);
+                yield* adapter.stopAll();
+                return;
+              }
+              yield* startSession(adapter, threadId);
+              const turn = yield* sendTurn(adapter, threadId, "hi");
+              yield* waitForEvent(
+                events,
+                (e) => e.type === "turn.completed" && e.turnId === turn.turnId,
+                30_000,
+                "turn completion",
+              );
+              // Settlement has fully finished: activeTurnId is cleared and the
+              // drain is closed. This chunk can only land via the late path.
+              yield* Queue.offer(agentToClient, sessionUpdate("LATE-CHUNK"));
+              yield* waitForEvent(
+                events,
+                (e) =>
+                  e.type === "content.delta" &&
+                  e.turnId === turn.turnId &&
+                  JSON.stringify(e.payload).includes("LATE-CHUNK"),
+                10_000,
+                "late content.delta attribution",
+              );
+              yield* adapter.stopAll();
+            }),
+          spawnerLayer,
+        );
+      } finally {
+        agentConnection?.close();
+        await Effect.runPromise(Queue.shutdown(clientToAgent));
+        await Effect.runPromise(Queue.shutdown(agentToClient));
+      }
+    },
+    45_000,
+  );
 });

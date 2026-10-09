@@ -87,6 +87,41 @@ describe("providerModelCatalogCache", () => {
     expect(await run(readProviderModelCatalogCache(filePath()))).toEqual([]);
   });
 
+  it.each([
+    { roles: [{ name: "smol", model: "upstream/model", thinkingLevel: "high" }] },
+    { roles: [{ name: null, model: 42, thinkingLevel: "retired-level" }] },
+  ])("strips legacy OMP roles while retaining every persisted catalog: %j", async ({ roles }) => {
+    const ompCatalog: ProviderListModelsResult = {
+      models: [
+        {
+          slug: "upstream/model",
+          name: "Model",
+          upstreamProviderId: "upstream",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+        },
+      ],
+      source: "omp-cli",
+      cached: false,
+    };
+    const entries = [
+      { key: "omp-key", result: ompCatalog, storedAt: 1 },
+      { key: "other-provider-key", result: CATALOG, storedAt: 2 },
+    ];
+    mkdirSync(path.dirname(filePath()), { recursive: true });
+    writeFileSync(
+      filePath(),
+      JSON.stringify({
+        version: 1,
+        entries: [{ ...entries[0], result: { ...ompCatalog, roles } }, entries[1]],
+      }),
+    );
+
+    const decoded = await run(readProviderModelCatalogCache(filePath()));
+    expect(decoded).toEqual(entries);
+    await run(writeProviderModelCatalogCache({ filePath: filePath(), entries: decoded }));
+    expect(JSON.parse(readFileSync(filePath(), "utf8"))).toEqual({ version: 1, entries });
+  });
+
   it("writes the snapshot as private-mode JSON", async () => {
     await run(
       writeProviderModelCatalogCache({

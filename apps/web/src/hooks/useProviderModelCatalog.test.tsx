@@ -706,12 +706,17 @@ describe("useProviderModelCatalog", () => {
     ]);
   });
 
-  it("does not expose OMP internal roles as selectable models", () => {
-    // Keep the legacy field in the runtime-shaped fixture: the server still
-    // carries roles for ACP/runtime consumers, while this hook owns the
-    // user-facing model catalog boundary.
+  it("retains real OMP models and thinking metadata but ignores legacy discovery roles", () => {
+    // An older server or cached payload may carry roles; only real models
+    // participate in either the provider or account-specific picker catalog.
     const discovery = {
-      models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+      models: [
+        {
+          slug: "anthropic/claude-sonnet-4",
+          name: "Claude Sonnet 4",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+        },
+      ],
       roles: [{ name: "smol", model: "anthropic/claude-sonnet-4" }],
       source: "omp-cli",
       cached: false,
@@ -723,6 +728,7 @@ describe("useProviderModelCatalog", () => {
       isPlaceholderData: false,
       isError: false,
     });
+    instanceModelQueries.set("omp", { ...EMPTY_QUERY, data: discovery });
 
     const catalog = readCatalogRenders({
       selectedProvider: "omp",
@@ -735,6 +741,81 @@ describe("useProviderModelCatalog", () => {
     expect(
       catalog?.modelOptionsByProvider.omp.some((model) => model.slug.startsWith("role:")),
     ).toBe(false);
+    expect(catalog?.modelOptionsByProviderInstance.omp?.map((model) => model.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+    expect(catalog?.runtimeModelsByProvider.omp).toEqual(discovery.models);
+    expect(catalog?.runtimeModelsByProviderInstance.omp).toEqual(discovery.models);
+  });
+
+  it.each(["omp", "omp_work"])(
+    "does not resurrect a stale role: hint as a custom model for %s",
+    (instanceId) => {
+      mocks.useAppSettings.mockReturnValue({
+        settings: {
+          ...SETTINGS,
+          providerInstances: {
+            omp_work: {
+              driver: "omp",
+              displayName: "Work",
+              config: { customModels: ["work/custom", "role:smol"] },
+            },
+          },
+          customOmpModels: ["personal/custom", "role:smol"],
+        },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+      const discovery = {
+        ...EMPTY_QUERY,
+        data: { models: [{ slug: "upstream/model", name: "Model" }], source: "omp-cli" },
+      };
+      modelQueries.set("omp", discovery);
+      instanceModelQueries.set(instanceId, discovery);
+
+      const catalog = readCatalogRenders({
+        selectedProvider: "omp",
+        selectedProviderInstanceId: instanceId,
+        modelHintByProvider: { omp: " role:smol " },
+        discoveryEnabled: true,
+      }).at(-1)!;
+
+      expect(catalog.modelOptionsByProvider.omp.map((model) => model.slug)).toEqual([
+        "upstream/model",
+        "personal/custom",
+      ]);
+      expect(
+        catalog.modelOptionsByProviderInstance[instanceId]?.map((model) => model.slug),
+      ).toEqual(["upstream/model", instanceId === "omp" ? "personal/custom" : "work/custom"]);
+    },
+  );
+
+  it("does not change OMP query ownership when only the project changes", () => {
+    readCatalogRenders(
+      { selectedProvider: "omp", discoveryEnabled: true, cwd: "/first" },
+      { selectedProvider: "omp", discoveryEnabled: true, cwd: "/second" },
+    );
+    const [first, second] = mocks.useEffect.mock.calls;
+    expect(first?.[1][0]).toBe(second?.[1][0]);
+  });
+
+  it("retains an exact discovery-proven OMP model whose opaque id starts with role:", () => {
+    const discovery = {
+      ...EMPTY_QUERY,
+      data: { models: [{ slug: "role:real-model", name: "Real Model" }], source: "omp-cli" },
+    };
+    modelQueries.set("omp", discovery);
+    instanceModelQueries.set("omp", discovery);
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      modelHintByProvider: { omp: "role:real-model" },
+      discoveryEnabled: true,
+    }).at(-1)!;
+    expect(catalog.modelOptionsByProvider.omp.map((model) => model.slug)).toEqual([
+      "role:real-model",
+    ]);
+    expect(catalog.modelOptionsByProviderInstance.omp?.map((model) => model.slug)).toEqual([
+      "role:real-model",
+    ]);
   });
 
   it("clears OMP loading and options on terminal discovery failure", () => {
