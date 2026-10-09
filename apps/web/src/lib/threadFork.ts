@@ -90,6 +90,8 @@ export async function dispatchThreadFork(input: {
     associatedWorktreePath: resolvedTarget.associatedWorktreePath,
     associatedWorktreeBranch: resolvedTarget.associatedWorktreeBranch,
     associatedWorktreeRef: resolvedTarget.associatedWorktreeRef,
+    // The provider fork must stop at the same turn as the imported transcript.
+    ...(input.throughMessageId ? { throughMessageId: input.throughMessageId } : {}),
     importedMessages: [...importedMessages],
     createdAt: new Date().toISOString(),
   });

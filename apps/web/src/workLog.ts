@@ -79,6 +79,7 @@ export interface ProviderHandoffInfo {
 
 export type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
+  | "fork-from-earlier-turn"
   | "fresh-session"
   | "interrupt-escalation"
   | "native-history-unavailable"
@@ -869,6 +870,7 @@ export function parseTaskListTasks(payload: unknown): TaskListTaskSnapshot[] | n
 function isProviderContextLifecycleReason(value: unknown): value is ProviderContextLifecycleReason {
   return (
     value === "conversation-rebuilt" ||
+    value === "fork-from-earlier-turn" ||
     value === "fresh-session" ||
     value === "interrupt-escalation" ||
     value === "native-history-unavailable" ||

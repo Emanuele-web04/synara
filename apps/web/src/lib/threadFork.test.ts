@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { MessageId, ProjectId, ThreadId, type NativeApi } from "@synara/contracts";
+import { describe, expect, it, vi } from "vitest";
 
-import { canForkThread } from "./threadFork";
+import type { Thread } from "../types";
+import { canForkThread, dispatchThreadFork } from "./threadFork";
 
 type ForkCandidate = Parameters<typeof canForkThread>[0]["thread"];
 
@@ -42,5 +44,59 @@ describe("canForkThread", () => {
         handoffAvailability: ordinary,
       }),
     ).toBe(false);
+  });
+});
+
+describe("dispatchThreadFork", () => {
+  const sourceThread = {
+    id: ThreadId.makeUnsafe("thread-source"),
+    projectId: ProjectId.makeUnsafe("project-1"),
+    title: "Words",
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+    workingDirectory: null,
+    associatedWorktreePath: null,
+    associatedWorktreeBranch: null,
+    associatedWorktreeRef: null,
+    messages: [
+      { id: "u1", role: "user", text: "Remember APPLE", streaming: false, createdAt: "t1" },
+      { id: "a1", role: "assistant", text: "ok", streaming: false, createdAt: "t2" },
+      { id: "u2", role: "user", text: "Remember BANANA", streaming: false, createdAt: "t3" },
+      { id: "a2", role: "assistant", text: "ok", streaming: false, createdAt: "t4" },
+    ],
+  } as unknown as Thread;
+
+  async function fork(throughMessageId?: string) {
+    const dispatchCommand = vi.fn(async (_command: unknown) => undefined);
+    await dispatchThreadFork({
+      api: { orchestration: { dispatchCommand } } as unknown as NativeApi,
+      sourceThread,
+      target: "local",
+      rootBranch: null,
+      modelSelection: { provider: "claudeAgent", model: "claude-haiku-4-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      ...(throughMessageId ? { throughMessageId: MessageId.makeUnsafe(throughMessageId) } : {}),
+    });
+    return dispatchCommand.mock.calls[0]?.[0] as {
+      readonly throughMessageId?: string;
+      readonly importedMessages: ReadonlyArray<{ readonly text: string }>;
+    };
+  }
+
+  it("tells the server which turn the fork was taken from", async () => {
+    const command = await fork("a1");
+    expect(command.throughMessageId).toBe("a1");
+    expect(command.importedMessages.map((message) => message.text)).toEqual([
+      "Remember APPLE",
+      "ok",
+    ]);
+  });
+
+  it("omits the cutoff for a whole-thread fork", async () => {
+    const command = await fork();
+    expect(command).not.toHaveProperty("throughMessageId");
+    expect(command.importedMessages).toHaveLength(4);
   });
 });
