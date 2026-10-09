@@ -961,15 +961,11 @@ export function projectProviderRuntimeActivities(
     }
 
     case "task.progress": {
-      // Only Codex's legacy agent_reasoning stream is reasoning. Claude task
-      // progress describes a task's (usually a subagent's) current step and is
-      // attributed to that task, never to the parent's reasoning.
+      // A subagent's own progress is that subagent's current step, attributed
+      // to it, never the launcher's reasoning. Other task progress (Codex's
+      // legacy agent_reasoning, workflow updates) keeps its compact grouping.
       const summary =
-        event.payload.toolUseId !== undefined
-          ? "Subagent progress"
-          : event.provider === "claudeAgent"
-            ? "Task progress"
-            : "Reasoning update";
+        event.payload.toolUseId !== undefined ? "Subagent progress" : "Reasoning update";
       return [
         {
           id: event.eventId,
