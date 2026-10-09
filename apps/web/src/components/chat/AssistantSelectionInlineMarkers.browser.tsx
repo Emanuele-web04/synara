@@ -95,9 +95,19 @@ it("labels each quote and edits or removes its comment from the label", async ()
     expect(onUpdateComment).toHaveBeenCalledExactlyOnceWith("sel-1", "Make it ten minutes");
     await expect.element(input).not.toBeInTheDocument();
 
-    // Clicking the highlighted text itself opens the same editor.
-    await userEvent.click(page.getByText("unchanged, and the process lifetime is the same."), {
-      position: { x: 160, y: 8 },
+    // Clicking the highlighted text itself opens the same editor. Aim at the
+    // quote's own rect: word positions depend on the platform's fonts.
+    const line = page.getByText("unchanged, and the process lifetime is the same.");
+    const lineRect = line.element().getBoundingClientRect();
+    const quoteRect = findTextRangeInElement(
+      line.element(),
+      "process lifetime",
+    )!.getClientRects()[0]!;
+    await userEvent.click(line, {
+      position: {
+        x: Math.round(quoteRect.left + quoteRect.width / 2 - lineRect.left),
+        y: Math.round(quoteRect.top + quoteRect.height / 2 - lineRect.top),
+      },
     });
     await expect.element(page.getByRole("textbox", { name: "Comment on selection" })).toBeVisible();
     await page.getByRole("button", { name: "Remove", exact: true }).click();
