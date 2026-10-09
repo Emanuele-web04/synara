@@ -13,10 +13,10 @@ This document covers build-only native validation and publishing desktop release
   `js` validation stages cannot publish and omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
-- Builds four artifacts in parallel:
+- Builds four native legs in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG
-  - Linux `x64` AppImage
+  - Linux `x64` AppImage and `.deb` from one staged payload and one electron-builder pass
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
@@ -49,6 +49,15 @@ This document covers build-only native validation and publishing desktop release
   - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
   - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
   - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
+- Linux `.deb` files are additional release downloads, not updater payloads:
+  - AppImage remains the sole authority for `latest-linux.yml` and its Stable
+    `synara-linux.yml` or Beta `beta-linux.yml` alias. Debian target events are
+    excluded from updater metadata; `.deb` files are not mirrored onto the pinned feed.
+  - The combined Linux leg declares `AppImage,deb` for packaging, provenance and
+    startup smoke. Provenance requires exactly one nonempty payload of each format
+    and verifies that the manifest describes only the matching AppImage bytes.
+  - Package-manager installations do not support in-app auto-update: the existing
+    Linux runtime gate requires `APPIMAGE`. Install a newer `.deb` with `apt` instead.
 - Enforced upgrade path:
   - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
   - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
@@ -106,6 +115,8 @@ Use this before publication to validate the real native macOS, Linux, and Window
 3. Wait for `.github/workflows/release.yml` to finish.
 4. Confirm preflight and all four native matrix builds pass.
 5. Download the workflow artifacts and sanity-check installation on each OS.
+   Linux must include both `.AppImage` and `.deb`; extraction/startup smoke does
+   not replace an actual package-manager install, desktop launch and removal check.
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
 The public updater repository lookup runs only when publication is enabled;
@@ -249,6 +260,55 @@ The release job installs the Cua driver's OpenSSL, X11, XCB, xkbcommon and
 Wayland development libraries before provisioning. This matches the build
 prerequisites in `cua-linux-check.yml`; it does not qualify Linux Computer Use
 as a supported 0.9.0 feature.
+
+### Linux Debian packaging and qualification
+
+The existing `linux-x64` runner stages JavaScript, Cua and native dependencies
+once, then creates both formats. The workflow installs `libcrypt1` for fpm's
+bundled Ruby, `xz-utils`, `dpkg-dev` for Debian inspection, and `xvfb`/`xauth` for
+headless startup. On Arch, the Ruby compatibility library is `libxcrypt-compat`;
+Debian inspection additionally needs `dpkg-deb`. No RPM or new architecture leg
+is included.
+
+The staged package includes the existing public feedback contact
+(`feedback@trysynara.com`) and `https://www.trysynara.com` as its maintainer and
+homepage metadata. Debian versions replace prerelease `-` with `~`, matching
+electron-builder's Debian version ordering. Stable and Beta retain separate
+package names (`synara-desktop` / `synara-desktop-beta`), installation directories
+(`/opt/Synara` / `/opt/Synara Beta`), executables, desktop entries, data homes and feeds.
+
+Local nonpublishing builds (outputs should be a fresh validation directory):
+
+```bash
+bun run dist:desktop:linux:deb -- --output-dir /PATH/TO/VALIDATION
+bun run dist:desktop:artifact -- --platform linux --target AppImage,deb --arch x64 --output-dir /PATH/TO/VALIDATION
+```
+
+Keep `dist:desktop:linux` for AppImage-only builds. Add `--flavor beta` and a
+matching `--build-version X.Y.Z-beta.N` for Beta qualification. All these commands
+pass `--publish never`; they do not produce a signed release or publish downloads.
+
+Before upload, startup smoke still extracts and probes the AppImage, then checks
+the `.deb` control identity/version/architecture, inspects its data archive for
+unsafe paths, links or special files, and extracts it into a separate temporary
+tree without root or maintainer-script execution. The extracted desktop entry,
+icon and executable must exist, and the same packaged dependency and backend/window
+startup gates run for each format with independent temporary state. For local
+verification on a Linux host with the inspection tools installed:
+
+```bash
+node scripts/verify-packaged-desktop-startup.ts --assets-dir /PATH/TO/VALIDATION --platform linux --arch x64 --target AppImage,deb --version X.Y.Z
+```
+
+Beta adds `--executable-name synara-beta` and its matching version. This verifies
+extracted payloads, **not** system installation or removal. Qualify those separately
+in a disposable Debian/Ubuntu VM: inspect `dpkg-deb --info`, install with
+`sudo apt install ./ARTIFACT.deb`, launch from the desktop menu and executable,
+upgrade with another package of the same flavor, then remove with
+`sudo apt remove synara-desktop` (or `synara-desktop-beta`). Check dependencies,
+launcher/icon registration, side-by-side Stable/Beta installation and that removal
+preserves the user's data. Record any unperformed checks as unverified; do not
+install test packages over the operator's production app.
 
 ### Local DMG appearance validation
 

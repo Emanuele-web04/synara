@@ -6,10 +6,13 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -19,6 +22,9 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SYNARA_PACKAGED_DESKTOP_FLAVORS } from "@synara/shared/desktopIdentity";
+import { createDesktopArtifactIdentity } from "./lib/desktop-artifact-identity.ts";
+import { parseLinuxPackageTargets } from "./lib/linux-package-targets.ts";
 
 export type PackagedDesktopPlatform = "linux" | "mac" | "win";
 
@@ -26,6 +32,7 @@ export interface PackagedDesktopStartupOptions {
   readonly assetsDirectory: string;
   readonly platform: PackagedDesktopPlatform;
   readonly arch: string;
+  readonly target: string;
   readonly version: string;
   readonly timeoutMs: number;
   readonly executableName: string;
@@ -47,6 +54,7 @@ export function parsePackagedDesktopStartupArgs(
     "--assets-dir",
     "--platform",
     "--arch",
+    "--target",
     "--version",
     "--timeout-ms",
     "--executable-name",
@@ -71,23 +79,40 @@ export function parsePackagedDesktopStartupArgs(
   if (!/^[A-Za-z0-9._-]+$/.test(executableName) || executableName.includes("..")) {
     throw new Error(`Invalid packaged startup executable name: ${executableName}.`);
   }
+  const target =
+    values.get("--target") ??
+    (platform === "linux" ? "AppImage" : platform === "mac" ? "dmg" : "nsis");
+  if (platform === "linux") parseLinuxPackageTargets(target);
+  else if (!(platform === "mac" ? ["dmg", "zip"] : ["nsis"]).includes(target)) {
+    throw new Error(`Unsupported ${platform} packaged startup target: ${target}.`);
+  }
   return {
     assetsDirectory: resolve(required("--assets-dir")),
     platform,
     arch: required("--arch"),
+    target,
     version: required("--version"),
     timeoutMs,
     executableName,
   };
 }
 
-function runCommand(command: string, args: ReadonlyArray<string>, cwd?: string): void {
+function runCommand(
+  command: string,
+  args: ReadonlyArray<string>,
+  cwd?: string,
+  stdoutFd?: number,
+): string {
+  const env = { ...process.env };
+  delete env.TAR_OPTIONS;
   const result = spawnSync(command, [...args], {
     cwd,
+    env,
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
     shell: false,
     windowsHide: true,
+    stdio: ["ignore", stdoutFd ?? "pipe", "pipe"],
   });
   if (result.error) {
     throw new Error(`${command} could not start: ${result.error.message}`);
@@ -95,6 +120,7 @@ function runCommand(command: string, args: ReadonlyArray<string>, cwd?: string):
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed with exit ${result.status ?? "unknown"}.`);
   }
+  return result.stdout || "";
 }
 
 function findFiles(root: string, predicate: (path: string) => boolean): string[] {
@@ -118,10 +144,12 @@ function findFiles(root: string, predicate: (path: string) => boolean): string[]
 function requireSingleAsset(directory: string, suffix: string): string {
   const matches = readdirSync(directory)
     .map((entry) => join(directory, entry))
-    .filter((candidate) => statSync(candidate).isFile() && candidate.endsWith(suffix));
+    .filter((candidate) => candidate.endsWith(suffix));
   if (matches.length !== 1) {
     throw new Error(`Expected one ${suffix} release asset, found ${matches.length}.`);
   }
+  if (!lstatSync(matches[0]!).isFile())
+    throw new Error(`Release asset must be a regular file: ${matches[0]}.`);
   return matches[0]!;
 }
 
@@ -185,6 +213,139 @@ function prepareLinuxLaunch(
       executable: join(extractionRoot, "squashfs-root", executableName),
       resourcesDirectory: join(extractionRoot, "squashfs-root", "resources"),
     },
+  };
+}
+
+export function assertDebianPackageMetadata(
+  metadata: string,
+  options: Pick<PackagedDesktopStartupOptions, "arch" | "version" | "executableName">,
+) {
+  const artifactIdentity = SYNARA_PACKAGED_DESKTOP_FLAVORS.map((flavor) =>
+    createDesktopArtifactIdentity({ platform: "linux", flavor }),
+  ).find((artifact) => artifact.identity.userDataDirectoryName === options.executableName);
+  if (!artifactIdentity)
+    throw new Error(`Unknown Debian package identity: ${options.executableName}.`);
+  const architecture = options.arch === "x64" ? "amd64" : options.arch === "arm64" ? "arm64" : null;
+  const expected = [
+    artifactIdentity.packageMetadata.name,
+    options.version.replaceAll("-", "~"),
+    architecture,
+  ];
+  const actual = metadata.trimEnd().split("\n");
+  if (
+    !architecture ||
+    actual.length !== 3 ||
+    expected.some((value, index) => value !== actual[index])
+  ) {
+    throw new Error(
+      `Debian package identity/version/architecture mismatch: ${actual.join(" / ")}.`,
+    );
+  }
+  return artifactIdentity;
+}
+
+export function assertDebianArchiveEntries(
+  names: ReadonlyArray<string>,
+  types: ReadonlyArray<string>,
+): void {
+  if (names.length === 0 || names.length !== types.length)
+    throw new Error("Invalid Debian payload archive inventory.");
+  const seen = new Set<string>();
+  for (let index = 0; index < names.length; index++) {
+    const name = names[index]!;
+    const path = name.replace(/^\.\//, "").replace(/\/$/, "");
+    const type = types[index];
+    // The generated Electron payload has no links. Reject links and devices
+    // before extracting anything so archive data cannot escape this owned tree.
+    if (type !== "-" && type !== "d")
+      throw new Error(`Debian payload may contain only files and directories: ${name}.`);
+    if ((name === "." || name === "./") && type === "d") continue;
+    if (
+      name.startsWith("/") ||
+      /[\\\p{Cc}]/u.test(path) ||
+      path.split("/").some((part) => !part || part === "." || part === "..")
+    ) {
+      throw new Error(`Unsafe Debian payload archive entry: ${name}.`);
+    }
+    if (seen.has(path)) throw new Error(`Duplicate Debian payload archive entry: ${name}.`);
+    seen.add(path);
+  }
+}
+
+export function prepareLinuxDebLaunch(
+  options: Pick<
+    PackagedDesktopStartupOptions,
+    "assetsDirectory" | "arch" | "version" | "executableName"
+  >,
+  extractionRoot: string,
+): LaunchCommand {
+  const deb = requireSingleAsset(options.assetsDirectory, ".deb");
+  const metadata = runCommand("dpkg-deb", [
+    "--show",
+    "--showformat=${Package}\n${Version}\n${Architecture}\n",
+    deb,
+  ]);
+  const artifact = assertDebianPackageMetadata(metadata, options);
+  const archive = join(extractionRoot, "payload.tar");
+  const descriptor = openSync(archive, "wx", 0o600);
+  try {
+    runCommand("dpkg-deb", ["--fsys-tarfile", deb], undefined, descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  const names = runCommand("tar", ["-tf", archive]).trimEnd().split("\n");
+  const types = runCommand("tar", ["-tvf", archive])
+    .trimEnd()
+    .split("\n")
+    .map((line) => line[0]!);
+  assertDebianArchiveEntries(names, types);
+  const payload = join(extractionRoot, "application");
+  mkdirSync(payload);
+  runCommand("tar", [
+    "--extract",
+    "--file",
+    archive,
+    "--directory",
+    payload,
+    "--no-same-owner",
+    "--no-same-permissions",
+  ]);
+  const application = join(payload, "opt", artifact.identity.displayName);
+  const executable = join(application, options.executableName);
+  const resourcesDirectory = join(application, "resources");
+  for (const path of [executable, join(resourcesDirectory, "app.asar")]) {
+    if (!existsSync(path) || !lstatSync(path).isFile() || statSync(path).size === 0) {
+      throw new Error(`Debian package is missing a runnable application payload: ${path}.`);
+    }
+  }
+  if ((statSync(executable).mode & 0o111) === 0)
+    throw new Error("Debian main executable is not executable.");
+  const desktopPath = join(payload, "usr/share/applications", `${options.executableName}.desktop`);
+  const desktop = readFileSync(desktopPath, "utf8");
+  const installedExecutable = `/opt/${artifact.identity.displayName}/${options.executableName}`;
+  const exec = installedExecutable.includes(" ") ? `"${installedExecutable}"` : installedExecutable;
+  for (const line of [
+    `Name=${artifact.identity.displayName}`,
+    `Exec=${exec} %U`,
+    `Icon=${options.executableName}`,
+    `StartupWMClass=${options.executableName}`,
+  ]) {
+    if (!desktop.split(/\r?\n/).includes(line))
+      throw new Error(`Debian desktop entry is missing ${line}.`);
+  }
+  if (
+    !findFiles(join(payload, "usr/share/icons"), (path) =>
+      path.endsWith(`/apps/${options.executableName}.png`),
+    ).length
+  ) {
+    throw new Error("Debian package is missing its desktop icon.");
+  }
+  // No privileged dpkg install and no maintainer script is ever executed.
+  return {
+    command: "xvfb-run",
+    args: ["-a", executable, "--no-sandbox", "--disable-gpu"],
+    cwd: application,
+    runtime: { executable, resourcesDirectory },
   };
 }
 
@@ -263,6 +424,7 @@ function prepareLaunch(
     return prepareMacLaunch(options.assetsDirectory, extractionRoot);
   }
   if (options.platform === "linux") {
+    if (options.target === "deb") return prepareLinuxDebLaunch(options, extractionRoot);
     return prepareLinuxLaunch(options.assetsDirectory, extractionRoot, options.executableName);
   }
   return prepareWindowsLaunch(options.assetsDirectory, extractionRoot);
@@ -289,6 +451,11 @@ export function createPackagedDesktopSmokeEnvironment(
   };
   delete env.SYNARA_AUTH_TOKEN;
   delete env.ELECTRON_RUN_AS_NODE;
+  delete env.APPIMAGE;
+  delete env.APPDIR;
+  delete env.NODE_OPTIONS;
+  delete env.NODE_PATH;
+  delete env.SYNARA_DESKTOP_SMOKE_USER_DATA;
   for (const path of [
     env.HOME,
     env.APPDATA,
@@ -400,6 +567,12 @@ export async function verifyPackagedDesktopStartup(
       `Packaged ${options.platform} startup smoke must run on its native host, not ${process.platform}.`,
     );
   }
+  const targets =
+    options.platform === "linux" ? parseLinuxPackageTargets(options.target) : [options.target];
+  for (const target of targets) await verifyPackagedDesktopPayload({ ...options, target });
+}
+
+async function verifyPackagedDesktopPayload(options: PackagedDesktopStartupOptions): Promise<void> {
   const temporaryRoot = mkdtempSync(join(tmpdir(), `synara-packaged-smoke-${options.platform}-`));
   const extractionRoot = join(temporaryRoot, "payload");
   mkdirSync(extractionRoot, { recursive: true });
@@ -444,7 +617,7 @@ export async function verifyPackagedDesktopStartup(
     while (Date.now() < deadline) {
       if (hasStartupProof(logPath)) {
         console.log(
-          `Packaged ${options.platform}/${options.arch} startup smoke passed from isolated state.`,
+          `Packaged ${options.platform}/${options.arch}/${options.target} startup smoke passed from isolated state.`,
         );
         return;
       }
