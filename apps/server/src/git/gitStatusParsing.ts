@@ -99,8 +99,8 @@ export function summarizeGitNumstatOutputs(
         ) {
           existing.changeType = "renamed";
           renamedSourcePaths.add(entry.previousPath);
-        } else {
-          existing.changeType = changeType ?? existing.changeType;
+        } else if (changeType !== undefined) {
+          existing.changeType = changeType;
         }
       }
       fileStatMap.set(entry.path, existing);
