@@ -26,6 +26,7 @@ import {
   ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT,
   ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH,
   type ProjectImportProvider,
+  ProjectId,
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceId,
 } from "@synara/contracts";
@@ -1148,7 +1149,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         {project.appearance ? (
                           <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
                             <ProjectSidebarIcon
-                              cwd={project.cwd}
+                              projectId={ProjectId.makeUnsafe(project.id)}
                               expanded
                               appearance={project.appearance}
                               glyphClassName="size-3.5"

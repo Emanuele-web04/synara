@@ -1,4 +1,5 @@
 import { readEventLoopStatus } from "./eventLoopMonitor";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -67,8 +68,9 @@ import {
 } from "./projectAgent/libraryStore";
 import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
+import { getProjectIconContentType } from "./imageMime";
+import { isContainedPath, resolveRealPathWithinRoot } from "./workspace/realPathContainment";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
-import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -113,7 +115,6 @@ import {
   voiceUploadAdmissionGate,
 } from "./voiceUploadAdmission";
 
-const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
@@ -691,47 +692,74 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest.pipe(
-      Effect.catchTag("AuthError", (error) => Effect.fail(error)),
-    );
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
-    const projectCwd = url.searchParams.get("cwd");
-    if (!projectCwd) return HttpServerResponse.text("Missing cwd parameter", { status: 400 });
-    const resolver = yield* ProjectFaviconResolver;
-    const faviconPath = yield* resolver.resolvePath(projectCwd);
-    if (!faviconPath) {
-      if (url.searchParams.get("fallback") === "none")
-        return HttpServerResponse.empty({ status: 204 });
-      return HttpServerResponse.text(FALLBACK_FAVICON_SVG, {
-        status: 200,
-        contentType: "image/svg+xml",
-        headers: {
-          "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
-          ...SVG_DOCUMENT_SECURITY_HEADERS,
-        },
-      });
+
+    // Image tags use the same session-cookie/loopback startup-token policy as
+    // other assets; a token never grants access on a network-bound deployment.
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
     }
-    return yield* HttpServerResponse.file(faviconPath, {
-      status: 200,
-      headers: {
-        "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
-        ...(nodePath.extname(faviconPath).toLowerCase() === ".svg"
-          ? SVG_DOCUMENT_SECURITY_HEADERS
-          : {}),
-      },
+    const projectId = url.searchParams.get("projectId")?.trim();
+    if (!projectId) return HttpServerResponse.text("Missing projectId parameter", { status: 400 });
+
+    return yield* Effect.gen(function* () {
+      const projects = yield* ProjectionSnapshotQuery;
+      const project = yield* projects.getProjectShellById(ProjectId.makeUnsafe(projectId));
+      if (Option.isNone(project)) return null;
+      const workspaceRoot = project.value.workspaceRoot;
+      if (!nodePath.isAbsolute(workspaceRoot) || workspaceRoot.includes("\0")) return null;
+      const resolver = yield* ProjectFaviconResolver;
+      const faviconPath = yield* resolver.resolvePath(workspaceRoot);
+      if (
+        !faviconPath ||
+        !nodePath.isAbsolute(faviconPath) ||
+        faviconPath.includes("\0") ||
+        !isContainedPath(nodePath.resolve(workspaceRoot), nodePath.resolve(faviconPath)) ||
+        !getProjectIconContentType(faviconPath)
+      ) {
+        return null;
+      }
+      // Discovery caches a candidate, not read authority. Revalidate its target
+      // on each request and hash the bytes actually returned, not cached stats.
+      const asset = yield* Effect.tryPromise(async () => {
+        const realPath = await resolveRealPathWithinRoot(workspaceRoot, faviconPath);
+        const contentType = realPath ? getProjectIconContentType(realPath) : null;
+        if (!realPath || !contentType || !(await fs.stat(realPath)).isFile()) return null;
+        return { bytes: await fs.readFile(realPath), contentType };
+      });
+      if (!asset) return null;
+      const etag = `"${createHash("sha256").update(asset.bytes).digest("hex")}"`;
+      const headers = {
+        "Cache-Control": "private, no-cache",
+        ETag: etag,
+        "X-Content-Type-Options": "nosniff",
+        ...(asset.contentType === "image/svg+xml" ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
+      };
+      if (ifNoneMatchSatisfies(request.headers["if-none-match"], etag)) {
+        return HttpServerResponse.empty({ status: 304, headers });
+      }
+      return HttpServerResponse.uint8Array(asset.bytes, {
+        status: 200,
+        contentType: asset.contentType,
+        headers,
+      });
     }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+      Effect.catchCause(() => Effect.succeed(null)),
+      Effect.map(
+        (response) =>
+          response ??
+          HttpServerResponse.empty({ status: 204, headers: { "Cache-Control": "no-store" } }),
       ),
     );
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
 // Resolves a real website favicon by domain (cached server-side, deduped by host)
-// so the UI can replace generic globe icons. Mirrors project-favicon's auth +
-// SVG-fallback shape; the actual fetch/cache logic lives in siteFaviconCache.ts.
+// so the UI can replace generic globe icons. Shares project-favicon's asset
+// authentication; the fetch/cache logic lives in siteFaviconCache.ts.
 const siteFaviconEffectRouteLayer = HttpRouter.add(
   "GET",
   "/api/site-favicon",
@@ -1610,7 +1638,5 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
     return response ?? HttpServerResponse.text("Internal Server Error", { status: 500 });
   }),
 );
-
-const FALLBACK_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 
 const FALLBACK_SITE_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="site-favicon"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20M12 2a14.5 14.5 0 0 1 0 20M2 12h20"/></svg>`;

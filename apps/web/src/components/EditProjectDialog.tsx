@@ -3,6 +3,7 @@
 // Layer: UI component
 // Exports: EditProjectDialog, EditProjectValue
 
+import type { ProjectId } from "@synara/contracts";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { ProjectAppearance } from "~/lib/projectAppearance";
@@ -29,7 +30,7 @@ export interface EditProjectValue {
 
 export interface EditProjectDialogProps {
   open: boolean;
-  cwd: string;
+  projectId?: ProjectId | null | undefined;
   /** Placeholder for the name field: what the project is called with no local name. */
   folderName: string;
   initialValue: EditProjectValue;
@@ -39,7 +40,7 @@ export interface EditProjectDialogProps {
 
 export function EditProjectDialog({
   open,
-  cwd,
+  projectId,
   folderName,
   initialValue,
   onOpenChange,
@@ -54,7 +55,7 @@ export function EditProjectDialog({
         {/* Field state lives below DialogPopup, which unmounts its children after the close
             transition, so each open seeds a fresh draft from initialValue. */}
         <EditProjectForm
-          cwd={cwd}
+          projectId={projectId}
           folderName={folderName}
           initialValue={initialValue}
           onOpenChange={onOpenChange}
@@ -66,7 +67,7 @@ export function EditProjectDialog({
 }
 
 function EditProjectForm({
-  cwd,
+  projectId,
   folderName,
   initialValue,
   onOpenChange,
@@ -125,7 +126,11 @@ function EditProjectForm({
                   }
                 >
                   <span className="relative flex size-4 items-center justify-center">
-                    <ProjectSidebarIcon cwd={cwd} expanded={false} appearance={appearance} />
+                    <ProjectSidebarIcon
+                      projectId={projectId}
+                      expanded={false}
+                      appearance={appearance}
+                    />
                   </span>
                 </PopoverTrigger>
               </InputGroupAddon>

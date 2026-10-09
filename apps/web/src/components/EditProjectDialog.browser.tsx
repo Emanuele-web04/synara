@@ -10,7 +10,6 @@ function renderDialog(onSave: (value: EditProjectValue) => void) {
   return render(
     <EditProjectDialog
       open
-      cwd="/tmp/ws-alpha"
       folderName="ws-alpha"
       initialValue={{ name: "", appearance: null }}
       onOpenChange={() => {}}
