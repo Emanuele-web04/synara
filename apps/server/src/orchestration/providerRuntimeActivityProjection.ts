@@ -809,6 +809,8 @@ export function projectProviderRuntimeActivities(
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
       const isClaudeRetry = event.provider === "claudeAgent" && detailSubtype === "api_retry";
+      // Claude Monitor events that woke the agent, read back from its transcript.
+      const isMonitorEvent = event.provider === "claudeAgent" && detailSubtype === "monitor_event";
       const willRetry =
         event.payload.willRetry === true || asObject(event.payload.detail)?.willRetry === true;
       const isPiInfoNotification =
@@ -833,16 +835,18 @@ export function projectProviderRuntimeActivities(
                 ? message
                 : isBackgroundMove
                   ? "Moved to background"
-                  : event.provider === "opencode" &&
-                      (nativeType === "session.next.retried" || nativeType === "session.status")
-                    ? "OpenCode retrying"
-                    : "Runtime warning",
+                  : isMonitorEvent
+                    ? "Monitor event"
+                    : event.provider === "opencode" &&
+                        (nativeType === "session.next.retried" || nativeType === "session.status")
+                      ? "OpenCode retrying"
+                      : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
             detail: message,
             ...(willRetry ? { willRetry: true } : {}),
-            ...(isBackgroundMove || isClaudeRetry
+            ...(isBackgroundMove || isClaudeRetry || isMonitorEvent
               ? { nativeEventType: detailSubtype }
               : nativeType
                 ? { nativeEventType: nativeType }

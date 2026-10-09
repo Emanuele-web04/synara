@@ -2084,6 +2084,63 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.textSegments).toBeUndefined();
   });
 
+  it("does not split the reply a Claude Monitor event woke", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-monitor-woken");
+    const itemId = asItemId("item-monitor-woken");
+    const push = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    const delta = (suffix: string, createdAt: string, text: string): ProviderRuntimeEvent => ({
+      type: "content.delta",
+      eventId: asEventId(`evt-monitor-woken-${suffix}`),
+      provider: "claudeAgent",
+      createdAt,
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: text },
+    });
+    await push(delta("1", "2026-07-14T00:30:01.000Z", "Still "));
+    // The transcript read lands mid-reply, dated at the notification before it.
+    await push({
+      type: "runtime.warning",
+      eventId: asEventId("evt-monitor-woken-event"),
+      provider: "claudeAgent",
+      createdAt: "2026-07-14T00:30:00.000Z",
+      threadId,
+      turnId,
+      payload: {
+        message: "CI checks — Lint: pass",
+        detail: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+      },
+    });
+    await push(delta("2", "2026-07-14T00:30:02.000Z", "running."));
+    await push({
+      type: "item.completed",
+      eventId: asEventId("evt-monitor-woken-complete"),
+      provider: "claudeAgent",
+      createdAt: "2026-07-14T00:30:03.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) => message.id === "assistant:item-monitor-woken" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find((entry) => entry.id === "assistant:item-monitor-woken");
+    expect(message?.text).toBe("Still running.");
+    expect(message?.textSegments).toBeUndefined();
+    expect(
+      thread.activities.find((activity) => activity.summary === "Monitor event")?.createdAt,
+    ).toBe("2026-07-14T00:30:00.000Z");
+  });
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
