@@ -1354,7 +1354,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   const collapseKey =
     deriveProviderRuntimeReconciliationCollapseKey(activity, payload) ??
-    deriveToolLifecycleCollapseKey(entry);
+    deriveToolLifecycleCollapseKey(entry, hasTurnScopedProviderToolCallId(payload));
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
@@ -2113,14 +2113,29 @@ function mergeChangedFiles(
   return [...new Set(merged)];
 }
 
+// ACP providers restart their tool-call ids every turn. The server then scopes
+// the runtime item id per turn and records the raw id as `providerToolCallId`,
+// while the activity data keeps carrying that raw id as `toolCallId`.
+function hasTurnScopedProviderToolCallId(payload: Record<string, unknown> | null): boolean {
+  return typeof asRecord(payload?.data)?.providerToolCallId === "string";
+}
+
 // Keep a stable lifecycle key so providers like Claude can stream many
 // in-progress tool deltas without turning each partial update into its own row.
-function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
+// Globally unique ids merge across turns on purpose (a background command can
+// outlive the turn that started it); per-turn ids only identify a call within
+// their turn.
+function deriveToolLifecycleCollapseKey(
+  entry: DerivedWorkLogEntry,
+  turnScopedToolCallId = false,
+): string | undefined {
   if (!isRenderableToolLifecycleActivity(entry.activityKind)) {
     return undefined;
   }
   if (entry.toolCallId) {
-    return `tool:${entry.toolCallId}`;
+    return turnScopedToolCallId && entry.turnId
+      ? `tool:${entry.turnId}\u001f${entry.toolCallId}`
+      : `tool:${entry.toolCallId}`;
   }
   const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
   const itemType = entry.itemType ?? "";
