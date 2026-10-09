@@ -38,7 +38,10 @@ export function ShareProfileButton({ handle, title }: { handle: string; title: s
   }, [status]);
 
   const profileUrl = () => `${window.location.origin}/@${handle}`;
-  const imagePath = (format: Exclude<ShareChoice, "link">) => `/@${handle}/share/${format}`;
+  const imagePath = (format: Exclude<ShareChoice, "link">) => {
+    const appearance = document.documentElement.classList.contains("dark") ? "dark" : "light";
+    return `/@${handle}/share/${format}?appearance=${appearance}`;
+  };
   const fileName = (format: string) => `synara-${handle}-${format}.png`;
 
   const imageFile = async (format: Exclude<ShareChoice, "link">) => {

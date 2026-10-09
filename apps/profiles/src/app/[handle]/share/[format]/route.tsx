@@ -27,7 +27,7 @@ const PAPER = "#f6f4ef";
 const INK = "#1a1917";
 const MUTED = "#6f6b62";
 
-export async function GET(_request: Request, { params }: Params) {
+export async function GET(request: Request, { params }: Params) {
   const { handle: rawHandle, format: rawFormat } = await params;
   const format = rawFormat.replace(/\.png$/u, "");
   const handle = handleFromParam(rawHandle);
@@ -36,7 +36,9 @@ export async function GET(_request: Request, { params }: Params) {
 
   const profile = await fetchPublicProfile(handle).catch(() => null);
   if (!profile) return new Response("Not found", { status: 404 });
-  const data = shareCardData(profile);
+  const appearance =
+    new URL(request.url).searchParams.get("appearance") === "dark" ? "dark" : "light";
+  const data = shareCardData(profile, appearance);
   const [avatar, fonts] = await Promise.all([
     drawableAvatar(profile.avatarUrl),
     imageFonts(

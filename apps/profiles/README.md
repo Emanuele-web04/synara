@@ -140,6 +140,13 @@ initial 290px scroll offset, visible current-day marker, hidden native
 scrollbar, manual scrolling back to 210px and no horizontal page overflow.
 Desktop keeps its full-year view with zero scroll offset.
 
+Version `49bcb1ec-576e-4a01-8d77-e2f44f736a7f` uses the bundled Central Icons
+filled social logos at 16px. Poster and Story exports now select the profile's
+light or dark accent from the page appearance, consistently for preview,
+download and sharing. Live verification covered both poster PNGs, the dark
+share-dialog preview, the social logos, the preserved proxy-secret binding,
+and the root/install pages. Images retain `private, no-store`.
+
 For subsequent deployments to this same verified destination, retain the
 existing proxy secret and explicitly override the trial API placeholder.
 From `apps/profiles` after the API and schema are ready:

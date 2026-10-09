@@ -253,6 +253,14 @@ describe("share cards", () => {
     );
   });
 
+  it.each([
+    ["light", "#ff6600"],
+    ["dark", "#ff8833"],
+  ] as const)("uses the profile's %s accent in share images", (appearance, accent) => {
+    expect(shareCardData(profile, appearance).accent).toBe(accent);
+    expect(shareCardData({ ...profile, themeAccent: null }, appearance).accent).toBe("#123456");
+  });
+
   it("knows its formats and draws a line through the month", () => {
     expect(isShareFormat("story")).toBe(true);
     expect(isShareFormat("receipt")).toBe(false);

@@ -45,14 +45,17 @@ export type ShareCardData = {
   hours: number[];
 };
 
-export function shareCardData(profile: PublicProfile): ShareCardData {
+export function shareCardData(
+  profile: PublicProfile,
+  appearance: "light" | "dark" = "light",
+): ShareCardData {
   const groups = groupModelUsage(profile.models);
   const topTokens = Math.max(1, groups[0]?.tokens ?? 0);
   const byHour = new Map(profile.hours.map((entry) => [entry.hour, entry.prompts]));
   const hours = Array.from({ length: 24 }, (_, hour) => byHour.get(hour) ?? 0);
   const maxHour = Math.max(...hours);
   return {
-    accent: resolveProfileAccent(profile)?.light ?? DEFAULT_ACCENT,
+    accent: resolveProfileAccent(profile)?.[appearance] ?? DEFAULT_ACCENT,
     totalTokens: formatCompact(profile.lifetimeTokens),
     totalTokensExact: profile.lifetimeTokens.toLocaleString("en-US"),
     prompts: profile.lifetimePrompts,
