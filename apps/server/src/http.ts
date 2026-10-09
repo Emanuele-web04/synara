@@ -115,6 +115,7 @@ import {
   voiceUploadAdmissionGate,
 } from "./voiceUploadAdmission";
 
+const PROJECT_FAVICON_MAX_BYTES = 4 * 1024 * 1024;
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
@@ -727,8 +728,26 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
       const asset = yield* Effect.tryPromise(async () => {
         const realPath = await resolveRealPathWithinRoot(workspaceRoot, faviconPath);
         const contentType = realPath ? getProjectIconContentType(realPath) : null;
-        if (!realPath || !contentType || !(await fs.stat(realPath)).isFile()) return null;
-        return { bytes: await fs.readFile(realPath), contentType };
+        if (!realPath || !contentType) return null;
+        // The icon is an untrusted project file. Never buffer an arbitrarily large
+        // payload, including if it grows between stat and the final read.
+        const handle = await fs.open(realPath, "r");
+        try {
+          const stats = await handle.stat();
+          if (!stats.isFile() || stats.size === 0 || stats.size > PROJECT_FAVICON_MAX_BYTES)
+            return null;
+          const buffer = Buffer.alloc(stats.size + 1);
+          let length = 0;
+          while (length < buffer.length) {
+            const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+            if (bytesRead === 0) break;
+            length += bytesRead;
+          }
+          if (length !== stats.size) return null;
+          return { bytes: buffer.subarray(0, length), contentType };
+        } finally {
+          await handle.close();
+        }
       });
       if (!asset) return null;
       const etag = `"${createHash("sha256").update(asset.bytes).digest("hex")}"`;
