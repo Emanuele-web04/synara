@@ -4011,6 +4011,131 @@ describe("deriveWorkLogEntries", () => {
     expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
+  it("folds Codex wait and subagent-settled collab calls into subagent state", () => {
+    const waitPayload = (status: string) => ({
+      itemType: "collab_agent_tool_call",
+      status,
+      data: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_wait_1",
+          tool: "wait",
+          status,
+          receiverThreadIds: [],
+          agentsStates: {},
+        },
+      },
+    });
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "wait-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool started",
+        payload: waitPayload("inProgress"),
+      }),
+      makeActivity({
+        id: "wait-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: waitPayload("completed"),
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.subagentAction?.tool).toBe("wait");
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
+  });
+
+  it("takes a background subagent's late final state over its launch completion", () => {
+    const collabPayload = (status: string, extra: Record<string, unknown> = {}) => ({
+      itemType: "collab_agent_tool_call",
+      status,
+      title: "Subagent task",
+      data: {
+        toolCallId: "toolu_background",
+        toolName: "Agent",
+        input: { description: "Background job", run_in_background: true },
+        receiverThreadId: "toolu_background",
+        nickname: "Background job",
+        background: true,
+        ...extra,
+      },
+    });
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "bg-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          payload: collabPayload("inProgress"),
+        }),
+        makeActivity({
+          id: "bg-launched",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.completed",
+          payload: collabPayload("completed"),
+        }),
+        makeActivity({
+          id: "bg-final-state",
+          createdAt: "2026-02-23T00:00:30.000Z",
+          kind: "tool.updated",
+          payload: collabPayload("completed", {
+            agentStates: { toolu_background: { status: "failed" } },
+          }),
+        }),
+      ],
+      undefined,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.subagents?.[0]?.rawStatus).toBe("failed");
+  });
+
+  it("attributes subagent task progress to its subagent", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "subagent-progress-1",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "task.progress",
+          summary: "Subagent progress",
+          tone: "info",
+          payload: {
+            taskId: "task-outer",
+            detail: "Running Sleep briefly then echo bg",
+            toolUseId: "toolu_outer",
+            subagentTitle: "Outer worker",
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries[0]?.subagentProgress).toEqual({
+      toolUseId: "toolu_outer",
+      title: "Outer worker",
+    });
+  });
+
+  it("keeps the native subagent cap notice visible outside rendered turns", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "native-child-overflow",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "subagent.materialization.capped",
+          summary: "Subagent limit reached: Synara shows up to 20 subagents per turn.",
+          tone: "error",
+          payload: { source: "provider_native", cap: 20 },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["native-child-overflow"]);
+  });
+
   it("keeps generic OpenCode task tool rows when no subagent route is available", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
