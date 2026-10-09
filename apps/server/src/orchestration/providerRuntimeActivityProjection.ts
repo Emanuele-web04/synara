@@ -961,15 +961,28 @@ export function projectProviderRuntimeActivities(
     }
 
     case "task.progress": {
+      // Only Codex's legacy agent_reasoning stream is reasoning. Claude task
+      // progress describes a task's (usually a subagent's) current step and is
+      // attributed to that task, never to the parent's reasoning.
+      const summary =
+        event.payload.toolUseId !== undefined
+          ? "Subagent progress"
+          : event.provider === "claudeAgent"
+            ? "Task progress"
+            : "Reasoning update";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
-          summary: "Reasoning update",
+          summary,
           payload: toActivityPayload({
             taskId: event.payload.taskId,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.subagentTitle
+              ? { subagentTitle: truncateDetail(event.payload.subagentTitle) }
+              : {}),
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
             // Kept verbatim next to detail: workflow progress encodes
             // "<phase>: <agent label>" here and the panel parses it back out.
@@ -1006,6 +1019,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.summary
               ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
               : {}),
