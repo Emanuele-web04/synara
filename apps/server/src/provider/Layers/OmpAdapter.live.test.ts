@@ -385,21 +385,23 @@ describe("OmpAdapter model selection and late updates (in-memory ACP)", () => {
                 if (scenario === "stale role at send") {
                   yield* startSession(adapter, threadId);
                 }
-                const error = yield* Effect.flip(
-                  scenario === "stale role at startup"
-                    ? adapter.startSession({
+                const error = yield* scenario === "stale role at startup"
+                  ? Effect.flip(
+                      adapter.startSession({
                         threadId,
                         provider: "omp",
                         cwd: "/tmp",
                         runtimeMode: "full-access",
                         modelSelection: staleSelection,
-                      })
-                    : adapter.sendTurn({
+                      }),
+                    )
+                  : Effect.flip(
+                      adapter.sendTurn({
                         threadId,
                         input: "Must not send",
                         modelSelection: staleSelection,
                       }),
-                );
+                    );
                 expect(error).toMatchObject({
                   provider: "omp",
                   detail:
