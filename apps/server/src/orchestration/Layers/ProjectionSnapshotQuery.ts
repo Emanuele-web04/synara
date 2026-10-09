@@ -167,6 +167,7 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
     sequence: Schema.NullOr(NonNegativeInt),
+    sequenceSource: Schema.optional(Schema.NullOr(Schema.Literal("orchestration"))),
   }),
 );
 type PendingInteractionRow = typeof OrchestrationPendingInteraction.Type;
@@ -174,8 +175,13 @@ const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
   Struct.assign({
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
+    startedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   }),
 );
+const TurnRequestMessageDbRowSchema = Schema.Struct({
+  turnId: TurnId,
+  messageId: MessageId,
+});
 const ProjectionFileChangeActivityPayloadDbRowSchema = Schema.Struct({
   payload: Schema.fromJsonString(Schema.Unknown),
 });
@@ -421,6 +427,9 @@ function toProjectedActivity(row: ProjectionThreadActivityDbRow): OrchestrationT
     payload: row.payload as OrchestrationThreadActivity["payload"],
     turnId: row.turnId,
     ...(row.sequence !== null ? { sequence: row.sequence } : {}),
+    ...(row.sequence !== null && row.sequenceSource === "orchestration"
+      ? { sequenceSource: "orchestration" as const }
+      : {}),
     createdAt: row.createdAt,
   };
 }
@@ -433,8 +442,22 @@ function toProjectedCheckpoint(row: ProjectionCheckpointDbRow): OrchestrationChe
     status: row.status,
     files: row.files,
     assistantMessageId: row.assistantMessageId,
+    ...(row.startedAt ? { startedAt: row.startedAt } : {}),
     completedAt: row.completedAt,
   };
+}
+
+// Binds a user request to the turn it started, so clients group that turn's
+// work under it even when the request was queued behind an earlier turn.
+function withRequestedTurnId(
+  message: OrchestrationMessage,
+  requestedTurnIdByMessageId: ReadonlyMap<MessageId, TurnId>,
+): OrchestrationMessage {
+  if (message.role !== "user" || message.turnId !== null || message.startsNewTurn === false) {
+    return message;
+  }
+  const turnId = requestedTurnIdByMessageId.get(message.id);
+  return turnId === undefined ? message : { ...message, turnId };
 }
 
 function toProjectedLatestTurn(row: ProjectionLatestTurnDbRow): OrchestrationLatestTurn {
@@ -2016,6 +2039,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             )
           ), activity.payload_json) AS "payload",
           sequence,
+          -- Server-created activities store the orchestration event sequence
+          -- of their own append event; provider activities keep the runtime
+          -- sequence. Tell clients which counter they got.
+          CASE WHEN activity.sequence IS NOT NULL AND EXISTS (
+            SELECT 1
+            FROM orchestration_events AS appended
+            WHERE appended.sequence = activity.sequence
+              AND appended.event_type = 'thread.activity-appended'
+              AND json_extract(appended.payload_json, '$.activity.id') = activity.activity_id
+              AND json_extract(appended.payload_json, '$.activity.sequence') IS NULL
+          ) THEN 'orchestration' END AS "sequenceSource",
           created_at AS "createdAt"
         FROM ranked
         JOIN projection_thread_activities AS activity USING (thread_id, activity_id)
@@ -2332,6 +2366,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // A user message is written when it is sent, before the turn it requests
+  // exists (a queued request waits for the running turn). The turn projection
+  // links them once the turn starts.
+  const listTurnRequestMessageRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: TurnRequestMessageDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          turn_id AS "turnId",
+          pending_message_id AS "messageId"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id IS NOT NULL
+          AND pending_message_id IS NOT NULL
+      `,
+  });
+
   const listCheckpointRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionCheckpointDbRowSchema,
@@ -2345,6 +2397,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
+          started_at AS "startedAt",
           COALESCE(completed_at, started_at, requested_at) AS "completedAt"
         FROM projection_turns
         -- Keep incomplete provider-diff placeholders out of the public
@@ -3371,7 +3424,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   // transaction (the single shared connection stays blocked for its duration).
   const loadThreadDetailRaw = (
     threadId: ThreadId,
-    options: { readonly messageLimit: number | null; readonly tracePrefix: string } = {
+    options: {
+      readonly messageLimit: number | null;
+      readonly tracePrefix: string;
+      // Client transcripts only: server commands keep the stored message rows.
+      readonly linkTurnRequests?: boolean;
+    } = {
       messageLimit: MAX_THREAD_MESSAGES,
       tracePrefix: "ProjectionSnapshotQuery.getThreadDetailById",
     },
@@ -3403,6 +3461,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         checkpointRows,
         latestTurnRow,
         sessionRow,
+        turnRequestMessageRows,
       ] = yield* Effect.all([
         listThreadMessageRowsByThread({ threadId, maxMessages: options.messageLimit }).pipe(
           Effect.mapError(
@@ -3460,17 +3519,33 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
+        options.linkTurnRequests === true
+          ? listTurnRequestMessageRowsByThread({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  `${options.tracePrefix}:listTurnRequestMessages:query`,
+                  `${options.tracePrefix}:listTurnRequestMessages:decodeRows`,
+                ),
+              ),
+            )
+          : Effect.succeed([]),
       ]);
 
       const segmentRows = yield* loadMessageSegments(messageRows, options.tracePrefix);
+      const requestedTurnIdByMessageId = new Map(
+        turnRequestMessageRows.map((row) => [row.messageId, row.turnId] as const),
+      );
       const thread = toProjectedThread({
         threadRow: threadRow.value,
         latestTurn: Option.match(latestTurnRow, {
           onNone: () => null,
           onSome: (row) => toProjectedLatestTurn(row),
         }),
-        messages: attachThreadMessageSegments(messageRows, segmentRows).map(
-          orchestrationMessageFromProjectionRow,
+        messages: attachThreadMessageSegments(messageRows, segmentRows).map((row) =>
+          withRequestedTurnId(
+            orchestrationMessageFromProjectionRow(row),
+            requestedTurnIdByMessageId,
+          ),
         ),
         proposedPlans: proposedPlanRows.map((row) => toProjectedProposedPlan(row)),
         activities: activityRows.map((row) => toProjectedActivity(row)),
@@ -3616,6 +3691,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           loadThreadDetailRaw(threadId, {
             messageLimit: MAX_THREAD_MESSAGES,
             tracePrefix: "ProjectionSnapshotQuery.getThreadDetailSnapshotById",
+            linkTurnRequests: true,
           }),
           listProjectionStateRows(undefined).pipe(
             Effect.mapError(

@@ -1459,6 +1459,136 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("links queued requests to their turns and labels the activity sequence source", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("thread-turn-links");
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-turn-links', 'Turn links', '/tmp/project-turn-links',
+          '{"provider":"claudeAgent","model":"claude-haiku-5-5"}', '[]',
+          '2026-10-09T19:49:00.000Z', '2026-10-09T19:49:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-turn-links', 'project-turn-links', 'Turn links',
+          '{"provider":"claudeAgent","model":"claude-haiku-5-5"}', NULL, NULL, 'turn-2',
+          '2026-10-09T19:49:00.000Z', '2026-10-09T19:49:30.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming, source,
+          sequence, created_at, updated_at
+        ) VALUES
+          ('request-1', 'thread-turn-links', NULL, 'user', 'first', 0, 'native', 1,
+            '2026-10-09T19:49:02.121Z', '2026-10-09T19:49:02.121Z'),
+          ('request-2', 'thread-turn-links', NULL, 'user', 'queued', 0, 'native', 2,
+            '2026-10-09T19:49:11.783Z', '2026-10-09T19:49:11.783Z'),
+          ('request-3', 'thread-turn-links', NULL, 'user', 'not started', 0, 'native', 3,
+            '2026-10-09T19:49:23.512Z', '2026-10-09T19:49:23.512Z'),
+          ('answer-1', 'thread-turn-links', 'turn-1', 'assistant', 'one', 0, 'native', 4,
+            '2026-10-09T19:49:16.419Z', '2026-10-09T19:49:16.534Z')
+      `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, pending_message_id, assistant_message_id, state,
+          requested_at, started_at, completed_at, checkpoint_turn_count, checkpoint_ref,
+          checkpoint_status, checkpoint_files_json
+        ) VALUES
+          ('thread-turn-links', 'turn-1', 'request-1', 'answer-1', 'completed',
+            '2026-10-09T19:49:02.121Z', '2026-10-09T19:49:03.048Z', '2026-10-09T19:49:16.559Z',
+            1, 'refs/synara/checkpoints/turn-links/turn/1', 'ready', '[]'),
+          ('thread-turn-links', 'turn-2', 'request-2', NULL, 'interrupted',
+            '2026-10-09T19:49:11.783Z', '2026-10-09T19:49:16.839Z', '2026-10-09T19:49:26.006Z',
+            2, 'refs/synara/checkpoints/turn-links/turn/2', 'missing', '[]')
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+          sequence, created_at
+        ) VALUES
+          ('activity-provider', 'thread-turn-links', 'turn-1', 'tool', 'tool.completed',
+            'Tool completed', '{}', 893, '2026-10-09T19:49:10.000Z'),
+          ('activity-server', 'thread-turn-links', 'turn-1', 'info', 'checkpoint.captured',
+            'Checkpoint captured', '{}', 929, '2026-10-09T19:49:16.559Z')
+      `;
+      yield* sql`
+        INSERT INTO orchestration_events (
+          sequence, event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id, actor_kind,
+          payload_json, metadata_json
+        ) VALUES (
+          929, 'event-server-activity', 'thread', 'thread-turn-links', 1,
+          'thread.activity-appended', '2026-10-09T19:49:16.559Z', NULL, NULL, NULL, 'server',
+          '{"threadId":"thread-turn-links","activity":{"id":"activity-server"}}', '{}'
+        )
+      `;
+
+      // Server commands keep the stored rows; only the client snapshot links
+      // each request to the turn it started.
+      const commandDetail = yield* snapshotQuery.getThreadDetailById(threadId);
+      assert.deepStrictEqual(
+        Option.isSome(commandDetail)
+          ? commandDetail.value.messages.map((message) => message.turnId)
+          : [],
+        [null, null, null, asTurnId("turn-1")],
+      );
+
+      const snapshot = yield* snapshotQuery.getThreadDetailSnapshotById(threadId);
+      assert.isTrue(Option.isSome(snapshot));
+      if (Option.isNone(snapshot)) return;
+      const detail = Option.some(snapshot.value.thread);
+      if (Option.isNone(detail)) return;
+
+      assert.deepStrictEqual(
+        detail.value.messages.map((message) => [message.id, message.turnId]),
+        [
+          [asMessageId("request-1"), asTurnId("turn-1")],
+          [asMessageId("request-2"), asTurnId("turn-2")],
+          [asMessageId("request-3"), null],
+          [asMessageId("answer-1"), asTurnId("turn-1")],
+        ],
+      );
+      assert.deepStrictEqual(
+        detail.value.checkpoints.map((checkpoint) => [
+          checkpoint.turnId,
+          checkpoint.startedAt,
+          checkpoint.completedAt,
+        ]),
+        [
+          [asTurnId("turn-1"), "2026-10-09T19:49:03.048Z", "2026-10-09T19:49:16.559Z"],
+          [asTurnId("turn-2"), "2026-10-09T19:49:16.839Z", "2026-10-09T19:49:26.006Z"],
+        ],
+      );
+      assert.deepStrictEqual(
+        detail.value.activities.map((activity) => [
+          activity.id,
+          activity.sequence,
+          activity.sequenceSource,
+        ]),
+        [
+          [asEventId("activity-provider"), 893, undefined],
+          [asEventId("activity-server"), 929, "orchestration"],
+        ],
+      );
+    }),
+  );
+
   it.effect("uses a settlement row when mixed activity counters replay a stale approval", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

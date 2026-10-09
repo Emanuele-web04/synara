@@ -571,6 +571,83 @@ describe("deriveWorkLogEntries", () => {
       taskType: "local_agent",
       description: "Server startup",
     });
+    expect(completion?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
+  });
+
+  it("keeps a stopped turn's late subagent completions in that turn", () => {
+    const stoppedTurn = TurnId.makeUnsafe("stopped-turn");
+    const nextTurn = TurnId.makeUnsafe("next-turn");
+    const workEntries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "moved",
+          createdAt: "2026-10-09T19:55:49.698Z",
+          kind: "runtime.warning",
+          summary: "Moved to background",
+          tone: "info",
+          turnId: stoppedTurn,
+          payload: {
+            message: "Run sleep 60 (1)",
+            nativeEventType: "background_tasks_changed",
+            data: {
+              tasks: [
+                { task_id: "agent-1", task_type: "local_agent", description: "Run sleep 60 (1)" },
+              ],
+            },
+          },
+        }),
+        // Legacy rows took the turn that was active when the stop arrived.
+        makeActivity({
+          id: "agent-stopped",
+          createdAt: "2026-10-09T19:56:10.000Z",
+          kind: "task.completed",
+          summary: "Task stopped",
+          tone: "info",
+          turnId: nextTurn,
+          payload: { taskId: "agent-1", status: "stopped" },
+        }),
+      ],
+      nextTurn,
+      { visibleTurnIds: new Set([stoppedTurn, nextTurn]) },
+    );
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Launch two subagents",
+          turnId: stoppedTurn,
+          createdAt: "2026-10-09T19:55:36.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("next-request"),
+          role: "user",
+          text: "Say hi",
+          turnId: nextTurn,
+          createdAt: "2026-10-09T19:56:05.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("next-answer"),
+          role: "assistant",
+          text: "Hi",
+          turnId: nextTurn,
+          createdAt: "2026-10-09T19:56:12.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      workEntries,
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "request",
+      "moved",
+      "agent-stopped",
+      "next-request",
+      "next-answer",
+    ]);
   });
 
   it("collapses task-list snapshots into one progressing row per turn", () => {
@@ -3518,6 +3595,29 @@ describe("deriveWorkLogEntries", () => {
     );
   });
 
+  it("keeps tools running while the session still runs a turn marked completed", () => {
+    const turnId = TurnId.makeUnsafe("turn-with-mid-turn-message");
+    const activity = makeActivity({
+      id: "mid-turn-command-start",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      kind: "tool.started",
+      summary: "Bash started",
+      turnId,
+      payload: {
+        itemType: "command_execution",
+        title: "Bash",
+        data: { toolCallId: "mid-turn-command", command: "sleep 15" },
+      },
+    });
+    const entries = deriveWorkLogEntries([activity], turnId, {
+      activeTurnId: turnId,
+      latestTurnState: "completed",
+      latestTurnCompletedAt: "2026-02-23T00:00:02.000Z",
+    });
+
+    expect(entries[0]?.toolStatus).toBe("running");
+  });
+
   it("advances retained elapsed time across metadata-only updates", () => {
     const entries = deriveWorkLogEntries(
       [
@@ -4520,6 +4620,204 @@ describe("deriveTimelineEntries", () => {
         .filter((entry) => entry.kind === "work" && entry.entry.turnId === oldTurn)
         .map((entry) => entry.createdAt),
     ).toEqual(oldWork.map((entry) => entry.createdAt));
+  });
+
+  it("groups each answer and its tools under the request whose turn produced them", () => {
+    // Shape of a live thread: the 2nd and 3rd requests were sent (and queued)
+    // while the previous turn was still running.
+    const turn1 = TurnId.makeUnsafe("turn-1");
+    const turn2 = TurnId.makeUnsafe("turn-2");
+    const turn3 = TurnId.makeUnsafe("turn-3");
+    const message = (
+      id: string,
+      role: "user" | "assistant",
+      turnId: TurnId,
+      createdAt: string,
+    ): ChatMessage => ({
+      id: MessageId.makeUnsafe(id),
+      role,
+      text: id,
+      turnId,
+      createdAt: `2026-10-09T19:49:${createdAt}Z`,
+      streaming: false,
+    });
+    const tool = (id: string, turnId: TurnId, createdAt: string, sequence: number) => ({
+      id,
+      turnId,
+      sequence,
+      createdAt: `2026-10-09T19:49:${createdAt}Z`,
+      tone: "tool" as const,
+      label: id,
+    });
+    const entries = deriveTimelineEntries(
+      [
+        message("request-1", "user", turn1, "02.121"),
+        message("request-2", "user", turn2, "11.783"),
+        message("answer-1", "assistant", turn1, "16.419"),
+        message("request-3", "user", turn3, "23.512"),
+        message("answer-2", "assistant", turn2, "25.685"),
+        message("answer-3", "assistant", turn3, "33.462"),
+      ],
+      [],
+      [
+        tool("tool-1a", turn1, "05.000", 10),
+        tool("tool-1b", turn1, "12.000", 20),
+        tool("tool-2a", turn2, "18.000", 30),
+        tool("tool-2b", turn2, "24.000", 40),
+        tool("tool-3", turn3, "28.000", 50),
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "request-1",
+      "tool-1a",
+      "tool-1b",
+      "answer-1",
+      "request-2",
+      "tool-2a",
+      "tool-2b",
+      "answer-2",
+      "request-3",
+      "tool-3",
+      "answer-3",
+    ]);
+  });
+
+  it("keeps the running turn above a queued request that has not started yet", () => {
+    const runningTurn = TurnId.makeUnsafe("running-turn");
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Run the slow task",
+          turnId: runningTurn,
+          createdAt: "2026-10-09T19:49:00.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("queued-request"),
+          role: "user",
+          text: "Then summarize",
+          dispatchMode: "queue",
+          startsNewTurn: true,
+          turnId: null,
+          createdAt: "2026-10-09T19:49:05.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("running-answer"),
+          role: "assistant",
+          text: "Still working",
+          turnId: runningTurn,
+          createdAt: "2026-10-09T19:49:08.000Z",
+          streaming: true,
+        },
+      ],
+      [],
+      [
+        {
+          id: "late-running-tool",
+          turnId: runningTurn,
+          sequence: 7,
+          createdAt: "2026-10-09T19:49:06.000Z",
+          tone: "tool",
+          label: "sleep 15",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "request",
+      "late-running-tool",
+      "running-answer",
+      "queued-request",
+    ]);
+  });
+
+  it("orders server-created rows by time so a late checkpoint cannot lift the final answer", () => {
+    const turnId = TurnId.makeUnsafe("question-turn");
+    // Provider rows carry provider runtime sequences; the server-created row
+    // carries its orchestration event sequence, a different (here lower) counter.
+    const activities = [
+      makeActivity({
+        id: "question",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        turnId,
+        sequence: 900,
+        createdAt: "2026-10-09T20:45:10.000Z",
+        payload: {
+          requestId: "req-1",
+          questions: [{ id: "pick", header: "Pick", question: "Which one?", options: [] }],
+        },
+      }),
+      makeActivity({
+        id: "answer",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        tone: "info",
+        turnId,
+        sequence: 905,
+        createdAt: "2026-10-09T20:45:11.000Z",
+        payload: { requestId: "req-1", answers: { pick: "First" } },
+      }),
+      makeActivity({
+        id: "tool",
+        kind: "tool.completed",
+        summary: "Ran command",
+        tone: "tool",
+        turnId,
+        sequence: 910,
+        createdAt: "2026-10-09T20:45:12.000Z",
+        payload: { itemType: "command_execution", detail: "ls" },
+      }),
+      makeActivity({
+        id: "baseline-skipped",
+        kind: "checkpoint.baseline.skipped",
+        summary: "Checkpoint skipped",
+        tone: "info",
+        turnId,
+        sequence: 120,
+        sequenceSource: "orchestration",
+        createdAt: "2026-10-09T20:45:37.000Z",
+        payload: {},
+      }),
+    ];
+    const workEntries = deriveWorkLogEntries(activities, turnId);
+    expect(workEntries.find((entry) => entry.id === "baseline-skipped")?.sequence).toBeUndefined();
+    expect(workEntries.find((entry) => entry.id === "tool")?.sequence).toBe(910);
+
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Ask me first",
+          turnId,
+          createdAt: "2026-10-09T20:45:00.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("final-answer"),
+          role: "assistant",
+          text: "Done",
+          turnId,
+          createdAt: "2026-10-09T20:45:30.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      workEntries,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "request",
+      "answer",
+      "tool",
+      "final-answer",
+      "baseline-skipped",
+    ]);
   });
 
   it("keeps timestamp ties in message, proposed-plan, then work order", () => {
