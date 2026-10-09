@@ -482,6 +482,7 @@ import {
 } from "../hooks/useSidebarProjectRunController";
 import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { useThreadActionShortcuts } from "../hooks/useThreadActionShortcuts";
+import { useSettingsEscapeToHome } from "../hooks/useSettingsEscapeToHome";
 import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
@@ -6738,6 +6739,8 @@ export default function Sidebar() {
     ...railAvailability,
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
+  // Escape leaves Settings exactly as the rail's Home item does, even when Home is hidden.
+  useSettingsEscapeToHome(isOnSettings, () => railItemFor("home").onSelect());
   const searchPaletteNavigationActions: SidebarSearchAction[] = (
     ["inbox", "kanban", "studio", "automations"] as const
   )
