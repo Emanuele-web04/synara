@@ -60,10 +60,34 @@ describe("dispatchThreadFork", () => {
     associatedWorktreeBranch: null,
     associatedWorktreeRef: null,
     messages: [
-      { id: "u1", role: "user", text: "Remember APPLE", streaming: false, createdAt: "t1" },
-      { id: "a1", role: "assistant", text: "ok", streaming: false, createdAt: "t2" },
-      { id: "u2", role: "user", text: "Remember BANANA", streaming: false, createdAt: "t3" },
-      { id: "a2", role: "assistant", text: "ok", streaming: false, createdAt: "t4" },
+      {
+        id: "u1",
+        role: "user",
+        text: "Remember APPLE",
+        streaming: false,
+        createdAt: "2026-10-09T00:00:01.000Z",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        text: "ok",
+        streaming: false,
+        createdAt: "2026-10-09T00:00:02.000Z",
+      },
+      {
+        id: "u2",
+        role: "user",
+        text: "Remember BANANA",
+        streaming: false,
+        createdAt: "2026-10-09T00:00:03.000Z",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        text: "ok",
+        streaming: false,
+        createdAt: "2026-10-09T00:00:04.000Z",
+      },
     ],
   } as unknown as Thread;
 
