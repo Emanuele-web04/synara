@@ -91,7 +91,7 @@ export function SelectionNewChatComposer(props: SelectionNewChatComposerProps) {
         !surfaceRef.current?.contains(event.target) &&
         !(
           event.target instanceof Element &&
-          event.target.closest("[data-composer-environment-menu]")
+          event.target.closest("[data-composer-environment-menu], [data-slot=popover-popup]")
         )
       ) {
         onClose();

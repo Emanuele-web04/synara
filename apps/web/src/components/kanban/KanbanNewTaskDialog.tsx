@@ -139,6 +139,7 @@ export function KanbanNewTaskDialog({
     addComposerImages,
     removeComposerImage,
     clearComposerAssistantSelections,
+    removeComposerAssistantSelection,
     clearComposerFileComments,
     removeComposerTerminalContext,
   } = draft;
@@ -437,6 +438,7 @@ export function KanbanNewTaskDialog({
               nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
               onExpandImage={setExpandedImage}
               onRemoveAssistantSelections={clearComposerAssistantSelections}
+              onRemoveAssistantSelection={removeComposerAssistantSelection}
               onRemoveFileComments={clearComposerFileComments}
               onRemoveFile={ignoreComposerFileRemoval}
               onRemoveImage={removeComposerImage}

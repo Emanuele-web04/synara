@@ -118,6 +118,9 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
   const clearComposerDraftAssistantSelections = useComposerDraftStore(
     (store) => store.clearAssistantSelections,
   );
+  const removeComposerDraftAssistantSelection = useComposerDraftStore(
+    (store) => store.removeAssistantSelection,
+  );
   const addComposerDraftFileComment = useComposerDraftStore((store) => store.addFileComment);
   const clearComposerDraftFileComments = useComposerDraftStore((store) => store.clearFileComments);
   const insertComposerDraftTerminalContext = useComposerDraftStore(
@@ -301,6 +304,17 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     discardPromptHistoryNavigationForComposerMutation,
     threadId,
   ]);
+  const removeComposerAssistantSelectionFromDraft = useCallback(
+    (selectionId: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      removeComposerDraftAssistantSelection(threadId, selectionId);
+    },
+    [
+      discardPromptHistoryNavigationForComposerMutation,
+      removeComposerDraftAssistantSelection,
+      threadId,
+    ],
+  );
   const clearComposerFileCommentsFromDraft = useCallback(() => {
     discardPromptHistoryNavigationForComposerMutation();
     clearComposerDraftFileComments(threadId);
@@ -533,6 +547,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     addComposerFileCommentToDraft,
     removeComposerImageFromDraft,
     clearComposerAssistantSelectionsFromDraft,
+    removeComposerAssistantSelectionFromDraft,
     clearComposerFileCommentsFromDraft,
     removeComposerTerminalContextFromDraft,
     removeComposerPastedTextFromDraft,

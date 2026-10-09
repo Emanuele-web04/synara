@@ -713,6 +713,7 @@ export default function ChatView({
     addComposerFileCommentToDraft,
     removeComposerImageFromDraft,
     clearComposerAssistantSelectionsFromDraft,
+    removeComposerAssistantSelectionFromDraft,
     clearComposerFileCommentsFromDraft,
     removeComposerTerminalContextFromDraft,
     removeComposerPastedTextFromDraft,
@@ -6104,6 +6105,7 @@ export default function ChatView({
                       nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
                       onExpandImage={setExpandedImage}
                       onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                      onRemoveAssistantSelection={removeComposerAssistantSelectionFromDraft}
                       onRemoveBrowserAnnotation={removeComposerBrowserAnnotationFromDraft}
                       onRemoveFileComments={clearComposerFileCommentsFromDraft}
                       onRemovePastedText={removeComposerPastedTextFromDraft}
