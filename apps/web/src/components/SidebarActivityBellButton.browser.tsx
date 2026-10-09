@@ -185,3 +185,35 @@ it("queues the Tasks hint behind Activity and remembers selection across layouts
   await page.getByRole("button", { name: "Tasks", exact: true }).click();
   expect(selectTasks).toHaveBeenCalledTimes(2);
 });
+
+it("paints the Tasks coachmark on its accent fill so the copy stays readable", async () => {
+  useAnnouncementSheetSlotStore.setState({ startupSettled: true });
+  localStorage.setItem(activityKey, "seen");
+  const screen = await render(
+    <TooltipProvider>
+      <AppRail
+        items={[
+          {
+            id: "tasks",
+            glyphs: railItemGlyphs("tasks"),
+            label: "Tasks",
+            badge: null,
+            active: false,
+            onSelect: () => {},
+          },
+        ]}
+        shortcuts={[]}
+        bottomItems={[]}
+      />
+    </TooltipProvider>,
+  );
+  screens.push(screen);
+  const copy = page.getByText(TASKS_COACHMARK.description);
+  await expect.element(copy).toBeVisible();
+  const popup = copy.element().closest<HTMLElement>("[data-slot='tooltip-popup']");
+  const popupStyle = getComputedStyle(popup!);
+  // The white copy needs the accent fill, not the shared popup surface's gradient fill.
+  expect(popupStyle.backgroundImage).toBe("none");
+  expect(popupStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(popupStyle.backgroundColor).not.toBe(getComputedStyle(copy.element()).color);
+});
