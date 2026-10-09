@@ -74,24 +74,39 @@ function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent
   };
 }
 
+// A row may exist before the Agent tool description streams in; until then it
+// reads as starting, and settles on a neutral label (never the raw provider id).
+function anonymousSubagentLabel(statusKind: SubagentStatusKind | null): string {
+  switch (statusKind) {
+    case "completed":
+    case "failed":
+    case "stopped":
+    case "idle":
+      return "Subagent";
+    default:
+      return "Starting subagent…";
+  }
+}
+
 function toStripItem(
   key: string,
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
 ): ComposerSubagentStripItem {
-  const presentation = resolveSubagentPresentation({
-    nickname: subagent.nickname,
-    role: subagent.role,
-    title: subagent.title,
-    fallbackId: subagent.threadId,
-  });
   const statusLabel =
     subagent.statusLabel ?? humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
   const statusKind = normalizeSubagentStatusKind(
     statusLabel ?? subagent.rawStatus,
     subagent.isActive,
   );
+  const presentation = resolveSubagentPresentation({
+    nickname: subagent.nickname,
+    role: subagent.role,
+    title: subagent.title,
+    fallbackId: subagent.threadId,
+    placeholderLabel: anonymousSubagentLabel(statusKind),
+  });
   const modelLabel = formatSubagentModelLabel(subagent.model);
   const threadId = ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId);
 

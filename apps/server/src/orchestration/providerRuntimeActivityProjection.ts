@@ -961,15 +961,24 @@ export function projectProviderRuntimeActivities(
     }
 
     case "task.progress": {
+      // A subagent's own progress is that subagent's current step, attributed
+      // to it, never the launcher's reasoning. Other task progress (Codex's
+      // legacy agent_reasoning, workflow updates) keeps its compact grouping.
+      const summary =
+        event.payload.toolUseId !== undefined ? "Subagent progress" : "Reasoning update";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
-          summary: "Reasoning update",
+          summary,
           payload: toActivityPayload({
             taskId: event.payload.taskId,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.subagentTitle
+              ? { subagentTitle: truncateDetail(event.payload.subagentTitle) }
+              : {}),
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
             // Kept verbatim next to detail: workflow progress encodes
             // "<phase>: <agent label>" here and the panel parses it back out.
@@ -1006,6 +1015,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.summary
               ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
               : {}),

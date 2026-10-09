@@ -254,6 +254,11 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
       ? AgentTaskIcon
       : BackgroundTrayIcon;
   }
+  // A subagent's progress is its live status, not a finished step: never the
+  // success check, and a warning once it failed.
+  if (workEntry.subagentProgress) {
+    return workEntry.subagentProgress.outcome === "failed" ? CircleAlertIcon : AgentTaskIcon;
+  }
   if (workEntry.providerHandoff) {
     return workEntry.providerHandoff.status === "failed" ? CircleAlertIcon : HandoffIcon;
   }

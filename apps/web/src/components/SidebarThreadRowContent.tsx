@@ -8,7 +8,7 @@ import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { pluralize } from "@synara/shared/text";
 
 import { useThreadHasPendingDraft } from "../composerDraftStore";
-import { createThreadSelector } from "../storeSelectors";
+import { createSubagentSiblingSummariesSelector, createThreadSelector } from "../storeSelectors";
 import { useStore } from "../store";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
@@ -157,10 +157,23 @@ function SidebarSubagentLabel({
     [thread.parentThreadId],
   );
   const parentThread = useStore(selectParentThread);
+  // Only an unnamed child can fall back to its position ("Subagent N").
+  const selectSiblings = useMemo(
+    () =>
+      createSubagentSiblingSummariesSelector(
+        thread.subagentNickname ? null : (thread.parentThreadId ?? null),
+      ),
+    [thread.parentThreadId, thread.subagentNickname],
+  );
+  const siblings = useStore(selectSiblings);
+  const threads = useMemo(
+    () => (parentThread ? [parentThread, ...siblings] : undefined),
+    [parentThread, siblings],
+  );
 
   return renderSubagentLabel({
     thread,
-    threads: parentThread ? [parentThread] : undefined,
+    threads,
     roleClassName,
   });
 }

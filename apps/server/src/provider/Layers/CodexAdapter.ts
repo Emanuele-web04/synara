@@ -925,6 +925,49 @@ function withMinimalRawPayload(
   };
 }
 
+// Codex multi-agent v2 announces each spawned child with a subAgentActivity
+// item (kind "started"/"completed", agentThreadId, agentPath "/root/<task>")
+// instead of a collabAgentToolCall naming receivers, and its spawn prompt is
+// encrypted. Present it as a collab call so the shared subagent machinery
+// creates the child thread, names it after its task, and records its outcome.
+function codexSubAgentActivityCollabItem(
+  source: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (source.type !== "subAgentActivity") {
+    return undefined;
+  }
+  const agentThreadId = asString(source.agentThreadId);
+  if (!agentThreadId) {
+    return undefined;
+  }
+  const kind = asString(source.kind);
+  const agentPath = asString(source.agentPath);
+  const taskName = agentPath
+    ?.split("/")
+    .map((segment) => segment.trim())
+    .findLast((segment) => segment.length > 0);
+  const model = asString(source.model);
+  const effort = asString(source.reasoningEffort);
+  const settled = kind !== undefined && kind !== "started";
+  return {
+    type: "collabAgentToolCall",
+    ...(asString(source.id) ? { id: asString(source.id) } : {}),
+    tool: settled ? "subAgentSettled" : "spawnAgent",
+    status: "completed",
+    receiverThreadIds: [agentThreadId],
+    receiverAgents: [
+      {
+        threadId: agentThreadId,
+        ...(taskName ? { agentNickname: taskName } : {}),
+        ...(model ? { model } : {}),
+        ...(effort ? { reasoningEffort: effort } : {}),
+      },
+    ],
+    ...(settled ? { agentsStates: { [agentThreadId]: { status: kind } } } : {}),
+    ...(agentPath ? { agentPath } : {}),
+  };
+}
+
 function mapItemLifecycle(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -936,6 +979,20 @@ function mapItemLifecycle(
   const source = item ?? payload;
   if (!source) {
     return undefined;
+  }
+
+  const subAgentCollabItem = codexSubAgentActivityCollabItem(source);
+  if (subAgentCollabItem) {
+    return {
+      ...runtimeEventBase(event, canonicalThreadId),
+      type: lifecycle,
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: lifecycle === "item.started" ? "inProgress" : "completed",
+        title: "Subagent",
+        data: { ...payload, item: subAgentCollabItem },
+      },
+    };
   }
 
   const itemType = toCanonicalItemType(source.type ?? source.kind);

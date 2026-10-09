@@ -549,6 +549,43 @@ describe("projected activities satisfy the orchestration command schema", () => 
 });
 
 describe("provider runtime activity projection", () => {
+  it("attributes Claude task progress to its subagent instead of reasoning", () => {
+    const subagentProgress = runtimeEvent({
+      type: "task.progress",
+      provider: "claudeAgent",
+      eventId: "claude-subagent-progress",
+      turnId: TURN_ID,
+      payload: {
+        taskId: "task-outer",
+        description: "Running Sleep briefly then echo bg",
+        toolUseId: "toolu_outer",
+        subagentTitle: "Outer worker",
+      },
+    });
+    const taskProgress = runtimeEvent({
+      type: "task.progress",
+      provider: "claudeAgent",
+      eventId: "claude-task-progress",
+      turnId: TURN_ID,
+      payload: { taskId: "task-bash", description: "Monitoring the build" },
+    });
+    const codexReasoning = runtimeEvent({
+      type: "task.progress",
+      eventId: "codex-agent-reasoning",
+      turnId: TURN_ID,
+      payload: { taskId: "codex-task", description: "Planning the change" },
+    });
+    expectSchemaValidActivities(subagentProgress);
+    const [subagentActivity] = projectProviderRuntimeActivities(subagentProgress);
+    expect(subagentActivity?.summary).toBe("Subagent progress");
+    expect(subagentActivity?.payload).toMatchObject({
+      toolUseId: "toolu_outer",
+      subagentTitle: "Outer worker",
+    });
+    expect(projectProviderRuntimeActivities(taskProgress)[0]?.summary).toBe("Reasoning update");
+    expect(projectProviderRuntimeActivities(codexReasoning)[0]?.summary).toBe("Reasoning update");
+  });
+
   it("keeps assistant text and assistant lifecycle events out of work activity", () => {
     const events = [
       runtimeEvent({

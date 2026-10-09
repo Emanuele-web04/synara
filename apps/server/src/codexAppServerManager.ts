@@ -1100,6 +1100,10 @@ export interface CodexAppServerManagerEvents {
 }
 
 const CODEX_DISCOVERY_CACHE_MAX_ENTRIES = 128;
+// Child (sub-agent) conversations outlive the parent turn that spawned them, so
+// their routing is kept until the child closes; cap it for sessions whose
+// children never report a close.
+const CODEX_COLLAB_RECEIVER_MAX_ENTRIES = 200;
 const GATEWAY_TURN_CANCELLATION_TIMEOUT_MS = 2_000;
 
 function getRecentCacheEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
@@ -1694,8 +1698,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         "Codex session gateway authority is retired; resume the provider runtime before starting another turn.",
       );
     }
-    context.collabReceiverTurns.clear();
-    context.collabReceiverParents.clear();
 
     // Normal sends never interrupt active work. The orchestration layer decides
     // when a queued follow-up is ready to become a provider turn.
@@ -2161,8 +2163,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     this.clearTaskCompleteFallback(context);
-    context.collabReceiverTurns.clear();
-    context.collabReceiverParents.clear();
     context.reviewTurnIds.delete(turnId);
     this.updateSession(context, {
       status: "ready",
@@ -3160,6 +3160,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.stopping) {
       context.stopping = true;
       this.clearTaskCompleteFallback(context);
+      context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
       context.gatewaySessionLease?.release();
 
       const stopError =
@@ -4343,6 +4345,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         notification.method === "thread/status/changed")
     )
       return;
+    if (isChildConversation && notification.method === "thread/closed" && providerThreadId) {
+      // The child conversation ended; nothing more will arrive from it.
+      context.collabReceiverTurns.delete(providerThreadId);
+      context.collabReceiverParents.delete(providerThreadId);
+    }
     if (
       isChildConversation &&
       this.shouldSuppressChildConversationNotification(notification.method)
@@ -4469,8 +4476,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       this.clearTaskCompleteFallback(context, rawRoute.turnId);
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -4494,8 +4499,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       this.clearTaskCompleteFallback(context, rawRoute.turnId);
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -4967,8 +4970,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
 
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       context.reviewTurnIds.delete(turnId);
       const gatewayTurnAuthorityRetired = context.gatewaySessionLease !== undefined;
       if (gatewayTurnAuthorityRetired) {
@@ -5255,14 +5256,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     params: unknown,
   ): ResolvedCollaborationRoute {
-    const parentTurnId = this.readChildParentTurnId(context, params);
     const providerThreadId = normalizeProviderThreadId(this.readProviderConversationId(params));
-    const mappedProviderParentThreadId = this.readChildParentProviderThreadId(context, params);
     const activeProviderThreadId = normalizeProviderThreadId(
       readResumeThreadId({
         resumeCursor: context.session.resumeCursor,
       }),
     );
+    // Receiver maps outlive parent turns, so never let a stale entry reroute
+    // the active root conversation as a child.
+    const isActiveRootConversation =
+      providerThreadId !== undefined && providerThreadId === activeProviderThreadId;
+    const mappedParentTurnId = isActiveRootConversation
+      ? undefined
+      : this.readChildParentTurnId(context, params);
+    const mappedProviderParentThreadId = isActiveRootConversation
+      ? undefined
+      : this.readChildParentProviderThreadId(context, params);
     // A child can emit events before its collab tool-call payload populates the
     // receiver maps. During a live parent turn, another provider thread belongs
     // to that active conversation. Preserve the mapped parent when one exists;
@@ -5277,6 +5286,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const providerParentThreadId =
       mappedProviderParentThreadId ??
       (isUnmappedChildConversation ? activeProviderThreadId : undefined);
+    let parentTurnId = mappedParentTurnId;
+    if (isUnmappedChildConversation) {
+      // Codex often spawns children without a collab tool-call item, so this
+      // fallback may be the only time the child is recognized. Remember it so
+      // notifications after the parent turn ends still route as a child.
+      parentTurnId ??= context.session.activeTurnId;
+      this.rememberChildConversation(
+        context,
+        providerThreadId,
+        activeProviderThreadId,
+        parentTurnId,
+      );
+    }
 
     return {
       ...(parentTurnId ? { parentTurnId } : {}),
@@ -5319,19 +5341,62 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const payload = this.readObject(params);
     const item = this.readObject(payload, "item") ?? payload;
     const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
-    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
-      return;
-    }
     const parentProviderThreadId = normalizeProviderThreadId(
       this.readProviderConversationId(params),
     );
+    // Multi-agent v2 announces a spawned child with a subAgentActivity item
+    // (agentThreadId) instead of a collab tool call naming receivers.
+    if (itemType === "subAgentActivity") {
+      const agentThreadId = normalizeProviderThreadId(this.readString(item, "agentThreadId"));
+      if (agentThreadId) {
+        this.rememberChildConversation(
+          context,
+          agentThreadId,
+          parentProviderThreadId,
+          parentTurnId,
+        );
+      }
+      return;
+    }
+    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
+      return;
+    }
 
     const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
     for (const receiverThreadId of receiverThreadIds) {
-      context.collabReceiverTurns.set(receiverThreadId, parentTurnId);
-      if (parentProviderThreadId) {
-        context.collabReceiverParents.set(receiverThreadId, parentProviderThreadId);
-      }
+      this.rememberChildConversation(
+        context,
+        receiverThreadId,
+        parentProviderThreadId,
+        parentTurnId,
+      );
+    }
+  }
+
+  private rememberChildConversation(
+    context: CodexSessionContext,
+    childProviderThreadId: string,
+    parentProviderThreadId: string | undefined,
+    parentTurnId: TurnId | undefined,
+  ): void {
+    if (childProviderThreadId === parentProviderThreadId) {
+      return;
+    }
+    if (parentTurnId) {
+      setRecentCacheEntry(
+        context.collabReceiverTurns,
+        childProviderThreadId,
+        parentTurnId,
+        CODEX_COLLAB_RECEIVER_MAX_ENTRIES,
+      );
+    }
+    if (parentProviderThreadId) {
+      setRecentCacheEntry(
+        context.collabReceiverParents,
+        childProviderThreadId,
+        parentProviderThreadId,
+        CODEX_COLLAB_RECEIVER_MAX_ENTRIES,
+      );
     }
   }
 
