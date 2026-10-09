@@ -153,6 +153,9 @@ export interface WorkLogEntry {
   // A task the agent moved to the background finished. Its completion wakes the
   // agent into a new turn, so the row also marks where that new response starts.
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
+  // A subagent's own progress, reported to the thread that launched it. It is
+  // that subagent's current step, never the launcher's reasoning.
+  subagentProgress?: WorkLogSubagentProgress;
   // Computer-control denial rows render as an actionable card (enable control
   // and retry) instead of a plain error line; carry just what that card needs.
   computerControlDenied?: WorkLogComputerControlDenied;
@@ -245,6 +248,14 @@ export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
   taskType: string | null;
   description: string | null;
+}
+
+export interface WorkLogSubagentProgress {
+  /** The spawning tool call id: the subagent's provider thread id. */
+  toolUseId: string;
+  title: string | null;
+  /** The subagent's final state, once it ended. */
+  outcome?: "completed" | "failed" | "stopped";
 }
 
 export interface WorkLogSynaraWorkerNotice {
@@ -378,9 +389,29 @@ export function orderedActivities(
 // because providers stream the tool call first and attach receiver metadata on a
 // later lifecycle update that merges into the same entry. Generic OpenCode task
 // calls carry no receiver metadata and keep their ordinary chat row.
-export function isRoutedSubagentWorkEntry(entry: Pick<WorkLogEntry, "itemType" | "subagents">) {
-  return entry.itemType === "collab_agent_tool_call" && (entry.subagents?.length ?? 0) > 0;
+export function isRoutedSubagentWorkEntry(
+  entry: Pick<WorkLogEntry, "itemType" | "subagents" | "subagentAction">,
+) {
+  if (entry.itemType !== "collab_agent_tool_call") {
+    return false;
+  }
+  if ((entry.subagents?.length ?? 0) > 0) {
+    return true;
+  }
+  // Waiting on, closing, or hearing back from subagents only changes their
+  // state, which the strip and the child threads already show. Codex sends
+  // these without receiver ids, so without this they read as bare "Wait" rows.
+  const tool = normalizeCollabIdentifier(entry.subagentAction?.tool ?? null);
+  return tool !== null && SUBAGENT_STATE_ONLY_COLLAB_TOOLS.has(tool);
 }
+
+const SUBAGENT_STATE_ONLY_COLLAB_TOOLS: ReadonlySet<string> = new Set([
+  "wait",
+  "waitagent",
+  "close",
+  "closeagent",
+  "subagentsettled",
+]);
 
 // Returns the same array when nothing is routed so memoized consumers keep their
 // reference identity on the common (no subagents) path.
@@ -452,7 +483,71 @@ export function deriveWorkLogEntries(
       }) => entry,
     );
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
-  return [...derived, ...completions, ...deriveTurnFailureEntries(ordered)];
+  return [
+    ...withSubagentProgressOutcomes(derived, ordered),
+    ...completions,
+    ...deriveTurnFailureEntries(ordered),
+  ];
+}
+
+function subagentOutcomeFromStatus(
+  status: string | null | undefined,
+): "completed" | "failed" | "stopped" | undefined {
+  switch (status?.trim().toLowerCase()) {
+    case "completed":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "interrupted":
+    case "cancelled":
+    case "killed":
+      return "stopped";
+    default:
+      return undefined;
+  }
+}
+
+// A subagent's progress rows take its final state from the task completion or
+// from the per-agent state on its launching call (set when the launcher's turn
+// was interrupted, or when a background subagent settled), whichever is latest.
+function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<Entry> {
+  if (!entries.some((entry) => entry.subagentProgress !== undefined)) {
+    return entries;
+  }
+  const outcomeByToolUseId = new Map<string, "completed" | "failed" | "stopped">();
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (activity.kind === "task.completed") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
+      if (toolUseId && outcome) outcomeByToolUseId.set(toolUseId, outcome);
+      continue;
+    }
+    if (
+      (activity.kind === "tool.updated" || activity.kind === "tool.completed") &&
+      extractWorkLogItemType(payload) === "collab_agent_tool_call"
+    ) {
+      for (const [threadId, state] of Object.entries(
+        decodeSubagentAgentStates(collabPayloadItem(payload)),
+      )) {
+        const outcome = subagentOutcomeFromStatus(state.status);
+        if (outcome) outcomeByToolUseId.set(threadId, outcome);
+      }
+    }
+  }
+  return entries.map((entry) => {
+    const outcome = entry.subagentProgress
+      ? outcomeByToolUseId.get(entry.subagentProgress.toolUseId)
+      : undefined;
+    return outcome && entry.subagentProgress
+      ? { ...entry, subagentProgress: { ...entry.subagentProgress, outcome } }
+      : entry;
+  });
 }
 
 function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
@@ -614,6 +709,12 @@ function shouldKeepActivityForWorkLog(
   // Created-automation milestones are thread-scoped and carry no provider turn id;
   // keep them so the transcript card survives once the thread has turn-stamped messages.
   if (activity.kind === "automation.created") {
+    return true;
+  }
+
+  // The native subagent cap notice can be budgeted outside any visible turn;
+  // it is the only sign that more subagents ran than the thread shows.
+  if (activity.kind === "subagent.materialization.capped") {
     return true;
   }
 
@@ -1201,6 +1302,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (activity.kind === "auth.status") {
     entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
+  }
+  if (activity.kind === "task.progress") {
+    const subagentToolUseId = asTrimmedString(payload?.toolUseId);
+    if (subagentToolUseId) {
+      entry.subagentProgress = {
+        toolUseId: subagentToolUseId,
+        title: asTrimmedString(payload?.subagentTitle),
+      };
+    }
   }
   if (activity.kind === "turn.tasks.updated") {
     const tasks = parseTaskListTasks(payload);

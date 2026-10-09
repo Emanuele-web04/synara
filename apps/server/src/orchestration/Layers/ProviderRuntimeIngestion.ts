@@ -272,6 +272,9 @@ type ProviderDiffPlaceholder = {
 type NativeChildSlotState = {
   initialized: boolean;
   readonly childIds: Set<string>;
+  // Distinct children refused by the cap. The notice is published once per
+  // budget; later refusals must not re-dispatch it with a new timestamp.
+  readonly overflowChildIds: Set<string>;
 };
 
 /**
@@ -652,6 +655,7 @@ interface SubagentIdentity {
   readonly role?: string;
   readonly model?: string;
   readonly modelIsRequestedHint?: boolean;
+  readonly prompt?: string;
 }
 
 function extractCollabPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
@@ -676,10 +680,29 @@ function extractSubagentIdentity(
   ) as SubagentIdentity | undefined;
 }
 
+const SUBAGENT_PROMPT_TITLE_MAX_CHARS = 60;
+
+// A subagent's own words beat any placeholder: providers that name no
+// nickname or role (Codex spawns) are titled from the clipped prompt. A raw
+// provider id (tool_use or conversation id) is never a title.
+function subagentPromptTitle(prompt: string | undefined): string | undefined {
+  const firstLine = prompt
+    ?.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) {
+    return undefined;
+  }
+  const collapsed = firstLine.replace(/\s+/gu, " ");
+  return collapsed.length > SUBAGENT_PROMPT_TITLE_MAX_CHARS
+    ? `${collapsed.slice(0, SUBAGENT_PROMPT_TITLE_MAX_CHARS - 1).trimEnd()}…`
+    : collapsed;
+}
+
 function subagentThreadTitle(identity: {
   nickname?: string | undefined;
   role?: string | undefined;
-  providerThreadId?: string | undefined;
+  prompt?: string | undefined;
 }): string {
   if (identity.nickname && identity.role) {
     return `${identity.nickname} [${identity.role}]`;
@@ -687,10 +710,51 @@ function subagentThreadTitle(identity: {
   if (identity.nickname) {
     return identity.nickname;
   }
+  const promptTitle = subagentPromptTitle(identity.prompt);
+  if (promptTitle && identity.role) {
+    return `${promptTitle} [${identity.role}]`;
+  }
+  if (promptTitle) {
+    return promptTitle;
+  }
   if (identity.role) {
     return `Subagent [${identity.role}]`;
   }
-  return identity.providerThreadId ? `Subagent ${identity.providerThreadId}` : "Subagent";
+  return "Subagent";
+}
+
+// Titles a child created before its identity arrived ("Subagent", or the raw
+// "Subagent <provider id>" older builds persisted) can still be replaced.
+function isPlaceholderSubagentThreadTitle(title: string): boolean {
+  return /^Subagent(?: \S+)?$/u.test(title.trim());
+}
+
+// The title an existing child thread should move to, or undefined to keep it.
+// A nickname always wins; without one, a prompt-derived title is only set over
+// a placeholder and is never downgraded back to "Subagent [role]".
+function nextSubagentThreadTitle(
+  existing: {
+    readonly title: string;
+    readonly subagentNickname?: string | null | undefined;
+    readonly subagentRole?: string | null | undefined;
+  },
+  identity: Pick<SubagentIdentity, "nickname" | "role" | "prompt"> | undefined,
+): string | undefined {
+  const nickname = identity?.nickname ?? existing.subagentNickname ?? undefined;
+  const role = identity?.role ?? existing.subagentRole ?? undefined;
+  let next: string | undefined;
+  if (nickname !== undefined) {
+    next =
+      identity?.nickname !== undefined || identity?.role !== undefined
+        ? subagentThreadTitle({ nickname, role })
+        : undefined;
+  } else if (isPlaceholderSubagentThreadTitle(existing.title)) {
+    next =
+      identity?.prompt !== undefined || identity?.role !== undefined
+        ? subagentThreadTitle({ role, prompt: identity?.prompt })
+        : undefined;
+  }
+  return next !== undefined && next !== existing.title ? next : undefined;
 }
 
 const takeCached = <Key, Value>(cache: Cache.Cache<Key, Value>, key: Key) =>
@@ -999,7 +1063,12 @@ const make = Effect.gen(function* () {
   const nativeChildIdsBySourceTurn = yield* Cache.make<string, NativeChildSlotState>({
     capacity: NATIVE_CHILD_IDS_BY_SOURCE_TURN_CACHE_CAPACITY,
     timeToLive: NATIVE_CHILD_IDS_BY_SOURCE_TURN_TTL,
-    lookup: () => Effect.succeed({ initialized: false, childIds: new Set<string>() }),
+    lookup: () =>
+      Effect.succeed({
+        initialized: false,
+        childIds: new Set<string>(),
+        overflowChildIds: new Set<string>(),
+      }),
   });
 
   const claimNativeChildSlot = Effect.fnUntraced(function* (
@@ -1026,7 +1095,9 @@ const make = Effect.gen(function* () {
       return { admitted: true, budgetKey } as const;
     }
     if (childIds.size >= MAX_NATIVE_CHILDREN_PER_PARENT_TURN) {
-      return { admitted: false, budgetKey } as const;
+      const firstOverflow = slotState.overflowChildIds.size === 0;
+      slotState.overflowChildIds.add(childThreadId);
+      return { admitted: false, budgetKey, firstOverflow } as const;
     }
     childIds.add(childThreadId);
     return { admitted: true, budgetKey } as const;
@@ -2154,18 +2225,37 @@ const make = Effect.gen(function* () {
         : yield* getThreadShellDetail(event.threadId);
       if (!parentThread) return;
 
+      // A subagent launched from inside another subagent's conversation (a
+      // nested spawn) still hangs off the main thread, but records the spawning
+      // child thread as its source so the nesting is not lost.
+      const eventProviderThreadId = normalizeNonEmptyString(event.providerRefs?.providerThreadId);
+      const eventProviderParentThreadId = normalizeNonEmptyString(
+        event.providerRefs?.providerParentThreadId,
+      );
+      const spawningThreadId =
+        eventProviderThreadId !== undefined &&
+        eventProviderParentThreadId !== undefined &&
+        eventProviderThreadId !== eventProviderParentThreadId
+          ? ThreadId.makeUnsafe(`subagent:${parentThread.id}:${eventProviderThreadId}`)
+          : parentThread.id;
+
       const ensureSubagentThread = (
         providerThreadId: string,
         identity?: Pick<
           SubagentIdentity,
-          "agentId" | "nickname" | "role" | "model" | "modelIsRequestedHint"
+          "agentId" | "nickname" | "role" | "model" | "modelIsRequestedHint" | "prompt"
         >,
+        options?: { readonly spawnedByThreadId?: ThreadId },
       ) =>
         Effect.gen(function* () {
           const childThreadId = ThreadId.makeUnsafe(
             `subagent:${parentThread.id}:${providerThreadId}`,
           );
           const sourceTurnId = toTurnId(event.turnId) ?? null;
+          const sourceThreadId =
+            options?.spawnedByThreadId !== undefined && options.spawnedByThreadId !== childThreadId
+              ? options.spawnedByThreadId
+              : parentThread.id;
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
           // Mirror the parent load: only this event's heavy-detail handlers read the
@@ -2206,27 +2296,48 @@ const make = Effect.gen(function* () {
             }
             const slot = yield* claimNativeChildSlot(parentThread.id, sourceTurnId, childThreadId);
             if (!slot.admitted) {
-              const overflowId = EventId.makeUnsafe(
-                `provider-native-child-overflow:${slot.budgetKey}`,
-              );
-              yield* orchestrationEngine.dispatch({
-                type: "thread.activity.append",
-                commandId: CommandId.makeUnsafe(`provider:native-child-overflow:${slot.budgetKey}`),
+              // The refused child keeps running in the provider; say so on the
+              // parent thread once per budget instead of dropping it silently.
+              yield* Effect.logWarning("provider runtime ingestion capped native subagents", {
+                eventId: event.eventId,
                 threadId: parentThread.id,
-                activity: {
-                  id: overflowId,
-                  tone: "error",
-                  kind: "subagent.materialization.capped",
-                  summary: `Synara limited this provider turn to ${MAX_NATIVE_CHILDREN_PER_PARENT_TURN} visible native subagents.`,
-                  payload: {
-                    source: "provider_native",
-                    cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
-                  },
-                  turnId: sourceTurnId,
-                  createdAt: now,
-                },
-                createdAt: now,
+                childThreadId,
+                cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
               });
+              if (slot.firstOverflow) {
+                const overflowId = EventId.makeUnsafe(
+                  `provider-native-child-overflow:${slot.budgetKey}`,
+                );
+                yield* orchestrationEngine
+                  .dispatch({
+                    type: "thread.activity.append",
+                    commandId: CommandId.makeUnsafe(
+                      `provider:native-child-overflow:${slot.budgetKey}`,
+                    ),
+                    threadId: parentThread.id,
+                    activity: {
+                      id: overflowId,
+                      tone: "error",
+                      kind: "subagent.materialization.capped",
+                      summary: `Subagent limit reached: Synara shows up to ${MAX_NATIVE_CHILDREN_PER_PARENT_TURN} subagents per turn. Additional subagents keep running, but their work is not shown.`,
+                      payload: {
+                        source: "provider_native",
+                        cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
+                      },
+                      turnId: sourceTurnId,
+                      createdAt: now,
+                    },
+                    createdAt: now,
+                  })
+                  // A restart forgets the in-memory budget; the durable notice
+                  // from before the restart already says this.
+                  .pipe(
+                    Effect.catchTag(
+                      "OrchestrationCommandIdentityCollisionError",
+                      () => Effect.void,
+                    ),
+                  );
+              }
               return undefined;
             }
             yield* orchestrationEngine.dispatch({
@@ -2237,7 +2348,7 @@ const make = Effect.gen(function* () {
               title: subagentThreadTitle({
                 nickname: identity?.nickname,
                 role: identity?.role,
-                providerThreadId,
+                prompt: identity?.prompt,
               }),
               modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
               runtimeMode: parentThread.runtimeMode,
@@ -2250,7 +2361,7 @@ const make = Effect.gen(function* () {
               associatedWorktreeRef: parentThread.associatedWorktreeRef,
               parentThreadId: parentThread.id,
               creationSource: "provider_native",
-              sourceThreadId: parentThread.id,
+              sourceThreadId,
               ...(sourceTurnId !== null ? { sourceTurnId } : {}),
               subagentAgentId: identity?.agentId ?? null,
               subagentNickname: identity?.nickname ?? null,
@@ -2259,26 +2370,19 @@ const make = Effect.gen(function* () {
             });
           } else {
             const existingThreadShell = existingThread.value;
+            const nextTitle = nextSubagentThreadTitle(existingThreadShell, identity);
             if (
               identity?.agentId !== undefined ||
               identity?.nickname !== undefined ||
               identity?.role !== undefined ||
-              (identity?.model !== undefined && identity.modelIsRequestedHint !== true)
+              (identity?.model !== undefined && identity.modelIsRequestedHint !== true) ||
+              nextTitle !== undefined
             ) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: providerCommandId(event, "subagent-thread-meta-update", childThreadId),
                 threadId: childThreadId,
-                ...(identity?.nickname !== undefined || identity?.role !== undefined
-                  ? {
-                      title: subagentThreadTitle({
-                        nickname:
-                          identity?.nickname ?? existingThreadShell.subagentNickname ?? undefined,
-                        role: identity?.role ?? existingThreadShell.subagentRole ?? undefined,
-                        providerThreadId,
-                      }),
-                    }
-                  : {}),
+                ...(nextTitle !== undefined ? { title: nextTitle } : {}),
                 parentThreadId: parentThread.id,
                 ...(resolvedModelSelection !== undefined &&
                 existingThreadShell.modelSelection.model !== resolvedModelSelection.model
@@ -2303,11 +2407,11 @@ const make = Effect.gen(function* () {
                 title: subagentThreadTitle({
                   nickname: identity?.nickname,
                   role: identity?.role,
-                  providerThreadId,
+                  prompt: identity?.prompt,
                 }),
                 parentThreadId: parentThread.id,
                 creationSource: "provider_native" as const,
-                sourceThreadId: parentThread.id,
+                sourceThreadId,
                 sourceTurnId,
                 gatewayOperationId: null,
                 gatewayOperationIndex: null,
@@ -2347,27 +2451,54 @@ const make = Effect.gen(function* () {
             resolveSubagentIdentityFromDirectory(identityDirectory, {
               providerThreadId: receiverThreadId,
             }) as SubagentIdentity | undefined,
+            { spawnedByThreadId: spawningThreadId },
           );
         }
       }
 
-      const providerThreadId = normalizeNonEmptyString(event.providerRefs?.providerThreadId);
-      const providerParentThreadId = normalizeNonEmptyString(
-        event.providerRefs?.providerParentThreadId,
-      );
       const targetThreadResolution =
-        providerThreadId !== undefined &&
-        providerParentThreadId !== undefined &&
-        providerThreadId !== providerParentThreadId
+        eventProviderThreadId !== undefined &&
+        eventProviderParentThreadId !== undefined &&
+        eventProviderThreadId !== eventProviderParentThreadId
           ? yield* ensureSubagentThread(
-              providerThreadId,
-              extractSubagentIdentity(event, providerThreadId),
+              eventProviderThreadId,
+              extractSubagentIdentity(event, eventProviderThreadId),
             )
           : { threadId: parentThread.id, thread: parentThread };
       if (targetThreadResolution === undefined) {
         return;
       }
       const thread = targetThreadResolution.thread;
+
+      // A subagent's brief (or a later message it got on resume) arrives as a
+      // user-message item on its child thread. Record it there as a message
+      // from the agent that launched it; the main thread's own user messages
+      // already exist, so only child threads take these.
+      const subagentBriefText =
+        event.type === "item.completed" &&
+        event.payload.itemType === "user_message" &&
+        thread.id !== parentThread.id
+          ? normalizeNonEmptyString(event.payload.detail)
+          : undefined;
+      if (subagentBriefText !== undefined) {
+        const briefKey = event.itemId ?? event.eventId;
+        yield* orchestrationEngine.dispatch({
+          type: "thread.messages.import",
+          commandId: providerCommandId(event, "subagent-brief", thread.id),
+          threadId: thread.id,
+          messages: [
+            {
+              messageId: MessageId.makeUnsafe(`subagent-brief:${thread.id}:${briefKey}`),
+              role: "user",
+              text: subagentBriefText,
+              dispatchOrigin: "agent",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        });
+      }
 
       // Durable last-activity signal (worker-monitoring silence is measured
       // from this, not from session lifecycle rows): every runtime event of

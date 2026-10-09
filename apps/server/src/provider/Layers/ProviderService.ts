@@ -811,6 +811,18 @@ function isStaleSettlingRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   return isTerminalRuntimeEvent(event) || isInteractionResolutionRuntimeEvent(event);
 }
 
+// Subagent-scoped events name the parent thread but belong to a child thread
+// (the child identity rides in providerRefs).
+function isSubagentChildRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  const providerThreadId = event.providerRefs?.providerThreadId;
+  const providerParentThreadId = event.providerRefs?.providerParentThreadId;
+  return (
+    providerThreadId !== undefined &&
+    providerParentThreadId !== undefined &&
+    providerThreadId !== providerParentThreadId
+  );
+}
+
 function runtimeStatusForEvent(
   event: ProviderRuntimeEvent,
   activeTurnId?: unknown,
@@ -2111,9 +2123,31 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             //  - the event still names the turn the binding considers active
             //    (a newer epoch has not started a different turn, so settling
             //    this turn cannot clobber newer state).
+            // The items a dying turn force-closes (tool rows, a subagent call
+            // and its final per-agent state) are as final as the turn end, and
+            // are subject to the same active-turn check below.
             const staleEventIsSettling =
-              isStaleSettlingRuntimeEvent(event) &&
+              (isStaleSettlingRuntimeEvent(event) || event.type === "item.completed") &&
               (currentGeneration === undefined || event.turnId !== undefined);
+            if (
+              currentGeneration !== undefined &&
+              isSubagentChildRuntimeEvent(event) &&
+              staleEventIsSettling
+            ) {
+              // A superseded session's subagent turns have no newer owner: the
+              // replacement session never resumes them, and child events never
+              // touch the parent binding. Their settling events (the turn end
+              // and the tool rows it closes) are the only thing that settles the
+              // child thread; an interrupt that rotated the generation would
+              // otherwise leave it running with live tool rows.
+              return Effect.logInfo("provider.session.stale_generation_terminal_event_accepted", {
+                threadId: event.threadId,
+                provider: event.provider,
+                eventType: event.type,
+                eventLifecycleGeneration: event.lifecycleGeneration,
+                currentLifecycleGeneration: currentGeneration,
+              }).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
+            }
             if (!staleEventIsSettling) {
               // Warn, not debug: a persistent mismatch silently discards every
               // runtime event for the thread — the provider runs, the UI shows

@@ -605,6 +605,37 @@ function createSortedSidechatSummariesSelector(
   };
 }
 
+const EMPTY_SUBAGENT_SIBLINGS: readonly SidebarThreadSummary[] = [];
+
+/**
+ * Child threads of one parent, so an unnamed subagent can read "Subagent N"
+ * instead of a provider id. A null parent selects nothing (named rows skip it).
+ */
+export function createSubagentSiblingSummariesSelector(
+  parentThreadId: ThreadId | null,
+): (state: AppState) => readonly SidebarThreadSummary[] {
+  if (parentThreadId === null) {
+    return () => EMPTY_SUBAGENT_SIBLINGS;
+  }
+  const selectSidebarSummaries = createSidebarThreadSummariesSelector();
+  let previousSummaries: readonly SidebarThreadSummary[] | undefined;
+  let previousSiblings: readonly SidebarThreadSummary[] = EMPTY_SUBAGENT_SIBLINGS;
+  return (state) => {
+    const summaries = selectSidebarSummaries(state);
+    if (summaries === previousSummaries) return previousSiblings;
+    previousSummaries = summaries;
+    const nextSiblings = summaries.filter((thread) => thread.parentThreadId === parentThreadId);
+    if (
+      nextSiblings.length === previousSiblings.length &&
+      nextSiblings.every((thread, index) => thread === previousSiblings[index])
+    ) {
+      return previousSiblings;
+    }
+    previousSiblings = nextSiblings;
+    return previousSiblings;
+  };
+}
+
 export function createSidechatSummariesForSourceSelector(
   sourceThreadId: ThreadId,
 ): (state: AppState) => readonly SidebarThreadSummary[] {
