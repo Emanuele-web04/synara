@@ -2126,6 +2126,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const staleEventIsSettling =
               isStaleSettlingRuntimeEvent(event) &&
               (currentGeneration === undefined || event.turnId !== undefined);
+            if (
+              currentGeneration !== undefined &&
+              isSubagentChildRuntimeEvent(event) &&
+              (staleEventIsSettling || event.type === "item.completed")
+            ) {
+              // A superseded session's subagent turns have no newer owner: the
+              // replacement session never resumes them, and child events never
+              // touch the parent binding. Their settling events (the turn end
+              // and the tool rows it closes) are the only thing that settles the
+              // child thread; an interrupt that rotated the generation would
+              // otherwise leave it running with live tool rows.
+              return Effect.logInfo("provider.session.stale_generation_terminal_event_accepted", {
+                threadId: event.threadId,
+                provider: event.provider,
+                eventType: event.type,
+                eventLifecycleGeneration: event.lifecycleGeneration,
+                currentLifecycleGeneration: currentGeneration,
+              }).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
+            }
             if (!staleEventIsSettling) {
               // Warn, not debug: a persistent mismatch silently discards every
               // runtime event for the thread — the provider runs, the UI shows
@@ -2138,20 +2157,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 eventLifecycleGeneration: event.lifecycleGeneration,
                 currentLifecycleGeneration: currentGeneration,
               });
-            }
-            if (currentGeneration !== undefined && isSubagentChildRuntimeEvent(event)) {
-              // A superseded session's subagent turns have no newer owner: the
-              // replacement session never resumes them, and child events never
-              // touch the parent binding. Their settling event is the only
-              // thing that closes the child thread's turn (an interrupt that
-              // rotated the generation would otherwise leave it running).
-              return Effect.logInfo("provider.session.stale_generation_terminal_event_accepted", {
-                threadId: event.threadId,
-                provider: event.provider,
-                eventType: event.type,
-                eventLifecycleGeneration: event.lifecycleGeneration,
-                currentLifecycleGeneration: currentGeneration,
-              }).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
             }
             if (currentGeneration !== undefined) {
               // A newer generation exists: only accept the stale settling event
