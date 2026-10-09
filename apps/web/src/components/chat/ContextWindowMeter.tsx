@@ -68,6 +68,14 @@ export function ContextWindowMeter(props: {
                   strokeWidth="1.5"
                   className="text-muted-foreground/45 dark:text-muted-foreground/55"
                 />
+                {/* The faint disc is the remaining window, so the sector reads as a share of it. */}
+                <circle
+                  cx={CONTEXT_WINDOW_METER_GEOMETRY.center}
+                  cy={CONTEXT_WINDOW_METER_GEOMETRY.center}
+                  r={CONTEXT_WINDOW_METER_GEOMETRY.pieRadius}
+                  fill="currentColor"
+                  className="text-muted-foreground/20 dark:text-muted-foreground/30"
+                />
                 {sectorPath ? (
                   <path
                     d={sectorPath}

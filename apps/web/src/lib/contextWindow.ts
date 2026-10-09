@@ -164,37 +164,61 @@ export interface ObservedClaudeContextBudget {
   readonly maxTokens: number;
 }
 
+/** The context window a configuration activity applies: "auto" when cleared, else its size. */
+function configuredContextWindowKey(activity: OrchestrationThreadActivity): string {
+  const payload = asRecord(activity.payload);
+  if (payload?.cleared === true) return "auto";
+  return String(asFiniteNumber(payload?.maxTokens) ?? "unknown");
+}
+
 /**
  * The context budget the runtime reported for the newest observed Claude model, held at
- * the largest value seen since the session was configured (or last compacted).
+ * the largest value seen while the configured context window stays the same.
  *
- * Within a turn the runtime first reports a provisional budget from the model catalog
- * (e.g. 200k) and corrects it from the live session at the end of the turn (e.g. 1M);
- * usage events without a cache observation (task usage) carry no model at all. Reading
- * each snapshot on its own made the composer label flip between "(200k)" and "(1M)" for
- * the same model while a turn ran. The server only ever raises its corrected window, so
- * the largest report for one model in an epoch is the stable answer.
+ * Every session start reconfigures the window, and each turn first reports a provisional
+ * budget from the model catalog (e.g. 200k) that the live session corrects at the end of
+ * the turn (e.g. 1M); usage without a cache observation (task usage) carries no model.
+ * Reading each snapshot on its own made the composer label flip between "(200k)", nothing,
+ * and "(1M)" for the same model while a turn ran. The server only ever raises its
+ * corrected window, so the largest report for one model under one configuration is the
+ * stable answer. Compaction shrinks usage, not the window, so it does not reset this.
  */
 export function deriveObservedClaudeContextBudget(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ObservedClaudeContextBudget | null {
-  let model: string | null = null;
-  let maxTokens = 0;
+  // Walking back, reports gather until the configuration they ran under is reached; they
+  // count only if that configuration matches the newest one.
+  const counted: Array<{ model: string; maxTokens: number }> = [];
+  let pending: Array<{ model: string; maxTokens: number }> = [];
+  let newestConfiguredKey: string | null = null;
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
     if (!activity) continue;
-    if (activity.kind === "context-window.configured" || isCompletedContextCompaction(activity)) {
-      break;
+    if (activity.kind === "context-window.configured") {
+      const key = configuredContextWindowKey(activity);
+      newestConfiguredKey ??= key;
+      if (key !== newestConfiguredKey) break;
+      counted.push(...pending);
+      pending = [];
+      continue;
     }
     if (activity.kind !== "context-window.updated") continue;
     const payload = asRecord(activity.payload);
-    const observedModel = readClaudeCacheObservation(payload?.claudeCache)?.model;
-    const reportedMaxTokens = asFiniteNumber(payload?.maxTokens);
-    if (!observedModel || reportedMaxTokens === null || reportedMaxTokens <= 0) continue;
-    if (model === null) model = observedModel;
-    if (observedModel === model) maxTokens = Math.max(maxTokens, reportedMaxTokens);
+    const model = readClaudeCacheObservation(payload?.claudeCache)?.model;
+    const maxTokens = asFiniteNumber(payload?.maxTokens);
+    if (!model || maxTokens === null || maxTokens <= 0) continue;
+    pending.push({ model, maxTokens });
   }
-  return model === null ? null : { model, maxTokens };
+  // A history that never recorded its configuration still has one running session.
+  if (newestConfiguredKey === null) counted.push(...pending);
+  const newestModel = counted[0]?.model;
+  if (newestModel === undefined) return null;
+  return {
+    model: newestModel,
+    maxTokens: Math.max(
+      ...counted.filter((entry) => entry.model === newestModel).map((entry) => entry.maxTokens),
+    ),
+  };
 }
 
 // Configuration identifies the applied target, never the runtime denominator.
