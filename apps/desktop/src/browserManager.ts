@@ -63,14 +63,20 @@ import {
 } from "./localHtmlPreviewProtocol";
 
 export { BROWSER_SESSION_PARTITION } from "./browserSessionPolicy";
-const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
-const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
-const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
+// Switching tabs must never cost the page: an inactive tab keeps its DOM, scroll,
+// form input and history for minutes, not seconds. Memory is bounded by the
+// per-thread warm limit and the app-wide live-runtime budget below instead.
+const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 10 * 60_000;
+const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 60_000;
+const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 5;
+// App-wide cap on browser-owned page runtimes. Past it, the least recently used
+// hidden page is suspended and reloads from its URL when shown again.
+const BROWSER_MAX_LIVE_TAB_RUNTIMES = 12;
 const BROWSER_MAX_BACKGROUND_AUTOMATION_RUNTIMES = 4;
 // Browser tools have a published maximum 30 second deadline. Keep a newly
 // acquired runtime out of the eviction pool until that action has drained.
 const BROWSER_AUTOMATION_RUNTIME_USE_GRACE_MS = 31_000;
-const BROWSER_THREAD_SUSPEND_DELAY_MS = 30_000;
+const BROWSER_THREAD_SUSPEND_DELAY_MS = 5 * 60_000;
 const BROWSER_AUTOMATION_WINDOW_OPEN_FALLBACK_MS = 2_000;
 const BROWSER_DEFERRED_PUBLICATION_DELAY_MS = 16;
 const BROWSER_AUTOMATION_INPUT_RELEASE_GRACE_MS = 100;
@@ -2426,7 +2432,7 @@ export class DesktopBrowserManager {
       }
       const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
       const runtime = this.ensureLiveRuntime(threadId, tab.id);
-      if (wasSuspended && !this.automationRuntimeKeys.has(runtimeKey)) {
+      if (wasSuspended && this.shouldRestoreSuspendedTab(runtime)) {
         void this.loadTab(threadId, tab.id, { force: true, runtime });
       } else {
         didChange =
@@ -2461,8 +2467,58 @@ export class DesktopBrowserManager {
    * expired hidden pages are evicted least-recently-used and restored from their
    * canonical tab URL on the next browser tool call.
    */
+  /**
+   * Bounds memory now that inactive tabs stay warm for minutes: past the
+   * app-wide cap, the least recently used hidden page is suspended. The shown
+   * page, pages an agent is acting on, and OAuth openers are never evicted.
+   */
+  private enforceLiveTabRuntimeBudget(): void {
+    const ownedRuntimes = [...this.runtimes.values()].filter((runtime) => runtime.ownsWebContents);
+    let excess = ownedRuntimes.length - BROWSER_MAX_LIVE_TAB_RUNTIMES;
+    if (excess <= 0) return;
+
+    const now = Date.now();
+    const popupOwnerRuntimeKeys = new Set(
+      [...this.popupRuntimes.values()].map((popup) => buildRuntimeKey(popup.threadId, popup.tabId)),
+    );
+    const evictionCandidates = ownedRuntimes
+      .filter(
+        (runtime) =>
+          runtime.key !== this.attachedRuntimeKey &&
+          !(
+            runtime.threadId === this.activeThreadId &&
+            this.states.get(runtime.threadId)?.activeTabId === runtime.tabId
+          ) &&
+          !this.isEmbeddedPopupFamily(runtime.threadId, runtime.tabId) &&
+          !popupOwnerRuntimeKeys.has(runtime.key) &&
+          (this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0) <= now,
+      )
+      .toSorted(
+        (left, right) =>
+          (this.runtimeLastActiveAtByKey.get(left.key) ?? 0) -
+          (this.runtimeLastActiveAtByKey.get(right.key) ?? 0),
+      );
+    const changedThreadIds = new Set<ThreadId>();
+    for (const runtime of evictionCandidates) {
+      if (excess <= 0) break;
+      const state = this.states.get(runtime.threadId);
+      const tab = state ? this.getTab(state, runtime.tabId) : null;
+      this.destroyRuntime(runtime.threadId, runtime.tabId);
+      if (state && tab && (suspendTabState(tab) || syncThreadLastError(state))) {
+        changedThreadIds.add(runtime.threadId);
+      }
+      excess -= 1;
+      this.perfCounters.inactiveTabBudgetEvictions += 1;
+    }
+    for (const threadId of changedThreadIds) {
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    }
+  }
+
   private enforceBackgroundAutomationRuntimeBudget(): void {
     if (this.disposed) return;
+    this.enforceLiveTabRuntimeBudget();
     if (this.backgroundAutomationEvictionTimer !== null) {
       clearTimeout(this.backgroundAutomationEvictionTimer);
       this.backgroundAutomationEvictionTimer = null;
@@ -2704,7 +2760,7 @@ export class DesktopBrowserManager {
       options.pageZoomFactor ?? this.getVisiblePageZoomFactor(threadId),
     );
     const shouldLoadProjectedUrl =
-      options.forceLoad || (wasSuspended && !this.automationRuntimeKeys.has(runtimeKey));
+      options.forceLoad || (wasSuspended && this.shouldRestoreSuspendedTab(runtime));
     if (shouldLoadProjectedUrl) {
       void this.loadTab(threadId, activeTab.id, {
         force: true,
@@ -2713,6 +2769,16 @@ export class DesktopBrowserManager {
     } else {
       this.syncRuntimeState(threadId, activeTab.id);
     }
+  }
+
+  // A suspended tab comes back as an empty WebContents. Agent tabs used to be
+  // skipped so a browser tool could restore them itself, but a user who reopened
+  // one without a tool call was left looking at a page that never loaded.
+  private shouldRestoreSuspendedTab(runtime: LiveTabRuntime): boolean {
+    if (!this.automationRuntimeKeys.has(runtime.key)) return true;
+    const toolIsActing =
+      (this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0) > Date.now();
+    return !toolIsActing && runtime.webContents.getURL().length === 0;
   }
 
   private attachRuntime(
@@ -2769,10 +2835,13 @@ export class DesktopBrowserManager {
       return;
     }
 
-    this.detachAttachedRuntime();
-    this.setRuntimeViewHidden(runtime, false);
-    this.bringRuntimeViewToFront(runtime);
+    // Size and raise the incoming page before revealing it, and hide the outgoing
+    // page only afterwards: hiding first left a frame with neither page on screen,
+    // which showed the panel's dark backdrop as a black flash on every tab switch.
     runtime.view.setBounds(bounds);
+    this.bringRuntimeViewToFront(runtime);
+    this.setRuntimeViewHidden(runtime, false);
+    this.detachAttachedRuntime();
     this.attachedRuntimeKey = runtime.key;
     this.attachedBoundsSignature = nextBoundsSignature;
     this.updatePopupWindowsForThread(runtime.threadId);
@@ -2877,6 +2946,12 @@ export class DesktopBrowserManager {
   private claimAutomationTab(threadId: ThreadId, tab: BrowserTabState): boolean {
     const key = buildRuntimeKey(threadId, tab.id);
     this.automationRuntimeKeys.add(key);
+    // A claim precedes the tool's own navigation; keep shell reveals and the
+    // live-runtime budget from loading or evicting the page underneath it.
+    this.automationRuntimeProtectedUntilByKey.set(
+      key,
+      Date.now() + BROWSER_AUTOMATION_RUNTIME_USE_GRACE_MS,
+    );
 
     const runtime = this.runtimes.get(key);
     const rendererGuestAlive = Boolean(
@@ -3610,7 +3685,7 @@ export class DesktopBrowserManager {
     ).length;
     if (
       threadRuntimeCount > BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD + 1 ||
-      this.runtimes.size > 4
+      this.runtimes.size > BROWSER_MAX_LIVE_TAB_RUNTIMES
     ) {
       return BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS;
     }
