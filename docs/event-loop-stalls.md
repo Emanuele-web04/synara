@@ -53,31 +53,19 @@ No worker watchdog or continuous profiler runs in normal operation.
 
 ## Client behavior and RPC deadlines
 
-The authenticated, optional `server.runtime-status` capability enables a lightweight
-`server.getRuntimeStatus` heartbeat on the active RPC socket. It runs every **5
-seconds**, at most once concurrently, with a **3 second** responsiveness deadline.
-That implies a worst-case detection delay of roughly 8 seconds while the renderer
-is running. A busy warning states that the server is not answering and explicitly
-allows heavy load or a connection delay as explanations. It does not assert that
-a server-side stall has been proven. Once the server replies, a stall reported
-within the last 30 seconds produces a recovery notice, using server-relative age
-rather than comparing machine clocks.
+The client does not poll server liveness and shows no busy or slow-request notice.
+Stalls are an operator diagnostic (above): on a responsive server, a long request
+is waiting on Git, GitHub, a provider or the network rather than on a busy server,
+and with several running chats such waits are routine, so a global notice was noise
+the user could not act on. The surface that asked for the data owns its loading
+state. The server still advertises the optional `server.runtime-status` capability
+and answers `server.getRuntimeStatus` for compatible clients and tooling.
 
-A slow unary request alone never shows a notice. While the heartbeat answers, a long
-request is waiting on Git, GitHub, a provider or the network rather than on a busy
-server, and with several running chats such waits are routine; the surface that
-asked for the data owns its loading state. In-flight unary requests are still
-counted (capped at 256 per transport; subscriptions and heartbeats excluded) so the
-busy, recovery and reconnecting notices can say how many requests are waiting.
-Older servers without the capability show only the reconnecting state. The notice
-lives outside the transcript and does not affect message auto-follow. One compact
-status surface covers busy, real reconnecting and recent recovery: on desktop a dot in
-the app rail with the details on hover, so it never covers menus; on phones, whose rail
-sits inside the sidebar sheet, a floating notice. Visibility changes, delayed renderer
-timers, reconnects and dispose fence prior
-heartbeat replies and reset liveness evidence.
-When a responsiveness timer fires over 500 ms late, the renderer gives queued
-socket responses another event-loop turn before declaring the server busy.
+The one connection status the client shows is **reconnecting**: once a socket that
+had opened drops, a dot appears in the app rail with the details on hover, so it
+never covers menus. Phones, whose rail sits inside the sidebar sheet, show a
+floating notice instead. Initial startup is not a reconnect. The status lives
+outside the transcript and does not affect message auto-follow.
 
 The default **60 second acknowledgement timeout remains**. Removing it globally
 would leave reads and mutations with uncertain external effects waiting indefinitely
@@ -86,12 +74,7 @@ safe to retry. Synara already handles supported `thread.turn.start` uncertainty
 through fingerprint-bound receipt settlement; that path keeps waiting/retrying
 settlement until acceptance, rejection, caller cancellation or transport disposal.
 Known long operations already opt out of the default timeout in `wsNativeApi.ts`.
-The new indicator neither reconnects automatically on a slow heartbeat nor retries
-mutations. Connection recovery continues to use the existing Effect socket protocol.
-Stall-tolerant keepalives and bounded stream-local overflow recovery ship separately
-from this monitoring change. A network failure and a server stall can both cause
-latency; the indicator reports observed responsiveness, without proving the cause.
-Existing cancellation and receipt settlement remain in charge. Timeout copy asks
+Connection recovery uses the existing Effect socket protocol. Timeout copy asks
 users to check mutation results before retrying; reads can be retried once the server
 responds.
 

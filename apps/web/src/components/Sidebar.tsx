@@ -279,7 +279,7 @@ import {
   SidebarSnoozedThreadsSection,
 } from "./SidebarActivityView";
 import { DesktopUpdateRailButton } from "./DesktopUpdateRailButton";
-import { ServerBusyRailButton } from "./ServerBusyIndicator";
+import { ServerConnectionRailButton } from "./ServerConnectionIndicator";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { OneTimeCoachmark, TASKS_COACHMARK } from "./OneTimeCoachmark";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -6950,7 +6950,7 @@ export default function Sidebar() {
     bottomItems: railBottomItems,
     bottomSlot: (
       <>
-        <ServerBusyRailButton />
+        <ServerConnectionRailButton />
         <AppRailUsage
           onOpenUsageSettings={() => {
             void navigate({ to: "/settings", search: { section: "usage" } });
