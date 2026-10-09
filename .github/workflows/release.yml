@@ -380,10 +380,12 @@ jobs:
 
   build:
     name: Build ${{ matrix.label }}
-    needs: [preflight, quality, server_tests, build_mac_icon, build_portable, prepare_cua]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.server_tests.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && (needs.build_mac_icon.result == 'success' || (needs.preflight.outputs.build_icon == 'false' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
+    # Tests consume the same source independently; both publishers gate on them.
+    needs: [preflight, build_mac_icon, build_portable, prepare_cua]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && (needs.build_mac_icon.result == 'success' || (needs.preflight.outputs.build_icon == 'false' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
     permissions:
       contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
@@ -405,8 +407,8 @@ jobs:
   publish_cli:
     name: Publish CLI to npm
     # Prereleases (beta lane) never touch the npm `latest` dist-tag.
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
-    needs: [preflight, build, build_portable]
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}
+    needs: [preflight, quality, server_tests, build, build_portable]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -489,8 +491,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' }}
-    needs: [preflight, build, build_server_tarball]
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}
+    needs: [preflight, quality, server_tests, build, build_server_tarball]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

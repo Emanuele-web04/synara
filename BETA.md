@@ -130,14 +130,24 @@ beta channel and the beta desktop flavor; every other suffix keeps today's behav
    - An ordinary Beta uses this one publication run. Full build-only qualification
      followed by a tag build is not required; use a scoped build-only stage only
      when diagnosing a native or packaging change.
+   - Native packaging and qualification share one runner and can overlap the
+     quality/server-test gates once preflight and prepared inputs pass. GitHub
+     and npm publication depend directly on all quality/server-test gates and
+     native success; Beta still never publishes npm `latest`.
 3. The workflow publishes a GitHub **prerelease** named `Synara vX.Y.Z-beta.N` with
    beta installers, `beta-*.yml` manifests, and blockmaps. It is never marked Latest,
    never bumps package versions on `main`, and never publishes the npm `latest`
    dist-tag.
 4. For a failure on the same source SHA, resume the existing run with
    `gh run rerun RUN_ID --failed` as described in
-   [release recovery](docs/release.md#resume-a-failed-release). Do not dispatch a
-   duplicate publication run. A manual publication dispatch on an existing tag
+   [release recovery](docs/release.md#resume-a-failed-release). A first successful
+   native attempt creates no checkpoint. After a failure with validated provenance,
+   the workflow rechecks integrity before retaining a candidate for 30 days; a
+   retry in that same run/SHA can restore it and skip packaging. Corruption or
+   artifact API errors fail closed; missing/expired candidates require rebuild.
+   A crash/cancellation that prevents checkpoint upload, or a notarization failure
+   before validated provenance, cannot recover from the old runner's local files.
+   Do not dispatch a duplicate publication run. A manual publication dispatch on an existing tag
    is an alternative trigger when no tag-triggered run is being used:
    `gh workflow run release.yml --ref vX.Y.Z-beta.N -f version=X.Y.Z-beta.N -f publish_release=true`.
    Publishing from a branch ref is refused by preflight; a new source SHA requires

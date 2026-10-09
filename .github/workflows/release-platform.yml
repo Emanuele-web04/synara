@@ -39,16 +39,17 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   # Keep the portable build fingerprint identical to its producer.
   AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
 
 jobs:
-  package:
-    name: Package
+  build:
+    name: Package and qualify
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -56,30 +57,95 @@ jobs:
           ref: ${{ inputs.source_commit }}
           fetch-depth: 0
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version-file: package.json
 
+      # A successful first attempt never transfers an intermediate checkpoint.
+      - name: Find failed attempt checkpoint in this run
+        id: checkpoint_lookup
+        if: github.run_attempt > 1
+        uses: actions/github-script@v8
+        env:
+          CHECKPOINT_NAME: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo,
+              run_id: context.runId,
+              name: process.env.CHECKPOINT_NAME,
+              per_page: 100,
+            });
+            const checkpoints = artifacts.filter((artifact) =>
+              artifact.name === process.env.CHECKPOINT_NAME && !artifact.expired
+            );
+            if (checkpoints.length > 1) {
+              throw new Error('More than one checkpoint matches this platform in this run.');
+            }
+            core.setOutput('artifact_id', checkpoints[0]?.id ?? '');
+
+      - name: Restore failed attempt checkpoint from this run
+        if: steps.checkpoint_lookup.outputs.artifact_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.checkpoint_lookup.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+          path: release-publish
+
+      - name: Verify restored checkpoint identity and bytes
+        id: restore_checkpoint
+        if: steps.checkpoint_lookup.outputs.artifact_id != ''
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          LOCKFILE_SHA256: ${{ inputs.lockfile_sha256 }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ inputs.allow_unsigned_windows_publication }}
+          EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          EXPECTED_WINDOWS_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+          EXPECTED_WINDOWS_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
+        run: |
+          node scripts/verify-release-artifact-checkpoint.ts \
+            --assets-dir release-publish \
+            --platform "${{ inputs.platform }}" \
+            --arch "${{ inputs.arch }}" \
+            --target "${{ inputs.target }}" \
+            --version "${{ inputs.version }}" \
+            --flavor "${{ inputs.desktop_flavor }}" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tag "$SOURCE_TAG" \
+            --lockfile-sha256 "$LOCKFILE_SHA256" \
+            --publication "$PUBLISH_RELEASE" \
+            --allow-unsigned-windows-publication "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" \
+            --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
+            --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
+            --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
+
+      - name: Setup Bun
+        if: steps.restore_checkpoint.outcome != 'success'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
       - name: Install dependencies
+        if: steps.restore_checkpoint.outcome != 'success'
         # Preflight validates the entire workspace. Native artifacts retain all
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
 
       - name: Download macOS icon catalog
-        if: inputs.platform == 'mac'
+        if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success'
         uses: actions/download-artifact@v8
         with:
           name: mac-icon-catalog
           path: ${{ runner.temp }}/mac-icon
 
       - name: Select macOS native toolchain
-        if: inputs.platform == 'mac'
+        if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -94,21 +160,24 @@ jobs:
           DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
 
       - name: Report runner capacity
+        if: steps.restore_checkpoint.outcome != 'success'
         run: node scripts/report-build-runner.ts
 
       - name: Import this candidate's verified Cua
-        if: inputs.platform == 'mac' || inputs.platform == 'linux'
+        if: (inputs.platform == 'mac' || inputs.platform == 'linux') && steps.restore_checkpoint.outcome != 'success'
         uses: ./.github/actions/provision-cua
         with:
           prepared-artifact: prepared-cua-${{ inputs.platform }}-${{ inputs.arch }}
 
       - name: Restore portable outputs
+        if: steps.restore_checkpoint.outcome != 'success'
         uses: ./.github/actions/restore-portable-build
         with:
           source-commit: ${{ inputs.source_commit }}
 
       - id: build_artifact
         name: Build desktop artifact
+        if: steps.restore_checkpoint.outcome != 'success'
         shell: bash
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -132,6 +201,9 @@ jobs:
           SOURCE_TAG: ${{ inputs.source_tag }}
           LOCKFILE_SHA256: ${{ inputs.lockfile_sha256 }}
         run: |
+          set -euo pipefail
+          key_path=""
+          trap 'if [[ -n "$key_path" ]]; then rm -f -- "$key_path"; fi' EXIT
           signed=false
           args=(
             --platform "${{ inputs.platform }}"
@@ -166,7 +238,7 @@ jobs:
           if [[ "${{ inputs.platform }}" == "mac" ]]; then
             if has_all "$CSC_LINK" "$CSC_KEY_PASSWORD" "$APPLE_API_KEY" "$APPLE_API_KEY_ID" "$APPLE_API_ISSUER" "$APPLE_TEAM_ID"; then
               key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-              printf '%s' "$APPLE_API_KEY" > "$key_path"
+              (umask 077; printf '%s' "$APPLE_API_KEY" > "$key_path")
               export APPLE_API_KEY="$key_path"
               echo "macOS signing enabled."
               signed=true
@@ -206,6 +278,7 @@ jobs:
           echo "signed=$signed" >> "$GITHUB_OUTPUT"
 
       - name: Collect release assets
+        if: steps.restore_checkpoint.outcome != 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -231,6 +304,8 @@ jobs:
           fi
 
       - name: Verify and record artifact provenance
+        id: provenance
+        if: steps.restore_checkpoint.outcome != 'success'
         shell: bash
         env:
           EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -254,69 +329,6 @@ jobs:
             --lockfile-sha256 "$LOCKFILE_SHA256" \
             --publication "$PUBLISH_RELEASE" \
             --signed "$SIGNED_ARTIFACT" \
-            --allow-unsigned-windows-publication "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" \
-            --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
-            --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
-            --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
-
-      # This checkpoint contains only installers/manifests and signing evidence.
-      # It is not a qualified release artifact and cannot be published directly.
-      - name: Preserve packaged candidate
-        uses: actions/upload-artifact@v7
-        with:
-          name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}
-          path: release-publish/*
-          # Installers and updater ZIPs are already compressed.
-          compression-level: 0
-          retention-days: 30
-          overwrite: true
-          if-no-files-found: error
-
-  qualify:
-    name: Qualify
-    needs: package
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.source_commit }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Restore packaged candidate from this run
-        uses: actions/download-artifact@v8
-        with:
-          name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}
-          path: release-publish
-
-      - name: Verify candidate identity and bytes
-        shell: bash
-        env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-          SOURCE_TAG: ${{ inputs.source_tag }}
-          LOCKFILE_SHA256: ${{ inputs.lockfile_sha256 }}
-          PUBLISH_RELEASE: ${{ inputs.publish_release }}
-          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ inputs.allow_unsigned_windows_publication }}
-          EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          EXPECTED_WINDOWS_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-          EXPECTED_WINDOWS_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
-        run: |
-          node scripts/verify-release-artifact-checkpoint.ts \
-            --assets-dir release-publish \
-            --platform "${{ inputs.platform }}" \
-            --arch "${{ inputs.arch }}" \
-            --target "${{ inputs.target }}" \
-            --version "${{ inputs.version }}" \
-            --flavor "${{ inputs.desktop_flavor }}" \
-            --source-commit "$SOURCE_COMMIT" \
-            --source-tag "$SOURCE_TAG" \
-            --lockfile-sha256 "$LOCKFILE_SHA256" \
-            --publication "$PUBLISH_RELEASE" \
             --allow-unsigned-windows-publication "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" \
             --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
             --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
@@ -355,6 +367,49 @@ jobs:
           name: desktop-${{ inputs.platform }}-${{ inputs.arch }}
           path: release-publish/*
           # Installers and updater ZIPs are already compressed.
+          compression-level: 0
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: error
+
+      # Failed scans may quarantine or alter installers. Save only complete,
+      # unchanged bytes whose native signing provenance already succeeded.
+      - name: Verify failed attempt checkpoint before preserving it
+        id: checkpoint_backup_verify
+        if: ${{ failure() && !cancelled() && steps.provenance.outcome == 'success' && steps.restore_checkpoint.outcome != 'success' }}
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          LOCKFILE_SHA256: ${{ inputs.lockfile_sha256 }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ inputs.allow_unsigned_windows_publication }}
+          EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          EXPECTED_WINDOWS_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+          EXPECTED_WINDOWS_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
+        run: |
+          node scripts/verify-release-artifact-checkpoint.ts \
+            --assets-dir release-publish \
+            --platform "${{ inputs.platform }}" \
+            --arch "${{ inputs.arch }}" \
+            --target "${{ inputs.target }}" \
+            --version "${{ inputs.version }}" \
+            --flavor "${{ inputs.desktop_flavor }}" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tag "$SOURCE_TAG" \
+            --lockfile-sha256 "$LOCKFILE_SHA256" \
+            --publication "$PUBLISH_RELEASE" \
+            --allow-unsigned-windows-publication "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" \
+            --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
+            --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
+            --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
+
+      - name: Preserve failed attempt checkpoint
+        if: ${{ failure() && !cancelled() && steps.checkpoint_backup_verify.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}
+          path: release-publish/*
           compression-level: 0
           retention-days: 30
           overwrite: true

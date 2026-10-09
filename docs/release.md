@@ -10,9 +10,13 @@ version, release notes and lockfile are final.
   - Manual dispatch defaults to build-only validation and uploads workflow artifacts without publishing anything.
   - A pushed tag matching `v*.*.*` publishes after successful builds.
   - Manual publication requires the explicit `publish_release=true` input.
-- Runs lint, typecheck and tests alongside unsigned native, JavaScript and icon
-  preparation. Packaging/signing waits for all quality gates. Narrow `native`, `icon`, and
-  `js` validation stages cannot publish and omit these full-suite gates.
+- Runs lint, typecheck and every test in parallel with native preparation and
+  packaging. Packaging starts after exact-source preflight and its portable
+  JavaScript, Cua and icon inputs are ready; it does not wait for `quality` or
+  `server_tests`. Both GitHub and npm publication depend directly on successful
+  `quality`, all `server_tests` shards and native artifact jobs. No tests are
+  removed. Narrow `native`, `icon`, and `js` validation stages cannot publish and
+  omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
 - Builds four artifacts in parallel:
@@ -20,11 +24,16 @@ version, release notes and lockfile are final.
   - macOS `x64` DMG
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
-- Each platform calls `release-platform.yml`: `package` builds, signs/notarizes
-  where required, checks provenance, and retains `candidate-desktop-PLATFORM-ARCH`
-  for 30 days. A separate `qualify` job downloads that same-run candidate, verifies
-  its source SHA, file digests and signing policy, runs Defender on Windows and
-  packaged startup smoke, then uploads the qualified `desktop-*` artifact.
+- Each platform calls `release-platform.yml` with one native job that builds,
+  signs/notarizes where required, records verified provenance, runs Defender on
+  Windows and packaged startup smoke, then uploads the qualified `desktop-*`
+  artifact on the same runner. A first successful attempt creates no candidate
+  checkpoint and needs no second runner or candidate upload/download.
+- If a later step fails after provenance has been validated, the failure handler
+  rechecks the candidate's integrity before retaining
+  `candidate-desktop-PLATFORM-ARCH` for 30 days. A retry of the same run and SHA
+  can restore that verified candidate and skip packaging; see
+  [release recovery](#resume-a-failed-release) for the limits.
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](../BETA.md).
@@ -221,8 +230,11 @@ only their platform's prepared artifact from the same run, recompute the build
 environment key, and repeat executable/provenance verification. Missing artifacts
 or runner drift fail instead of falling back to unrelated binaries. These temporary
 handoff artifacts expire after 30 days; signing credentials are passed only to the
-packaging step after quality gates. A failed candidate can spend extra parallel
-compute on unsigned preparation. No tests or release acceptance gates are skipped.
+packaging step. Once preflight and the required prepared inputs pass, packaging
+can run while quality and server tests are still in progress. This can spend
+native compute on a candidate whose tests later fail. Both GitHub and npm
+publication wait directly for the full quality/server-test gates and successful
+native qualification; no tests or release acceptance gates are skipped.
 
 When deploying changes to the cache/provenance logic, run the producer on `main`
 after merge and before the next release: the exact fingerprint changes with that
@@ -425,8 +437,9 @@ full subject distinguished name.
    verify `bun run build:marketing` separately unless equivalent successful CI
    proof exists for that exact candidate; it is not part of the desktop payload.
    Retain commands, candidate SHA and results; do not restart completed checks
-   merely to resume the release conversation. CI failures still block packaging
-   and publication.
+   merely to resume the release conversation. Packaging can overlap these CI
+   checks; a failed quality gate or server shard blocks both GitHub and npm
+   publication through their direct dependencies.
 4. Run `node scripts/resolve-release-update-policy.ts X.Y.Z` and confirm the lane,
    `make_latest`, and `mirror_to_stable_channel` values. Before any publication
    trigger, configure the exact Windows unsigned exception or verify the requested
@@ -458,17 +471,24 @@ full subject distinguished name.
   `gh run rerun RUN_ID --failed`. This retains successful jobs. If GitHub refuses
   a rerun while the workflow is active, let the other jobs finish; do not cancel
   their work and dispatch a second full run.
-- The reusable platform workflow separates `package` from `qualify`. Once
-  `package` succeeds, its 30-day `candidate-desktop-PLATFORM-ARCH` checkpoint lets
-  a failed Defender or packaged-startup job retry qualification without rebuilding
-  or re-signing. The consumer verifies the original source SHA, digests and signing
-  policy before using the candidate; successful qualified platforms stay complete.
-  These are retained artifacts from the same run, not cross-run promotion or a
-  cache of signing credentials.
-- An Apple notarization failure inside `package` occurs before that checkpoint.
-  It still needs a packaging retry; the local `--keep-stage` recovery described
-  above does not persist Apple wait state onto a replacement runner. Expired or
-  missing candidate artifacts also require rebuilding that candidate.
+- Build and qualification share one native job and runner. A successful first
+  attempt uploads only the qualified `desktop-*` artifact, without retaining a
+  separate candidate. If Defender, startup or a later step fails after provenance
+  was validated, the failure handler rechecks file integrity and signing policy
+  before uploading `candidate-desktop-PLATFORM-ARCH` for 30 days. A failed
+  integrity check must not preserve the candidate as reusable.
+- On a retry of the same run and source SHA, the native job looks for that
+  retained candidate and verifies its source, version, lockfile, flavor, file
+  inventory/digests and signing policy before skipping packaging. Qualification
+  runs again; successful platforms remain complete. This is same-run recovery,
+  not cross-run promotion or a cache of signing credentials.
+- A corrupt candidate or an artifact API error fails closed; neither is treated
+  as a cache miss. An absent or expired candidate requires packaging again.
+  Crashes or cancellations that prevent the failure handler from uploading a
+  validated checkpoint cannot resume from that runner's local files. Signing or
+  Apple notarization failures before validated provenance also require packaging
+  again. The local `--keep-stage` recovery described above does not persist Apple
+  wait state onto a replacement runner.
 - A source correction changes the candidate. Run the checks affected by that
   correction, commit it and follow the unpublished-tag correction policy before
   triggering its publication. Artifacts and test results from a different SHA

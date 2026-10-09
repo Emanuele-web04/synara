@@ -121,7 +121,16 @@ function verifyCanonicalIdentity(): void {
   }
 }
 
-function verifyReleaseWorkflowSafety(): void {
+async function verifyReleaseWorkflowSafety(): Promise<void> {
+  // Bun is the pinned release toolchain and already required by this smoke.
+  const parseYaml = (source: string): unknown =>
+    JSON.parse(
+      execFileSync(
+        "bun",
+        ["-e", "process.stdout.write(JSON.stringify(Bun.YAML.parse(await Bun.stdin.text())))"],
+        { input: source, encoding: "utf8" },
+      ),
+    );
   const workflow = readFileSync(
     resolve(repoRoot, ".github/workflows/release.yml"),
     "utf8",
@@ -130,11 +139,7 @@ function verifyReleaseWorkflowSafety(): void {
     resolve(repoRoot, ".github/workflows/release-platform.yml"),
     "utf8",
   ).replaceAll("\r\n", "\n");
-  const packagingJob = platformWorkflow.slice(
-    platformWorkflow.indexOf("  package:\n"),
-    platformWorkflow.indexOf("  qualify:\n"),
-  );
-  const qualificationJob = platformWorkflow.slice(platformWorkflow.indexOf("  qualify:\n"));
+  const packagingJob = platformWorkflow.slice(platformWorkflow.indexOf("\njobs:\n"));
   assertContains(
     workflow,
     "\npermissions: {}\n",
@@ -154,7 +159,7 @@ function verifyReleaseWorkflowSafety(): void {
     workflow.indexOf("  build:\n"),
     workflow.indexOf("  publish_cli:\n"),
   );
-  const buildSteps = qualificationJob.split(/\n      - /).slice(1);
+  const buildSteps = packagingJob.split(/\n      - /).slice(1);
   const defenderIndex = buildSteps.findIndex((step) =>
     step.includes("run: ./scripts/verify-windows-defender.ps1"),
   );
@@ -210,56 +215,206 @@ function verifyReleaseWorkflowSafety(): void {
   assertContains(
     buildJob,
     "uses: ./.github/workflows/release-platform.yml",
-    "Desktop matrix must await the package/qualify workflow.",
+    "Missing native workflow.",
   );
-  assertContains(
-    qualificationJob,
-    "needs: package",
-    "Qualification must await its platform checkpoint.",
-  );
-  const checkpointIndex = buildSteps.findIndex((step) =>
-    step.includes("node scripts/verify-release-artifact-checkpoint.ts"),
-  );
-  const restoreIndex = buildSteps.findIndex((step) =>
-    step.includes("uses: actions/download-artifact@"),
-  );
+  type Step = {
+    name?: string;
+    id?: string;
+    uses?: string;
+    if?: string;
+    run?: string;
+    with?: Record<string, string>;
+    "continue-on-error"?: boolean | string;
+  };
+  const platformDefinition = parseYaml(platformWorkflow) as {
+    jobs: Record<string, { steps: Step[] }>;
+  };
+  if (Object.keys(platformDefinition.jobs).length !== 1) {
+    throw new Error("Successful packaging and qualification must share one runner.");
+  }
+  const nativeSteps = Object.values(platformDefinition.jobs)[0]!.steps;
+  const stepById = (id: string): Step => {
+    const step = nativeSteps.find((step) => step.id === id);
+    if (!step) throw new Error(`Missing native release step ${id}.`);
+    return step;
+  };
+  const evaluates = (step: Step, context: Record<string, unknown>): boolean => {
+    if (!step.if) throw new Error(`Missing conditional admission for ${step.name}.`);
+    const expression = step.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "");
+    return Boolean(
+      new Function(...Object.keys(context), `return ${expression};`)(...Object.values(context)),
+    );
+  };
+  const lookup = stepById("checkpoint_lookup");
   if (
-    restoreIndex < 0 ||
-    checkpointIndex <= restoreIndex ||
-    defenderIndex <= checkpointIndex ||
+    evaluates(lookup, { github: { run_attempt: 1 } }) ||
+    !evaluates(lookup, { github: { run_attempt: 2 } })
+  ) {
+    throw new Error("Checkpoint lookup must run only on retries.");
+  }
+  const restore = nativeSteps.find((step) => step.with?.["artifact-ids"]);
+  if (
+    !restore ||
+    restore.with?.["run-id"] !== "${{ github.run_id }}" ||
+    restore.with?.repository !== "${{ github.repository }}"
+  ) {
+    throw new Error("Checkpoint download must be bound to the current run and repository.");
+  }
+  for (const artifactId of ["", "42"]) {
+    const context = { steps: { checkpoint_lookup: { outputs: { artifact_id: artifactId } } } };
+    for (const step of [restore, stepById("restore_checkpoint")]) {
+      if (evaluates(step, context) !== Boolean(artifactId))
+        throw new Error("Checkpoint restore/verification admission mismatch.");
+    }
+  }
+  const verifyIndex = nativeSteps.indexOf(stepById("restore_checkpoint"));
+  const buildIndex = nativeSteps.indexOf(stepById("build_artifact"));
+  const provenanceIndex = nativeSteps.indexOf(stepById("provenance"));
+  if (
+    verifyIndex <= nativeSteps.indexOf(restore) ||
+    buildIndex <= verifyIndex ||
+    provenanceIndex <= buildIndex ||
+    defenderIndex <= provenanceIndex ||
     uploadIndex <= startupIndex
   ) {
-    throw new Error(
-      "Checkpoint restore and identity verification must precede qualification and qualified upload.",
-    );
+    throw new Error("Restore, build, provenance and qualification order is unsafe.");
   }
-  const restore = buildSteps[restoreIndex]!;
-  assertContains(
-    restore,
-    "name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}",
-    "Qualification must restore its platform's candidate.",
+  // Execute real workflow conditions for every preparation step. A valid
+  // restored checkpoint skips the entire build; a cache miss keeps the full path.
+  for (const platform of ["mac", "win", "linux"]) {
+    for (const step of nativeSteps.slice(verifyIndex + 1, provenanceIndex + 1)) {
+      const withOutcome = (outcome: string) =>
+        evaluates(step, { inputs: { platform }, steps: { restore_checkpoint: { outcome } } });
+      if (withOutcome("success"))
+        throw new Error(`Restored ${platform} checkpoint repeats ${step.name}.`);
+      if (step.id === "build_artifact" && !withOutcome("skipped"))
+        throw new Error("Checkpoint miss must build.");
+    }
+  }
+  const backupVerify = stepById("checkpoint_backup_verify");
+  for (const step of nativeSteps.slice(0, nativeSteps.indexOf(backupVerify))) {
+    if (step["continue-on-error"] !== undefined && step["continue-on-error"] !== false) {
+      throw new Error(`Release failures must not be ignored by ${step.name}.`);
+    }
+    const diagnosticEvidence = step.with?.name === "windows-defender-${{ inputs.arch }}";
+    if (!diagnosticEvidence && /\b(?:always|cancelled|failure|success)\s*\(/.test(step.if ?? "")) {
+      throw new Error(`Normal release step ${step.name} must retain implicit success admission.`);
+    }
+  }
+  for (const step of [backupVerify, stepById("restore_checkpoint")]) {
+    if (!step.run?.includes("node scripts/verify-release-artifact-checkpoint.ts"))
+      throw new Error("Checkpoint transfer requires the full identity and byte verifier.");
+  }
+  const backupUpload = nativeSteps.find((step) =>
+    step.with?.name?.startsWith("candidate-desktop-"),
   );
-  if (/\n\s+(?:run-id|github-token|repository):/.test(restore))
-    throw new Error("Candidate checkpoints must come from the same workflow run.");
-  assertContains(
-    packagingJob,
-    "name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}",
-    "Packaging must preserve the candidate before qualification.",
+  if (!backupUpload) throw new Error("Missing failed-attempt checkpoint persistence.");
+  for (const failed of [false, true])
+    for (const cancelled of [false, true]) {
+      for (const provenance of ["success", "failure", "skipped"])
+        for (const restored of ["success", "skipped"]) {
+          const context = {
+            failure: () => failed,
+            cancelled: () => cancelled,
+            steps: {
+              provenance: { outcome: provenance },
+              restore_checkpoint: { outcome: restored },
+            },
+          };
+          if (
+            evaluates(backupVerify, context) !==
+            (failed && !cancelled && provenance === "success" && restored !== "success")
+          ) {
+            throw new Error(
+              "Checkpoint backup must be limited to verified, freshly built failure payloads.",
+            );
+          }
+        }
+      for (const verified of ["success", "failure", "skipped"]) {
+        if (
+          evaluates(backupUpload, {
+            failure: () => failed,
+            cancelled: () => cancelled,
+            steps: { checkpoint_backup_verify: { outcome: verified } },
+          }) !== (failed && !cancelled && verified === "success")
+        ) {
+          throw new Error(
+            "Checkpoint upload must not run on success, cancellation or changed bytes.",
+          );
+        }
+      }
+    }
+  // Run the actual GitHub lookup script against an API boundary fixture; the
+  // response includes unrelated and expired artifacts to catch a broad lookup.
+  const lookupScript = lookup.with?.script;
+  if (!lookupScript) throw new Error("Missing same-run checkpoint lookup.");
+  const executeLookup = new Function(
+    "github",
+    "context",
+    "process",
+    "core",
+    `return (async () => { ${lookupScript} })();`,
   );
-  assertNotContains(
-    packagingJob,
-    "name: desktop-",
-    "Unqualified candidates must not use the publication artifact prefix.",
-  );
-  assertNotContains(
-    qualificationJob,
-    "dist:desktop:artifact",
-    "Qualification retries must not rebuild installers.",
-  );
+  for (const scenario of ["hit", "duplicate", "miss", "api-error"]) {
+    const outputs: Record<string, unknown> = {};
+    let listedCurrentRun = false;
+    let errorMessage = "";
+    const endpoint = {};
+    try {
+      await executeLookup(
+        {
+          rest: { actions: { listWorkflowRunArtifacts: endpoint } },
+          paginate: async (method: unknown, options: Record<string, unknown>) => {
+            if (
+              method !== endpoint ||
+              options.run_id !== 123 ||
+              options.owner !== "owner" ||
+              options.repo !== "repo"
+            )
+              throw new Error("Checkpoint lookup escaped current run.");
+            listedCurrentRun = true;
+            if (scenario === "api-error") throw new Error("expected API failure");
+            return [
+              { id: 11, name: "other", expired: false },
+              { id: 12, name: "candidate-desktop-mac-x64", expired: true },
+              ...(scenario !== "miss"
+                ? [{ id: 13, name: "candidate-desktop-mac-x64", expired: false }]
+                : []),
+              ...(scenario === "duplicate"
+                ? [{ id: 14, name: "candidate-desktop-mac-x64", expired: false }]
+                : []),
+            ];
+          },
+        },
+        { repo: { owner: "owner", repo: "repo" }, runId: 123 },
+        { env: { CHECKPOINT_NAME: "candidate-desktop-mac-x64" } },
+        {
+          setOutput: (key: string, value: unknown) => {
+            outputs[key] = value;
+          },
+        },
+      );
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+    const expectedError =
+      scenario === "api-error"
+        ? "expected API failure"
+        : scenario === "duplicate"
+          ? "More than one checkpoint matches this platform in this run."
+          : "";
+    if (
+      !listedCurrentRun ||
+      errorMessage !== expectedError ||
+      (!expectedError && outputs.artifact_id !== (scenario === "miss" ? "" : 13))
+    ) {
+      throw new Error(`Incorrect checkpoint lookup result for ${scenario}.`);
+    }
+  }
   assertContains(
     platformWorkflow,
-    "permissions:\n  contents: read",
-    "Platform workflows must remain read-only.",
+    "permissions:\n  contents: read\n  actions: read",
+    "Native jobs require only repository and artifact reads.",
   );
   // Execute the actual job predicate against failed/skipped prerequisites. A
   // matching source string would not detect a permissive OR elsewhere in it.
@@ -269,17 +424,13 @@ function verifyReleaseWorkflowSafety(): void {
     needs: Record<string, unknown>,
     cancelled: () => boolean,
   ) => boolean;
-  const prerequisites = [
-    "preflight",
-    "quality",
-    "server_tests",
-    "build_mac_icon",
-    "build_portable",
-    "prepare_cua",
-  ];
+  const prerequisites = ["preflight", "build_mac_icon", "build_portable", "prepare_cua"];
   const dependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
   for (const name of prerequisites)
     if (!dependencies.includes(name)) throw new Error(`Packaging does not await ${name}.`);
+  for (const testGate of ["quality", "server_tests"])
+    if (dependencies.includes(testGate))
+      throw new Error(`Packaging unnecessarily waits for ${testGate}.`);
   const successful: Record<string, { result: string; outputs?: Record<string, string> }> =
     Object.fromEntries(prerequisites.map((name) => [name, { result: "success" }]));
   successful.preflight = {
@@ -317,7 +468,7 @@ function verifyReleaseWorkflowSafety(): void {
     "bunx turbo run test --filter='!@synara/cli'",
     "bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}",
   ]) {
-    assertContains(workflow, gate, "Expected read-only, sharded quality gates before packaging.");
+    assertContains(workflow, gate, "Expected read-only, sharded quality gates before publication.");
   }
   assertContains(
     buildJob,
@@ -352,6 +503,47 @@ function verifyReleaseWorkflowSafety(): void {
     "    permissions:\n      contents: read\n      id-token: write\n    steps:",
     "Expected only CLI publication to combine repository reads with npm OIDC.",
   );
+  const workflowDefinition = parseYaml(workflow) as {
+    jobs: Record<string, { needs: string[]; if: string }>;
+  };
+  for (const name of ["release", "publish_cli"]) {
+    const publisher = workflowDefinition.jobs[name]!;
+    for (const gate of ["preflight", "quality", "server_tests", "build"])
+      if (!publisher.needs.includes(gate))
+        throw new Error(`${name} does not directly await ${gate}.`);
+    const expression = publisher.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "");
+    if (/\b(?:always|cancelled|failure|success)\s*\(/.test(expression))
+      throw new Error(`${name} must retain implicit success admission.`);
+    const allows = new Function("needs", "vars", `return ${expression};`);
+    for (const publish of ["true", "false"])
+      for (const prerelease of ["true", "false"]) {
+        const needs = Object.fromEntries(
+          publisher.needs.map((gate) => [
+            gate,
+            { result: "success", outputs: {} as Record<string, string> },
+          ]),
+        );
+        needs.preflight!.outputs = { publish_release: publish, is_prerelease: prerelease };
+        if (
+          Boolean(allows(needs, { SYNARA_PUBLISH_CLI: "1" })) !==
+          (publish === "true" && (name === "release" || prerelease === "false"))
+        )
+          throw new Error(`${name} publication policy changed.`);
+      }
+    for (const gate of ["quality", "server_tests"])
+      for (const result of ["failure", "cancelled", "skipped", ""]) {
+        const needs = Object.fromEntries(
+          publisher.needs.map((gate) => [
+            gate,
+            { result: "success", outputs: {} as Record<string, string> },
+          ]),
+        );
+        needs.preflight!.outputs = { publish_release: "true", is_prerelease: "false" };
+        needs[gate]!.result = result;
+        if (allows(needs, { SYNARA_PUBLISH_CLI: "1" }))
+          throw new Error(`${name} admits ${gate}=${result}.`);
+      }
+  }
   const serverJob = workflow.slice(
     workflow.indexOf("  build_server_tarball:\n"),
     workflow.indexOf("  release:\n"),
@@ -366,7 +558,7 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
-    "  release:\n    name: Publish GitHub Release\n    if: ${{ needs.preflight.outputs.publish_release == 'true' }}\n    needs: [preflight, build, build_server_tarball]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: write",
+    "  release:\n    name: Publish GitHub Release\n    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}\n    needs: [preflight, quality, server_tests, build, build_server_tarball]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: write",
     "Expected only GitHub release publication to receive contents write access.",
   );
   assertContains(
@@ -391,7 +583,7 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
-    "if: ${{ needs.preflight.outputs.publish_release == 'true' }}",
+    "if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}",
     "Expected GitHub publication to require explicit publication mode.",
   );
   assertContains(
@@ -742,7 +934,7 @@ const tempRoot = mkdtempSync(join(tmpdir(), "synara-release-smoke-"));
 
 try {
   verifyCanonicalIdentity();
-  verifyReleaseWorkflowSafety();
+  await verifyReleaseWorkflowSafety();
   verifyDesktopStageLockAuthority();
   copyWorkspaceManifestFixture(tempRoot);
 
