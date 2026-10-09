@@ -103,6 +103,57 @@ export function encodeVoiceRecordingWav(
   };
 }
 
+/**
+ * Converts microphone chunks to 16-bit little-endian mono PCM at the output
+ * rate as they arrive. Linear interpolation carries its phase and the last
+ * input sample across chunk boundaries, so a split stream matches one pass.
+ */
+export function createPcm16StreamEncoder(
+  inputSampleRateHz: number,
+  outputSampleRateHz: number,
+): (chunk: Float32Array) => Uint8Array {
+  const step = inputSampleRateHz / outputSampleRateHz;
+  if (!Number.isFinite(step) || step <= 0) {
+    throw new Error("Voice sample rates must be positive.");
+  }
+  // Source position of the next output sample, relative to the next chunk's
+  // first sample; -1 < position means "between the previous chunk and this one".
+  let position = 0;
+  let previousSample = 0;
+
+  return (chunk) => {
+    if (chunk.length === 0) return new Uint8Array(0);
+    const lastIndex = chunk.length - 1;
+    const outputCount = position > lastIndex ? 0 : Math.floor((lastIndex - position) / step) + 1;
+    const view = new DataView(new ArrayBuffer(outputCount * 2));
+    for (let outputIndex = 0; outputIndex < outputCount; outputIndex += 1) {
+      const sourcePosition = position + outputIndex * step;
+      const leftIndex = Math.floor(sourcePosition);
+      const left = leftIndex < 0 ? previousSample : (chunk[leftIndex] ?? 0);
+      const right = chunk[leftIndex + 1] ?? left;
+      const sample = left + (right - left) * (sourcePosition - leftIndex);
+      const clamped = Math.max(-1, Math.min(1, sample));
+      view.setInt16(
+        outputIndex * 2,
+        Math.round(clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff),
+        true,
+      );
+    }
+    position += outputCount * step - chunk.length;
+    previousSample = chunk[lastIndex] ?? 0;
+    return new Uint8Array(view.buffer);
+  };
+}
+
+export function encodeBytesBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const blockSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += blockSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + blockSize));
+  }
+  return btoa(binary);
+}
+
 function writeWavHeader(view: DataView, sampleCount: number, sampleRateHz: number): void {
   writeAscii(view, 0, "RIFF");
   view.setUint32(4, 36 + sampleCount * 2, true);

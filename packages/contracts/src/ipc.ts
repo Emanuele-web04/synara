@@ -305,6 +305,10 @@ import type {
   ServerEditKeybindingsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
+  ServerVoiceDictationAudioInput,
+  ServerVoiceDictationEvent,
+  ServerVoiceDictationFinishInput,
+  ServerVoiceDictationStreamInput,
   ServerVoicePrewarmInput,
   ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
@@ -1330,6 +1334,16 @@ export interface NativeApi {
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
+    /** Resolves when the dictation stream ends; rejects when it fails or `signal` aborts. */
+    streamVoiceDictation?: (
+      input: ServerVoiceDictationStreamInput,
+      options: {
+        readonly onEvent: (event: ServerVoiceDictationEvent) => void;
+        readonly signal: AbortSignal;
+      },
+    ) => Promise<void>;
+    appendVoiceDictationAudio?: (input: ServerVoiceDictationAudioInput) => Promise<void>;
+    finishVoiceDictation?: (input: ServerVoiceDictationFinishInput) => Promise<void>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
     editKeybindings: (input: ServerEditKeybindingsInput) => Promise<ServerEditKeybindingsResult>;
   };

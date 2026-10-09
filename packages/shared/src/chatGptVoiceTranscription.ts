@@ -7,6 +7,11 @@ import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
 import { encodeOutboundMultipart, outboundHttp, type OutboundHttpResponse } from "./outboundHttp";
 
 export const CHATGPT_VOICE_TRANSCRIPTION_URL = "https://chatgpt.com/backend-api/transcribe";
+export const CHATGPT_DICTATION_STREAM_URL = "wss://chatgpt.com/backend-api/dictation/stream";
+// From Node, the dictation socket handshake answered a browser User-Agent (or
+// none) with a Cloudflare challenge (403) but accepted a plain client
+// identity, the one the Codex usage fetcher already sends.
+export const CHATGPT_DICTATION_STREAM_USER_AGENT = "Synara";
 
 const MAX_MULTIPART_BYTES = SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES + 64 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;

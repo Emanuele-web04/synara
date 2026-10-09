@@ -2540,6 +2540,30 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }),
       }).pipe(Effect.map((result) => result satisfies ServerVoiceTranscriptionResult));
 
+    const openVoiceDictation: NonNullable<CodexAdapterShape["openVoiceDictation"]> = (
+      input,
+      handlers,
+    ) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.openVoiceDictation(
+            {
+              ...input,
+              ...(input.providerOptions?.codex
+                ? { codexOptions: input.providerOptions.codex }
+                : {}),
+            },
+            handlers,
+          ),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "voice/dictation",
+            detail: toMessage(cause, "voice/dictation failed"),
+            cause,
+          }),
+      });
+
     const prewarmVoice: NonNullable<CodexAdapterShape["prewarmVoice"]> = (input) =>
       Effect.tryPromise({
         try: () =>
@@ -2757,6 +2781,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       listModels,
       prewarmVoice,
       transcribeVoice,
+      openVoiceDictation,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies CodexAdapterShape;
   });

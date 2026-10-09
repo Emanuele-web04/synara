@@ -337,6 +337,10 @@ import {
   ServerEditKeybindingsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
+  ServerVoiceDictationAudioInput,
+  ServerVoiceDictationEvent,
+  ServerVoiceDictationFinishInput,
+  ServerVoiceDictationStreamInput,
   ServerVoicePrewarmInput,
   ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
@@ -1480,6 +1484,30 @@ export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVo
   error: WsRpcError,
 });
 
+// Live dictation: the stream owns the provider session for its lifetime, so
+// interrupting it (cancel, disconnect) closes the upstream connection.
+export const WsServerStreamVoiceDictationRpc = Rpc.make(WS_METHODS.serverStreamVoiceDictation, {
+  payload: ServerVoiceDictationStreamInput,
+  success: ServerVoiceDictationEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsServerAppendVoiceDictationAudioRpc = Rpc.make(
+  WS_METHODS.serverAppendVoiceDictationAudio,
+  {
+    payload: ServerVoiceDictationAudioInput,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerFinishVoiceDictationRpc = Rpc.make(WS_METHODS.serverFinishVoiceDictation, {
+  payload: ServerVoiceDictationFinishInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerateThreadRecap, {
   payload: ServerGenerateThreadRecapInput,
   success: ServerGenerateThreadRecapResult,
@@ -2013,6 +2041,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerReadThreadDiagnosticsRpc,
   WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
+  WsServerStreamVoiceDictationRpc,
+  WsServerAppendVoiceDictationAudioRpc,
+  WsServerFinishVoiceDictationRpc,
   WsServerGenerateThreadRecapRpc,
   WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,

@@ -32,6 +32,7 @@ import {
   type ProviderTurnStartResult,
   RuntimeMode,
   ProviderInteractionMode,
+  type ServerVoiceDictationStreamInput,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
   type UserInputQuestion,
@@ -103,6 +104,11 @@ import {
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
+import { ChatGptDictationStreamError, openChatGptDictationStream } from "./voiceDictationStream.ts";
+import type {
+  VoiceDictationHandlers,
+  VoiceDictationSession,
+} from "./provider/Services/ProviderAdapter.ts";
 import {
   CodexAppServerTransportError,
   CodexJsonlFramer,
@@ -3611,6 +3617,34 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           refreshToken,
         }),
     });
+  }
+
+  async openVoiceDictation(
+    input: ServerVoiceDictationStreamInput & { codexOptions?: CodexDiscoveryOptions },
+    handlers: VoiceDictationHandlers,
+  ): Promise<VoiceDictationSession> {
+    const open = async (refreshToken: boolean) => {
+      const auth = await this.resolveVoiceTranscriptionAuth({
+        cwd: input.cwd,
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.codexOptions ? { codexOptions: input.codexOptions } : {}),
+        refreshToken,
+      });
+      return openChatGptDictationStream({
+        token: auth.token,
+        sampleRateHz: input.sampleRateHz,
+        handlers,
+      });
+    };
+    try {
+      return await open(false);
+    } catch (error) {
+      // A cached token can expire between dictations; refresh it once, as uploads do.
+      if (error instanceof ChatGptDictationStreamError && error.code === "auth") {
+        return open(true);
+      }
+      throw error;
+    }
   }
 
   async prewarmVoice(input: {

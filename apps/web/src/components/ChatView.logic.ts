@@ -950,6 +950,65 @@ export function appendVoiceTranscriptToPrompt(
     : `${currentPrompt.replace(/\s+$/, "")}\n${trimmedTranscript}`;
 }
 
+/** The dictated tail a live voice transcript keeps after the composer prompt. */
+export interface LiveVoiceDraft {
+  /** Prompt text before the dictated tail. */
+  readonly base: string;
+  /** Dictated text currently shown after `base`. */
+  readonly live: string;
+  /** Length of the latest transcript, in the provider's own text. */
+  readonly transcriptLength: number;
+  /** Transcript characters that became the user's after they edited the dictated tail. */
+  readonly handedOff: number;
+}
+
+function composeLiveVoicePrompt(draft: Pick<LiveVoiceDraft, "base" | "live">): string {
+  return appendVoiceTranscriptToPrompt(draft.base, draft.live) ?? draft.base;
+}
+
+/**
+ * Shows the latest dictation transcript after the prompt the user had when
+ * dictation started. Edits made meanwhile survive: text changed before the
+ * dictated tail stays, and once the tail itself is edited those words belong
+ * to the user and only newer words follow them.
+ */
+export function applyLiveVoiceTranscript(
+  draft: LiveVoiceDraft | null,
+  currentPrompt: string,
+  transcript: string,
+): { readonly draft: LiveVoiceDraft; readonly prompt: string } {
+  let base = draft?.base ?? currentPrompt;
+  let handedOff = draft?.handedOff ?? 0;
+  if (draft && currentPrompt !== composeLiveVoicePrompt(draft)) {
+    if (draft.live.length > 0 && currentPrompt.endsWith(draft.live)) {
+      // Drop the separator the dictated tail added; composing adds it back.
+      base = currentPrompt.slice(0, currentPrompt.length - draft.live.length).replace(/\s+$/, "");
+    } else {
+      base = currentPrompt;
+      handedOff = draft.transcriptLength;
+    }
+  }
+  const live = transcript.slice(handedOff).trim();
+  const nextDraft: LiveVoiceDraft = {
+    base,
+    live,
+    transcriptLength: transcript.length,
+    handedOff,
+  };
+  return { draft: nextDraft, prompt: composeLiveVoicePrompt(nextDraft) };
+}
+
+/** Removes the dictated tail when dictation is cancelled or fails. */
+export function discardLiveVoiceTranscript(draft: LiveVoiceDraft, currentPrompt: string): string {
+  if (currentPrompt === composeLiveVoicePrompt(draft)) {
+    return draft.base;
+  }
+  if (draft.live.length > 0 && currentPrompt.endsWith(draft.live)) {
+    return currentPrompt.slice(0, currentPrompt.length - draft.live.length).replace(/\s+$/, "");
+  }
+  return currentPrompt;
+}
+
 export function sanitizeVoiceErrorMessage(message: string): string {
   const normalized = message.trim();
   if (normalized.length === 0) {

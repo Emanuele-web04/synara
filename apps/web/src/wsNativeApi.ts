@@ -812,6 +812,12 @@ export function createWsNativeApi(): NativeApi {
           return transport.request(WS_METHODS.serverTranscribeVoice, input, { timeoutMs: null });
         }
       },
+      streamVoiceDictation: (input, { onEvent, signal }) =>
+        transport.streamVoiceDictation(input, onEvent, signal),
+      appendVoiceDictationAudio: (input) =>
+        transport.request(WS_METHODS.serverAppendVoiceDictationAudio, input),
+      finishVoiceDictation: (input) =>
+        transport.request(WS_METHODS.serverFinishVoiceDictation, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
       editKeybindings: (input) => transport.request(WS_METHODS.serverEditKeybindings, input),
     },

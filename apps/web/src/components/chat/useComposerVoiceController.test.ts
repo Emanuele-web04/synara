@@ -87,6 +87,16 @@ const nativeApi = vi.hoisted(() => ({
   available: true,
 }));
 
+const dictation = vi.hoisted(() => ({
+  enabled: false,
+  onTranscript: null as ((text: string) => void) | null,
+  stream: {
+    pushAudio: vi.fn(),
+    finish: vi.fn<() => Promise<string>>(),
+    cancel: vi.fn(),
+  },
+}));
+
 const toast = vi.hoisted(() => ({ add: vi.fn(), reportIssue: vi.fn() }));
 const voiceAvailability = vi.hoisted(() => ({
   canStartVoiceNotes: true,
@@ -114,6 +124,14 @@ vi.mock("../../lib/voiceRecorder", () => ({
     stopRecording: recorder.stopRecording,
     cancelRecording: recorder.cancelRecording,
   }),
+}));
+
+vi.mock("../../lib/voiceDictationStream", () => ({
+  startVoiceDictationStream: (input: { onTranscript: (text: string) => void }) => {
+    if (!dictation.enabled) return null;
+    dictation.onTranscript = input.onTranscript;
+    return dictation.stream;
+  },
 }));
 
 vi.mock("../../nativeApi", () => ({
@@ -193,6 +211,11 @@ describe("useComposerVoiceController", () => {
     nativeApi.prewarmVoice.mockReset().mockResolvedValue({ ready: true });
     nativeApi.transcribeVoice.mockReset().mockResolvedValue({ text: "transcribed once" });
     nativeApi.available = true;
+    dictation.enabled = false;
+    dictation.onTranscript = null;
+    dictation.stream.pushAudio.mockReset();
+    dictation.stream.finish.mockReset().mockResolvedValue("streamed text");
+    dictation.stream.cancel.mockReset();
     voiceAvailability.canStartVoiceNotes = true;
     voiceAvailability.showVoiceNotesControl = true;
     toast.add.mockReset();
@@ -267,6 +290,96 @@ describe("useComposerVoiceController", () => {
       expect(result.isVoiceTranscribing).toBe(false);
     },
   );
+
+  describe("with live dictation", () => {
+    const startStreaming = async () => {
+      dictation.enabled = true;
+      recorder.isRecording = false;
+      render({ onLiveTranscript: vi.fn() });
+      await result.startComposerVoiceRecording();
+      recorder.isRecording = true;
+      render();
+    };
+
+    it("shows live text and finishes with the streamed transcript", async () => {
+      await startStreaming();
+      const onAudioChunk = (
+        recorder.startRecording.mock.calls[0] as unknown as
+          | [{ onAudioChunk: (samples: Float32Array, rate: number) => void }]
+          | undefined
+      )?.[0].onAudioChunk;
+      const samples = new Float32Array(4);
+      onAudioChunk?.(samples, 24_000);
+      dictation.onTranscript?.("Hola");
+
+      await expect(result.submitComposerVoiceRecording()).resolves.toBe(true);
+
+      expect(dictation.stream.pushAudio).toHaveBeenCalledWith(samples, 24_000);
+      expect(options.onLiveTranscript).toHaveBeenCalledWith("Hola");
+      expect(options.onTranscriptReady).toHaveBeenCalledWith("streamed text");
+      expect(nativeApi.transcribeVoice).not.toHaveBeenCalled();
+    });
+
+    it("uploads the recorded clip when the stream fails", async () => {
+      await startStreaming();
+      dictation.stream.finish.mockRejectedValueOnce(new Error("socket closed"));
+
+      await expect(result.submitComposerVoiceRecording()).resolves.toBe(true);
+
+      expect(nativeApi.transcribeVoice).toHaveBeenCalledWith(
+        expect.objectContaining({ audioBase64: AUDIO_PAYLOAD.audioBase64 }),
+      );
+      expect(options.onTranscriptReady).toHaveBeenCalledWith("transcribed once");
+      expect(toast.add).not.toHaveBeenCalled();
+    });
+
+    it("uploads the recorded clip when the stream heard nothing", async () => {
+      await startStreaming();
+      dictation.stream.finish.mockResolvedValueOnce("  ");
+
+      await expect(result.submitComposerVoiceRecording()).resolves.toBe(true);
+
+      expect(nativeApi.transcribeVoice).toHaveBeenCalledTimes(1);
+      expect(options.onTranscriptReady).toHaveBeenCalledWith("transcribed once");
+    });
+
+    it.each(["failed", "empty"] as const)(
+      "uploads once and drops the live text when a %s stream's upload fails too",
+      async (streamOutcome) => {
+        await startStreaming();
+        if (streamOutcome === "failed") {
+          dictation.stream.finish.mockRejectedValueOnce(new Error("socket closed"));
+        } else {
+          dictation.stream.finish.mockResolvedValueOnce("");
+        }
+        nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("upload failed"));
+
+        await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
+
+        expect(nativeApi.transcribeVoice).toHaveBeenCalledTimes(1);
+        expect(options.onLiveTranscript).toHaveBeenLastCalledWith(null);
+        expect(options.onTranscriptReady).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["cancel", "thread"] as const)(
+      "drops the stream and live text on %s",
+      async (cause) => {
+        await startStreaming();
+
+        if (cause === "cancel") {
+          result.cancelComposerVoiceRecording();
+        } else {
+          render({ activeThreadId: THREAD_B, threadId: THREAD_B });
+        }
+        dictation.onTranscript?.("late words");
+
+        expect(dictation.stream.cancel).toHaveBeenCalledTimes(1);
+        expect(options.onLiveTranscript).toHaveBeenCalledWith(null);
+        expect(options.onLiveTranscript).not.toHaveBeenCalledWith("late words");
+      },
+    );
+  });
 
   it("does not surface recorder startup cancellation as an error", async () => {
     recorder.isRecording = false;
