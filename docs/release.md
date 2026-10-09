@@ -32,12 +32,6 @@ version, release notes and lockfile are final.
   Windows and packaged startup smoke, then uploads the qualified `desktop-*`
   artifact on the same runner. A first successful attempt creates no candidate
   checkpoint and needs no second runner or candidate upload/download.
-- Signed macOS builds pass `--defer-dmg-notarization`: the build step finalizes
-  the update ZIP, then smokes it while `finalize-mac-dmg.ts --dmg-only` waits for
-  Apple's DMG notarization (about 2 minutes, which covers most of the Intel
-  smoke under Rosetta). Provenance still verifies the stapled DMG afterwards. If
-  that early smoke fails, the regular smoke step repeats it after provenance, so
-  a failure still preserves the checkpoint.
 - If a later step fails after provenance has been validated, the failure handler
   rechecks the candidate's integrity before retaining
   `candidate-desktop-PLATFORM-ARCH` for 30 days. A retry of the same run and SHA
@@ -267,9 +261,6 @@ environment, resume finalization without re-signing the app:
 node scripts/notarize-mac-app.ts /PATH/TO/STAGE/app/dist/mac-arm64/Synara.app
 node scripts/finalize-mac-dmg.ts /PATH/TO/STAGE/app/dist
 ```
-
-In release CI the DMG is finalized in the `release/` output directory with
-`--dmg-only`, so its `.notary-state` lives there rather than in the stage.
 
 The first command is for an interrupted app notarization stage; DMG finalization
 requires an already-created signed DMG. Changed payloads reject saved state;

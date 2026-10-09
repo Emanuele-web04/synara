@@ -164,20 +164,8 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     step.includes("run: ./scripts/verify-windows-defender.ps1"),
   );
   const startupIndex = buildSteps.findIndex((step) =>
-    step.startsWith("name: Smoke packaged desktop startup\n"),
+    step.includes("node scripts/verify-packaged-desktop-startup.ts"),
   );
-  // Only the notarized Mac path may launch its app inside the build step, while
-  // Apple notarizes the DMG; Windows must scan installers before any launch.
-  const buildStep = buildSteps.find((step) => step.includes("id: build_artifact"))!;
-  const earlySmoke = buildStep.indexOf("node scripts/verify-packaged-desktop-startup.ts");
-  if (
-    earlySmoke >= 0 &&
-    !buildStep
-      .slice(0, earlySmoke)
-      .includes('if [[ "${{ inputs.platform }}" == "mac" && "$signed" == "true" ]]; then')
-  ) {
-    throw new Error("Only the signed macOS build may smoke before provenance.");
-  }
   const uploadIndex = buildSteps.findIndex((step) =>
     step.includes("name: desktop-${{ inputs.platform }}-${{ inputs.arch }}"),
   );

@@ -62,18 +62,6 @@ jobs:
         with:
           node-version-file: package.json
 
-      - name: Prepare packaged startup smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          timeout_ms=60000
-          if [[ "${{ inputs.platform }}" == "mac" && "${{ inputs.arch }}" == "x64" && "$(uname -m)" == "arm64" ]]; then
-            arch -x86_64 /usr/bin/true || { echo "Rosetta 2 is required to smoke the Intel app on Apple Silicon." >&2; exit 1; }
-            # The first launch also translates the whole Intel Electron runtime.
-            timeout_ms=180000
-          fi
-          echo "SYNARA_SMOKE_TIMEOUT_MS=$timeout_ms" >> "$GITHUB_ENV"
-
       # A successful first attempt never transfers an intermediate checkpoint.
       - name: Find failed attempt checkpoint in this run
         id: checkpoint_lookup
@@ -216,10 +204,8 @@ jobs:
         run: |
           set -euo pipefail
           key_path=""
-          dmg_pid=""
-          trap 'if [[ -n "$dmg_pid" ]]; then kill "$dmg_pid" 2>/dev/null || true; fi; if [[ -n "$key_path" ]]; then rm -f -- "$key_path"; fi' EXIT
+          trap 'if [[ -n "$key_path" ]]; then rm -f -- "$key_path"; fi' EXIT
           signed=false
-          smoked=false
           args=(
             --platform "${{ inputs.platform }}"
             --target "${{ inputs.target }}"
@@ -257,7 +243,7 @@ jobs:
               export APPLE_API_KEY="$key_path"
               echo "macOS signing enabled."
               signed=true
-              args+=(--signed --defer-dmg-notarization)
+              args+=(--signed)
             elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" ]]; then
               echo "Publishing macOS artifacts requires every signing and notarization secret."
               exit 1
@@ -290,27 +276,7 @@ jobs:
           # Never retry source, signing or notarization failures as downloads.
           bun run dist:desktop:artifact -- "${args[@]}"
 
-          if [[ "${{ inputs.platform }}" == "mac" && "$signed" == "true" ]]; then
-            # The update ZIP is final; smoke it while Apple notarizes the DMG
-            # (~2 minutes). A failed early smoke repeats after provenance, so a
-            # failure there still keeps the checkpoint for a retry.
-            node scripts/finalize-mac-dmg.ts release --dmg-only &
-            dmg_pid=$!
-            if node scripts/verify-packaged-desktop-startup.ts \
-              --timeout-ms "$SYNARA_SMOKE_TIMEOUT_MS" \
-              --assets-dir release \
-              --platform mac \
-              --arch "${{ inputs.arch }}" \
-              --version "${{ inputs.version }}" \
-              --executable-name "${{ inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"; then
-              smoked=true
-            fi
-            wait "$dmg_pid"
-            dmg_pid=""
-          fi
-
           echo "signed=$signed" >> "$GITHUB_OUTPUT"
-          echo "smoked=$smoked" >> "$GITHUB_OUTPUT"
 
       - name: Collect release assets
         if: steps.restore_checkpoint.outcome != 'success'
@@ -387,11 +353,16 @@ jobs:
           if-no-files-found: error
 
       - name: Smoke packaged desktop startup
-        if: steps.build_artifact.outputs.smoked != 'true'
         shell: bash
         run: |
-          node scripts/verify-packaged-desktop-startup.ts \
-            --timeout-ms "$SYNARA_SMOKE_TIMEOUT_MS" \
+          timeout_args=""
+          if [[ "${{ inputs.platform }}" == "mac" && "${{ inputs.arch }}" == "x64" && "$(uname -m)" == "arm64" ]]; then
+            arch -x86_64 /usr/bin/true || { echo "Rosetta 2 is required to smoke the Intel app on Apple Silicon." >&2; exit 1; }
+            # The first launch also translates the whole Intel Electron runtime.
+            timeout_args="--timeout-ms 180000"
+          fi
+          # shellcheck disable=SC2086
+          node scripts/verify-packaged-desktop-startup.ts $timeout_args \
             --assets-dir release-publish \
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
