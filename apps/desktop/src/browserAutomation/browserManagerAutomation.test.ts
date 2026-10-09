@@ -85,6 +85,9 @@ class FakeWebContents extends EventEmitter {
 }
 
 describe("DesktopBrowserManager tab switching", () => {
+  // Unused queued views would otherwise leak into the next describe's tests.
+  afterEach(() => webContentsViewConstructor.mockReset());
+
   function makeView(id: number, url = "") {
     let currentUrl = url;
     const contents = Object.assign(new FakeWebContents(id), {
