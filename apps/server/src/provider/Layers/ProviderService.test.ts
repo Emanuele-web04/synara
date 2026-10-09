@@ -2617,6 +2617,69 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }),
     );
 
+    it.effect("settles a superseded session's subagent child turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-subagent-child");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
+
+        // An interrupt that replaced the session leaves a subagent's synthetic
+        // turn open on its child thread; the old generation's settling event for
+        // that child is the only thing that can close it. It must never touch the
+        // parent binding, and non-settling child events stay dropped.
+        const childRefs = {
+          providerThreadId: "toolu_child",
+          providerParentThreadId: String(threadId),
+        };
+        staleSettlementRouting.codex.emit({
+          type: "content.delta",
+          eventId: asEventId("stale-child-delta"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { streamKind: "assistant_text", delta: "invisible" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("stale-child-turn-completed"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { state: "interrupted" },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-child-turn-completed"),
+          500,
+          10,
+          "stale child turn.completed to be persisted",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-child-delta"), false);
+        const parentBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(
+          asRuntimePayloadRecord(parentBinding?.runtimePayload).activeTurnId,
+          activeTurnId,
+        );
+      }),
+    );
+
     it.effect("settles a stale interaction resolution naming the binding's active turn", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;
