@@ -3,7 +3,17 @@
 //          after their destination route actually commits.
 // Layer: Web navigation orchestration
 
-const inFlightDraftNavigationBySlot = new Map<string, Promise<unknown>>();
+/**
+ * Repeated clicks and shortcuts within this window join the attempt already in flight. A
+ * navigation that has not settled by then is treated as lost, so a later "New thread" starts
+ * a fresh attempt instead of waiting on it until the page reloads.
+ */
+export const DRAFT_NAVIGATION_COALESCE_WINDOW_MS = 5_000;
+
+const inFlightDraftNavigationBySlot = new Map<
+  string,
+  { readonly operation: Promise<unknown>; readonly startedAt: number }
+>();
 
 export function draftNavigationSlotKey(projectId: string, entryPoint: string): string {
   return `${projectId}\u0000${entryPoint}`;
@@ -11,15 +21,15 @@ export function draftNavigationSlotKey(projectId: string, entryPoint: string): s
 
 /** Coalesces repeated clicks/shortcuts that target the same project + entry-point slot. */
 export function runDraftNavigationOnce<T>(slotKey: string, run: () => Promise<T>): Promise<T> {
-  const existing = inFlightDraftNavigationBySlot.get(slotKey) as Promise<T> | undefined;
-  if (existing) {
-    return existing;
+  const existing = inFlightDraftNavigationBySlot.get(slotKey);
+  if (existing && Date.now() - existing.startedAt < DRAFT_NAVIGATION_COALESCE_WINDOW_MS) {
+    return existing.operation as Promise<T>;
   }
 
   const operation = Promise.resolve().then(run);
-  inFlightDraftNavigationBySlot.set(slotKey, operation);
+  inFlightDraftNavigationBySlot.set(slotKey, { operation, startedAt: Date.now() });
   const clearOperation = () => {
-    if (inFlightDraftNavigationBySlot.get(slotKey) === operation) {
+    if (inFlightDraftNavigationBySlot.get(slotKey)?.operation === operation) {
       inFlightDraftNavigationBySlot.delete(slotKey);
     }
   };
