@@ -32,6 +32,7 @@ function mountFooter(input: {
         waveformLevels: [],
         onCancel: vi.fn(),
         onSubmit: vi.fn(),
+        onSend: vi.fn(),
         onToggle: input.onVoiceToggle ?? vi.fn(),
       }}
       pendingInput={null}

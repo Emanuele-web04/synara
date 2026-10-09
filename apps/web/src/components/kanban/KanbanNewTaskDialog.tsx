@@ -479,7 +479,6 @@ export function KanbanNewTaskDialog({
           <div className="px-4 pb-2.5">
             {isVoiceActive ? (
               <ComposerVoiceRecorderBar
-                durationLabel={voice.voiceRecordingDurationLabel}
                 isRecording={voice.isVoiceRecording}
                 isWaitingForAudio={voice.isVoiceWaitingForAudio}
                 isTranscribing={voice.isVoiceTranscribing}
