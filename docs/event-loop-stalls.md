@@ -71,7 +71,9 @@ counted (capped at 256 per transport; subscriptions and heartbeats excluded) so 
 busy, recovery and reconnecting notices can say how many requests are waiting.
 Older servers without the capability show only the reconnecting state. The notice
 lives outside the transcript and does not affect message auto-follow. One compact
-status surface covers busy, real reconnecting and recent recovery. Visibility changes, delayed renderer
+status surface covers busy, real reconnecting and recent recovery: on desktop a dot in
+the app rail with the details on hover, so it never covers menus; on phones, whose rail
+sits inside the sidebar sheet, a floating notice. Visibility changes, delayed renderer
 timers, reconnects and dispose fence prior
 heartbeat replies and reset liveness evidence.
 When a responsiveness timer fires over 500 ms late, the renderer gives queued

@@ -142,7 +142,7 @@ type AppRailProps = {
   /** The "…" menu trigger, after the shortcuts. */
   moreSlot?: ReactNode;
   bottomItems: ReadonlyArray<AppRailItem>;
-  /** Rendered above the bottom items (the usage rings, then the Help menu like Codex's rail). */
+  /** Rendered above the bottom items (server status, usage rings, then the Help menu like Codex's rail). */
   bottomSlot?: ReactNode;
   /** Right-click on the rail (offers "Customize"). */
   onContextMenu?: ((event: MouseEvent) => void) | undefined;
