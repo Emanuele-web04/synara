@@ -5554,6 +5554,90 @@ it.layer(
     }),
   );
 
+  it.effect("keeps an interrupted turn interrupted when its checkpoint lands afterwards", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-interrupted-checkpoint");
+      const turnId = TurnId.makeUnsafe("turn-interrupted-checkpoint");
+      const session = (status: "running" | "interrupted", updatedAt: string) => ({
+        threadId,
+        session: {
+          threadId,
+          status,
+          providerName: "claudeAgent",
+          providerInstanceId: "claudeAgent",
+          runtimeMode: "full-access" as const,
+          activeTurnId: status === "running" ? turnId : null,
+          lastError: null,
+          updatedAt,
+        },
+      });
+      const base = (key: string, occurredAt: string) => ({
+        eventId: EventId.makeUnsafe(`evt-interrupted-checkpoint-${key}`),
+        aggregateKind: "thread" as const,
+        aggregateId: threadId,
+        occurredAt,
+        commandId: CommandId.makeUnsafe(`cmd-interrupted-checkpoint-${key}`),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe(`cmd-interrupted-checkpoint-${key}`),
+        metadata: {},
+      });
+
+      yield* eventStore.append({
+        ...base("running", "2026-10-09T19:55:36.172Z"),
+        type: "thread.session-set",
+        payload: session("running", "2026-10-09T19:55:36.172Z"),
+      });
+      yield* eventStore.append({
+        ...base("interrupted", "2026-10-09T19:55:51.826Z"),
+        type: "thread.session-set",
+        payload: session("interrupted", "2026-10-09T19:55:51.826Z"),
+      });
+      yield* eventStore.append({
+        ...base("diff", "2026-10-09T19:55:51.826Z"),
+        type: "thread.turn-diff-completed",
+        payload: {
+          threadId,
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/interrupted/turn/1"),
+          status: "missing",
+          files: [],
+          assistantMessageId: null,
+          completedAt: "2026-10-09T19:55:51.826Z",
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{
+        readonly state: string;
+        readonly startedAt: string | null;
+        readonly completedAt: string | null;
+        readonly checkpointTurnCount: number | null;
+      }>`
+        SELECT
+          state,
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          checkpoint_turn_count AS "checkpointTurnCount"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+      `;
+      assert.deepEqual(rows, [
+        {
+          state: "interrupted",
+          startedAt: "2026-10-09T19:55:36.172Z",
+          completedAt: "2026-10-09T19:55:51.826Z",
+          checkpointTurnCount: 1,
+        },
+      ]);
+    }),
+  );
+
   it.effect("projects steer dispatch mode onto the triggering user message", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
