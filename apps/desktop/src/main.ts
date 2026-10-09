@@ -603,6 +603,7 @@ const browserVault = new BrowserVault(Path.join(BASE_DIR, "browser-vault"), brow
 let browserSessionRestore: BrowserSessionRestore | undefined;
 const browserVaultCapture = new BrowserVaultCapture(browserVault);
 const browserManager = new DesktopBrowserManager({
+  workspaceStatePath: Path.join(STATE_DIR, "browser-workspaces.json"),
   onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
   onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
   annotationPreloadPath: annotationGuestPreload,

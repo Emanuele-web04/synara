@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import * as FS from "node:fs";
+import * as Path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
 import { nativeTheme, type WebContents } from "electron";
@@ -115,6 +117,125 @@ describe("DesktopBrowserManager tab switching", () => {
   }
 
   const bounds = { x: 0, y: 50, width: 800, height: 600 };
+
+  it("restores native suspended tabs without claims and loads only the shown active tab", async () => {
+    const directory = FS.mkdtempSync(Path.join(process.cwd(), ".browser-restore-test-"));
+    const workspaceStatePath = Path.join(directory, "browser-workspaces.json");
+    const managers: DesktopBrowserManager[] = [];
+    const create = () => {
+      const manager = new DesktopBrowserManager({ workspaceStatePath });
+      managers.push(manager);
+      return manager;
+    };
+    const access = (manager: DesktopBrowserManager) =>
+      manager as unknown as {
+        automationRuntimeKeys: Set<string>;
+        states: Map<ThreadId, { tabs: Array<{ runtimeSurface: string }> }>;
+      };
+    try {
+      const original = create();
+      const first = original.open({
+        threadId: THREAD_ID,
+        initialUrl: "https://example.test/first",
+      });
+      const agent = original.prepareAutomationTab({
+        threadId: THREAD_ID,
+        url: "https://example.test/agent",
+        reuse: false,
+      });
+      const otherThread = ThreadId.makeUnsafe("other-thread");
+      original.open({ threadId: otherThread, initialUrl: "https://example.test/other" });
+      const agentTabId = agent.activeTabId!;
+      expect(access(original).automationRuntimeKeys.size).toBe(1);
+      // Simulate an older renderer tab: no surface or automation claim may survive.
+      const state = access(original).states.get(THREAD_ID)!;
+      state.tabs[0]!.runtimeSurface = "renderer";
+      original.hide({ threadId: THREAD_ID });
+      original.dispose();
+      const savedFile = FS.readFileSync(workspaceStatePath, "utf8");
+      expect(savedFile).not.toContain("runtimeSurface");
+      expect(savedFile).not.toContain("automationRuntimeKeys");
+
+      const restored = create();
+      const snapshot = restored.getState({ threadId: THREAD_ID });
+      expect(snapshot).toMatchObject({ open: true, activeTabId: agentTabId });
+      expect(snapshot.tabs.map((tab) => tab.id)).toEqual([first.activeTabId, agentTabId]);
+      expect(
+        snapshot.tabs.every((tab) => tab.status === "suspended" && tab.runtimeSurface === "native"),
+      ).toBe(true);
+      expect(access(restored).automationRuntimeKeys.size).toBe(0);
+      expect(webContentsViewConstructor).not.toHaveBeenCalled();
+      restored.setWindow({
+        isDestroyed: () => false,
+        contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      } as never);
+      restored.open({ threadId: THREAD_ID });
+      expect(webContentsViewConstructor).not.toHaveBeenCalled();
+
+      const page = makeView(490);
+      webContentsViewConstructor.mockReturnValueOnce(page.view);
+      restored.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      await Promise.resolve();
+      expect(webContentsViewConstructor).toHaveBeenCalledOnce();
+      expect(page.contents.loadURL).toHaveBeenCalledWith("https://example.test/agent");
+      expect(restored.getState({ threadId: THREAD_ID }).tabs.map((tab) => tab.status)).toEqual([
+        "suspended",
+        "live",
+      ]);
+      expect(restored.getState({ threadId: otherThread }).tabs[0]!.status).toBe("suspended");
+    } finally {
+      for (const manager of managers) manager.dispose();
+      FS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("persists tab closure, hides without clearing, and forgets a closed browser", () => {
+    const directory = FS.mkdtempSync(Path.join(process.cwd(), ".browser-restore-test-"));
+    const workspaceStatePath = Path.join(directory, "browser-workspaces.json");
+    const managers: DesktopBrowserManager[] = [];
+    const create = () => {
+      const manager = new DesktopBrowserManager({ workspaceStatePath });
+      managers.push(manager);
+      return manager;
+    };
+    try {
+      const original = create();
+      const first = original.open({
+        threadId: THREAD_ID,
+        initialUrl: "https://example.test/first",
+      });
+      const second = original.newTab({ threadId: THREAD_ID, url: "https://example.test/second" });
+      original.closeTab({ threadId: THREAD_ID, tabId: first.activeTabId! });
+      original.hide({ threadId: THREAD_ID });
+      original.dispose();
+      const restored = create();
+      expect(restored.getState({ threadId: THREAD_ID })).toMatchObject({
+        open: true,
+        activeTabId: second.activeTabId,
+        tabs: [
+          {
+            id: second.activeTabId,
+            url: "https://example.test/second",
+            status: "suspended",
+            runtimeSurface: "native",
+          },
+        ],
+      });
+      restored.close({ threadId: THREAD_ID });
+      restored.dispose();
+      const closed = create();
+      expect(closed.getState({ threadId: THREAD_ID })).toMatchObject({
+        open: false,
+        tabs: [],
+        activeTabId: null,
+      });
+      expect(closed.open({ threadId: THREAD_ID }).tabs).toMatchObject([{ url: "about:blank" }]);
+      expect(webContentsViewConstructor).not.toHaveBeenCalled();
+    } finally {
+      for (const manager of managers) manager.dispose();
+      FS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it("keeps three tabs live through quick and slow switches without reloading", async () => {
     vi.useFakeTimers();
