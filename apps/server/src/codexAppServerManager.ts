@@ -5341,12 +5341,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const payload = this.readObject(params);
     const item = this.readObject(payload, "item") ?? payload;
     const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
-    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
-      return;
-    }
     const parentProviderThreadId = normalizeProviderThreadId(
       this.readProviderConversationId(params),
     );
+    // Multi-agent v2 announces a spawned child with a subAgentActivity item
+    // (agentThreadId) instead of a collab tool call naming receivers.
+    if (itemType === "subAgentActivity") {
+      const agentThreadId = normalizeProviderThreadId(this.readString(item, "agentThreadId"));
+      if (agentThreadId) {
+        this.rememberChildConversation(
+          context,
+          agentThreadId,
+          parentProviderThreadId,
+          parentTurnId,
+        );
+      }
+      return;
+    }
+    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
+      return;
+    }
 
     const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
     for (const receiverThreadId of receiverThreadIds) {

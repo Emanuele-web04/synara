@@ -6970,6 +6970,30 @@ describe("collab child routing after the parent turn ends", () => {
     expect(harness.context.session.activeTurnId).toBeUndefined();
   });
 
+  it("routes a child announced by a v2 subAgentActivity item after the parent turn completes", () => {
+    const harness = createLateChildHarness();
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "subAgentActivity",
+          id: "call_spawn_v2",
+          kind: "started",
+          agentThreadId: "child_provider_v2",
+          agentPath: "/root/count_calc",
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+    completeParentTurn(harness);
+
+    sendLateChildNotifications(harness, "child_provider_v2");
+
+    expectOnlyChildDelta(harness, "child_provider_v2");
+    expect(harness.context.session.status).toBe("ready");
+  });
+
   it("remembers a child first seen through the unmapped fallback after the parent turn completes", () => {
     const harness = createLateChildHarness();
     sendInferredChildDelta(harness, "child_provider_inferred");
