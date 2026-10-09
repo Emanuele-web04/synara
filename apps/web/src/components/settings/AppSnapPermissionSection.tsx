@@ -34,7 +34,7 @@ export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
     pane: "input-monitoring",
     title: "Input Monitoring",
     description:
-      "Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded.",
+      "Lets Synara notice the AppSnap shortcut while another app owns the keyboard. Nothing you type is recorded.",
   },
   {
     pane: "screen-recording",
