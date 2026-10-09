@@ -1,3 +1,4 @@
+import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import type { WorkLogEntry } from "../../session-logic";
 import {
@@ -218,6 +219,85 @@ describe("deriveAgentActivityTimelineState", () => {
       "agent-reasoning:reasoning-1",
       "tool-1",
       "tool-2",
+    ]);
+  });
+});
+
+describe("subagent progress", () => {
+  const progress = (
+    id: string,
+    toolUseId: string,
+    title: string,
+    detail: string,
+    turnId: string,
+  ): WorkLogEntry =>
+    workEntry({
+      id,
+      label: "Subagent progress",
+      tone: "info",
+      activityKind: "task.progress",
+      detail,
+      turnId: TurnId.makeUnsafe(turnId),
+      subagentProgress: { toolUseId, title },
+    });
+
+  it("is attributed to its subagent instead of reading as reasoning", () => {
+    const entry = progress("p-1", "toolu_outer", "Outer worker", "Running Sleep 8", "turn-1");
+    expect(isReasoningUpdateWorkEntry(entry)).toBe(false);
+    expect(formatAgentActivityEntryTitle(entry)).toBe("Outer worker");
+    // Settled steps must not keep the present-tense "Running" prefix.
+    expect(formatAgentActivityEntryPreview(entry)).toBe("Sleep 8");
+  });
+
+  it("groups per subagent and per turn, never across either", () => {
+    const state = deriveAgentActivityTimelineState([
+      progress("a-1", "toolu_a", "Agent A", "Running sleep 8", "turn-1"),
+      progress("b-1", "toolu_b", "Agent B", "Running sleep 12", "turn-1"),
+      progress("a-2", "toolu_a", "Agent A", "Running echo A", "turn-1"),
+      workEntry({
+        id: "reasoning-1",
+        label: "Reasoning update",
+        tone: "info",
+        turnId: TurnId.makeUnsafe("turn-1"),
+      }),
+      progress("a-3", "toolu_a", "Agent A", "Running wc -l", "turn-2"),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual([
+      "subagent-progress:a-1",
+      "subagent-progress:b-1",
+      "agent-reasoning:reasoning-1",
+      "subagent-progress:a-3",
+    ]);
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      label: "Agent A",
+      toolTitle: "Agent A",
+      preview: "2 updates - echo A",
+    });
+    expect(state.timelineWorkEntries[1]).toMatchObject({ label: "Agent B", preview: "sleep 12" });
+    expect(state.timelineWorkEntries[3]).toMatchObject({ label: "Agent A", preview: "wc -l" });
+    expect(state.detailById.get("subagent-progress:a-1")?.entries).toHaveLength(2);
+    expect(state.detailById.get("subagent-progress:a-1")?.title).toBe("Agent A");
+  });
+
+  it("does not merge reasoning updates from different turns", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "r-1",
+        label: "Reasoning update",
+        tone: "info",
+        turnId: TurnId.makeUnsafe("turn-1"),
+      }),
+      workEntry({
+        id: "r-2",
+        label: "Reasoning update",
+        tone: "info",
+        turnId: TurnId.makeUnsafe("turn-2"),
+      }),
+    ]);
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual([
+      "agent-reasoning:r-1",
+      "agent-reasoning:r-2",
     ]);
   });
 });
