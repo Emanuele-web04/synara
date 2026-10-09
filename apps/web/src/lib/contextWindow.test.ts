@@ -7,6 +7,8 @@ import {
   deriveAppliedContextWindowSelection,
   deriveContextWindowMeterDisplay,
   deriveCumulativeCostUsd,
+  deriveObservedClaudeContextBudget,
+  contextWindowMeterSectorPath,
   deriveLatestContextWindowState,
   deriveSelectedContextWindowSnapshot,
   formatContextWindowTokens,
@@ -344,4 +346,111 @@ describe("composer context budget label", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("context window meter glyph", () => {
+  it("draws a filled sector from 12 o'clock, clockwise, closed at the centre", () => {
+    expect(contextWindowMeterSectorPath(0)).toBeNull();
+    // A quarter ends at 3 o'clock.
+    expect(contextWindowMeterSectorPath(25)).toBe(
+      "M 8 8 L 8 2.75 A 5.25 5.25 0 0 1 13.250 8.000 Z",
+    );
+    // More than half takes the large arc.
+    expect(contextWindowMeterSectorPath(75)).toContain("A 5.25 5.25 0 1 1");
+    // A full window is a whole disc, not a degenerate zero-length arc.
+    expect(contextWindowMeterSectorPath(100)).toBe(
+      "M 8 2.75 A 5.25 5.25 0 1 1 8 13.25 A 5.25 5.25 0 1 1 8 2.75 Z",
+    );
+  });
+});
+
+describe("observed Claude context budget", () => {
+  const model = "claude-haiku-5-5";
+  const cache = (observedModel: string) => ({
+    model: observedModel,
+    observedAt: "2026-10-09T21:29:36.000Z",
+    state: "unknown" as const,
+    source: "request-usage" as const,
+  });
+  // Recorded from a live Claude Haiku 5.5 turn: provisional catalog budgets, then the
+  // end-of-turn correction, then the next turn's provisional budget again.
+  const turnActivities = [
+    makeActivity("configured", "context-window.configured", { cleared: true }),
+    makeActivity("u1", "context-window.updated", {
+      usedTokens: 30115,
+      maxTokens: 200_000,
+      claudeCache: cache(model),
+    }),
+    makeActivity("u2", "context-window.updated", {
+      usedTokens: 30115,
+      maxTokens: 1_000_000,
+      claudeCache: cache(model),
+    }),
+    makeActivity("u3", "context-window.updated", {
+      usedTokens: 30115,
+      maxTokens: 200_000,
+      claudeCache: cache(model),
+    }),
+    // Task usage arrives without a cache observation.
+    makeActivity("task", "context-window.updated", { usedTokens: 4000, maxTokens: 200_000 }),
+  ];
+
+  it("keeps the largest budget reported for the model, so the label does not flip", () => {
+    expect(deriveObservedClaudeContextBudget(turnActivities)).toEqual({
+      model,
+      maxTokens: 1_000_000,
+    });
+    const status = deriveContextWindowSelectionStatus({
+      activeSnapshot: deriveLatestContextWindowState(turnActivities).snapshot,
+      appliedValue: "auto",
+      selectedValue: "auto",
+    });
+    const labels = [];
+    for (let count = 2; count <= turnActivities.length; count += 1) {
+      const activities = turnActivities.slice(0, count);
+      labels.push(
+        deriveComposerContextWindowLabel({
+          provider: "claudeAgent",
+          model,
+          snapshot: deriveLatestContextWindowState(activities).snapshot,
+          status,
+          observedBudget: deriveObservedClaudeContextBudget(activities),
+        }),
+      );
+    }
+    expect(labels).toEqual(["(200k)", "(1M)", "(1M)", "(1M)"]);
+  });
+
+  it("starts over when the session is reconfigured or compacted", () => {
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("compacted", "context-compaction", { state: "compacted" }),
+        makeActivity("u4", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 200_000,
+          claudeCache: cache(model),
+        }),
+      ]),
+    ).toEqual({ model, maxTokens: 200_000 });
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("reconfigured", "context-window.configured", { maxTokens: 200_000 }),
+      ]),
+    ).toBeNull();
+  });
+
+  it("follows the newest observed model", () => {
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("other", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 200_000,
+          claudeCache: cache("claude-sonnet-5"),
+        }),
+      ]),
+    ).toEqual({ model: "claude-sonnet-5", maxTokens: 200_000 });
+  });
 });
