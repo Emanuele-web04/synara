@@ -2773,18 +2773,18 @@ describe("startSession", () => {
 });
 
 describe("sendTurn", () => {
-  it("clears stale collaboration receiver routing before a new turn", async () => {
+  it("keeps collaboration receiver routing for live children across a new turn", async () => {
     const { manager, context } = createSendTurnHarness();
-    context.collabReceiverTurns.set("reused-child", "old-turn");
-    context.collabReceiverParents.set("reused-child", "old-parent");
+    context.collabReceiverTurns.set("live-child", "old-turn");
+    context.collabReceiverParents.set("live-child", "thread_1");
 
     await manager.sendTurn({
       threadId: asThreadId("thread_1"),
       input: "Start the next turn",
     });
 
-    expect(context.collabReceiverTurns.size).toBe(0);
-    expect(context.collabReceiverParents.size).toBe(0);
+    expect(context.collabReceiverTurns.get("live-child")).toBe("old-turn");
+    expect(context.collabReceiverParents.get("live-child")).toBe("thread_1");
   });
 
   it("sends text and image user input items to turn/start", async () => {
@@ -6866,4 +6866,172 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
       rmSync(workspaceDir, { recursive: true, force: true });
     }
   }, 300_000);
+});
+
+describe("collab child routing after the parent turn ends", () => {
+  function createLateChildHarness() {
+    const harness = createCollabNotificationHarness();
+    harness.updateSession.mockImplementation((...args: unknown[]) => {
+      const [target, patch] = args as [typeof harness.context, Record<string, unknown>];
+      Object.assign(target.session, patch);
+    });
+    return harness;
+  }
+
+  type LateChildHarness = ReturnType<typeof createLateChildHarness>;
+
+  function sendInferredChildDelta(harness: LateChildHarness, childProviderThreadId: string): void {
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: childProviderThreadId,
+        turnId: "turn_child_early",
+        itemId: "msg_child_early",
+        delta: "early child output",
+      },
+    });
+  }
+
+  function completeParentTurn(harness: LateChildHarness): void {
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "turn/completed",
+      params: {
+        threadId: "provider_parent",
+        turn: { id: "turn_parent", status: "completed" },
+      },
+    });
+    expect(harness.context.session.status).toBe("ready");
+    expect(harness.context.session.activeTurnId).toBeUndefined();
+    harness.emitEvent.mockClear();
+  }
+
+  function sendLateChildNotifications(
+    harness: LateChildHarness,
+    childProviderThreadId: string,
+  ): void {
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "turn/started",
+      params: {
+        threadId: childProviderThreadId,
+        turn: { id: "turn_child_late" },
+      },
+    });
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: childProviderThreadId,
+        turnId: "turn_child_late",
+        itemId: "msg_child_late",
+        delta: "late child output",
+      },
+    });
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "turn/completed",
+      params: {
+        threadId: childProviderThreadId,
+        turn: { id: "turn_child_late", status: "completed" },
+      },
+    });
+  }
+
+  function expectOnlyChildDelta(harness: LateChildHarness, childProviderThreadId: string): void {
+    expect(harness.emitEvent).toHaveBeenCalledTimes(1);
+    expect(harness.emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/agentMessage/delta",
+        turnId: "turn_child_late",
+        parentTurnId: "turn_parent",
+        providerThreadId: childProviderThreadId,
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  }
+
+  it("routes a collab-mapped child as a child after the parent turn completes", () => {
+    const harness = createLateChildHarness();
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_collab_late",
+          receiverThreadIds: ["child_provider_mapped"],
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+    completeParentTurn(harness);
+
+    sendLateChildNotifications(harness, "child_provider_mapped");
+
+    expectOnlyChildDelta(harness, "child_provider_mapped");
+    expect(harness.context.session.status).toBe("ready");
+    expect(harness.context.session.activeTurnId).toBeUndefined();
+  });
+
+  it("remembers a child first seen through the unmapped fallback after the parent turn completes", () => {
+    const harness = createLateChildHarness();
+    sendInferredChildDelta(harness, "child_provider_inferred");
+    completeParentTurn(harness);
+
+    sendLateChildNotifications(harness, "child_provider_inferred");
+
+    expectOnlyChildDelta(harness, "child_provider_inferred");
+    expect(harness.context.session.status).toBe("ready");
+    expect(harness.context.session.activeTurnId).toBeUndefined();
+  });
+
+  it("routes a child as a child after the parent's next sendTurn", async () => {
+    const harness = createLateChildHarness();
+    vi.spyOn(
+      harness.manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+      "sendRequest",
+    ).mockResolvedValue({ turn: { id: "turn_parent_next" } });
+    sendInferredChildDelta(harness, "child_provider_inferred");
+    completeParentTurn(harness);
+
+    await harness.manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Next parent turn",
+    });
+    expect(harness.context.session.activeTurnId).toBe("turn_parent_next");
+    harness.emitEvent.mockClear();
+
+    sendLateChildNotifications(harness, "child_provider_inferred");
+
+    expectOnlyChildDelta(harness, "child_provider_inferred");
+    expect(harness.context.session.status).toBe("running");
+    expect(harness.context.session.activeTurnId).toBe("turn_parent_next");
+  });
+
+  it("forgets a child mapping once the child thread closes", () => {
+    const harness = createLateChildHarness();
+    sendInferredChildDelta(harness, "child_provider_inferred");
+    expect(harness.context.collabReceiverParents.get("child_provider_inferred")).toBe(
+      "provider_parent",
+    );
+
+    handleServerNotificationForTest(harness.manager, harness.context, {
+      method: "thread/closed",
+      params: { threadId: "child_provider_inferred" },
+    });
+
+    expect(harness.context.collabReceiverParents.has("child_provider_inferred")).toBe(false);
+    expect(harness.context.collabReceiverTurns.has("child_provider_inferred")).toBe(false);
+    expect(harness.context.session.status).toBe("running");
+    expect(harness.context.session.activeTurnId).toBe("turn_parent");
+  });
+
+  it("bounds remembered child mappings", () => {
+    const harness = createLateChildHarness();
+    for (let index = 0; index < 250; index += 1) {
+      sendInferredChildDelta(harness, `child_provider_${index}`);
+    }
+
+    expect(harness.context.collabReceiverParents.size).toBeLessThanOrEqual(200);
+    expect(harness.context.collabReceiverTurns.size).toBeLessThanOrEqual(200);
+    expect(harness.context.collabReceiverParents.has("child_provider_249")).toBe(true);
+    expect(harness.context.collabReceiverParents.has("child_provider_0")).toBe(false);
+  });
 });
