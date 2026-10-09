@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DRAFT_NAVIGATION_COALESCE_WINDOW_MS,
   draftNavigationSlotKey,
   runDraftNavigationOnce,
   stageDraftNavigation,
@@ -85,5 +86,28 @@ describe("stagedDraftNavigation", () => {
 
     await expect(runDraftNavigationOnce(slotKey, secondRun)).resolves.toBe("second");
     expect(secondRun).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a navigation that never settles block later attempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const stuckRun = vi.fn(() => new Promise<string>(() => undefined));
+      const retryRun = vi.fn(async () => "retry");
+      const slotKey = draftNavigationSlotKey("project-stuck", "chat");
+
+      const stuck = runDraftNavigationOnce(slotKey, stuckRun);
+      // A double click right away still joins the pending attempt.
+      expect(runDraftNavigationOnce(slotKey, retryRun)).toBe(stuck);
+      await Promise.resolve();
+      expect(stuckRun).toHaveBeenCalledOnce();
+      expect(retryRun).not.toHaveBeenCalled();
+
+      // Once the attempt is clearly lost, "New thread" must work again without a reload.
+      vi.advanceTimersByTime(DRAFT_NAVIGATION_COALESCE_WINDOW_MS);
+      await expect(runDraftNavigationOnce(slotKey, retryRun)).resolves.toBe("retry");
+      expect(retryRun).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
