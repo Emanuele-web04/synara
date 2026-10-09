@@ -162,19 +162,28 @@ export function appRailButtonClassName(active: boolean): string {
   );
 }
 
-function AppRailButton({ item }: { item: AppRailItem }) {
+function AppRailButton({
+  item,
+  slidingBackground = false,
+}: {
+  item: AppRailItem;
+  slidingBackground?: boolean;
+}) {
   const label = item.badge ? `${item.label} · ${item.badge.accessibleLabel}` : item.label;
   const glyphs = item.glyphs;
   const button = (
     <SidebarIconButton
       icon={item.active ? glyphs.active : glyphs.idle}
-      iconClassName={APP_RAIL_GLYPH_CLASS_NAME}
+      iconClassName={cn(APP_RAIL_GLYPH_CLASS_NAME, item.active && "app-rail-icon-enter")}
       label={label}
       size="lg"
       tooltip={item.id === "tasks" ? undefined : label}
       tooltipSide="right"
       aria-current={item.active ? "page" : undefined}
-      className={appRailButtonClassName(item.active)}
+      className={cn(
+        appRailButtonClassName(item.active),
+        slidingBackground && item.active && "bg-transparent hover:bg-transparent",
+      )}
       onClick={item.onSelect}
       {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
       {...(item.onFocus ? { onFocus: item.onFocus } : {})}
@@ -202,6 +211,7 @@ export function AppRail({
   bottomSlot,
   onContextMenu,
 }: AppRailProps) {
+  const activeIndex = items.findIndex((item) => item.active);
   return (
     <nav
       aria-label="Primary"
@@ -209,9 +219,19 @@ export function AppRail({
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >
       <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]">
-        {items.map((item) => (
-          <AppRailButton key={item.id} item={item} />
-        ))}
+        <div className="relative flex shrink-0 flex-col items-center gap-1.5">
+          {activeIndex >= 0 ? (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-0 size-9 rounded-lg bg-[var(--sidebar-selected)] transition-transform duration-220 ease-out motion-reduce:transition-none"
+              // Keep the stride aligned with the size-9 buttons and gap-1.5 above.
+              style={{ transform: `translateY(${activeIndex * 2.625}rem)` }}
+            />
+          ) : null}
+          {items.map((item) => (
+            <AppRailButton key={item.id} item={item} slidingBackground />
+          ))}
+        </div>
         {shortcuts.length > 0 ? (
           <>
             <div
