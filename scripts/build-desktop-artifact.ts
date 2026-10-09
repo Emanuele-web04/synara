@@ -122,6 +122,7 @@ interface BuildCliInput {
   readonly outputDir: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
+  readonly deferDmgNotarization: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
@@ -222,6 +223,7 @@ interface ResolvedBuildOptions {
   readonly outputDir: string;
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
+  readonly deferDmgNotarization: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -348,6 +350,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const skipBuild = resolveBooleanFlag(input.skipBuild, envSkipBuild);
   const keepStage = resolveBooleanFlag(input.keepStage, envKeepStage);
   const signed = resolveBooleanFlag(input.signed, envSigned);
+  const deferDmgNotarization = resolveBooleanFlag(input.deferDmgNotarization, false);
+  if (deferDmgNotarization && (platform !== "mac" || target !== "dmg" || !signed)) {
+    return yield* new BuildScriptError({
+      message: "--defer-dmg-notarization applies only to a signed macOS DMG.",
+    });
+  }
   const verbose = resolveBooleanFlag(input.verbose, envVerbose);
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, envMockUpdates);
   const mockUpdateServerPort = mergeOptions(
@@ -368,6 +376,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     outputDir,
     skipBuild,
     keepStage,
+    deferDmgNotarization,
     signed,
     verbose,
     mockUpdates,
@@ -1433,7 +1442,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  if (options.platform === "mac" && options.target === "dmg" && options.signed) {
+  if (options.deferDmgNotarization) {
+    yield* Effect.log(
+      "[desktop-artifact] DMG notarization deferred: run scripts/finalize-mac-dmg.ts --dmg-only on the output.",
+    );
+  } else if (options.platform === "mac" && options.target === "dmg" && options.signed) {
     yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
     const finalizedDmg = yield* Effect.tryPromise({
       try: () =>
@@ -1560,6 +1573,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   keepStage: Flag.boolean("keep-stage").pipe(
     Flag.withDescription("Keep temporary staging files (env: SYNARA_DESKTOP_KEEP_STAGE)."),
+    Flag.optional,
+  ),
+  deferDmgNotarization: Flag.boolean("defer-dmg-notarization").pipe(
+    Flag.withDescription(
+      "Leave the signed DMG for finalize-mac-dmg.ts, so release CI can smoke the update ZIP during Apple's wait.",
+    ),
     Flag.optional,
   ),
   signed: Flag.boolean("signed").pipe(
