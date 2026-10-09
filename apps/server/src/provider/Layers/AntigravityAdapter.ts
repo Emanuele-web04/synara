@@ -2630,11 +2630,18 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           }
         });
         const output = createBoundedProcessOutput();
+        // Keep the complete stdout stream for legacy plain-text responses. The
+        // bounded capture above is reserved for diagnostics/raw process-exit
+        // events; applying that cap to the response would silently truncate a
+        // valid provider answer.
+        const responseStdout: string[] = [];
         const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
-          outputParser.write(String(chunk));
+          const text = String(chunk);
+          responseStdout.push(text);
+          outputParser.write(text);
           output.append("stdout", chunk);
         });
         child.stderr.on("data", (chunk) => output.append("stderr", chunk));
@@ -2689,9 +2696,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            const { stdout, stderr } = output.snapshot();
+            const { stdout: boundedStdout, stderr } = output.snapshot();
             const printResult = outputParser.finish();
-            const responseText = printResult?.response ?? stdout.trim();
+            const responseText = printResult?.response ?? responseStdout.join("").trim();
             if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
@@ -2750,7 +2757,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                       `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
-              raw: raw("process-exit", { code, signal, stdout, stderr }),
+              raw: raw("process-exit", {
+                code,
+                signal,
+                stdout: boundedStdout,
+                stderr,
+              }),
             });
             await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
           })();
