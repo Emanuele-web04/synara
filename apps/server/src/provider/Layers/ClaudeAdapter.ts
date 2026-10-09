@@ -1696,6 +1696,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude authentication succeeded, but this organization does not allow Claude Code.";
     case "account_on_hold":
       return "The active Claude account is on hold. Resolve the account issue, then retry.";
+    case "verification_required":
+      return "Claude requires organization verification before this account can continue. Complete verification, then retry.";
     case "billing_error":
       return "Claude billing or subscription access failed. Check the active Claude account, then retry.";
     case "rate_limit":
@@ -1710,6 +1712,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude returned a server error. Retry in a moment.";
     case "max_output_tokens":
       return "Claude reached the maximum output length before completing the turn.";
+    case "cloud_credential_error":
+      return "Claude could not load its cloud provider credentials. Check or refresh them, then retry.";
     case "unknown":
       return "Claude failed to complete the turn.";
   }
@@ -1720,6 +1724,7 @@ function claudeAssistantErrorRequiresProcessRestart(error: SDKAssistantMessageEr
     error === "authentication_failed" ||
     error === "oauth_org_not_allowed" ||
     error === "account_on_hold" ||
+    error === "verification_required" ||
     error === "billing_error"
   );
 }
@@ -4622,6 +4627,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // before allocating an event stamp so it can't flood the timeline (or churn
         // allocations) with "Runtime warning" entries.
         if (message.subtype === "thinking_tokens") {
+          return;
+        }
+
+        // `permission_check_status` is an internal CLI bookend ('checking' → 'done')
+        // sent when an auto-mode permission check runs long. It is absent from the
+        // SDK's public types and the tool's own result settles the call, so drop it.
+        if (sdkMessageSubtype(message) === "permission_check_status") {
           return;
         }
 
