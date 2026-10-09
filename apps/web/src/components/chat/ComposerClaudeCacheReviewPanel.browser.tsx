@@ -31,6 +31,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
         isCompactionRequest
         compactDisabledReason={null}
         onRespond={onRespond}
+        onStopAsking={vi.fn()}
       />,
     );
     try {
@@ -52,6 +53,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
         review={review}
         compactDisabledReason={null}
         onRespond={onRespond}
+        onStopAsking={vi.fn()}
       />,
     );
     try {
@@ -69,6 +71,33 @@ describe("ComposerClaudeCacheReviewPanel", () => {
     }
   });
 
+  it("continues and stops asking only after the choice is accepted", async () => {
+    const review = makeReview();
+    const onRespond = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Connection unavailable"))
+      .mockResolvedValue(undefined);
+    const onStopAsking = vi.fn();
+    const screen = await render(
+      <ComposerClaudeCacheReviewPanel
+        review={review}
+        compactDisabledReason={null}
+        onRespond={onRespond}
+        onStopAsking={onStopAsking}
+      />,
+    );
+    try {
+      await page.getByRole("button", { name: /^Don't ask again/ }).click();
+      await expect.element(page.getByRole("alert")).toHaveTextContent("Connection unavailable");
+      expect(onStopAsking).not.toHaveBeenCalled();
+      await page.getByRole("button", { name: /^Don't ask again/ }).click();
+      expect(onRespond).toHaveBeenNthCalledWith(2, review, "continue");
+      await expect.poll(() => onStopAsking.mock.calls.length).toBe(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("preserves the held message and makes a rejected choice retryable", async () => {
     const review = makeReview();
     const onRespond = vi
@@ -80,6 +109,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
         review={review}
         compactDisabledReason={null}
         onRespond={onRespond}
+        onStopAsking={vi.fn()}
       />,
     );
     try {
@@ -102,6 +132,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
           review={makeReview({ status })}
           compactDisabledReason={null}
           onRespond={vi.fn()}
+          onStopAsking={vi.fn()}
         />,
       );
       try {
@@ -132,6 +163,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
         review={makeReview({ status: "uncertain" })}
         compactDisabledReason={null}
         onRespond={onRespond}
+        onStopAsking={vi.fn()}
       />,
     );
     try {
@@ -139,6 +171,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
         /^Continue with full context/,
         /^Compact, then send/,
         /^Cancel this send/,
+        /^Don't ask again/,
       ]) {
         await expect.element(page.getByRole("button", { name: label })).toBeDisabled();
       }
@@ -177,6 +210,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
         review={makeReview({ status: "failed", error: "Compaction failed" })}
         compactDisabledReason={null}
         onRespond={vi.fn().mockRejectedValue(new Error("Choice request failed"))}
+        onStopAsking={vi.fn()}
       />,
     );
     try {
@@ -210,6 +244,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
         review={review}
         compactDisabledReason="Compaction is unavailable for this Claude session."
         onRespond={onRespond}
+        onStopAsking={vi.fn()}
       />,
     );
     try {

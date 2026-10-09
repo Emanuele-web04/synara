@@ -3182,7 +3182,12 @@ const make = Effect.gen(function* () {
         observation &&
         assessment.requiresConfirmation &&
         (!input.acceptedCacheReview ||
-          !claudeCacheReviewCoversObservation(input.acceptedCacheReview, observation))
+          !claudeCacheReviewCoversObservation(input.acceptedCacheReview, observation)) &&
+        // Users can opt out of the review. If the setting cannot be read, keep asking.
+        (yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.confirmClaudeCacheResume),
+          Effect.catch(() => Effect.succeed(true)),
+        ))
       ) {
         const createdAt = new Date().toISOString();
         const hold = {

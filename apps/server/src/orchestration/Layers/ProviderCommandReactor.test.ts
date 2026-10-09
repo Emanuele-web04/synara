@@ -1679,6 +1679,22 @@ describe("ProviderCommandReactor", () => {
       await harness.drain();
     }
 
+    it("sends without a review when expired-cache confirmation is turned off", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+        getClaudeCacheObservation: () => Effect.sync(expiredCacheObservation),
+        serverSettings: { confirmClaudeCacheResume: false },
+      });
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "cache-unconfirmed-message",
+        text: "Send this without a cache review",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.claudeCacheReview).toBeFalsy();
+    });
+
     it("recovers a retryable cache response ahead of the source cursor before source admission", async () => {
       const observation = expiredCacheObservation();
       const harness = await createCacheHarness(() => observation, false);

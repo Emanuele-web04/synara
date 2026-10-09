@@ -2197,6 +2197,10 @@ export default function ChatView({
     },
     [threadId],
   );
+  const onStopAskingClaudeCacheReview = useCallback(
+    () => updateSettings({ confirmClaudeCacheResume: false }),
+    [updateSettings],
+  );
   const activeRootBranch = useMemo(
     () =>
       resolveComposerSlashRootBranch({
@@ -5948,6 +5952,7 @@ export default function ChatView({
                   compactDisabledReason={claudeCompactDisabledReason}
                   isCompactionRequest={cacheReviewIsCompactionRequest}
                   onRespond={onRespondToClaudeCacheReview}
+                  onStopAsking={onStopAskingClaudeCacheReview}
                 />
               </div>
             ) : null}

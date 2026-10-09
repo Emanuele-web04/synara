@@ -28,6 +28,11 @@ queueing the prompt. A context larger than 100,000 tokens with evidence of an ex
 a choice. This applies to a resumed process and a long pause in the same process. Unknown evidence
 does not block ordinary use. There is no periodic inference to maintain or inspect the cache.
 
+Users who prefer to always continue can turn the review off under Settings → Behavior → Expired
+Claude cache confirmation, or by choosing "Don't ask again" on the review. The server then sends such
+messages and goal iterations with the full context. If the setting cannot be read, the review still
+applies.
+
 The displayed input, cache-read, and cache-write counts describe requests. They are not percentages
 of an Anthropic subscription allowance. A warm estimate does not guarantee a hit if the provider
 changes the prefix or configuration.
@@ -43,6 +48,7 @@ compaction turn identity. The review appears in full, detail, and shell snapshot
 | Continue with full context | Revalidate the saved assessment and deliver the held message once through ordinary orchestration. |
 | Compact, then send         | Run a separate native `/compact` operation; deliver the held message only after verified success. |
 | Cancel this send           | Clear the pending send while retaining the conversation message.                                  |
+| Don't ask again            | Continue with full context, then turn the review off for later sends.                             |
 
 Once a choice is accepted, the review panel hides and progress moves to the transcript: the Claude
 adapter publishes a "Compacting context" row when native compaction starts (explicit `/compact` or a

@@ -22,6 +22,7 @@ import {
   runThreadRetentionSweep,
   THREAD_RETENTION_COMMAND_ID_PREFIX,
   THREAD_RETENTION_UNUSED_MS,
+  threadAutoArchiveMs,
 } from "./threadRetention";
 
 function makeReadModelThread(
@@ -262,7 +263,30 @@ describe("thread retention", () => {
     ).toEqual([]);
   });
 
-  it("dispatches reversible archive commands and publishes completed progress", async () => {
+  it("uses the auto-archive setting as the idle window", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const threadIdleFor = (days: number) => {
+      const lastActivityAt = new Date(nowMs - days * 24 * 60 * 60 * 1000 - 1).toISOString();
+      return makeReadModelThread({
+        id: ThreadId.makeUnsafe(`thread-${days}d`),
+        createdAt: lastActivityAt,
+        updatedAt: lastActivityAt,
+        latestUserMessageAt: lastActivityAt,
+      });
+    };
+    const readModel = makeReadModel([threadIdleFor(7), threadIdleFor(14), threadIdleFor(30)]);
+
+    expect(threadAutoArchiveMs("7d")).toBe(THREAD_RETENTION_UNUSED_MS);
+    expect(threadAutoArchiveMs("never")).toBeNull();
+    expect(
+      getRetentionArchiveRootIds(readModel, nowMs, new Set(), threadAutoArchiveMs("14d")!),
+    ).toEqual([ThreadId.makeUnsafe("thread-14d"), ThreadId.makeUnsafe("thread-30d")]);
+    expect(
+      getRetentionArchiveRootIds(readModel, nowMs, new Set(), threadAutoArchiveMs("30d")!),
+    ).toEqual([ThreadId.makeUnsafe("thread-30d")]);
+  });
+
+  async function runSweep(unusedMs: number | null) {
     const archivedThreadId = ThreadId.makeUnsafe("thread-to-archive");
     const dispatchedCommands: OrchestrationCommand[] = [];
     let pruneCount = 0;
@@ -295,10 +319,18 @@ describe("thread retention", () => {
           Effect.sync(() => {
             pruneCount += 1;
           }),
+          unusedMs,
         );
         const lifecycle = yield* ServerLifecycleEvents;
         return (yield* lifecycle.snapshot).events.find((event) => event.type === "maintenance");
       }).pipe(Effect.provide(ServerLifecycleEventsLive)),
+    );
+    return { archivedThreadId, dispatchedCommands, pruneCount, maintenanceEvent };
+  }
+
+  it("dispatches reversible archive commands and publishes completed progress", async () => {
+    const { archivedThreadId, dispatchedCommands, pruneCount, maintenanceEvent } = await runSweep(
+      THREAD_RETENTION_UNUSED_MS,
     );
 
     expect(dispatchedCommands).toHaveLength(1);
@@ -319,5 +351,13 @@ describe("thread retention", () => {
         totalCount: 1,
       },
     });
+  });
+
+  it("archives nothing when auto-archive is off but still prunes archived worktrees", async () => {
+    const { dispatchedCommands, pruneCount, maintenanceEvent } = await runSweep(null);
+
+    expect(dispatchedCommands).toEqual([]);
+    expect(pruneCount).toBe(1);
+    expect(maintenanceEvent).toBeUndefined();
   });
 });

@@ -14,6 +14,10 @@ export const DEFAULT_CODEX_ACCOUNT_ID = "default";
 export const SidechatExpiry = Schema.Literals(["1h", "24h", "never"]);
 export type SidechatExpiry = typeof SidechatExpiry.Type;
 
+// How long a thread can sit idle before the server archives it.
+export const ThreadAutoArchive = Schema.Literals(["7d", "14d", "30d", "never"]);
+export type ThreadAutoArchive = typeof ThreadAutoArchive.Type;
+
 export const SourceControlWritingStyle = Schema.Literals(["repository", "conventional", "custom"]);
 export type SourceControlWritingStyle = typeof SourceControlWritingStyle.Type;
 export const MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH = 4096;
@@ -147,6 +151,9 @@ export const ServerSettings = Schema.Struct({
   // reads the project's other GitHub remotes, such as the upstream of a fork.
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   sidechatExpiry: SidechatExpiry.pipe(Schema.withDecodingDefault(() => "1h")),
+  threadAutoArchive: ThreadAutoArchive.pipe(Schema.withDecodingDefault(() => "7d")),
+  // Hold a message for review before Claude re-reads a large, likely-uncached context.
+  confirmClaudeCacheResume: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   sourceControlWritingStyle: SourceControlWritingStyle.pipe(
     Schema.withDecodingDefault(() => "repository"),
   ),
@@ -212,6 +219,8 @@ export const ServerSettingsPatch = Schema.Struct({
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),
   sidechatExpiry: Schema.optionalKey(SidechatExpiry),
+  threadAutoArchive: Schema.optionalKey(ThreadAutoArchive),
+  confirmClaudeCacheResume: Schema.optionalKey(Schema.Boolean),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),
   sourceControlCustomInstructions: Schema.optionalKey(SourceControlCustomInstructions),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
