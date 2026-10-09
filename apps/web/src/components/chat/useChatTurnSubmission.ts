@@ -796,6 +796,7 @@ export function useChatTurnSubmission({
         ),
         composerBrowserAnnotationsSnapshot,
         messageIdForSend,
+        composerImagesSnapshot.map((image) => image.id),
       );
       const messageCreatedAt = new Date().toISOString();
       const outgoingTextSeed =

@@ -18,6 +18,7 @@ import type { WebContents } from "electron";
 import type {
   BrowserAnnotationCancelInput,
   BrowserAnnotationEvent,
+  BrowserAnnotationImage,
   BrowserAnnotationSession,
   BrowserAnnotationStartInput,
   BrowserAnnotationSyncMarkersInput,
@@ -375,6 +376,29 @@ function isAllowedBrowserRuntimeNavigation(url: string, currentUrl: string): boo
   }
 }
 
+// Re-encodes a pasted annotation image to PNG, capping its longest side so a
+// full-resolution screenshot doesn't blow the provider's image budget.
+const BROWSER_ANNOTATION_IMAGE_MAX_EDGE_PX = 2_048;
+
+function encodeBrowserAnnotationImage(image: {
+  readonly bytes: Uint8Array;
+}): BrowserAnnotationImage | null {
+  const decoded = nativeImage.createFromBuffer(Buffer.from(image.bytes));
+  if (decoded.isEmpty()) return null;
+  const { width, height } = decoded.getSize();
+  const scale = Math.min(1, BROWSER_ANNOTATION_IMAGE_MAX_EDGE_PX / Math.max(width, height));
+  const fitted =
+    scale < 1
+      ? decoded.resize({
+          width: Math.max(1, Math.round(width * scale)),
+          height: Math.max(1, Math.round(height * scale)),
+          quality: "best",
+        })
+      : decoded;
+  const png = fitted.toPNG();
+  return png.byteLength > 0 ? { mimeType: "image/png", bytes: new Uint8Array(png) } : null;
+}
+
 function normalizeAutomationKey(value: string): string {
   if (value === "Space" || value === "Spacebar" || value === " ") {
     return " ";
@@ -513,6 +537,7 @@ export class DesktopBrowserManager {
       resolveRuntimeByWebContentsId: (webContentsId) =>
         this.toAnnotationRuntime(this.findRuntimeByWebContentsId(webContentsId)),
       markHumanControl: (threadId) => this.markHumanControl(threadId),
+      encodeImage: encodeBrowserAnnotationImage,
     });
   }
 

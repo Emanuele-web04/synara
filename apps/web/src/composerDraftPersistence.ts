@@ -198,6 +198,7 @@ const PersistedBrowserAnnotationDraft = Schema.Struct({
   ordinal: Schema.Number,
   tabId: Schema.String,
   documentKey: Schema.optionalKey(Schema.String),
+  imageId: Schema.optionalKey(Schema.String),
   source: Schema.Struct({
     url: Schema.String,
     pageTitle: Schema.String,

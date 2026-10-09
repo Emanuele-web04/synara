@@ -342,6 +342,7 @@ async function dispatchDraftThreadOnce(
     ),
     composerBrowserAnnotations,
     messageId,
+    composerImages.map((image) => image.id),
   );
   const fullOutgoingMessageText = formatOutgoingComposerPrompt({
     provider: modelSelection.provider,

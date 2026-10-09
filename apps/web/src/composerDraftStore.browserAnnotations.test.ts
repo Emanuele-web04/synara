@@ -1,10 +1,11 @@
-import { ThreadId } from "@synara/contracts";
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { partializeComposerDraftStoreState, useComposerDraftStore } from "./composerDraftStore";
 import { toHydratedThreadDraft } from "./composerDraftPersistence";
 import {
   makeBrowserAnnotation,
+  makeImage,
   makeQueuedChatTurn,
   resetComposerDraftStore,
 } from "./composerDraftStoreTestFixtures";
@@ -42,6 +43,41 @@ describe("composerDraftStore browser annotations", () => {
     expect(
       useComposerDraftStore.getState().draftsByThreadId[otherThreadId]?.browserAnnotations,
     ).toMatchObject([{ id: "other", ordinal: 1 }]);
+  });
+
+  it("adds an annotation and its image atomically and refuses both at the attachment limit", () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({
+      id: "annotation-image",
+      previewUrl: "blob:annotation-image",
+      name: "annotation.png",
+    });
+    expect(
+      store.addBrowserAnnotation(threadId, makeBrowserAnnotation({ id: "with-image" }), image),
+    ).toBe(true);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
+      browserAnnotations: [{ id: "with-image", imageId: image.id }],
+      images: [{ id: image.id }],
+    });
+    store.addImages(
+      threadId,
+      Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1 }, (_, i) =>
+        makeImage({ id: `filler-${i}`, previewUrl: `blob:filler-${i}`, name: `filler-${i}.png` }),
+      ),
+    );
+    expect(
+      store.addBrowserAnnotation(
+        threadId,
+        makeBrowserAnnotation({ id: "rejected" }),
+        makeImage({ id: "rejected-image", previewUrl: "blob:rejected" }),
+      ),
+    ).toBe(false);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.browserAnnotations,
+    ).toHaveLength(1);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.images).toHaveLength(
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+    );
   });
 
   it("resets numbering after the batch is emptied", () => {
@@ -83,7 +119,7 @@ describe("composerDraftStore browser annotations", () => {
 
   it("persists and hydrates live and queued annotations", () => {
     const store = useComposerDraftStore.getState();
-    const live = makeBrowserAnnotation({ id: "live" });
+    const live = { ...makeBrowserAnnotation({ id: "live" }), imageId: "image-live" };
     const queued = makeQueuedChatTurn("queued");
     if (queued.kind !== "chat") {
       throw new Error("Expected chat turn");
@@ -95,7 +131,7 @@ describe("composerDraftStore browser annotations", () => {
     const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState())
       .draftsByThreadId[threadId];
     expect(persisted?.browserAnnotations).toMatchObject([
-      { id: "live", ordinal: 1, documentKey: live.documentKey },
+      { id: "live", ordinal: 1, documentKey: live.documentKey, imageId: "image-live" },
     ]);
     expect(persisted?.queuedTurns?.[0]).toMatchObject({
       kind: "chat",
@@ -104,7 +140,7 @@ describe("composerDraftStore browser annotations", () => {
 
     const hydrated = toHydratedThreadDraft(threadId, persisted!);
     expect(hydrated.browserAnnotations).toMatchObject([
-      { id: "live", ordinal: 1, documentKey: live.documentKey },
+      { id: "live", ordinal: 1, documentKey: live.documentKey, imageId: "image-live" },
     ]);
     expect(hydrated.queuedTurns[0]).toMatchObject({
       kind: "chat",
