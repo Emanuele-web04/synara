@@ -5,7 +5,13 @@
 // Exports: showFileReferenceContextMenu, getRevealInFolderLabel
 
 import { formatSelectionLabel, type ChatFileReference } from "~/lib/chatReferences";
+import {
+  isLocalAbsolutePath,
+  isWorkspaceRelativePathSafe,
+  joinWorkspaceRelativePath,
+} from "@synara/shared/path";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { contextMenuGroup } from "~/lib/contextMenuGroup";
 import { getNavigatorPlatform, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { toastManager } from "~/components/ui/toast";
@@ -27,6 +33,14 @@ export async function showFileReferenceContextMenu(input: {
   /** Absolute path to reveal in the platform file manager. Omit when the
    * surface only knows a repository-relative path. */
   revealPath?: string;
+  /** Explorer paths stay workspace-relative; the server still authorizes every file read. */
+  workspaceRoot?: string | null;
+  kind?: "file" | "directory";
+  onCopyFileContents?: (
+    contents: string,
+    fileName: string,
+    options?: { partial?: boolean },
+  ) => void;
   position: { x: number; y: number };
   /** Line/column range from source views, or a quoted snippet from surfaces
    * without stable source lines (rendered markdown preview). */
@@ -48,6 +62,14 @@ export async function showFileReferenceContextMenu(input: {
   };
   const rangeLabel = formatSelectionLabel(reference);
   const hasSnippet = typeof reference.snippet === "string" && reference.snippet.trim().length > 0;
+  const workspaceRoot =
+    input.workspaceRoot &&
+    isLocalAbsolutePath(input.workspaceRoot) &&
+    isWorkspaceRelativePathSafe(input.path)
+      ? input.workspaceRoot
+      : null;
+  const absolutePath = workspaceRoot ? joinWorkspaceRelativePath(workspaceRoot, input.path) : null;
+  const canCopyFileContents = workspaceRoot && input.kind === "file" && input.onCopyFileContents;
   const clicked = await api.contextMenu.show(
     [
       ...(input.onReferenceInChat
@@ -78,7 +100,15 @@ export async function showFileReferenceContextMenu(input: {
             },
           ]
         : []),
-      { id: "copy-path" as const, label: "Copy path" },
+      ...contextMenuGroup({ id: "copy", label: "Copy" }, [
+        {
+          id: "copy-path",
+          label: absolutePath ? "Relative path" : "Path",
+          standaloneLabel: "Copy path",
+        },
+        ...(absolutePath ? [{ id: "copy-absolute-path", label: "Absolute path" }] : []),
+        ...(canCopyFileContents ? [{ id: "copy-file-content", label: "File content" }] : []),
+      ]),
     ],
     input.position,
   );
@@ -103,7 +133,28 @@ export async function showFileReferenceContextMenu(input: {
     }
     return;
   }
-  if (clicked === "copy-path") {
-    await copyTextToClipboard(input.path);
+  if (clicked === "copy-file-content" && canCopyFileContents && workspaceRoot) {
+    try {
+      const file = await api.projects.readFile({ cwd: workspaceRoot, relativePath: input.path });
+      input.onCopyFileContents?.(file.contents, input.path, { partial: file.truncated });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to copy file content",
+        description: error instanceof Error ? error.message : "Could not read the file.",
+      });
+    }
+    return;
+  }
+  if (clicked === "copy-path" || (clicked === "copy-absolute-path" && absolutePath)) {
+    try {
+      await copyTextToClipboard(clicked === "copy-path" ? input.path : absolutePath!);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to copy path",
+        description: error instanceof Error ? error.message : "Clipboard is unavailable.",
+      });
+    }
   }
 }

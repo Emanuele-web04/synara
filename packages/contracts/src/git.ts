@@ -398,6 +398,18 @@ export type GitUnstageFilesInput = typeof GitUnstageFilesInput.Type;
 
 // RPC Results
 
+export const GitFileChangeType = Schema.Literals([
+  "added",
+  "untracked",
+  "modified",
+  "deleted",
+  "renamed",
+  "copied",
+  "unmerged",
+  "type-changed",
+]);
+export type GitFileChangeType = typeof GitFileChangeType.Type;
+
 const GitStatusPr = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyStringSchema,
@@ -418,9 +430,12 @@ export const GitStatusResult = Schema.Struct({
   workingTree: Schema.Struct({
     files: Schema.Array(
       Schema.Struct({
-        path: TrimmedNonEmptyStringSchema,
+        // Git's NUL-delimited paths are opaque; whitespace is part of a filename.
+        path: Schema.String.check(Schema.isNonEmpty()),
         insertions: NonNegativeInt,
         deletions: NonNegativeInt,
+        /** Authoritative Git metadata, not inferred from line counts. Optional for older servers. */
+        changeType: Schema.optional(GitFileChangeType),
       }),
     ),
     insertions: NonNegativeInt,

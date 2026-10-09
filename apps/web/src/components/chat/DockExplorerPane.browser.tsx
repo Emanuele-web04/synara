@@ -82,9 +82,9 @@ it("reveals Windows links using actual entry casing and still collapses manually
 
   await expect.element(page.getByTitle("src/inner/readme.md", { exact: true })).toBeVisible();
   expect(listDirectories).toHaveBeenCalledWith({ cwd, relativePath: "src", includeFiles: true });
-  await page.getByTitle("src", { exact: true }).click();
+  await page.getByTitle("src/inner", { exact: true }).click();
   await expect
-    .element(page.getByTitle("src", { exact: true }))
+    .element(page.getByTitle("src/inner", { exact: true }))
     .toHaveAttribute("aria-expanded", "false");
 });
 

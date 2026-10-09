@@ -7,7 +7,7 @@
 
 import type { ProjectEntry, ProjectFileSystemEntry } from "@synara/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type ComponentPropsWithoutRef,
   type DragEvent as ReactDragEvent,
@@ -15,8 +15,10 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   forwardRef,
+  useMemo,
 } from "react";
 
+import { useCopyFileContentsToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   CHAT_FILE_REFERENCE_DRAG_TYPE,
   formatChatFileReference,
@@ -24,6 +26,7 @@ import {
 } from "~/lib/chatReferences";
 import { splitRepoRelativePath } from "~/lib/diffRendering";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
+import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import {
   projectListDirectoriesQueryOptions,
   projectReadFileQueryOptions,
@@ -35,29 +38,18 @@ import { Skeleton } from "../ui/skeleton";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { SearchInput } from "../ui/search-input";
+import { StatusDot } from "../ui/status-chip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { EXPLORER_ROW_PROPS, useExplorerListNavigation } from "./explorerListNavigation";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { fileRowClassName, fileRowIndentStyle } from "./fileRowStyles";
 import { PanelStateMessage } from "./PanelStateMessage";
-
-const EXPLORER_HIDDEN_DIRECTORY_NAMES = new Set([
-  ".cache",
-  ".next",
-  ".nuxt",
-  ".parcel-cache",
-  ".pnpm-store",
-  ".svelte-kit",
-  ".turbo",
-  ".vite",
-  ".yarn",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-  "out",
-  "target",
-]);
+import {
+  compactWorkspaceExplorerDirectory,
+  visibleWorkspaceExplorerEntries,
+  workspaceExplorerGitIndicators,
+  type WorkspaceExplorerGitIndicator,
+} from "./workspaceExplorer.logic";
 
 // Mirrors the composer mention search: debounce keystrokes so they don't fan
 // out into fuzzy-search RPCs, and cap results to keep the sidebar light.
@@ -78,14 +70,12 @@ export function setFileReferenceDragData(dataTransfer: DataTransfer, path: strin
   dataTransfer.setData("text/plain", path);
 }
 
-function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
-  if (entry.kind !== "directory") {
-    return true;
-  }
-  if (entry.name.startsWith(".synara")) {
-    return false;
-  }
-  return !EXPLORER_HIDDEN_DIRECTORY_NAMES.has(entry.name);
+function useExplorerGitIndicators(
+  cwd: string | null,
+): ReadonlyMap<string, WorkspaceExplorerGitIndicator> {
+  const { data } = useQuery(gitStatusQueryOptions(cwd));
+  const files = data?.workingTree.files;
+  return useMemo(() => workspaceExplorerGitIndicators(files ?? []), [files]);
 }
 
 /**
@@ -122,6 +112,7 @@ const ExplorerRow = forwardRef<
     depth: number;
     selected: boolean;
     expanded: boolean;
+    gitIndicator: WorkspaceExplorerGitIndicator | undefined;
     onSelectFile: (path: string) => void;
     onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
     onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
@@ -132,6 +123,7 @@ const ExplorerRow = forwardRef<
     depth,
     selected,
     expanded,
+    gitIndicator,
     onSelectFile,
     onPrefetchEntry,
     onEntryContextMenu,
@@ -187,7 +179,14 @@ const ExplorerRow = forwardRef<
           className="size-3.5 shrink-0 opacity-75"
         />
       )}
-      <span className="min-w-0 truncate">{entry.name}</span>
+      <span className={cn("min-w-0 truncate", gitIndicator?.textClassName)}>{entry.name}</span>
+      {gitIndicator ? (
+        <StatusDot
+          className={cn("ml-auto", gitIndicator.dotClassName)}
+          title={gitIndicator.label}
+          aria-label={gitIndicator.label}
+        />
+      ) : null}
     </button>
   );
 });
@@ -212,40 +211,24 @@ function ExplorerLoadingRows(props: { depth: number }) {
   );
 }
 
-function WorkspaceDirectory(props: {
+interface WorkspaceDirectoryProps {
   cwd: string;
-  relativePath: string | null;
   depth: number;
   selectedFilePath: string | null;
   expandedDirectories: ReadonlySet<string>;
+  gitIndicators: ReadonlyMap<string, WorkspaceExplorerGitIndicator>;
   onSelectFile: (path: string) => void;
   onToggleDirectory: (path: string) => void;
   onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
   onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
-}) {
-  const query = useQuery(
-    projectListDirectoriesQueryOptions({
-      cwd: props.cwd,
-      relativePath: props.relativePath,
-      includeFiles: true,
-    }),
-  );
+}
 
-  if (query.isLoading && !query.data) {
-    return <ExplorerLoadingRows depth={props.depth} />;
-  }
-
-  if (query.error) {
-    return (
-      <p className="px-3 py-2 text-ui-sm text-destructive/80">
-        {query.error instanceof Error ? query.error.message : "Could not load directory."}
-      </p>
-    );
-  }
-
+function WorkspaceDirectoryEntries(
+  props: WorkspaceDirectoryProps & { entries: ReadonlyArray<ProjectFileSystemEntry> },
+) {
   return (
     <>
-      {(query.data?.entries ?? []).filter(shouldShowExplorerEntry).map((entry) => {
+      {visibleWorkspaceExplorerEntries(props.entries).map((entry) => {
         if (entry.kind !== "directory") {
           return (
             <ExplorerRow
@@ -254,51 +237,110 @@ function WorkspaceDirectory(props: {
               depth={props.depth}
               selected={entry.path === props.selectedFilePath}
               expanded={false}
+              gitIndicator={props.gitIndicators.get(entry.path)}
               onSelectFile={props.onSelectFile}
               onPrefetchEntry={props.onPrefetchEntry}
               onEntryContextMenu={props.onEntryContextMenu}
             />
           );
         }
-        const expanded = props.expandedDirectories.has(entry.path);
-        return (
-          <Collapsible
-            key={entry.path}
-            open={expanded}
-            onOpenChange={() => props.onToggleDirectory(entry.path)}
-          >
-            <CollapsibleTrigger
-              render={
-                <ExplorerRow
-                  entry={entry}
-                  depth={props.depth}
-                  selected={false}
-                  expanded={expanded}
-                  onSelectFile={props.onSelectFile}
-                  onPrefetchEntry={props.onPrefetchEntry}
-                  onEntryContextMenu={props.onEntryContextMenu}
-                />
-              }
-            />
-            {/* Keep children mounted only while open (plus the closing transition Base UI
-                manages) so the height animation plays and lazy listings stay cached. */}
-            <CollapsiblePanel>
-              <WorkspaceDirectory
-                cwd={props.cwd}
-                relativePath={entry.path}
-                depth={props.depth + 1}
-                selectedFilePath={props.selectedFilePath}
-                expandedDirectories={props.expandedDirectories}
-                onSelectFile={props.onSelectFile}
-                onToggleDirectory={props.onToggleDirectory}
-                onPrefetchEntry={props.onPrefetchEntry}
-                onEntryContextMenu={props.onEntryContextMenu}
-              />
-            </CollapsiblePanel>
-          </Collapsible>
-        );
+        return <WorkspaceDirectoryBranch key={entry.path} {...props} entry={entry} />;
       })}
     </>
+  );
+}
+
+function WorkspaceDirectoryListing(
+  props: WorkspaceDirectoryProps & {
+    entries: ReadonlyArray<ProjectFileSystemEntry> | undefined;
+    pending: boolean;
+    error: Error | null;
+  },
+) {
+  if (props.pending && !props.entries) return <ExplorerLoadingRows depth={props.depth} />;
+  if (props.error) {
+    return <p className="px-3 py-2 text-ui-sm text-destructive/80">{props.error.message}</p>;
+  }
+  return <WorkspaceDirectoryEntries {...props} entries={props.entries ?? []} />;
+}
+
+function WorkspaceDirectoryBranch(
+  props: WorkspaceDirectoryProps & { entry: ProjectFileSystemEntry },
+) {
+  const queryClient = useQueryClient();
+  const expanded = props.expandedDirectories.has(props.entry.path);
+  const chain = compactWorkspaceExplorerDirectory(
+    props.entry,
+    (path) =>
+      queryClient.getQueryData(
+        projectListDirectoriesQueryOptions({ cwd: props.cwd, relativePath: path }).queryKey,
+      )?.entries,
+  );
+  // Observe cached intermediate listings too, so invalidation can split a
+  // compact row again. Closed branches never request another directory level.
+  const queries = useQueries({
+    queries: chain.paths.map((path) =>
+      projectListDirectoriesQueryOptions({
+        cwd: props.cwd,
+        relativePath: path,
+        includeFiles: true,
+        enabled: expanded,
+      }),
+    ),
+  });
+  const listing = queries.at(-1)!;
+  const listingError = queries.find((query) => query.error)?.error ?? null;
+  return (
+    <Collapsible open={expanded} onOpenChange={() => props.onToggleDirectory(props.entry.path)}>
+      <CollapsibleTrigger
+        render={
+          <ExplorerRow
+            entry={chain.entry}
+            depth={props.depth}
+            selected={false}
+            expanded={expanded}
+            gitIndicator={
+              props.gitIndicators.get(chain.entry.path) ??
+              chain.paths
+                .map((path) => props.gitIndicators.get(path))
+                .find((indicator) => indicator !== undefined)
+            }
+            onSelectFile={props.onSelectFile}
+            onPrefetchEntry={props.onPrefetchEntry}
+            onEntryContextMenu={props.onEntryContextMenu}
+          />
+        }
+      />
+      {/* Keep the same trigger mounted as its label compacts, retaining keyboard
+          focus. The shared panel owns disclosure/reduced-motion transitions. */}
+      <CollapsiblePanel>
+        <WorkspaceDirectoryListing
+          {...props}
+          depth={props.depth + 1}
+          entries={listing.isPlaceholderData ? undefined : listing.data?.entries}
+          pending={listing.isPending || listing.isPlaceholderData}
+          error={listingError}
+        />
+      </CollapsiblePanel>
+    </Collapsible>
+  );
+}
+
+function WorkspaceDirectory(props: WorkspaceDirectoryProps & { relativePath: string | null }) {
+  const query = useQuery(
+    projectListDirectoriesQueryOptions({
+      cwd: props.cwd,
+      relativePath: props.relativePath,
+      includeFiles: true,
+    }),
+  );
+  return (
+    <WorkspaceDirectoryListing
+      {...props}
+      entries={query.isPlaceholderData ? undefined : query.data?.entries}
+      pending={query.isPending || query.isPlaceholderData}
+      error={query.error}
+    />
   );
 }
 
@@ -306,18 +348,32 @@ function WorkspaceDirectory(props: {
 // search-result row (path only). Both wrap the same menu, so they live here
 // instead of being re-declared in every sidebar that renders these rows.
 function useTreeEntryContextMenu(
+  workspaceRoot: string | null,
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined,
 ) {
-  return (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => {
-    void showFileReferenceContextMenu({ path: entry.path, position, onReferenceInChat });
+  const copyFileContents = useCopyFileContentsToClipboard();
+  return (
+    entry: Pick<ProjectFileSystemEntry, "path" | "kind">,
+    position: { x: number; y: number },
+  ) => {
+    void showFileReferenceContextMenu({
+      path: entry.path,
+      kind: entry.kind,
+      workspaceRoot,
+      position,
+      onReferenceInChat,
+      onCopyFileContents: copyFileContents,
+    });
   };
 }
 
 function useResultEntryContextMenu(
+  workspaceRoot: string | null,
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined,
 ) {
+  const showEntryMenu = useTreeEntryContextMenu(workspaceRoot, onReferenceInChat);
   return (path: string, position: { x: number; y: number }) => {
-    void showFileReferenceContextMenu({ path, position, onReferenceInChat });
+    showEntryMenu({ path, kind: "file" }, position);
   };
 }
 
@@ -327,6 +383,7 @@ function WorkspaceFilesTreeBody(props: {
   workspaceRoot: string | null;
   selectedFilePath: string | null;
   expandedDirectories: ReadonlySet<string>;
+  gitIndicators: ReadonlyMap<string, WorkspaceExplorerGitIndicator>;
   onSelectFile: (path: string) => void;
   onToggleDirectory: (path: string) => void;
   onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
@@ -341,6 +398,7 @@ function WorkspaceFilesTreeBody(props: {
           depth={0}
           selectedFilePath={props.selectedFilePath}
           expandedDirectories={props.expandedDirectories}
+          gitIndicators={props.gitIndicators}
           onSelectFile={props.onSelectFile}
           onToggleDirectory={props.onToggleDirectory}
           onPrefetchEntry={props.onPrefetchEntry}
@@ -365,7 +423,11 @@ export function WorkspaceFilesSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const handleEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
+  const gitIndicators = useExplorerGitIndicators(props.workspaceRoot);
+  const handleEntryContextMenu = useTreeEntryContextMenu(
+    props.workspaceRoot,
+    props.onReferenceInChat,
+  );
   const handleListKeyDown = useExplorerListNavigation();
   return (
     <aside
@@ -376,6 +438,7 @@ export function WorkspaceFilesSidebar(props: {
         workspaceRoot={props.workspaceRoot}
         selectedFilePath={props.selectedFilePath}
         expandedDirectories={props.expandedDirectories}
+        gitIndicators={gitIndicators}
         onSelectFile={props.onSelectFile}
         onToggleDirectory={props.onToggleDirectory}
         onPrefetchEntry={prefetchEntry}
@@ -388,6 +451,7 @@ export function WorkspaceFilesSidebar(props: {
 function WorkspaceSearchResultRow(props: {
   entry: ProjectEntry;
   selected: boolean;
+  gitIndicator: WorkspaceExplorerGitIndicator | undefined;
   onSelectFile: (path: string) => void;
   onPrefetchEntry: (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => void;
   onEntryContextMenu: (path: string, position: { x: number; y: number }) => void;
@@ -418,11 +482,20 @@ function WorkspaceSearchResultRow(props: {
     >
       <FileEntryIcon pathValue={entry.path} kind="file" className="size-3.5 shrink-0 opacity-75" />
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
-        <span className="shrink-0 truncate font-medium">{name}</span>
+        <span className={cn("shrink-0 truncate font-medium", props.gitIndicator?.textClassName)}>
+          {name}
+        </span>
         {dir ? (
           <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
         ) : null}
       </div>
+      {props.gitIndicator ? (
+        <StatusDot
+          className={props.gitIndicator.dotClassName}
+          title={props.gitIndicator.label}
+          aria-label={props.gitIndicator.label}
+        />
+      ) : null}
     </button>
   );
 }
@@ -527,6 +600,7 @@ function WorkspaceSearchResultsBody(props: {
   workspaceRoot: string | null;
   search: WorkspaceFileSearchState;
   selectedFilePath: string | null;
+  gitIndicators: ReadonlyMap<string, WorkspaceExplorerGitIndicator>;
   onSelectFile: (path: string) => void;
   onPrefetchEntry: (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => void;
   onEntryContextMenu: (path: string, position: { x: number; y: number }) => void;
@@ -566,6 +640,7 @@ function WorkspaceSearchResultsBody(props: {
               key={entry.path}
               entry={entry}
               selected={entry.path === props.selectedFilePath}
+              gitIndicator={props.gitIndicators.get(entry.path)}
               onSelectFile={props.onSelectFile}
               onPrefetchEntry={props.onPrefetchEntry}
               onEntryContextMenu={props.onEntryContextMenu}
@@ -592,7 +667,11 @@ export function WorkspaceSearchSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const handleEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
+  const gitIndicators = useExplorerGitIndicators(props.workspaceRoot);
+  const handleEntryContextMenu = useResultEntryContextMenu(
+    props.workspaceRoot,
+    props.onReferenceInChat,
+  );
   const handleListKeyDown = useExplorerListNavigation();
   const search = useWorkspaceFileSearch(props.workspaceRoot, props.query);
 
@@ -619,6 +698,7 @@ export function WorkspaceSearchSidebar(props: {
           workspaceRoot={props.workspaceRoot}
           search={search}
           selectedFilePath={props.selectedFilePath}
+          gitIndicators={gitIndicators}
           onSelectFile={props.onSelectFile}
           onPrefetchEntry={prefetchEntry}
           onEntryContextMenu={handleEntryContextMenu}
@@ -643,8 +723,15 @@ export function WorkspaceExplorerSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const handleTreeEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
-  const handleResultEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
+  const gitIndicators = useExplorerGitIndicators(props.workspaceRoot);
+  const handleTreeEntryContextMenu = useTreeEntryContextMenu(
+    props.workspaceRoot,
+    props.onReferenceInChat,
+  );
+  const handleResultEntryContextMenu = useResultEntryContextMenu(
+    props.workspaceRoot,
+    props.onReferenceInChat,
+  );
   const handleListKeyDown = useExplorerListNavigation();
   const search = useWorkspaceFileSearch(props.workspaceRoot, props.query);
 
@@ -664,6 +751,7 @@ export function WorkspaceExplorerSidebar(props: {
           workspaceRoot={props.workspaceRoot}
           selectedFilePath={props.selectedFilePath}
           expandedDirectories={props.expandedDirectories}
+          gitIndicators={gitIndicators}
           onSelectFile={props.onSelectFile}
           onToggleDirectory={props.onToggleDirectory}
           onPrefetchEntry={prefetchEntry}
@@ -674,6 +762,7 @@ export function WorkspaceExplorerSidebar(props: {
           workspaceRoot={props.workspaceRoot}
           search={search}
           selectedFilePath={props.selectedFilePath}
+          gitIndicators={gitIndicators}
           onSelectFile={props.onSelectFile}
           onPrefetchEntry={prefetchEntry}
           onEntryContextMenu={handleResultEntryContextMenu}
