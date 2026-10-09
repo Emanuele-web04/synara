@@ -232,7 +232,8 @@ export function threadTurnStatesEqual(
   return (
     left !== undefined &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
-    sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan)
+    sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan) &&
+    left.pendingTurnStartMessageId === right.pendingTurnStartMessageId
   );
 }
 
@@ -1231,6 +1232,7 @@ function normalizeTurnDiffSummaries(
     const files = normalizeTurnDiffFiles(checkpoint.files, existing?.files);
     if (
       existing &&
+      existing.startedAt === (checkpoint.startedAt ?? existing.startedAt) &&
       existing.completedAt === checkpoint.completedAt &&
       existing.status === checkpoint.status &&
       existing.assistantMessageId === (checkpoint.assistantMessageId ?? undefined) &&
@@ -1240,8 +1242,10 @@ function normalizeTurnDiffSummaries(
     ) {
       return existing;
     }
+    const startedAt = checkpoint.startedAt ?? existing?.startedAt;
     return {
       turnId: checkpoint.turnId,
+      ...(startedAt ? { startedAt } : {}),
       completedAt: checkpoint.completedAt,
       status: checkpoint.status,
       assistantMessageId: checkpoint.assistantMessageId ?? undefined,
@@ -1376,7 +1380,9 @@ export function withOrchestrationEventSequence(
   // Match the read-model projection: runtime journal activity sequences and
   // orchestration envelope sequences are different counters. Overwriting the
   // former only on live updates reorders snapshot history into the new turn.
-  return { ...activity, sequence: activity.sequence ?? sequence };
+  return activity.sequence !== undefined
+    ? activity
+    : { ...activity, sequence, sequenceSource: "orchestration" };
 }
 
 /**
@@ -1607,6 +1613,7 @@ function activitiesEqual(
     deepEqualJson(left.payload, right.payload) &&
     left.turnId === right.turnId &&
     left.sequence === right.sequence &&
+    left.sequenceSource === right.sequenceSource &&
     left.createdAt === right.createdAt
   );
 }
@@ -1852,6 +1859,9 @@ export function normalizeThreadFromReadModel(
   const pendingSourceProposedPlan =
     latestTurn?.sourceProposedPlan ??
     (incoming.session?.status === "running" ? previous?.pendingSourceProposedPlan : undefined);
+  // The read model carries no pending turn start; keep the live one until the
+  // next session start consumes it.
+  const pendingTurnStartMessageId = previous?.pendingTurnStartMessageId;
 
   if (
     previous &&
@@ -1940,6 +1950,7 @@ export function normalizeThreadFromReadModel(
     isPinned: incoming.isPinned ?? false,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
+    ...(pendingTurnStartMessageId ? { pendingTurnStartMessageId } : {}),
     lastVisitedAt,
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
@@ -2149,6 +2160,10 @@ export function normalizeThreadShellSnapshot(
       latestTurn,
       ...(latestTurn?.sourceProposedPlan
         ? { pendingSourceProposedPlan: latestTurn.sourceProposedPlan }
+        : {}),
+      // Shell rows carry no pending turn start; the next session start consumes it.
+      ...(previous?.pendingTurnStartMessageId
+        ? { pendingTurnStartMessageId: previous.pendingTurnStartMessageId }
         : {}),
     },
   };

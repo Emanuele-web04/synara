@@ -254,6 +254,7 @@ function normalizeSingleTurnDiffSummary(
   if (
     previous &&
     previous.turnId === incoming.turnId &&
+    previous.startedAt === (incoming.startedAt ?? previous.startedAt) &&
     previous.completedAt === incoming.completedAt &&
     previous.status === incoming.status &&
     previous.assistantMessageId === incoming.assistantMessageId &&
@@ -263,8 +264,10 @@ function normalizeSingleTurnDiffSummary(
   ) {
     return previous;
   }
+  const startedAt = incoming.startedAt ?? previous?.startedAt;
   return {
     ...incoming,
+    ...(startedAt ? { startedAt } : {}),
     files,
   };
 }
@@ -320,6 +323,65 @@ function buildLatestTurn(params: {
     assistantMessageId: params.assistantMessageId,
     ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
   };
+}
+
+// Mirror of the server turn projection: the latest turn start request names the
+// user message that a newly started turn answers. A queued message is written
+// when it is sent, long before its turn starts, so the transcript can only
+// group that turn under it once the message carries the turn id.
+function bindPendingTurnStartMessage(
+  thread: Thread,
+  session: NonNullable<ReadModelThread["session"]>,
+): Thread | null {
+  if (!isSessionRunningTurn(session)) {
+    return null;
+  }
+  const pendingMessageId = thread.pendingTurnStartMessageId;
+  // Without a recorded request (the detail stream can attach after the first
+  // send's request), fall back to the one unanswered request at the tail.
+  const messageIndex =
+    pendingMessageId !== undefined
+      ? thread.messages.findLastIndex((message) => message.id === pendingMessageId)
+      : soleUnansweredRequestIndex(thread.messages);
+  if (pendingMessageId === undefined && messageIndex < 0) {
+    return null;
+  }
+  const { pendingTurnStartMessageId: _consumed, ...rest } = thread;
+  const message = messageIndex >= 0 ? thread.messages[messageIndex] : undefined;
+  const turnId = session.activeTurnId;
+  if (
+    !message ||
+    !isUnboundTurnRequest(message) ||
+    // Only a turn that has produced nothing yet is the one just started for the
+    // request; the shell stream may already have advanced latestTurn to it.
+    thread.messages.some((candidate) => candidate.turnId === turnId) ||
+    thread.activities.some((activity) => activity.turnId === turnId)
+  ) {
+    return pendingMessageId === undefined ? null : rest;
+  }
+  return { ...rest, messages: thread.messages.with(messageIndex, { ...message, turnId }) };
+}
+
+function isUnboundTurnRequest(message: Thread["messages"][number]): boolean {
+  return (
+    message.role === "user" &&
+    message.startsNewTurn !== false &&
+    (message.turnId === undefined || message.turnId === null)
+  );
+}
+
+function soleUnansweredRequestIndex(messages: Thread["messages"]): number {
+  let found = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "assistant" || (message.turnId !== undefined && message.turnId !== null)) {
+      break;
+    }
+    if (!isUnboundTurnRequest(message)) continue;
+    if (found >= 0) return -1;
+    found = index;
+  }
+  return found;
 }
 
 function reconcileLatestTurnFromSession(
@@ -554,7 +616,13 @@ function applyTurnDiffSummaryToThread(
         : buildLatestTurn({
             previous: thread.latestTurn,
             turnId: nextSummary.turnId,
-            state: checkpointStatusToLatestTurnState(nextSummary.status),
+            // Mirror of the server projection: the session already settled an
+            // interrupted or failed turn; its checkpoint does not complete it.
+            state:
+              thread.latestTurn?.turnId === nextSummary.turnId &&
+              (thread.latestTurn.state === "interrupted" || thread.latestTurn.state === "error")
+                ? thread.latestTurn.state
+                : checkpointStatusToLatestTurnState(nextSummary.status),
             requestedAt: thread.latestTurn?.requestedAt ?? nextSummary.completedAt,
             startedAt: thread.latestTurn?.startedAt ?? nextSummary.completedAt,
             completedAt: nextSummary.completedAt,
@@ -798,10 +866,15 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
     (thread.latestTurn === null || thread.latestTurn.turnId === payload.turnId)
   ) {
     const previousTurn = thread.latestTurn;
+    // A settled message is not the end of its turn while the session still runs
+    // it: more tools and messages can follow, and the session settles the turn.
+    const turnStillRunning =
+      payload.streaming ||
+      (isSessionRunningTurn(thread.session) && thread.session.activeTurnId === payload.turnId);
     latestTurn = buildLatestTurn({
       previous: previousTurn,
       turnId: payload.turnId,
-      state: payload.streaming
+      state: turnStillRunning
         ? "running"
         : previousTurn?.state === "interrupted"
           ? "interrupted"
@@ -810,7 +883,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
             : "completed",
       requestedAt: previousTurn?.requestedAt ?? payload.createdAt,
       startedAt: previousTurn?.startedAt ?? payload.createdAt,
-      completedAt: payload.streaming ? (previousTurn?.completedAt ?? null) : payload.updatedAt,
+      completedAt: turnStillRunning ? (previousTurn?.completedAt ?? null) : payload.updatedAt,
       assistantMessageId: payload.messageId,
       sourceProposedPlan: thread.pendingSourceProposedPlan,
     });
@@ -1272,7 +1345,9 @@ function applyOrchestrationEvent(
           const session = normalizeThreadSession(event.payload.session, thread.session);
           const error = normalizeThreadErrorMessage(event.payload.session.lastError);
           const latestTurn = reconcileLatestTurnFromSession(thread, event.payload.session, error);
+          const boundThread = bindPendingTurnStartMessage(thread, event.payload.session);
           if (
+            boundThread === null &&
             session === thread.session &&
             error === thread.error &&
             latestTurn === thread.latestTurn &&
@@ -1283,7 +1358,7 @@ function applyOrchestrationEvent(
             return thread;
           }
           return {
-            ...thread,
+            ...(boundThread ?? thread),
             session,
             error,
             latestTurn,
@@ -1416,6 +1491,7 @@ function applyOrchestrationEvent(
             thread.runtimeMode === runtimeMode &&
             thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
+            thread.pendingTurnStartMessageId === event.payload.messageId &&
             (!isSidechatThread(thread) ||
               thread.sidechatLastActivityAt === event.payload.createdAt) &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
@@ -1428,6 +1504,7 @@ function applyOrchestrationEvent(
             runtimeMode,
             interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
+            pendingTurnStartMessageId: event.payload.messageId,
             ...(isSidechatThread(thread)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
@@ -1573,6 +1650,11 @@ function applyOrchestrationEvent(
         (thread) =>
           applyTurnDiffSummaryToThread(thread, {
             turnId: event.payload.turnId,
+            // The live event carries no start; the turn it completes is the
+            // latest one, whose start the session already reported.
+            ...(thread.latestTurn?.turnId === event.payload.turnId && thread.latestTurn.startedAt
+              ? { startedAt: thread.latestTurn.startedAt }
+              : {}),
             completedAt: event.payload.completedAt,
             status: event.payload.status,
             files: event.payload.files.map((file) => ({

@@ -1,4 +1,10 @@
-import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@synara/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  MessageId,
+  OrchestrationProposedPlanId,
+  TurnId,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
@@ -9,6 +15,7 @@ import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
+  deriveTurnTimingByTurnId,
   findLastLiveWorkGroupId,
   normalizeCompactToolLabel,
   planWorkEntryRenderChunks,
@@ -1132,6 +1139,169 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal).toBeDefined();
     expect(collapsedSignature(terminal!)).toEqual(["work:w1", "narration:a1", "work:w2"]);
     expect(terminal!.collapsedWorkElapsed).toBe("23m");
+  });
+
+  it("times a request-less subagent run from its turn, not from its single message", () => {
+    // A subagent child thread has no user message: the message clock spans 1ms.
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        workEntry("sleep", "2026-01-01T00:00:01Z", "sleep 8"),
+        assistantEntry("child-answer", "2026-01-01T00:00:08.999Z", {
+          turnId: "child-turn",
+          completedAt: "2026-01-01T00:00:09Z",
+        }),
+      ],
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("child-turn"),
+          state: "completed",
+          startedAt: "2026-01-01T00:00:00.500Z",
+          completedAt: "2026-01-01T00:00:09.000Z",
+        },
+        activities: [],
+      }),
+    });
+
+    expect(messageRow(rows, "child-answer")?.collapsedWorkElapsed).toBe("8.5s");
+    expect(messageRow(rows, "child-answer")?.collapsedWorkInterrupted).toBeUndefined();
+  });
+
+  it("times a stopped turn to its interruption and marks it stopped", () => {
+    // The preamble settles 5.8s in; the user stops the turn 16s in.
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("preamble", "2026-01-01T00:00:01Z", {
+          turnId: "stopped-turn",
+          completedAt: "2026-01-01T00:00:05.800Z",
+        }),
+        workEntry("agents", "2026-01-01T00:00:06Z", "Agent"),
+        userEntry("u2", "2026-01-01T00:00:30Z"),
+        assistantEntry("next", "2026-01-01T00:00:31Z", {
+          turnId: "next-turn",
+          completedAt: "2026-01-01T00:00:32Z",
+        }),
+      ],
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [
+          makeSummary({
+            turnId: "stopped-turn",
+            startedAt: "2026-01-01T00:00:00.200Z",
+            completedAt: "2026-01-01T00:00:16.200Z",
+            status: "missing",
+          }),
+        ],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("next-turn"),
+          state: "completed",
+          startedAt: "2026-01-01T00:00:30.100Z",
+          completedAt: "2026-01-01T00:00:32Z",
+        },
+        activities: [
+          {
+            id: EventId.makeUnsafe("turn-stopped"),
+            tone: "info",
+            kind: "turn.completed",
+            summary: "Turn interrupted",
+            payload: { state: "interrupted" },
+            turnId: TurnId.makeUnsafe("stopped-turn"),
+            createdAt: "2026-01-01T00:00:16.200Z",
+          },
+        ],
+      }),
+    });
+
+    const stopped = messageRow(rows, "preamble");
+    expect(stopped?.collapsedWorkElapsed).toBe("16s");
+    expect(stopped?.collapsedWorkInterrupted).toBe(true);
+    expect(messageRow(rows, "next")?.collapsedWorkInterrupted).toBeUndefined();
+  });
+
+  it("marks a turn stopped before it wrote anything on its last work row", () => {
+    const stoppedWork = (id: string, createdAt: string): TimelineEntry => ({
+      id: `entry-${id}`,
+      kind: "work",
+      createdAt,
+      entry: { id, createdAt, label: "Agent", tone: "tool", turnId: TurnId.makeUnsafe("t1") },
+    });
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        stoppedWork("agent-1", "2026-01-01T00:00:01Z"),
+        stoppedWork("agent-2", "2026-01-01T00:00:02Z"),
+      ],
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("t1"),
+          state: "interrupted",
+          startedAt: "2026-01-01T00:00:00.500Z",
+          completedAt: "2026-01-01T00:00:16.500Z",
+        },
+        activities: [],
+      }),
+    });
+
+    const work = rows.filter((row) => row.kind === "work");
+    expect(work).toHaveLength(1);
+    expect(work[0]).toMatchObject({ stoppedTurnElapsed: "16s" });
+  });
+
+  it("anchors the live header to the running turn's request, above queued requests", () => {
+    const request = userEntry("u1", "2026-01-01T00:00:00Z");
+    if (request.kind !== "message") throw new Error("Expected a message");
+    request.message.turnId = TurnId.makeUnsafe("live-turn");
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("live-turn"),
+      activeTurnStartedAt: "2026-01-01T00:00:01Z",
+      timelineEntries: [
+        request,
+        workEntry("sleep", "2026-01-01T00:00:02Z", "sleep 15"),
+        userEntry("queued", "2026-01-01T00:00:05Z"),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual([
+      "message",
+      "working-header",
+      "work",
+      "message",
+      "working",
+    ]);
+  });
+
+  it("times a response woken by a background task from its own turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [
+          makeSummary({
+            turnId: "t1",
+            startedAt: "2026-01-01T00:00:00.100Z",
+            completedAt: "2026-01-01T00:00:04Z",
+          }),
+          // The provider opens the woken turn only when it replies, in a burst.
+          makeSummary({
+            turnId: "t2",
+            startedAt: "2026-01-01T00:01:02.900Z",
+            completedAt: "2026-01-01T00:01:02.901Z",
+          }),
+        ],
+        latestTurn: null,
+        activities: [],
+      }),
+    });
+
+    expect(messageRow(rows, "launched")?.collapsedWorkElapsed).toBe("3.9s");
+    expect(messageRow(rows, "report-1")?.collapsedWorkElapsed).toBe("2.9s");
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {
