@@ -421,24 +421,42 @@ describe("observed Claude context budget", () => {
     expect(labels).toEqual(["(200k)", "(1M)", "(1M)", "(1M)"]);
   });
 
-  it("starts over when the session is reconfigured or compacted", () => {
+  it("holds across session restarts and compaction under the same configuration", () => {
+    // Recorded: a restarted session reconfigures Auto again, reports cache-only usage,
+    // then the provisional 200k before its 1M correction.
     expect(
       deriveObservedClaudeContextBudget([
         ...turnActivities,
         makeActivity("compacted", "context-compaction", { state: "compacted" }),
+        makeActivity("restart", "context-window.configured", { cleared: true }),
+        makeActivity("cache-only", "context-window.updated", { claudeCache: cache(model) }),
         makeActivity("u4", "context-window.updated", {
           usedTokens: 1000,
           maxTokens: 200_000,
           claudeCache: cache(model),
         }),
       ]),
-    ).toEqual({ model, maxTokens: 200_000 });
+    ).toEqual({ model, maxTokens: 1_000_000 });
+  });
+
+  it("starts over when the configured context window changes", () => {
     expect(
       deriveObservedClaudeContextBudget([
         ...turnActivities,
         makeActivity("reconfigured", "context-window.configured", { maxTokens: 200_000 }),
       ]),
     ).toBeNull();
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("reconfigured", "context-window.configured", { maxTokens: 200_000 }),
+        makeActivity("u5", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 167_000,
+          claudeCache: cache(model),
+        }),
+      ]),
+    ).toEqual({ model, maxTokens: 167_000 });
   });
 
   it("follows the newest observed model", () => {
