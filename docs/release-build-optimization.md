@@ -3,30 +3,33 @@
 ## Intel app on Apple Silicon (2026-10-09)
 
 The `macos-15-intel` runner was the release critical path. The Intel app and its
-Cua driver now build on `macos-15` (arm64). Job = "Package and qualify", started
-to completed, excluding queue; each value is one observation.
+Cua driver now build on `macos-15` (arm64); a short `qualify_intel` job then runs
+the packaged startup smoke on `macos-15-intel`. Durations run from job start to
+completion, excluding queue; each value is one observation.
 
-| macOS x64 job                                                                                       | Runner             |  Duration |
-| --------------------------------------------------------------------------------------------------- | ------------------ | --------: |
-| [v1.0.1 tag](https://github.com/Emanuele-web04/synara/actions/runs/37850836681)                     | `macos-15-intel`   |     14.8m |
-| [build-only 37865125366](https://github.com/Emanuele-web04/synara/actions/runs/37865125366)         | `macos-15-intel`   |     15.7m |
-| [v1.0.1-beta.1 tag](https://github.com/Emanuele-web04/synara/actions/runs/37339778939)              | `macos-15-intel`   |     17.4m |
-| [v1.0.1-beta.2 tag](https://github.com/Emanuele-web04/synara/actions/runs/37555043844)              | `macos-15-intel`   |     19.9m |
-| [build-only 37903022273](https://github.com/Emanuele-web04/synara/actions/runs/37903022273), signed | `macos-15` (arm64) | **13.7m** |
+| macOS x64 path                                                                              | Packaging runner   | Package | Intel smoke job |     Total |
+| ------------------------------------------------------------------------------------------- | ------------------ | ------: | --------------: | --------: |
+| [v1.0.1 tag](https://github.com/Emanuele-web04/synara/actions/runs/37850836681)             | `macos-15-intel`   |   14.8m |               - |     14.8m |
+| [build-only 37865125366](https://github.com/Emanuele-web04/synara/actions/runs/37865125366) | `macos-15-intel`   |   15.7m |               - |     15.7m |
+| [v1.0.1-beta.1 tag](https://github.com/Emanuele-web04/synara/actions/runs/37339778939)      | `macos-15-intel`   |   17.4m |               - |     17.4m |
+| [v1.0.1-beta.2 tag](https://github.com/Emanuele-web04/synara/actions/runs/37555043844)      | `macos-15-intel`   |   19.9m |               - |     19.9m |
+| [build-only 37911471339](https://github.com/Emanuele-web04/synara/actions/runs/37911471339) | `macos-15` (arm64) |   11.1m |            2.7m | **13.9m** |
 
-- Packaging (sign, notarize, DMG, ZIP): 8m16s against 12m36s on Intel. Signing
-  took 66s against 116s; Apple's notarization waits are unchanged.
-- The startup smoke runs under Rosetta 2 and costs 3m38s against 24s on Intel:
-  about 70s for the runtime dependency smoke, which includes the first
-  translation, and 135s for the app launch. It needs the 180-second limit.
-- The arm64 and Windows jobs of [run 37900925952](https://github.com/Emanuele-web04/synara/actions/runs/37900925952)
-  took 10.0m and 7.0m on the same commit, so Intel remains the slowest job,
-  now by about 3.7 minutes rather than 5-10.
+- Packaging (sign, notarize, DMG, ZIP) took 8.3-9.2m against 12.6m on Intel;
+  signing took 66s against 116s. Apple's notarization waits are unchanged.
+- The Intel smoke job: 49s artifact download, 44s extraction, Mach-O check and
+  runtime dependency smoke, then 25s to app startup.
+- Rosetta 2 could not qualify the app: its startup took 135s in
+  [run 37903022273](https://github.com/Emanuele-web04/synara/actions/runs/37903022273)
+  and exceeded 180s in [run 37908310551](https://github.com/Emanuele-web04/synara/actions/runs/37908310551),
+  where the server process spent 64s loading its JavaScript bundle.
+- In run 37911471339 arm64 took 10.4m and Windows 9.8m, so the Intel path stays
+  the longest, by about 3.5 minutes rather than 5-10.
 - A cold Cua build of the Intel driver took 5.9-7.6m on arm64 against 10-14.5m on
-  Intel. The new cache key binds the target arch, so the first default-branch
-  cache run after merge builds it once.
+  Intel. The cache key binds the target arch, so the first default-branch cache
+  run after merge builds it once.
 - Every Mach-O must carry the target slice, so a cross-build cannot ship a
-  host-only helper that Rosetta would still run. The Intel-built v1.0.1 app passes
+  host-only helper the smoke never launches. The Intel-built v1.0.1 app passes
   that check; the same app checked as arm64 reports 26 binaries.
 
 Baseline: [v0.9.0 run 35659929299](https://github.com/Emanuele-web04/synara/actions/runs/35659929299),
