@@ -384,6 +384,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      # Both Linux formats share one stage/native build and one manifest authority.
+      ARTIFACT_TARGET: ${{ matrix.platform == 'linux' && 'AppImage,deb' || matrix.target }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
@@ -409,6 +412,16 @@ jobs:
         # Preflight validates the entire workspace. Native artifacts retain all
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+
+      - name: Install Linux packaging and smoke tools
+        if: matrix.platform == 'linux' && needs.preflight.outputs.package_artifacts == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # fpm's bundled Ruby needs libcrypt.so.1; dpkg-deb only extracts the
+          # package in startup smoke, never installs it or runs maintainer scripts.
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libcrypt1 dpkg-dev xz-utils xvfb xauth
 
       - name: Download macOS icon catalog
         if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
@@ -476,7 +489,7 @@ jobs:
           signed=false
           args=(
             --platform "${{ matrix.platform }}"
-            --target "${{ matrix.target }}"
+            --target "$ARTIFACT_TARGET"
             --arch "${{ matrix.arch }}"
             --flavor "${{ needs.preflight.outputs.desktop_flavor }}"
             --build-version "${{ needs.preflight.outputs.version }}"
@@ -558,6 +571,7 @@ jobs:
             "release/*.dmg" \
             "release/*.zip" \
             "release/*.AppImage" \
+            "release/*.deb" \
             "release/*.exe" \
             "release/*.blockmap" \
             "release/latest*.yml"; do
@@ -590,7 +604,7 @@ jobs:
             --assets-dir release-publish \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
-            --target "${{ matrix.target }}" \
+            --target "$ARTIFACT_TARGET" \
             --version "${{ needs.preflight.outputs.version }}" \
             --source-commit "$SOURCE_COMMIT" \
             --source-tag "$SOURCE_TAG" \
@@ -625,6 +639,7 @@ jobs:
             --assets-dir release-publish \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
+            --target "$ARTIFACT_TARGET" \
             --version "${{ needs.preflight.outputs.version }}" \
             --executable-name "${{ needs.preflight.outputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
 
@@ -853,6 +868,7 @@ jobs:
             release-assets/*.dmg
             release-assets/*.zip
             release-assets/*.AppImage
+            release-assets/*.deb
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml

@@ -4,11 +4,23 @@
 
 import { spawnSync } from "node:child_process";
 import { hashFile } from "./file-digest.ts";
-import { lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  createReadStream,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { matchesDistinguishedName } from "@synara/shared/windowsCertificate";
+import { parseLinuxPackageTargets } from "./linux-package-targets.ts";
 
 export type ReleaseArtifactPlatform = "linux" | "mac" | "win";
 
@@ -133,7 +145,59 @@ function requireSingleArtifact(
   if (matches.length !== 1) {
     throw new Error(`Expected exactly one ${suffix} artifact, found ${matches.length}.`);
   }
+  if (matches[0]!.size === 0) throw new Error(`Release ${suffix} payload must not be empty.`);
   return matches[0]!;
+}
+
+export function linuxPackageArtifacts(target: string): ReadonlyArray<string> {
+  return parseLinuxPackageTargets(target).map((entry) => `.${entry}`);
+}
+
+async function verifyLinuxUpdaterAuthority(
+  input: ReleaseArtifactProvenanceInput,
+  artifacts: ReadonlyArray<ReleaseArtifactDigest>,
+): Promise<void> {
+  const manifests = artifacts.filter((artifact) => /^latest.*\.yml$/.test(artifact.fileName));
+  if (!parseLinuxPackageTargets(input.target).includes("AppImage")) {
+    if (manifests.length > 0)
+      throw new Error("Debian-only artifacts must not own Linux updater metadata.");
+    return;
+  }
+  const manifestName = input.arch === "x64" ? "latest-linux.yml" : `latest-linux-${input.arch}.yml`;
+  if (manifests.length !== 1 || manifests[0]!.fileName !== manifestName) {
+    throw new Error(`Expected exactly one Linux updater manifest: ${manifestName}.`);
+  }
+  const appImage = requireSingleArtifact(artifacts, ".AppImage");
+  // Use the same pinned YAML parser as electron-builder, resolved from its
+  // dependency tree rather than relying on a hoisted transitive dependency.
+  const requireScripts = createRequire(new URL("../package.json", import.meta.url));
+  const requireBuilder = createRequire(requireScripts.resolve("electron-builder"));
+  const requireAppBuilder = createRequire(requireBuilder.resolve("app-builder-lib"));
+  const yaml = requireAppBuilder("js-yaml") as { load: (text: string) => unknown };
+  const decoded = yaml.load(readFileSync(join(input.assetsDirectory, manifestName), "utf8"));
+  if (!decoded || typeof decoded !== "object") throw new Error("Invalid Linux updater manifest.");
+  const manifest = decoded as Record<string, unknown>;
+  const files = manifest.files;
+  if (!Array.isArray(files) || files.length !== 1 || !files[0] || typeof files[0] !== "object") {
+    throw new Error("Linux updater metadata must describe only the AppImage payload.");
+  }
+  const file = files[0] as Record<string, unknown>;
+  const hash = createHash("sha512");
+  for await (const chunk of createReadStream(join(input.assetsDirectory, appImage.fileName)))
+    hash.update(chunk);
+  const sha512 = hash.digest("base64");
+  if (
+    manifest.version !== input.version ||
+    manifest.path !== appImage.fileName ||
+    file.url !== appImage.fileName ||
+    manifest.sha512 !== sha512 ||
+    file.sha512 !== sha512 ||
+    file.size !== appImage.size
+  ) {
+    throw new Error(
+      "Linux updater metadata does not match the AppImage version, path, hash or size.",
+    );
+  }
 }
 
 export async function collectReleaseArtifactDigests(
@@ -152,6 +216,9 @@ export async function collectReleaseArtifactDigests(
 
   const artifacts: ReleaseArtifactDigest[] = [];
   for (const fileName of fileNames) {
+    if (!fileName || fileName === "." || fileName === ".." || /[/\\\p{Cc}]/u.test(fileName)) {
+      throw new Error(`Release asset must have a plain file name: ${fileName}`);
+    }
     const filePath = join(assetsDirectory, fileName);
     const entry = lstatSync(filePath);
     if (!entry.isFile() || entry.isSymbolicLink()) {
@@ -378,12 +445,15 @@ function resolveSigningEvidence(
     if (input.signed) {
       throw new Error("Linux release provenance cannot claim an unsupported signing scheme.");
     }
-    requireSingleArtifact(artifacts, ".AppImage");
+    const checks = linuxPackageArtifacts(input.target).map((suffix) => {
+      requireSingleArtifact(artifacts, suffix);
+      return `${suffix.slice(1)} payload present`;
+    });
     return {
       status: "not-applicable",
       scheme: "none",
       identity: null,
-      checks: ["AppImage payload present"],
+      checks,
     };
   }
 
@@ -415,6 +485,7 @@ function resolveSigningEvidence(
 }
 
 function validateInput(input: ReleaseArtifactProvenanceInput): void {
+  if (input.platform === "linux") parseLinuxPackageTargets(input.target);
   if (!/^[0-9a-f]{40}$/i.test(input.sourceCommit)) {
     throw new Error("Artifact provenance requires a full source commit.");
   }
@@ -437,6 +508,12 @@ export async function writeReleaseArtifactProvenance(
     input.assetsDirectory,
     input.artifactFileNames,
   );
+  if (input.platform === "linux") {
+    // Prove every declared format before examining the AppImage-owned feed.
+    for (const suffix of linuxPackageArtifacts(input.target))
+      requireSingleArtifact(artifacts, suffix);
+    await verifyLinuxUpdaterAuthority(input, artifacts);
+  }
   const manifest: ReleaseArtifactProvenanceManifest = {
     schemaVersion: 1,
     publication: input.publication,
