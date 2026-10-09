@@ -352,17 +352,12 @@ jobs:
           overwrite: true
           if-no-files-found: error
 
+      # The Intel app is cross-built here and launched by qualify_intel below.
       - name: Smoke packaged desktop startup
+        if: inputs.platform != 'mac' || inputs.arch != 'x64'
         shell: bash
         run: |
-          timeout_args=""
-          if [[ "${{ inputs.platform }}" == "mac" && "${{ inputs.arch }}" == "x64" && "$(uname -m)" == "arm64" ]]; then
-            arch -x86_64 /usr/bin/true || { echo "Rosetta 2 is required to smoke the Intel app on Apple Silicon." >&2; exit 1; }
-            # The first launch also translates the whole Intel Electron runtime.
-            timeout_args="--timeout-ms 180000"
-          fi
-          # shellcheck disable=SC2086
-          node scripts/verify-packaged-desktop-startup.ts $timeout_args \
+          node scripts/verify-packaged-desktop-startup.ts \
             --assets-dir release-publish \
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
@@ -422,3 +417,39 @@ jobs:
           retention-days: 30
           overwrite: true
           if-no-files-found: error
+
+  # Rosetta 2 ran the cross-built Intel app too slowly to qualify it (startup
+  # took 135s, then over 180s). Launch it on real Intel hardware instead. The
+  # caller's publishers await this job through the reusable workflow's result.
+  qualify_intel:
+    name: Qualify on Intel
+    needs: build
+    if: inputs.platform == 'mac' && inputs.arch == 'x64'
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_commit }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Download the packaged Intel app
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-${{ inputs.platform }}-${{ inputs.arch }}
+          path: release-publish
+
+      - name: Smoke packaged desktop startup on Intel
+        shell: bash
+        run: |
+          node scripts/verify-packaged-desktop-startup.ts \
+            --assets-dir release-publish \
+            --platform "${{ inputs.platform }}" \
+            --arch "${{ inputs.arch }}" \
+            --version "${{ inputs.version }}" \
+            --executable-name "${{ inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"

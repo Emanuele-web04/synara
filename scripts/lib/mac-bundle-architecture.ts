@@ -34,9 +34,9 @@ function readMachOArchitectures(path: string): string[] | null {
   }
 }
 
-// Release CI cross-builds the Intel app on Apple Silicon, where Rosetta cannot
-// reveal a host-only helper. Each Mach-O must carry the target slice, except
-// prebuilds a package files under another darwin-<arch> directory.
+// Release CI cross-builds the Intel app on Apple Silicon, and the startup smoke
+// launches only some of its binaries. Each Mach-O must carry the target slice,
+// except prebuilds a package files under another darwin-<arch> directory.
 export function findMacBundleArchitectureMismatches(appBundle: string, arch: string): string[] {
   const mismatches: string[] = [];
   const pending = [appBundle];

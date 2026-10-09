@@ -22,9 +22,10 @@ version, release notes and lockfile are final.
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
-    `arm64` (the Intel runner took 15-20 minutes for the same work). Its startup
-    smoke runs under Rosetta 2, so it also requires every Mach-O in the app to
-    carry the `x86_64` slice; Rosetta alone would run a host-only helper.
+    `arm64` (the Intel runner took 15-20 minutes for the same work). Every
+    Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
+    job then downloads it and runs the startup smoke on `macos-15-intel`:
+    under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
 - Each platform calls `release-platform.yml` with one native job that builds,

@@ -227,9 +227,18 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "continue-on-error"?: boolean | string;
   };
   const platformDefinition = parseYaml(platformWorkflow) as {
-    jobs: Record<string, { steps: Step[] }>;
+    jobs: Record<string, { if?: string; steps: Step[] }>;
   };
-  if (Object.keys(platformDefinition.jobs).length !== 1) {
+  // Only the Intel Mac app, cross-built on Apple Silicon, adds a runner: Rosetta 2
+  // cannot launch it reliably. Every other platform qualifies where it packages.
+  const extraJobs = Object.entries(platformDefinition.jobs).slice(1);
+  if (
+    extraJobs.length > 1 ||
+    extraJobs.some(
+      ([name, job]) =>
+        name !== "qualify_intel" || job.if !== "inputs.platform == 'mac' && inputs.arch == 'x64'",
+    )
+  ) {
     throw new Error("Successful packaging and qualification must share one runner.");
   }
   const nativeSteps = Object.values(platformDefinition.jobs)[0]!.steps;
