@@ -528,7 +528,7 @@ export class DesktopBrowserManager {
           ...defaultThreadBrowserState(saved.threadId),
           open: saved.open,
           activeTabId: saved.activeTabId,
-          tabs: saved.tabs.map((tab) => ({ ...createBrowserTab(tab.url), ...tab })),
+          tabs: saved.tabs.map((tab) => Object.assign(createBrowserTab(tab.url), tab)),
         });
       }
     }
