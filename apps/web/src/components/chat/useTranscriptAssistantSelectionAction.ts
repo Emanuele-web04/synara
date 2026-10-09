@@ -178,18 +178,12 @@ export function useTranscriptAssistantSelectionAction(
     });
   };
 
-  const commitTranscriptAssistantSelection = () => {
-    const pendingSelection = pendingTranscriptSelectionAction;
-    if (!pendingSelection) {
-      return;
-    }
-
-    if (
-      canReferenceAssistantSelection &&
-      !canReferenceAssistantSelection(pendingSelection.selection)
-    ) {
-      setPendingTranscriptSelectionAction(null);
-      window.getSelection()?.removeAllRanges();
+  // Called after the user confirms the comment field, so the floating action is already gone.
+  const commitTranscriptAssistantSelection = (
+    selection: TranscriptAssistantSelection,
+    comment: string,
+  ) => {
+    if (canReferenceAssistantSelection && !canReferenceAssistantSelection(selection)) {
       return;
     }
 
@@ -199,7 +193,6 @@ export function useTranscriptAssistantSelectionAction(
         composerAssistantSelectionsRef.current.length >=
       PROVIDER_SEND_TURN_MAX_ATTACHMENTS
     ) {
-      setPendingTranscriptSelectionAction(null);
       toastManager.add({
         type: "warning",
         title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
@@ -207,10 +200,9 @@ export function useTranscriptAssistantSelectionAction(
       return;
     }
 
-    const nextSelection = createAssistantSelectionAttachment(pendingSelection.selection);
+    const nextSelection = createAssistantSelectionAttachment({ ...selection, comment });
     if (!nextSelection) {
-      setPendingTranscriptSelectionAction(null);
-      if (getAssistantSelectionValidationError(pendingSelection.selection) === "too-long") {
+      if (getAssistantSelectionValidationError(selection) === "too-long") {
         toastManager.add({
           type: "warning",
           title: "Selections can be up to 4,000 characters.",
@@ -219,10 +211,7 @@ export function useTranscriptAssistantSelectionAction(
       return;
     }
 
-    const inserted = addComposerAssistantSelectionToDraft(nextSelection);
-    setPendingTranscriptSelectionAction(null);
-    if (inserted) {
-      window.getSelection()?.removeAllRanges();
+    if (addComposerAssistantSelectionToDraft(nextSelection)) {
       scheduleComposerFocus();
     }
   };

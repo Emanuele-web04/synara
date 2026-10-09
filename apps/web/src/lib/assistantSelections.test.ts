@@ -5,6 +5,7 @@ import {
   appendAssistantSelectionsToPrompt,
   createAssistantSelectionAttachment,
   extractTrailingAssistantSelections,
+  mergeAssistantSelectionComments,
   stripEmbeddedAssistantSelections,
 } from "./assistantSelections";
 import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
@@ -132,5 +133,68 @@ describe("assistantSelections", () => {
         text: "x".repeat(CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS + 1),
       }),
     ).toBeNull();
+  });
+
+  it("round-trips a comment next to its quote", () => {
+    const prompt = appendAssistantSelectionsToPrompt("Review", [
+      {
+        assistantMessageId: "msg-1",
+        text: "first quote\n- comment:",
+        comment: " Too vague\r\nRewrite ",
+      },
+      { assistantMessageId: "msg-2", text: "second quote" },
+    ]);
+    expect(prompt).toBe(
+      [
+        "Review",
+        "",
+        "<assistant_selection>",
+        "- assistant message msg-1:",
+        "  first quote",
+        "  - comment:",
+        "- comment:",
+        "  Too vague",
+        "  Rewrite",
+        "- assistant message msg-2:",
+        "  second quote",
+        "</assistant_selection>",
+      ].join("\n"),
+    );
+    expect(extractTrailingAssistantSelections(prompt)).toEqual({
+      promptText: "Review",
+      selections: [
+        {
+          assistantMessageId: "msg-1",
+          text: "first quote\n- comment:",
+          comment: "Too vague\nRewrite",
+        },
+        { assistantMessageId: "msg-2", text: "second quote" },
+      ],
+    });
+  });
+
+  it("drops blank comments", () => {
+    expect(
+      createAssistantSelectionAttachment({
+        assistantMessageId: "msg-1",
+        text: "quote",
+        comment: "  ",
+      }),
+    ).not.toHaveProperty("comment");
+  });
+
+  it("pairs parsed comments back onto server attachments", () => {
+    const attachments = [
+      { type: "assistant-selection" as const, id: "a", assistantMessageId: "msg-1", text: "same" },
+      { type: "assistant-selection" as const, id: "b", assistantMessageId: "msg-1", text: "same" },
+      { type: "assistant-selection" as const, id: "c", assistantMessageId: "msg-2", text: "other" },
+    ];
+    expect(
+      mergeAssistantSelectionComments(attachments, [
+        { assistantMessageId: "msg-1", text: "same", comment: "one" },
+        { assistantMessageId: "msg-1", text: "same", comment: "two" },
+        { assistantMessageId: "msg-2", text: "other" },
+      ]).map((attachment) => attachment.comment),
+    ).toEqual(["one", "two", undefined]);
   });
 });

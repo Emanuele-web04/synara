@@ -148,6 +148,12 @@ describe("composerDraftStore persisted-state hydration", () => {
               assistantMessageId: " assistant-message-1 ",
               text: " selected assistant text ",
             },
+            {
+              id: "assistant-selection-2",
+              assistantMessageId: "assistant-message-1",
+              text: "selected assistant text",
+              comment: " Make this shorter ",
+            },
           ],
           fileComments: [
             {
@@ -176,6 +182,12 @@ describe("composerDraftStore persisted-state hydration", () => {
         id: "assistant-selection-1",
         assistantMessageId: "assistant-message-1",
         text: "selected assistant text",
+      },
+      {
+        id: "assistant-selection-2",
+        assistantMessageId: "assistant-message-1",
+        text: "selected assistant text",
+        comment: "Make this shorter",
       },
     ]);
     expect(hydrated.draftsByThreadId[threadId]?.fileComments).toEqual([

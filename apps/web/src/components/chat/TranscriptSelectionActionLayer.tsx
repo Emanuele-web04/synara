@@ -19,7 +19,7 @@ interface TranscriptSelectionActionLayerProps {
   canUseWorktree: boolean;
   canAddToSide: boolean;
   onDismiss: () => void;
-  onAddToChat: () => void;
+  onAddToChat: (selection: TranscriptAssistantSelection, comment: string) => void;
   onAddToSide: (selection: TranscriptAssistantSelection) => Promise<void>;
   onNewChat: (
     selection: TranscriptAssistantSelection,
@@ -30,38 +30,52 @@ interface TranscriptSelectionActionLayerProps {
 }
 
 export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionLayerProps) {
-  const [composerAction, setComposerAction] = useState<PendingTranscriptSelectionAction | null>(
-    null,
-  );
+  const [composerAction, setComposerAction] = useState<{
+    action: PendingTranscriptSelectionAction;
+    variant: "new-chat" | "comment";
+  } | null>(null);
   const [sideBusy, setSideBusy] = useState(false);
   const sideInFlightRef = useRef(false);
 
   if (composerAction) {
+    const { selection } = composerAction.action;
     return createPortal(
-      <SelectionNewChatComposer
-        action={composerAction}
-        defaultEnvMode={props.defaultEnvMode}
-        canUseWorktree={props.canUseWorktree}
-        onSend={(prompt, envMode) =>
-          props.onNewChat(composerAction.selection, prompt, envMode, "send")
-        }
-        onOpenInChat={(prompt, envMode) =>
-          props.onNewChat(composerAction.selection, prompt, envMode, "compose")
-        }
-        onClose={() => setComposerAction(null)}
-      />,
+      composerAction.variant === "comment" ? (
+        <SelectionNewChatComposer
+          variant="comment"
+          action={composerAction.action}
+          onAddComment={(comment) => props.onAddToChat(selection, comment)}
+          onClose={() => setComposerAction(null)}
+        />
+      ) : (
+        <SelectionNewChatComposer
+          variant="new-chat"
+          action={composerAction.action}
+          defaultEnvMode={props.defaultEnvMode}
+          canUseWorktree={props.canUseWorktree}
+          onSend={(prompt, envMode) => props.onNewChat(selection, prompt, envMode, "send")}
+          onOpenInChat={(prompt, envMode) => props.onNewChat(selection, prompt, envMode, "compose")}
+          onClose={() => setComposerAction(null)}
+        />
+      ),
       document.body,
     );
   }
   const action = props.action;
   if (!action) return null;
 
+  const openComposer = (variant: "new-chat" | "comment") => {
+    setComposerAction({ action, variant });
+    props.onDismiss();
+    window.getSelection()?.removeAllRanges();
+  };
+
   return createPortal(
     <TranscriptSelectionAction
       left={action.left}
       top={action.top}
       placement={action.placement}
-      onAddToChat={props.onAddToChat}
+      onAddToChat={() => openComposer("comment")}
       disabled={sideBusy}
       sideDisabled={!props.canAddToSide}
       onAddToSide={() => {
@@ -86,11 +100,7 @@ export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionL
             setSideBusy(false);
           });
       }}
-      onAddToNewChat={() => {
-        setComposerAction(action);
-        props.onDismiss();
-        window.getSelection()?.removeAllRanges();
-      }}
+      onAddToNewChat={() => openComposer("new-chat")}
     />,
     document.body,
   );

@@ -139,6 +139,7 @@ import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
+import { mergeAssistantSelectionComments } from "~/lib/assistantSelections";
 import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import {
@@ -1657,14 +1658,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               userImages.length > 0 || userFiles.length > 0 || assistantSelections.length > 0,
             messageId: row.message.id,
           });
+          // Comments live only in the prompt block, so pair them back onto the server attachments.
           const renderedAssistantSelections =
             assistantSelections.length > 0
-              ? assistantSelections
+              ? mergeAssistantSelectionComments(
+                  assistantSelections,
+                  displayedUserMessage.assistantSelections,
+                )
               : displayedUserMessage.assistantSelections.map((selection, index) => ({
                   type: "assistant-selection" as const,
                   id: `fallback-selection-${row.message.id}-${index}`,
-                  assistantMessageId: selection.assistantMessageId,
-                  text: selection.text,
+                  ...selection,
                 }));
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
