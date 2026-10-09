@@ -26,6 +26,7 @@ import {
 } from "@synara/shared/threadSummary";
 
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
+import { textSegmentsCoverText } from "./messageTextSegments";
 import {
   countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
@@ -824,8 +825,19 @@ function mergeReadModelMessagesWithLiveHotPath(
     }
 
     changed = true;
+    // Segments must spell the text they ship with: the snapshot's describe its
+    // own (shorter) text, so keep whichever side still covers the retained text.
+    const { textSegments: _incomingTextSegments, ...incomingMessageWithoutSegments } =
+      incomingMessage;
+    const retainedTextSegments = [incomingMessage.textSegments, previousMessage.textSegments].find(
+      (segments) =>
+        segments !== undefined &&
+        segments.length > 0 &&
+        textSegmentsCoverText(segments, previousMessage.text),
+    );
     mergedById.set(incomingMessage.id, {
-      ...incomingMessage,
+      ...incomingMessageWithoutSegments,
+      ...(retainedTextSegments !== undefined ? { textSegments: retainedTextSegments } : {}),
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
