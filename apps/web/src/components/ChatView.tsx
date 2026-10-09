@@ -158,6 +158,7 @@ import {
 import {
   deriveContextWindowSelectionStatus,
   deriveComposerContextWindowLabel,
+  deriveObservedClaudeContextBudget,
   deriveAppliedContextWindowSelection,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowState,
@@ -4574,11 +4575,16 @@ export default function ChatView({
       appliedContextWindowSelection,
     ],
   );
+  const observedClaudeContextBudget = useMemo(
+    () => deriveObservedClaudeContextBudget(threadActivities),
+    [threadActivities],
+  );
   const composerContextWindowLabel = deriveComposerContextWindowLabel({
     provider: selectedProvider,
     model: selectedModel,
     snapshot: runtimeUsageContextWindow,
     status: contextWindowSelectionStatus,
+    observedBudget: observedClaudeContextBudget,
   });
   const composerFooterControlsPlan = useMemo(
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
@@ -6459,7 +6465,9 @@ export default function ChatView({
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
-            aria-hidden={terminalWorkspaceTerminalTabActive}
+            // `inert`, not aria-hidden: hiding a subtree that still holds focus (the composer
+            // or the terminal) is blocked by the browser; inert also releases that focus.
+            inert={terminalWorkspaceTerminalTabActive}
             className={cn(
               "flex min-h-0 min-w-0 flex-1 flex-col",
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
@@ -6491,6 +6499,13 @@ export default function ChatView({
                     <SynaraLogo aria-label="Synara logo" className="size-10" />
                     <h2
                       data-testid="empty-landing-heading"
+                      // A combobox contributes its (empty) value, not its text, to the
+                      // heading's name, which read as "What should we do in ?".
+                      aria-label={
+                        isEmptyChatLanding
+                          ? undefined
+                          : `What should we do in ${activeProjectDisplayName ?? "this folder"}?`
+                      }
                       className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
                     >
                       {isEmptyChatLanding ? (
@@ -6760,7 +6775,7 @@ export default function ChatView({
 
           {terminalWorkspaceOpen ? (
             <div
-              aria-hidden={!terminalWorkspaceTerminalTabActive}
+              inert={!terminalWorkspaceTerminalTabActive}
               className={cn(
                 "absolute inset-0 min-h-0 min-w-0 transition-all duration-200 ease-out",
                 terminalWorkspaceTerminalTabActive
