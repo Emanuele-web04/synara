@@ -2644,14 +2644,29 @@ describe("ChatView transcript geometry (full app)", () => {
                 index === 0 || hint.closest("[data-thread-item]")!.textContent?.includes("Atlas"),
             )) {
               const row = hoverHint.closest<HTMLElement>("[data-thread-item]")!;
-              await userEvent.hover(row);
               const actions = activityViewEnabled
                 ? row.querySelector<HTMLElement>(
                     'span[class*="group-hover/activity-row:opacity-100"]',
                   )!
                 : row.querySelector<HTMLElement>('[data-testid^="thread-hover-actions-"]')!;
+              // The geometry contract is about settled hover/focus visibility, not
+              // transition timing. Under parallel Chromium CI, animation frames can
+              // lag past waitFor's deadline. Keep the real hover/focus selectors
+              // active but make these two measured transitions instantaneous.
+              hoverHint.style.setProperty("transition-duration", "0s", "important");
+              actions.style.setProperty("transition-duration", "0s", "important");
+              const hoverGroup = row.closest<HTMLElement>(
+                activityViewEnabled
+                  ? '[class~="group/activity-row"]'
+                  : '[class~="group/thread-row"]',
+              )!;
+              await userEvent.unhover(row);
+              await userEvent.hover(row);
               const assertHoverLayout = () => {
-                expect(Number(getComputedStyle(hoverHint).opacity)).toBe(0);
+                expect(
+                  Number(getComputedStyle(hoverHint).opacity),
+                  `Shortcut ${hoverHint.textContent} should fade (hover=${hoverGroup.matches(":hover")}, focus=${hoverGroup.contains(document.activeElement)})`,
+                ).toBe(0);
                 expect(Number(getComputedStyle(actions).opacity)).toBe(1);
                 const actionsRect = actions.getBoundingClientRect();
                 for (const label of [...row.querySelectorAll<HTMLElement>("span")].filter(
@@ -2670,13 +2685,13 @@ describe("ChatView transcript geometry (full app)", () => {
                   }
                 }
               };
-              await vi.waitFor(assertHoverLayout);
+              await vi.waitFor(assertHoverLayout, { timeout: 3_000 });
               await userEvent.unhover(row);
               const focusTarget = row.matches('[role="button"]')
                 ? row
                 : row.querySelector<HTMLElement>('button, [role="button"]')!;
               focusTarget.focus();
-              await vi.waitFor(assertHoverLayout);
+              await vi.waitFor(assertHoverLayout, { timeout: 3_000 });
               focusTarget.blur();
             }
             window.dispatchEvent(new KeyboardEvent("keyup", { key: mod, bubbles: true }));
