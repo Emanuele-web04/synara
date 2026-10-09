@@ -1,5 +1,34 @@
 # Release build optimization evidence
 
+## Intel app on Apple Silicon (2026-10-09)
+
+The `macos-15-intel` runner was the release critical path. The Intel app and its
+Cua driver now build on `macos-15` (arm64). Job = "Package and qualify", started
+to completed, excluding queue; each value is one observation.
+
+| macOS x64 job                                                                                       | Runner             |  Duration |
+| --------------------------------------------------------------------------------------------------- | ------------------ | --------: |
+| [v1.0.1 tag](https://github.com/Emanuele-web04/synara/actions/runs/37850836681)                     | `macos-15-intel`   |     14.8m |
+| [build-only 37865125366](https://github.com/Emanuele-web04/synara/actions/runs/37865125366)         | `macos-15-intel`   |     15.7m |
+| [v1.0.1-beta.1 tag](https://github.com/Emanuele-web04/synara/actions/runs/37339778939)              | `macos-15-intel`   |     17.4m |
+| [v1.0.1-beta.2 tag](https://github.com/Emanuele-web04/synara/actions/runs/37555043844)              | `macos-15-intel`   |     19.9m |
+| [build-only 37903022273](https://github.com/Emanuele-web04/synara/actions/runs/37903022273), signed | `macos-15` (arm64) | **13.7m** |
+
+- Packaging (sign, notarize, DMG, ZIP): 8m16s against 12m36s on Intel. Signing
+  took 66s against 116s; Apple's notarization waits are unchanged.
+- The startup smoke runs under Rosetta 2 and costs 3m38s against 24s on Intel:
+  about 70s for the runtime dependency smoke, which includes the first
+  translation, and 135s for the app launch. It needs the 180-second limit.
+- The arm64 and Windows jobs of [run 37900925952](https://github.com/Emanuele-web04/synara/actions/runs/37900925952)
+  took 10.0m and 7.0m on the same commit, so Intel remains the slowest job,
+  now by about 3.7 minutes rather than 5-10.
+- A cold Cua build of the Intel driver took 5.9-7.6m on arm64 against 10-14.5m on
+  Intel. The new cache key binds the target arch, so the first default-branch
+  cache run after merge builds it once.
+- Every Mach-O must carry the target slice, so a cross-build cannot ship a
+  host-only helper that Rosetta would still run. The Intel-built v1.0.1 app passes
+  that check; the same app checked as arm64 reports 26 binaries.
+
 Baseline: [v0.9.0 run 35659929299](https://github.com/Emanuele-web04/synara/actions/runs/35659929299),
 source `f04341a67bc4941d1b2e91e0b23bbe782dfbc727`.
 Validation: [build-only run 35711485748](https://github.com/Emanuele-web04/synara/actions/runs/35711485748),
