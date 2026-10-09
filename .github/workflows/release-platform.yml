@@ -167,6 +167,7 @@ jobs:
         if: (inputs.platform == 'mac' || inputs.platform == 'linux') && steps.restore_checkpoint.outcome != 'success'
         uses: ./.github/actions/provision-cua
         with:
+          arch: ${{ inputs.arch }}
           prepared-artifact: prepared-cua-${{ inputs.platform }}-${{ inputs.arch }}
 
       - name: Restore portable outputs
@@ -354,6 +355,9 @@ jobs:
       - name: Smoke packaged desktop startup
         shell: bash
         run: |
+          if [[ "${{ inputs.platform }}" == "mac" && "${{ inputs.arch }}" == "x64" && "$(uname -m)" == "arm64" ]]; then
+            arch -x86_64 /usr/bin/true || { echo "Rosetta 2 is required to smoke the Intel app on Apple Silicon." >&2; exit 1; }
+          fi
           node scripts/verify-packaged-desktop-startup.ts \
             --assets-dir release-publish \
             --platform "${{ inputs.platform }}" \

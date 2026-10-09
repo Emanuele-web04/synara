@@ -361,6 +361,7 @@ jobs:
       - name: Provision verified Cua
         uses: ./.github/actions/provision-cua
         with:
+          arch: ${{ matrix.arch }}
           benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
       - name: Upload prepared Cua for this candidate
         if: needs.preflight.outputs.package_artifacts == 'true'

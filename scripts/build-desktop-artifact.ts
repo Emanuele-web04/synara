@@ -817,6 +817,7 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
   repoRoot: string,
   stageAppDir: string,
   platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
   verbose: boolean,
 ) {
   const path = yield* Path.Path;
@@ -854,11 +855,14 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
       })`bun install --omit=dev --ignore-scripts --linker hoisted`,
     );
   } else {
+    // Optional per-CPU packages (Claude SDK, esbuild, msgpackr) must match the
+    // target, not the host: release CI builds the Intel app on Apple Silicon.
+    const cpu = arch === "universal" ? "*" : arch;
     yield* runCommand(
       ChildProcess.make({
         cwd: stageAppDir,
         ...commandOutputOptions(verbose),
-      })`bun install --frozen-lockfile --ignore-scripts --linker hoisted`,
+      })`bun install --frozen-lockfile --ignore-scripts --linker hoisted --cpu=${cpu}`,
     );
   }
 
@@ -1343,7 +1347,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* timedBuildStage(
     "production-dependencies",
-    installFrozenStageDependencies(repoRoot, stageAppDir, options.platform, options.verbose),
+    installFrozenStageDependencies(
+      repoRoot,
+      stageAppDir,
+      options.platform,
+      options.arch,
+      options.verbose,
+    ),
   );
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);

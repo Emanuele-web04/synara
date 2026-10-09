@@ -21,7 +21,10 @@ version, release notes and lockfile are final.
   output checksums on each consumer, and stages native dependencies per platform.
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
-  - macOS `x64` DMG
+  - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
+    `arm64` (the Intel runner took 15-20 minutes for the same work). Its startup
+    smoke runs under Rosetta 2, so it also requires every Mach-O in the app to
+    carry the `x86_64` slice; Rosetta alone would run a host-only helper.
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
 - Each platform calls `release-platform.yml` with one native job that builds,
@@ -247,7 +250,7 @@ directory, verifies the complete file inventory, source, lockfile and build
 settings, then copies only the two allowed output roots. Frozen production
 installs, dependency patches and native ABI checks still run on each platform.
 
-The Intel Mac job no longer retries the whole artifact command. Diagnose the
+The macOS jobs no longer retry the whole artifact command. Diagnose the
 failed stage and rerun only its platform. With `--keep-stage` (used by CI), the
 logged stage directory retains Apple submission IDs and exact payload hashes
 for same-run recovery; it is not uploaded or persisted across runners. A failed
@@ -295,7 +298,8 @@ On an Apple Silicon Mac, build the DMG and macOS update ZIP in `release/` with:
 SYNARA_DESKTOP_UPDATE_REPOSITORY=Emanuele-web04/synara bun run dist:desktop:dmg:arm64
 ```
 
-Use `dist:desktop:dmg:x64` on Intel. The updater repository setting is needed for
+`dist:desktop:dmg:x64` builds the Intel app; on Apple Silicon, add the
+`x86_64-apple-darwin` Rust target for Cua, and launching it needs Rosetta 2. The updater repository setting is needed for
 ZIP manifest finalization outside GitHub Actions. The build passes
 `--publish never` to electron-builder and defaults to unsigned; release signing,
 notarization, and updater settings remain controlled by the existing release flow.

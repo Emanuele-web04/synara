@@ -10,7 +10,9 @@ const platforms = [
   {
     id: "mac-x64",
     label: "macOS x64",
-    runner: "macos-15-intel",
+    // Apple Silicon cross-builds Intel and smokes it under Rosetta 2: the
+    // Intel runner took 15-20 minutes for the same work as arm64's ~10.
+    runner: "macos-15",
     platform: "mac",
     target: "dmg",
     arch: "x64",

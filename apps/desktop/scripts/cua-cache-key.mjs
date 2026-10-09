@@ -56,6 +56,8 @@ export function collectCuaCacheInputs(root, env = process.env) {
   return {
     platform: process.platform,
     arch: process.arch,
+    // Apple Silicon also cross-compiles the Intel driver.
+    targetArch: env.SYNARA_CUA_TARGET_ARCH || process.arch,
     os:
       process.platform === "darwin"
         ? output("sw_vers", ["-productVersion"])
