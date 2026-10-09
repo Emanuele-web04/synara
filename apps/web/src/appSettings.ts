@@ -38,6 +38,7 @@ import {
 } from "@synara/shared/model";
 import {
   APP_SNAP_SHORTCUT_KEYS,
+  APP_SNAP_MODIFIER_PAIR_SHORTCUT_KINDS,
   APP_SNAP_SHORTCUT_MODIFIERS,
   DEFAULT_APP_SNAP_SHORTCUT,
 } from "@synara/shared/appSnapShortcut";
@@ -210,7 +211,7 @@ export type ChatWidthMode = typeof ChatWidthMode.Type;
 export { DEFAULT_CHAT_WIDTH };
 
 const AppSnapShortcut = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("both-option-keys") }),
+  Schema.Struct({ kind: Schema.Literals(APP_SNAP_MODIFIER_PAIR_SHORTCUT_KINDS) }),
   Schema.Struct({
     kind: Schema.Literal("key-chord"),
     modifier: Schema.Literals(APP_SNAP_SHORTCUT_MODIFIERS),

@@ -267,6 +267,54 @@ describe("AppSnapSettingsPanel", () => {
     await mounted.unmount();
   });
 
+  it("records both Command keys as a modifier-pair shortcut", async () => {
+    const checkShortcut = vi.fn().mockResolvedValue({ available: true, reason: null });
+    const shortcut = { kind: "both-command-keys" } as const;
+    const setShortcut = vi.fn().mockResolvedValue({
+      state: { ...READY_STATE, shortcut },
+      availability: { available: true, reason: null },
+    });
+    setDesktopBridge({
+      appSnap: {
+        getState: vi.fn().mockResolvedValue(READY_STATE),
+        requestPermissions: vi.fn().mockResolvedValue(READY_STATE),
+        setEnabled: vi.fn().mockResolvedValue(READY_STATE),
+        checkShortcut,
+        setShortcut,
+        onState: vi.fn(() => vi.fn()),
+        onPermissionGuideState: vi.fn(() => vi.fn()),
+      },
+    });
+
+    const mounted = await render(<AppSnapActivityHarness />);
+    await mounted.getByRole("button", { name: "Record AppSnap shortcut" }).click();
+    const recorder = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Record AppSnap shortcut"]',
+    );
+    for (const code of ["MetaLeft", "MetaRight"]) {
+      recorder?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code,
+          key: "Meta",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    await expect.element(mounted.getByText("Available — save to apply.")).toBeVisible();
+    await expect.element(mounted.getByText("⌘ left")).toBeVisible();
+    expect(checkShortcut).toHaveBeenCalledWith(shortcut);
+    await mounted.getByRole("button", { name: "Save" }).click();
+    await vi.waitFor(() => {
+      expect(setShortcut).toHaveBeenCalledWith(shortcut);
+      expect(harness.updateSettings).toHaveBeenCalledWith({ appSnapShortcut: shortcut });
+    });
+
+    await mounted.unmount();
+  });
+
   it("walks through a denied permission with the guided flow", async () => {
     const pushedStateRef: { current: ((state: DesktopAppSnapState) => void) | null } = {
       current: null,

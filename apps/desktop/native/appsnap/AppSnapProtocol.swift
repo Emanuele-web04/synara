@@ -15,7 +15,8 @@ enum AppSnapMode {
     case watch(
         outputDirectory: URL,
         excludedBundleIdentifier: String,
-        externalTrigger: Bool
+        externalTrigger: Bool,
+        chordModifier: AppSnapChordModifier
     )
     case computerFrames(
         windowID: CGWindowID,
@@ -46,6 +47,7 @@ struct AppSnapOptions {
         var outputDirectory: String?
         var excludedBundleIdentifier: String?
         var externalTrigger = false
+        var chordModifier: AppSnapChordModifier?
         var permissions = Set<AppSnapPermission>()
         var guidePane: String?
         var guideAppPath: String?
@@ -72,7 +74,9 @@ struct AppSnapOptions {
 
         // Watch-only flags are invalid in every non-watch mode.
         func rejectWatchArguments(_ message: String) throws {
-            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger,
+                  chordModifier == nil
+            else {
                 throw AppSnapFailure(
                     code: "invalid_arguments",
                     message: message
@@ -97,6 +101,15 @@ struct AppSnapOptions {
                 excludedBundleIdentifier = try readValue("--excluded-bundle-id", "a bundle identifier")
             case "--external-trigger":
                 externalTrigger = true
+            case "--chord-modifier":
+                let value = try readValue("--chord-modifier", "a value")
+                guard let modifier = AppSnapChordModifier(rawValue: value) else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--chord-modifier requires option or command."
+                    )
+                }
+                chordModifier = modifier
             case "--permission":
                 let value = try readValue("--permission", "a value")
                 guard let permission = AppSnapPermission(rawValue: value) else {
@@ -225,7 +238,8 @@ struct AppSnapOptions {
                 mode: .watch(
                     outputDirectory: URL(fileURLWithPath: outputDirectory).standardizedFileURL,
                     excludedBundleIdentifier: excludedBundleIdentifier,
-                    externalTrigger: externalTrigger
+                    externalTrigger: externalTrigger,
+                    chordModifier: chordModifier ?? .option
                 )
             )
         case "--escape-monitor":

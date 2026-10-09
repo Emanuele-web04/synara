@@ -631,7 +631,12 @@ export interface DesktopAppSnapKeyChord {
   key: string;
 }
 
-export type DesktopAppSnapShortcut = { kind: "both-option-keys" } | DesktopAppSnapKeyChord;
+/** Both physical keys of one modifier held together, e.g. left and right ⌘. */
+export type DesktopAppSnapModifierPairShortcut =
+  | { kind: "both-option-keys" }
+  | { kind: "both-command-keys" };
+
+export type DesktopAppSnapShortcut = DesktopAppSnapModifierPairShortcut | DesktopAppSnapKeyChord;
 
 export interface DesktopAppSnapShortcutAvailability {
   available: boolean;

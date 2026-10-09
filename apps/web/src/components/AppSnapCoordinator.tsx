@@ -9,6 +9,7 @@ import {
   type DesktopBridge,
   type ThreadId,
 } from "@synara/contracts";
+import { DEFAULT_APP_SNAP_SHORTCUT } from "@synara/shared/appSnapShortcut";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef } from "react";
 
@@ -275,7 +276,8 @@ export function AppSnapCoordinator() {
   }, []);
 
   // Settings objects are re-decoded from localStorage on every write, so key
-  // this effect on the chord's primitive fields rather than object identity.
+  // this effect on the shortcut's primitive fields rather than object identity.
+  const shortcutKind = settings.appSnapShortcut.kind;
   const shortcutModifier =
     settings.appSnapShortcut.kind === "key-chord" ? settings.appSnapShortcut.modifier : null;
   const shortcutKey =
@@ -285,9 +287,11 @@ export function AppSnapCoordinator() {
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) return;
     const shortcut: DesktopAppSnapShortcut =
-      shortcutModifier && shortcutKey
-        ? { kind: "key-chord", modifier: shortcutModifier, key: shortcutKey }
-        : { kind: "both-option-keys" };
+      shortcutKind === "key-chord"
+        ? shortcutModifier && shortcutKey
+          ? { kind: "key-chord", modifier: shortcutModifier, key: shortcutKey }
+          : DEFAULT_APP_SNAP_SHORTCUT
+        : { kind: shortcutKind };
     // The opt-in preference lives in the renderer settings store. This root
     // coordinator is mounted for the full UI lifetime and owns the native listener.
     // AppSnap is macOS-only, so unsupported desktop platforms must not attempt
@@ -306,7 +310,7 @@ export function AppSnapCoordinator() {
       .catch((error) => {
         console.warn("[appsnap] Could not update native listener state", error);
       });
-  }, [shortcutModifier, shortcutKey, settings.enableAppSnap]);
+  }, [shortcutKind, shortcutModifier, shortcutKey, settings.enableAppSnap]);
 
   const activateExistingTarget = useCallback(
     async (target: AppSnapThreadTarget) => {

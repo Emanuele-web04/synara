@@ -17,7 +17,7 @@ do {
         emitter.emitPermissions(preflightAppSnapPermissions(selectedPermissions))
     case .releaseHeldInput:
         emitter.emit(releaseHeldInputEvents())
-    case let .watch(outputDirectory, excludedBundleIdentifier, externalTrigger):
+    case let .watch(outputDirectory, excludedBundleIdentifier, externalTrigger, chordModifier):
         _ = umask(0o077)
         try preparePrivateOutputDirectory(outputDirectory)
         _ = NSApplication.shared.setActivationPolicy(.accessory)
@@ -46,7 +46,7 @@ do {
         if externalTrigger {
             gestureSource = requestListener
         } else {
-            let monitor = OptionChordMonitor(emitter: emitter) {
+            let monitor = ModifierPairChordMonitor(emitter: emitter, modifier: chordModifier) {
                 coordinator.handleGesture()
             }
             monitor.start()
