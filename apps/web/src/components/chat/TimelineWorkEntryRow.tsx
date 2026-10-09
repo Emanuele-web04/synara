@@ -984,6 +984,8 @@ function providerContextLifecycleReasonLabel(
   switch (reason) {
     case "conversation-rebuilt":
       return "Conversation rebuilt from a summary";
+    case "fork-from-earlier-turn":
+      return "Fork rebuilt up to the chosen turn";
     case "fresh-session":
       return "New session started";
     case "interrupt-escalation":

@@ -1112,6 +1112,11 @@ export const OrchestrationThread = Schema.Struct({
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  /**
+   * Source message a fork was taken from ("Fork from this turn"). The provider
+   * fork must not carry native history past it. Null/absent = whole thread.
+   */
+  forkSourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
   sidechatSourceThreadId: SidechatSourceThreadId,
   sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
@@ -1517,6 +1522,8 @@ const ThreadForkCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  /** Fork from a specific turn: the source message the imported transcript ends at. */
+  throughMessageId: Schema.optional(MessageId),
   importedMessages: Schema.Array(ThreadHandoffImportedMessage),
   createdAt: IsoDateTime,
 });
@@ -2241,6 +2248,11 @@ export const ThreadCreatedPayload = Schema.Struct({
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  /**
+   * Source message a fork was taken from ("Fork from this turn"). The provider
+   * fork must not carry native history past it. Null/absent = whole thread.
+   */
+  forkSourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
   sidechatSourceThreadId: SidechatSourceThreadId,
   sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,

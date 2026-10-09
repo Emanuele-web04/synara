@@ -5,6 +5,7 @@ import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
 import { ComputerService } from "../../computer/Services/ComputerService";
 import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
+import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -413,6 +414,7 @@ const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 
 type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
+  | "fork-from-earlier-turn"
   | "fresh-session"
   | "interrupt-escalation"
   | "native-history-unavailable"
@@ -459,6 +461,11 @@ function recapTailPreview(recapText: string): string {
 }
 
 function providerContextLifecycleSummary(evidence: ProviderContextLifecycleEvidence): string {
+  if (evidence.reason === "fork-from-earlier-turn") {
+    return evidence.recapText !== null
+      ? "This fork starts from an earlier turn, so the model continues from the transcript up to that turn."
+      : "This fork starts from an earlier turn without the source session's history.";
+  }
   if (evidence.reason === "interrupt-escalation") {
     return evidence.recapText !== null
       ? "The turn could not be stopped cleanly, so the session was restarted and your message included a summary."
@@ -1084,6 +1091,9 @@ const make = Effect.gen(function* () {
   // Fresh sessions that cannot inherit native conversation state need one
   // transcript bootstrap (fork fallbacks and non-resumable Droid model changes).
   const freshSessionContextBootstrapThreadIds = new Set<string>();
+  // Fork-from-turn threads whose native fork could not stop at the chosen
+  // turn; their fresh-session notice explains the deliberate transcript rebuild.
+  const forkFromEarlierTurnContextThreadIds = new Set<string>();
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
@@ -1148,7 +1158,10 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       activity: {
         id: EventId.makeUnsafe(`provider-context-lifecycle:${activityKey}`),
-        tone: input.nativeHistory === "unavailable" ? "error" : "info",
+        tone:
+          input.nativeHistory === "unavailable" && input.restartReason !== "fork-from-earlier-turn"
+            ? "error"
+            : "info",
         kind: PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND,
         summary: input.summary,
         payload: {
@@ -1299,6 +1312,7 @@ const make = Effect.gen(function* () {
   const clearPendingContextBootstraps = (threadId: string) => {
     sidechatContextBootstrapThreadIds.delete(threadId);
     freshSessionContextBootstrapThreadIds.delete(threadId);
+    forkFromEarlierTurnContextThreadIds.delete(threadId);
     rollbackContextBootstrapThreadIds.delete(threadId);
     pendingContextBootstrapAttempts.delete(threadId);
   };
@@ -1312,6 +1326,7 @@ const make = Effect.gen(function* () {
     }
     if (attempt.clearFreshSessionTranscript) {
       freshSessionContextBootstrapThreadIds.delete(threadId);
+      forkFromEarlierTurnContextThreadIds.delete(threadId);
     }
     if (attempt.clearRollbackTranscript) {
       rollbackContextBootstrapThreadIds.delete(threadId);
@@ -2600,12 +2615,38 @@ const make = Effect.gen(function* () {
             ),
           )
         : (options?.enableComputerControl ?? false);
-      const forked = yield* providerService.forkThread({
-        ...providerSessionOptions,
-        sourceThreadId: thread.forkSourceThreadId,
-        enableComputerControl: forkComputerControl,
-        ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
+      // "Fork from this turn" must not hand the model source turns the
+      // imported transcript left out. Without a native boundary for the chosen
+      // point, skip the native fork and rebuild from the imported transcript.
+      const forkCutoff = resolveForkSourceCutoff({
+        throughMessageId: thread.forkSourceMessageId,
+        sourceMessages: thread.forkSourceMessageId
+          ? (yield* resolveThread(thread.forkSourceThreadId))?.messages
+          : undefined,
       });
+      if (forkCutoff.kind === "unavailable") {
+        yield* Effect.logInfo(
+          "provider native fork skipped because the fork point has no boundary",
+          {
+            threadId,
+            sourceThreadId: thread.forkSourceThreadId,
+            reason: forkCutoff.reason,
+          },
+        );
+      }
+      const forked =
+        forkCutoff.kind === "unavailable"
+          ? null
+          : yield* providerService.forkThread({
+              ...providerSessionOptions,
+              sourceThreadId: thread.forkSourceThreadId,
+              ...(forkCutoff.kind === "turn" ? { throughTurnId: forkCutoff.turnId } : {}),
+              enableComputerControl: forkComputerControl,
+              ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
+            });
+      if (!forked && forkCutoff.kind !== "latest") {
+        forkFromEarlierTurnContextThreadIds.add(threadId);
+      }
       if (forked) {
         if (
           shouldRegisterContextBootstrap &&
@@ -3401,7 +3442,9 @@ const make = Effect.gen(function* () {
         : rollbackContextBootstrapThreadIds.has(input.threadId)
           ? "conversation-rebuilt"
           : freshSessionContextBootstrapThreadIds.has(input.threadId)
-            ? "fresh-session"
+            ? forkFromEarlierTurnContextThreadIds.has(input.threadId)
+              ? "fork-from-earlier-turn"
+              : "fresh-session"
             : "native-history-unavailable";
     const followsProviderHandoff = providerHandoffContextThreadIds.delete(input.threadId);
     let providerContextLifecycleEvidence: ProviderContextLifecycleEvidence | null =
@@ -4025,6 +4068,7 @@ const make = Effect.gen(function* () {
       }
       if (durableCompletionSucceeded) {
         freshSessionContextBootstrapThreadIds.delete(input.threadId);
+        forkFromEarlierTurnContextThreadIds.delete(input.threadId);
         if (retiresPriorTranscriptBootstrap) {
           rollbackContextBootstrapThreadIds.delete(input.threadId);
         }

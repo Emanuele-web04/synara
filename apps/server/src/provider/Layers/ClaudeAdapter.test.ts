@@ -12157,6 +12157,148 @@ describe("ClaudeAdapterLive forkThread", () => {
     );
   });
 
+  it.effect("forks through the chosen turn's native boundary instead of the latest point", () => {
+    const forkCalls: Array<{ readonly upToMessageId?: string } | undefined> = [];
+    const layer = makeForkLayer(async (_sessionId, options) => {
+      forkCalls.push(options);
+      return { sessionId: "forked-through-turn" };
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        throughTurnId: TurnId.makeUnsafe("turn-apple"),
+        sourceResumeCursor: {
+          threadId: String(THREAD_ID),
+          resume: SOURCE_SESSION_ID,
+          resumeSessionAt: "assistant-banana",
+          turnBoundaries: [
+            {
+              turnId: "turn-apple",
+              sessionId: SOURCE_SESSION_ID,
+              assistantUuid: "assistant-apple",
+            },
+            {
+              turnId: "turn-banana",
+              sessionId: SOURCE_SESSION_ID,
+              assistantUuid: "assistant-banana",
+            },
+          ],
+        },
+      });
+
+      assert.deepEqual(
+        forkCalls.map((options) => options?.upToMessageId),
+        ["assistant-apple"],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("refuses to fork at the latest point when the chosen turn has no boundary", () => {
+    let forkCalls = 0;
+    const layer = makeForkLayer(async () => {
+      forkCalls += 1;
+      return { sessionId: "unexpected" };
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        throughTurnId: TurnId.makeUnsafe("turn-apple"),
+        sourceResumeCursor: {
+          threadId: String(THREAD_ID),
+          resume: SOURCE_SESSION_ID,
+          resumeSessionAt: "assistant-banana",
+          // A boundary from another native session (e.g. before /clear) is not usable.
+          turnBoundaries: [
+            { turnId: "turn-apple", sessionId: "older-session", assistantUuid: "assistant-apple" },
+          ],
+        },
+      }).pipe(Effect.result);
+
+      assert.equal(forkCalls, 0);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.instanceOf(result.failure, ProviderAdapterValidationError);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("records completed turn boundaries for a later fork from an earlier turn", () => {
+    const query = new FakeClaudeQuery();
+    const forkCalls: Array<{ readonly upToMessageId?: string } | undefined> = [];
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => query,
+      forkNativeSession: async (_sessionId, options) => {
+        forkCalls.push(options);
+        return { sessionId: "forked-live" };
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const runTurn = (input: string, assistantUuid: string) =>
+        Effect.gen(function* () {
+          const completed = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input, attachments: [] });
+          emitAssistantUsage(query, SOURCE_SESSION_ID, assistantUuid, "ok", { input_tokens: 1 });
+          emitSuccessResult(query, SOURCE_SESSION_ID, `${assistantUuid}-result`, {
+            input_tokens: 1,
+          });
+          yield* Fiber.join(completed);
+          return turn.turnId;
+        });
+      const appleTurnId = yield* runTurn("Remember APPLE", "assistant-apple");
+      const bananaTurnId = yield* runTurn("Remember BANANA", "assistant-banana");
+
+      const cursor = (yield* adapter.listSessions())[0]?.resumeCursor as
+        | { readonly turnBoundaries?: unknown }
+        | undefined;
+      assert.deepEqual(cursor?.turnBoundaries, [
+        { turnId: appleTurnId, sessionId: SOURCE_SESSION_ID, assistantUuid: "assistant-apple" },
+        { turnId: bananaTurnId, sessionId: SOURCE_SESSION_ID, assistantUuid: "assistant-banana" },
+      ]);
+
+      yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        throughTurnId: appleTurnId,
+      });
+      assert.deepEqual(
+        forkCalls.map((options) => options?.upToMessageId),
+        ["assistant-apple"],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("keeps the larger persisted turnCount over a freshly resumed live context", () => {
     const query = new FakeClaudeQuery();
     const layer = makeClaudeAdapterLive({
