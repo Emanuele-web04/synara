@@ -476,6 +476,9 @@ export const AppSettingsSchema = Schema.Struct({
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only opt-in for explicit Hand off → Continue here actions. Ordinary
+  // composer model selection and the existing new-conversation flow are unchanged.
+  enableSameThreadHandoffs: Schema.Boolean.pipe(withDefaults(() => false)),
   // Fold each finished turn's tool calls and intermediate messages behind one
   // "Worked for…" line. Off keeps every step of finished turns visible.
   collapseFinishedTurns: Schema.Boolean.pipe(withDefaults(() => true)),

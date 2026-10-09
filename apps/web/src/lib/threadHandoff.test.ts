@@ -13,8 +13,10 @@ import type { Thread } from "../types";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
+  buildThreadHandoffContextMenuItems,
   canContinueThreadHandoff,
   resolveAvailableHandoffTargets,
+  resolveContinueThreadHandoffTargets,
   resolveProviderHandoffOutcome,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffModelSelection,
@@ -27,6 +29,104 @@ import {
 } from "./browserAnnotations";
 
 describe("threadHandoff", () => {
+  const menuTargets = [
+    { provider: "claudeAgent", instanceId: "claudeAgent", label: "Claude" },
+    { provider: "grok", instanceId: "grok", label: "Grok" },
+    { provider: "codex", instanceId: "codex_work", label: "Codex work" },
+  ] as const;
+
+  it("gates explicit Continue here targets without changing available new-conversation targets", () => {
+    expect(
+      resolveContinueThreadHandoffTargets({
+        enabled: false,
+        sourceProvider: "codex",
+        targets: menuTargets,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveContinueThreadHandoffTargets({
+        enabled: true,
+        sourceProvider: "codex",
+        targets: menuTargets,
+      }),
+    ).toEqual(menuTargets.slice(0, 2));
+    expect(menuTargets).toHaveLength(3);
+  });
+
+  it("keeps the legacy context menu when opted out even if Continue here targets were supplied", () => {
+    const items = buildThreadHandoffContextMenuItems({
+      enabled: false,
+      targets: menuTargets,
+      continueTargets: menuTargets.slice(0, 2),
+      icon: "handoff",
+    });
+    expect(items).toEqual([
+      {
+        id: "handoff",
+        label: "Hand off",
+        icon: "handoff",
+        children: menuTargets.map((target) => ({
+          id: `handoff:${target.instanceId}`,
+          label: target.label,
+          icon: "handoff",
+        })),
+      },
+    ]);
+  });
+
+  it("groups explicit destinations and their target variants instead of adding top-level rows", () => {
+    const items = buildThreadHandoffContextMenuItems({
+      enabled: true,
+      targets: menuTargets,
+      continueTargets: menuTargets.slice(0, 2),
+      icon: "handoff",
+    });
+    expect(items).toHaveLength(1);
+    const destinations = items[0]!.children!;
+    expect(destinations.map((item) => item.label)).toEqual(["Continue here", "New conversation"]);
+    expect(destinations[0]!.children?.map((item) => item.id)).toEqual([
+      "handoff-here:claudeAgent",
+      "handoff-here:grok",
+    ]);
+    expect(destinations[1]!.children?.map((item) => item.id)).toEqual([
+      "handoff:claudeAgent",
+      "handoff:grok",
+      "handoff:codex_work",
+    ]);
+  });
+
+  it("collapses one-target outcomes to plain rows and omits empty handoff groups", () => {
+    const target = menuTargets[0];
+    const items = buildThreadHandoffContextMenuItems({
+      enabled: true,
+      targets: [target],
+      continueTargets: [target],
+      icon: "handoff",
+    });
+    expect(
+      items[0]!.children?.map((item) => ({ label: item.label, children: item.children })),
+    ).toEqual([
+      { label: "Continue here with Claude", children: undefined },
+      { label: "New conversation with Claude", children: undefined },
+    ]);
+    expect(
+      buildThreadHandoffContextMenuItems({
+        enabled: false,
+        targets: [target],
+        continueTargets: [],
+        icon: "handoff",
+      })[0]?.label,
+    ).toBe("Handoff to Claude");
+    expect(
+      buildThreadHandoffContextMenuItems({
+        enabled: true,
+        targets: [],
+        continueTargets: [],
+        icon: "handoff",
+      }),
+    ).toEqual([]);
+  });
+
   it("reads a same-thread handoff outcome from the activity keyed by its command", () => {
     const activity = (id: string, payload: Record<string, unknown> = {}) =>
       ({

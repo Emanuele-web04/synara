@@ -392,6 +392,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show token-by-token output while a response is in progress. streaming",
   },
   {
+    id: "behavior:continue-handoffs-here",
+    section: "behavior",
+    title: "Continue handoffs here",
+    keywords:
+      "Opt in to Hand off Continue here same conversation provider bounded recap. New conversation remains available. Does not change the model picker.",
+  },
+  {
     id: "behavior:fold-finished-turns",
     section: "behavior",
     title: "Fold finished turns",

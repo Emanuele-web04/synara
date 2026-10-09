@@ -41,8 +41,8 @@ import {
 } from "./chatHeaderControls";
 import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
-import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
+import { Menu, MenuItem, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationControls";
@@ -69,6 +69,8 @@ import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { SurfacePanelToggle, type SurfacePanelToggleState } from "./chatHeaderControls";
 import type { ThreadHandoffTarget } from "~/lib/threadHandoff";
+import type { ContinuousHandoffPathStep } from "~/lib/continuousHandoffPath";
+import { ContinuousHandoffPath } from "./ContinuousHandoffPath";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -109,6 +111,9 @@ interface ChatHeaderProps {
   handoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
   /** Subset of `handoffActionTargets` that can continue in this same thread. */
   continueHandoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
+  /** Opt-in for explicit Hand off destinations only; defaults off for older callers. */
+  enableSameThreadHandoffs?: boolean;
+  providerHandoffPath?: ReadonlyArray<ContinuousHandoffPathStep>;
   // Coordinator threads pass false — a hand-off copy would read as a second
   // coordinator, so the action itself is hidden rather than disabled.
   showHandoffAction?: boolean;
@@ -436,6 +441,8 @@ export function ChatHeader({
   handoffDisabled,
   handoffActionTargets,
   continueHandoffActionTargets,
+  enableSameThreadHandoffs = false,
+  providerHandoffPath = [],
   showHandoffAction: showHandoffActionProp,
   gitCwd,
   diffTotals,
@@ -710,6 +717,13 @@ export function ChatHeader({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+        {!minimalChrome && activeThreadEntryPoint === "chat" ? (
+          <ContinuousHandoffPath
+            steps={providerHandoffPath}
+            currentProvider={activeProvider}
+            compact={compact}
+          />
+        ) : null}
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
@@ -735,38 +749,66 @@ export function ChatHeader({
               <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
             </Tooltip>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
-              {continueHandoffActionTargets.length > 0 ? (
-                <>
-                  <MenuGroup>
-                    <MenuGroupLabel>Continue in this thread</MenuGroupLabel>
-                    {continueHandoffActionTargets.map((target) => (
+              {enableSameThreadHandoffs
+                ? [
+                    {
+                      destination: "this-thread",
+                      label: "Continue here",
+                      targets: continueHandoffActionTargets,
+                      onSelect: onContinueHandoff,
+                    },
+                    {
+                      destination: "new-thread",
+                      label: "New conversation",
+                      targets: handoffActionTargets,
+                      onSelect: onCreateHandoff,
+                    },
+                  ].map((choice) =>
+                    choice.targets.length === 1 ? (
                       <MenuItem
-                        key={target.instanceId}
-                        data-handoff-destination="this-thread"
-                        onClick={() => onContinueHandoff(target)}
+                        key={choice.destination}
+                        data-handoff-destination={choice.destination}
+                        onClick={() => choice.onSelect(choice.targets[0]!)}
                       >
-                        {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
-                        {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
-                        <span>{target.label}</span>
+                        {renderProviderIcon(
+                          choice.targets[0]!.provider,
+                          "size-3.5 shrink-0 opacity-100",
+                        )}
+                        <span>
+                          {choice.label} with {choice.targets[0]!.label}
+                        </span>
                       </MenuItem>
-                    ))}
-                  </MenuGroup>
-                  <MenuSeparator />
-                </>
-              ) : null}
-              <MenuGroup>
-                <MenuGroupLabel>Continue in a new thread</MenuGroupLabel>
-                {handoffActionTargets.map((target) => (
-                  <MenuItem
-                    key={target.instanceId}
-                    data-handoff-destination="new-thread"
-                    onClick={() => onCreateHandoff(target)}
-                  >
-                    {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
-                    <span>{target.label}</span>
-                  </MenuItem>
-                ))}
-              </MenuGroup>
+                    ) : choice.targets.length > 1 ? (
+                      <MenuSub key={choice.destination}>
+                        <MenuSubTrigger>
+                          <HandoffIcon className="size-3.5 shrink-0" />
+                          <span>{choice.label}</span>
+                        </MenuSubTrigger>
+                        <ComposerPickerMenuSubPopup className="w-56 min-w-56">
+                          {choice.targets.map((target) => (
+                            <MenuItem
+                              key={target.instanceId}
+                              data-handoff-destination={choice.destination}
+                              onClick={() => choice.onSelect(target)}
+                            >
+                              {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
+                              <span>{target.label}</span>
+                            </MenuItem>
+                          ))}
+                        </ComposerPickerMenuSubPopup>
+                      </MenuSub>
+                    ) : null,
+                  )
+                : handoffActionTargets.map((target) => (
+                    <MenuItem
+                      key={target.instanceId}
+                      data-handoff-destination="new-thread"
+                      onClick={() => onCreateHandoff(target)}
+                    >
+                      {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
+                      <span>{target.label}</span>
+                    </MenuItem>
+                  ))}
             </ComposerPickerMenuPopup>
           </Menu>
         ) : null}

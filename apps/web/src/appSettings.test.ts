@@ -87,6 +87,36 @@ describe("source control writing settings", () => {
   });
 });
 
+describe("same-thread handoff preference", () => {
+  it("stays off for fresh installs and upgrades without resetting other preferences", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).enableSameThreadHandoffs).toBe(false);
+    const upgraded = normalizeStoredAppSettings(
+      Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+        JSON.stringify({ anchorSentMessagesToTop: false, chatFontSizePx: 15 }),
+      ),
+    );
+    expect(upgraded).toMatchObject({
+      enableSameThreadHandoffs: false,
+      anchorSentMessagesToTop: false,
+      chatFontSizePx: 15,
+    });
+  });
+
+  it("persists an explicit opt-in and opt-out as a local UI preference", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    const enabled = applyLocalAppSettingsPatch(defaults, { enableSameThreadHandoffs: true });
+    const restored = normalizeStoredAppSettings(
+      Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(JSON.stringify(enabled)),
+    );
+    expect(restored.enableSameThreadHandoffs).toBe(true);
+    expect(appSettingsPatchToServerSettingsPatch({ enableSameThreadHandoffs: true })).toEqual({});
+    expect(
+      applyLocalAppSettingsPatch(restored, { enableSameThreadHandoffs: false })
+        .enableSameThreadHandoffs,
+    ).toBe(false);
+  });
+});
+
 describe("computer control defaults", () => {
   it("leaves computer control off until a preference is explicitly saved", () => {
     expect(AppSettingsSchema.makeUnsafe({}).computerControlEnabled).toBe(false);

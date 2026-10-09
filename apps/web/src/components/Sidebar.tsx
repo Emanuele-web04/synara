@@ -443,7 +443,8 @@ import {
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import {
   canCreateThreadHandoff,
-  canContinueThreadHandoff,
+  buildThreadHandoffContextMenuItems,
+  resolveContinueThreadHandoffTargets,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffBadgeLabel,
@@ -3064,6 +3065,7 @@ export default function Sidebar() {
 
   const continueHandoffInThread = useCallback(
     async (thread: Thread, target: ThreadHandoffTarget) => {
+      if (!appSettings.enableSameThreadHandoffs) return;
       try {
         await continueThreadHandoff(thread, target.provider, target.instanceId);
       } catch (error) {
@@ -3077,7 +3079,7 @@ export default function Sidebar() {
         });
       }
     },
-    [continueThreadHandoff],
+    [appSettings.enableSameThreadHandoffs, continueThreadHandoff],
   );
 
   const forkThread = useCallback(
@@ -3289,37 +3291,23 @@ export default function Sidebar() {
             providerStatuses,
           })
         : [];
-      const continueHandoffTargets = handoffTargets.filter((target) =>
-        canContinueThreadHandoff({
-          sourceProvider: thread.modelSelection.provider,
-          targetProvider: target.provider,
-        }),
-      );
+      const continueHandoffTargets = resolveContinueThreadHandoffTargets({
+        enabled: appSettings.enableSameThreadHandoffs,
+        sourceProvider: thread.modelSelection.provider,
+        targets: handoffTargets,
+      });
       const handoffTargetById = new Map(
         handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
       );
       const continueHandoffTargetById = new Map(
         continueHandoffTargets.map((target) => [`handoff-here:${target.instanceId}`, target]),
       );
-      const handoffItems = contextMenuGroup(
-        { id: "handoff", label: "Handoff", icon: THREAD_CONTEXT_MENU_ICONS.handoff },
-        [
-          ...continueHandoffTargets.map((target) => ({
-            id: `handoff-here:${target.instanceId}`,
-            label: `${target.label} in this thread`,
-            standaloneLabel: `Handoff to ${target.label} in this thread`,
-            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-          })),
-          ...handoffTargets.map((target, index) => ({
-            id: `handoff:${target.instanceId}`,
-            label:
-              continueHandoffTargets.length > 0 ? `${target.label} in a new thread` : target.label,
-            standaloneLabel: `Handoff to ${target.label}`,
-            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-            ...(index === 0 && continueHandoffTargets.length > 0 ? { separatorBefore: true } : {}),
-          })),
-        ],
-      );
+      const handoffItems = buildThreadHandoffContextMenuItems({
+        enabled: appSettings.enableSameThreadHandoffs,
+        targets: handoffTargets,
+        continueTargets: continueHandoffTargets,
+        icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+      });
       // Same action as `/fork`.
       const canFork = canForkThread({ thread, handoffAvailability });
       const forkItems = canFork
