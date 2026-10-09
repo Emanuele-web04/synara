@@ -2897,25 +2897,17 @@ it("tracks the real unary wait while keeping the heartbeat out of pending counts
   (transport as unknown as { setState(state: string): void }).setState("open");
   const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
   await vi.advanceTimersByTimeAsync(15000);
-  expect(serverBusy.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 1,
-    slowRequests: 1,
-  });
+  expect(serverBusy.getSnapshot()).toMatchObject({ reason: null, pendingRequests: 1 });
   await vi.advanceTimersByTimeAsync(45000);
   expect(await verdict).toMatchObject({
     message: expect.stringContaining("Try again when the server responds"),
   });
-  expect(serverBusy.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 0,
-    slowRequests: 0,
-  });
+  expect(serverBusy.getSnapshot()).toMatchObject({ reason: null, pendingRequests: 0 });
   serverBusy.dispose();
   vi.useRealTimers();
 });
 
-it("uses the caller's long-operation budget for providerCompactThread", async () => {
+it("keeps a long providerCompactThread pending until the caller aborts it", async () => {
   vi.useFakeTimers();
   bindWindowTimersToCurrentGlobals();
   const { transport, internals } = makeBareTransport();
@@ -2937,10 +2929,8 @@ it("uses the caller's long-operation budget for providerCompactThread", async ()
     )
     .catch((error) => error);
   try {
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(serverBusy.getSnapshot()).toMatchObject({ pendingRequests: 1, slowRequests: 0 });
-    await vi.advanceTimersByTimeAsync(105_000);
-    expect(serverBusy.getSnapshot().slowRequests).toBe(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(serverBusy.getSnapshot()).toMatchObject({ reason: null, pendingRequests: 1 });
     caller.abort();
     expect(await pending).toMatchObject({ code: "WS_REQUEST_ABORTED" });
     expect(serverBusy.getSnapshot().pendingRequests).toBe(0);

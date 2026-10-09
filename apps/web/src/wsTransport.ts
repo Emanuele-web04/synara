@@ -961,7 +961,7 @@ export class WsTransport {
     params?: unknown,
     options?: WsRequestOptions,
   ): Promise<T> {
-    const finish = this.serverBusy?.trackRequest(method, options);
+    const finish = this.serverBusy?.trackRequest(method);
     const activity = rendererRpcActivity(method, params);
     if (activity) recordRendererActivity(activity, "started");
     try {

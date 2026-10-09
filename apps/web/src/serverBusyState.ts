@@ -3,20 +3,16 @@ import type { ServerRuntimeStatus } from "@synara/contracts";
 const HEARTBEAT_MS = 5000;
 const RESPONSE_MS = 3000;
 const RECENT_STALL_MS = 30_000;
-const SLOW_REQUEST_MS = 15_000;
-const LONG_REQUEST_MS = 120_000;
 const MAX_TRACKED_REQUESTS = 256;
 
 export interface ServerBusySnapshot {
   readonly reason: "unresponsive" | "recent-stall" | null;
   readonly pendingRequests: number;
-  readonly slowRequests: number;
   readonly lastStallMs: number | null;
 }
 const EMPTY: ServerBusySnapshot = {
   reason: null,
   pendingRequests: 0,
-  slowRequests: 0,
   lastStallMs: null,
 };
 let latest = EMPTY;
@@ -42,7 +38,7 @@ export function publishServerBusySnapshot(snapshot: ServerBusySnapshot): void {
 /** Transport-owned liveness and latency. It never reconnects or retries commands. */
 export class ServerBusyController {
   private snapshot = EMPTY;
-  private pending = new Map<symbol, { slow: boolean; timer: ReturnType<typeof setTimeout> }>();
+  private pending = new Set<symbol>();
   private epoch = 0;
   private heartbeat: ((signal: AbortSignal) => Promise<ServerRuntimeStatus>) | null = null;
   private requestAbort: AbortController | null = null;
@@ -70,14 +66,18 @@ export class ServerBusyController {
     if (
       next.reason === this.snapshot.reason &&
       next.pendingRequests === this.snapshot.pendingRequests &&
-      next.slowRequests === this.snapshot.slowRequests &&
       next.lastStallMs === this.snapshot.lastStallMs
     )
       return;
     this.snapshot = next;
     this.options.onChange?.(next);
   }
-  trackRequest(method: string, options?: { readonly timeoutMs?: number | null }): () => void {
+  /**
+   * Counts in-flight requests for the unresponsive and reconnecting notices. A long request
+   * on a server that still answers the heartbeat is not a busy server: it is waiting on Git,
+   * GitHub, a provider or the network, and the surface that asked for it owns that wait.
+   */
+  trackRequest(method: string): () => void {
     if (
       this.disposed ||
       method.includes("subscribe") ||
@@ -86,30 +86,11 @@ export class ServerBusyController {
     )
       return () => {};
     const token = Symbol();
-    const timer = setTimeout(
-      () => {
-        const entry = this.pending.get(token);
-        if (!entry) return;
-        entry.slow = true;
-        this.update({ slowRequests: this.snapshot.slowRequests + 1 });
-      },
-      options?.timeoutMs === null
-        ? LONG_REQUEST_MS
-        : options?.timeoutMs !== undefined && options.timeoutMs > 60_000
-          ? options.timeoutMs * 0.75
-          : SLOW_REQUEST_MS,
-    );
-    this.pending.set(token, { slow: false, timer });
+    this.pending.add(token);
     this.update({ pendingRequests: this.pending.size });
     return () => {
-      const entry = this.pending.get(token);
-      if (!entry) return;
-      clearTimeout(entry.timer);
-      this.pending.delete(token);
-      this.update({
-        pendingRequests: this.pending.size,
-        slowRequests: this.snapshot.slowRequests - Number(entry.slow),
-      });
+      if (!this.pending.delete(token)) return;
+      this.update({ pendingRequests: this.pending.size });
     };
   }
   startHeartbeat(request: (signal: AbortSignal) => Promise<ServerRuntimeStatus>): () => void {
@@ -198,7 +179,6 @@ export class ServerBusyController {
     if (this.disposed) return;
     this.disposed = true;
     this.stopHeartbeat();
-    for (const entry of this.pending.values()) clearTimeout(entry.timer);
     this.pending.clear();
     this.update(EMPTY);
   }

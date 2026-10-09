@@ -7,7 +7,11 @@ import {
 import { addWsTransportStateListener, type WsTransportState } from "../wsTransportEvents";
 import { StatusChip } from "./ui/status-chip";
 
-/** Shell status only: never inserts work or message rows into the transcript. */
+/**
+ * Shell status only: never inserts work or message rows into the transcript. It appears only
+ * when the server itself misses its heartbeat, has just recovered from a stall, or the socket
+ * is reconnecting — never for one slow request on a server that still answers.
+ */
 export function ServerBusyNotice({
   snapshot,
   reconnecting = false,
@@ -15,7 +19,7 @@ export function ServerBusyNotice({
   snapshot: ServerBusySnapshot;
   reconnecting?: boolean;
 }) {
-  if (!reconnecting && !snapshot.reason && snapshot.slowRequests === 0) return null;
+  if (!reconnecting && !snapshot.reason) return null;
   const title = reconnecting
     ? "Reconnecting to Synara server"
     : snapshot.reason === "recent-stall"
@@ -29,9 +33,7 @@ export function ServerBusyNotice({
     ? `The connection was interrupted. Thread updates will resume automatically when it recovers.${snapshot.pendingRequests ? ` ${waiting}` : ""}`
     : snapshot.reason === "unresponsive"
       ? `The server is not answering. Heavy load or a connection delay may be the cause.${snapshot.pendingRequests ? ` ${waiting}` : " Updates will resume when it responds."}`
-      : snapshot.reason === "recent-stall"
-        ? `The server paused for ${((snapshot.lastStallMs ?? 0) / 1000).toFixed(1)} s and is responding again.${snapshot.pendingRequests ? ` ${waiting}` : ""}`
-        : `${waiting} You can keep working while it completes.`;
+      : `The server paused for ${((snapshot.lastStallMs ?? 0) / 1000).toFixed(1)} s and is responding again.${snapshot.pendingRequests ? ` ${waiting}` : ""}`;
   return (
     <div
       role="status"
@@ -70,11 +72,7 @@ export function ServerBusyIndicator() {
     getServerBusySnapshot,
     getServerBusySnapshot,
   );
-  if (
-    !reconnecting &&
-    (transportState !== "open" || (!snapshot.reason && snapshot.slowRequests === 0))
-  )
-    return null;
+  if (!reconnecting && (transportState !== "open" || !snapshot.reason)) return null;
   return (
     <div className="pointer-events-none fixed top-12 left-1/2 z-50 max-w-[calc(100vw-2rem)] -translate-x-1/2">
       <ServerBusyNotice snapshot={snapshot} reconnecting={reconnecting} />

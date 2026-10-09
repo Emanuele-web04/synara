@@ -8,7 +8,7 @@ import { publishServerBusySnapshot } from "../serverBusyState";
 it("explains waiting during an unresponsive server without a blocking dialog", async () => {
   const screen = await render(
     <ServerBusyNotice
-      snapshot={{ reason: "unresponsive", pendingRequests: 2, slowRequests: 1, lastStallMs: null }}
+      snapshot={{ reason: "unresponsive", pendingRequests: 2, lastStallMs: null }}
     />,
   );
   await expect.element(screen.getByRole("status")).toBeVisible();
@@ -16,24 +16,16 @@ it("explains waiting during an unresponsive server without a blocking dialog", a
   await expect.element(screen.getByText(/2 requests are still waiting/)).toBeVisible();
 });
 
-it("distinguishes a recent stall from a still-running request on a responsive server", async () => {
+it("reports a recent stall and stays silent for requests on a responsive server", async () => {
   const screen = await render(
     <ServerBusyNotice
-      snapshot={{ reason: "recent-stall", pendingRequests: 0, slowRequests: 0, lastStallMs: 5200 }}
+      snapshot={{ reason: "recent-stall", pendingRequests: 0, lastStallMs: 5200 }}
     />,
   );
   await expect.element(screen.getByText("Synara server recovered")).toBeVisible();
   await expect.element(screen.getByText(/5.2 s/)).toBeVisible();
   await screen.rerender(
-    <ServerBusyNotice
-      snapshot={{ reason: null, pendingRequests: 1, slowRequests: 1, lastStallMs: null }}
-    />,
-  );
-  await expect.element(screen.getByText("Synara server is busy")).toBeVisible();
-  await screen.rerender(
-    <ServerBusyNotice
-      snapshot={{ reason: null, pendingRequests: 0, slowRequests: 0, lastStallMs: null }}
-    />,
+    <ServerBusyNotice snapshot={{ reason: null, pendingRequests: 14, lastStallMs: null }} />,
   );
   await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
 });
@@ -42,12 +34,7 @@ it("uses one reconnecting state when the socket actually closes", async () => {
   const screen = await render(
     <ServerBusyNotice
       reconnecting
-      snapshot={{
-        reason: null,
-        pendingRequests: 2,
-        slowRequests: 1,
-        lastStallMs: null,
-      }}
+      snapshot={{ reason: null, pendingRequests: 2, lastStallMs: null }}
     />,
   );
   await expect.element(screen.getByRole("status")).toBeVisible();
@@ -57,12 +44,7 @@ it("uses one reconnecting state when the socket actually closes", async () => {
 });
 
 it("follows actual transport recovery without showing reconnecting during initial startup", async () => {
-  publishServerBusySnapshot({
-    reason: null,
-    pendingRequests: 1,
-    slowRequests: 1,
-    lastStallMs: null,
-  });
+  publishServerBusySnapshot({ reason: "unresponsive", pendingRequests: 1, lastStallMs: null });
   emitWsTransportState("connecting");
   const screen = await render(<ServerBusyIndicator />);
   await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
@@ -70,13 +52,7 @@ it("follows actual transport recovery without showing reconnecting during initia
   await expect.element(screen.getByText("Synara server is busy")).toBeVisible();
   emitWsTransportState("connecting");
   await expect.element(screen.getByText("Reconnecting to Synara server")).toBeVisible();
-  await expect.element(screen.getByText(/You can keep working/)).not.toBeInTheDocument();
-  publishServerBusySnapshot({
-    reason: null,
-    pendingRequests: 0,
-    slowRequests: 0,
-    lastStallMs: null,
-  });
+  publishServerBusySnapshot({ reason: null, pendingRequests: 3, lastStallMs: null });
   emitWsTransportState("open");
   await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
   emitWsTransportState("disposed");

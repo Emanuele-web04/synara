@@ -44,35 +44,16 @@ it("shows busy after a missed heartbeat, with only one request in flight, then r
   expect(controller.getSnapshot().reason).toBe(null);
 });
 
-it("explains slow requests without claiming a responsive server is blocked", async () => {
+it("counts in-flight requests without calling a responsive server busy", async () => {
   controller.startHeartbeat(async () => healthy);
-  const finish = controller.trackRequest("projects.searchEntries");
-  await vi.advanceTimersByTimeAsync(15000);
-  expect(controller.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 1,
-    slowRequests: 1,
-  });
-  finish();
-  finish();
-  expect(controller.getSnapshot().slowRequests).toBe(0);
-});
-
-it("derives long-request thresholds from caller options and ignores subscriptions", async () => {
-  controller.trackRequest("provider.compactThread", { timeoutMs: null });
+  const finish = controller.trackRequest("git.status");
   controller.trackRequest("orchestration.subscribeThread");
-  await vi.advanceTimersByTimeAsync(15000);
-  expect(controller.getSnapshot()).toMatchObject({ pendingRequests: 1, slowRequests: 0 });
-  await vi.advanceTimersByTimeAsync(105000);
-  expect(controller.getSnapshot().slowRequests).toBe(1);
-});
-
-it("explains an extended request before its explicit timeout expires", async () => {
-  controller.trackRequest("custom.longOperation", { timeoutMs: 180_000 });
-  await vi.advanceTimersByTimeAsync(134_999);
-  expect(controller.getSnapshot().slowRequests).toBe(0);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(controller.getSnapshot().slowRequests).toBe(1);
+  controller.trackRequest("server.getRuntimeStatus");
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(controller.getSnapshot()).toMatchObject({ reason: null, pendingRequests: 1 });
+  finish();
+  finish();
+  expect(controller.getSnapshot().pendingRequests).toBe(0);
 });
 
 it("lets a queued heartbeat response settle before declaring a late renderer timer busy", async () => {
@@ -123,16 +104,12 @@ it("ignores hidden-tab and stale-session heartbeat results", async () => {
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("clears pending request timers on dispose", () => {
+it("clears pending requests and heartbeat timers on dispose", () => {
   controller.trackRequest("git.status");
   controller.startHeartbeat(() => new Promise(() => {}));
   controller.dispose();
   expect(vi.getTimerCount()).toBe(0);
-  expect(controller.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 0,
-    slowRequests: 0,
-  });
+  expect(controller.getSnapshot()).toMatchObject({ reason: null, pendingRequests: 0 });
 });
 
 it("the heartbeat owner can stop after visibility changes", async () => {

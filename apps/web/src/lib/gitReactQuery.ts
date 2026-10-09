@@ -160,6 +160,8 @@ function trackGitRefresh(
  * pull that just settled), so reusing it would mark stale data fresh. It is cancelled
  * explicitly first because refetchQueries' cancelRefetch only cancels fetches on queries
  * that already hold data — a cold query's initial fetch would otherwise be joined.
+ * Git query functions forward React Query's abort signal, so a cancelled read stops on the
+ * server too instead of holding one of its few expensive-read slots and Git permits.
  */
 async function refetchFreshGitQueries(
   queryClient: QueryClient,
@@ -426,13 +428,13 @@ export function refreshGitQueriesScoped(
 export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
   return queryOptions({
     queryKey: gitQueryKeys.status(cwd),
-    queryFn: async ({ client }) => {
+    queryFn: async ({ client, signal }) => {
       const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git status is unavailable.");
       return preserveActivePullRequestActionGitFields(
         client,
-        await api.git.status({ cwd }),
+        await api.git.status({ cwd }, { signal }),
         readFence,
       );
     },
@@ -448,10 +450,10 @@ export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
 export function gitGithubRepositoryQueryOptions(cwd: string | null, enabled = true) {
   return queryOptions({
     queryKey: gitQueryKeys.githubRepository(cwd),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("GitHub repository is unavailable.");
-      return api.git.githubRepository({ cwd });
+      return api.git.githubRepository({ cwd }, { signal });
     },
     enabled: enabled && cwd !== null,
     staleTime: 5 * 60_000,
@@ -479,10 +481,10 @@ export function gitRecentCommitsQueryOptions(input: {
   const limit = input.limit ?? DEFAULT_GIT_RECENT_COMMIT_LIMIT;
   return queryOptions({
     queryKey: gitQueryKeys.recentCommits(input.cwd, limit),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!input.cwd) throw new Error("Git commits are unavailable.");
-      return api.git.listRecentCommits({ cwd: input.cwd, limit });
+      return api.git.listRecentCommits({ cwd: input.cwd, limit }, { signal });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: GIT_BRANCHES_STALE_TIME_MS,
@@ -494,10 +496,10 @@ export function gitRecentCommitsQueryOptions(input: {
 export function gitBranchesQueryOptions(cwd: string | null) {
   return queryOptions({
     queryKey: gitQueryKeys.branches(cwd),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git branches are unavailable.");
-      return api.git.listBranches({ cwd });
+      return api.git.listBranches({ cwd }, { signal });
     },
     enabled: cwd !== null,
     staleTime: GIT_BRANCHES_STALE_TIME_MS,
@@ -514,12 +516,12 @@ export function gitResolvePullRequestQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), input.reference] as const,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request lookup is unavailable.");
       }
-      return api.git.resolvePullRequest({ cwd: input.cwd, reference: input.reference });
+      return api.git.resolvePullRequest({ cwd: input.cwd, reference: input.reference }, { signal });
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: 30_000,
@@ -546,7 +548,7 @@ export function gitPullRequestSnapshotQueryOptions(input: {
   return queryOptions({
     // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), "snapshot", input.reference] as const,
-    queryFn: async ({ client }) => {
+    queryFn: async ({ client, signal }) => {
       const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
@@ -554,7 +556,10 @@ export function gitPullRequestSnapshotQueryOptions(input: {
       }
       return preserveActivePullRequestActionGitFields(
         client,
-        await api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference }),
+        await api.git.pullRequestSnapshot(
+          { cwd: input.cwd, reference: input.reference },
+          { signal },
+        ),
         readFence,
       );
     },
@@ -594,16 +599,15 @@ export function gitWorkingTreeDiffStatsQueryOptions(input: {
   const refetchInterval = input.refetchInterval;
   return queryOptions({
     queryKey: gitQueryKeys.workingTreeDiffStats(input.cwd, scope, compareRef),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Working tree diff stats are unavailable.");
       }
-      return api.git.workingTreeDiffStats({
-        cwd: input.cwd,
-        scope,
-        ...(compareRef ? { compareRef } : {}),
-      });
+      return api.git.workingTreeDiffStats(
+        { cwd: input.cwd, scope, ...(compareRef ? { compareRef } : {}) },
+        { signal },
+      );
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && (scope !== "ref" || !!compareRef),
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
@@ -654,17 +658,20 @@ export function gitWorkingTreeDiffQueryOptions(input: {
   const refetchInterval = input.refetchInterval;
   return queryOptions({
     queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope, compareRef, input.filePath ?? null),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Working tree diff is unavailable.");
       }
-      return api.git.readWorkingTreeDiff({
-        cwd: input.cwd,
-        scope,
-        ...(compareRef ? { compareRef } : {}),
-        ...(input.filePath ? { filePath: input.filePath } : {}),
-      });
+      return api.git.readWorkingTreeDiff(
+        {
+          cwd: input.cwd,
+          scope,
+          ...(compareRef ? { compareRef } : {}),
+          ...(input.filePath ? { filePath: input.filePath } : {}),
+        },
+        { signal },
+      );
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && (scope !== "ref" || !!compareRef),
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,

@@ -63,17 +63,15 @@ a server-side stall has been proven. Once the server replies, a stall reported
 within the last 30 seconds produces a recovery notice, using server-relative age
 rather than comparing machine clocks.
 
-Unary requests get a **15 second** slow notice. Requests opting out with
-`timeoutMs: null` get **120 seconds**; explicit timeouts above 60 seconds use
-75% of their budget as the slow-notice threshold. This uses caller options, without a fixed operation
-list. Slow notices display only while the transport is open; interrupted
-connections use the reconnecting state. Tracking is capped
-at 256 requests per transport. Subscriptions and heartbeats are excluded. Older
-servers without the capability still get the slow-request explanation. The
-notice lives outside the transcript and does not affect message auto-follow.
-One compact status surface covers busy, real reconnecting and recent recovery; there
-is no separate slow-request toast. A slow RPC alone says the request is waiting,
-without claiming the connection is broken. Visibility changes, delayed renderer
+A slow unary request alone never shows a notice. While the heartbeat answers, a long
+request is waiting on Git, GitHub, a provider or the network rather than on a busy
+server, and with several running chats such waits are routine; the surface that
+asked for the data owns its loading state. In-flight unary requests are still
+counted (capped at 256 per transport; subscriptions and heartbeats excluded) so the
+busy, recovery and reconnecting notices can say how many requests are waiting.
+Older servers without the capability show only the reconnecting state. The notice
+lives outside the transcript and does not affect message auto-follow. One compact
+status surface covers busy, real reconnecting and recent recovery. Visibility changes, delayed renderer
 timers, reconnects and dispose fence prior
 heartbeat replies and reset liveness evidence.
 When a responsiveness timer fires over 500 ms late, the renderer gives queued
