@@ -178,13 +178,10 @@ export function useTranscriptAssistantSelectionAction(
     });
   };
 
-  // Called after the user confirms the comment field, so the floating action is already gone.
-  const commitTranscriptAssistantSelection = (
-    selection: TranscriptAssistantSelection,
-    comment: string,
-  ) => {
+  // Checked before the comment field opens, so a rejected quote never costs the user a typed comment.
+  const canAddTranscriptAssistantSelection = (selection: TranscriptAssistantSelection) => {
     if (canReferenceAssistantSelection && !canReferenceAssistantSelection(selection)) {
-      return;
+      return false;
     }
 
     if (
@@ -197,21 +194,32 @@ export function useTranscriptAssistantSelectionAction(
         type: "warning",
         title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
       });
-      return;
+      return false;
     }
 
-    const nextSelection = createAssistantSelectionAttachment({ ...selection, comment });
-    if (!nextSelection) {
-      if (getAssistantSelectionValidationError(selection) === "too-long") {
+    const validationError = getAssistantSelectionValidationError(selection);
+    if (validationError) {
+      if (validationError === "too-long") {
         toastManager.add({
           type: "warning",
           title: "Selections can be up to 4,000 characters.",
         });
       }
+      return false;
+    }
+    return true;
+  };
+
+  const commitTranscriptAssistantSelection = (
+    selection: TranscriptAssistantSelection,
+    comment: string,
+  ) => {
+    // Re-check: the composer may have filled up while the comment field was open.
+    if (!canAddTranscriptAssistantSelection(selection)) {
       return;
     }
-
-    if (addComposerAssistantSelectionToDraft(nextSelection)) {
+    const nextSelection = createAssistantSelectionAttachment({ ...selection, comment });
+    if (nextSelection && addComposerAssistantSelectionToDraft(nextSelection)) {
       scheduleComposerFocus();
     }
   };
@@ -259,6 +267,7 @@ export function useTranscriptAssistantSelectionAction(
 
   return {
     pendingTranscriptSelectionAction,
+    canAddTranscriptAssistantSelection,
     commitTranscriptAssistantSelection,
     dismissTranscriptSelectionAction,
     onMessagesClickCapture,

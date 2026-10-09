@@ -19,6 +19,7 @@ interface TranscriptSelectionActionLayerProps {
   canUseWorktree: boolean;
   canAddToSide: boolean;
   onDismiss: () => void;
+  canAddToChat: (selection: TranscriptAssistantSelection) => boolean;
   onAddToChat: (selection: TranscriptAssistantSelection, comment: string) => void;
   onAddToSide: (selection: TranscriptAssistantSelection) => Promise<void>;
   onNewChat: (
@@ -75,7 +76,14 @@ export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionL
       left={action.left}
       top={action.top}
       placement={action.placement}
-      onAddToChat={() => openComposer("comment")}
+      onAddToChat={() => {
+        if (props.canAddToChat(action.selection)) {
+          openComposer("comment");
+          return;
+        }
+        props.onDismiss();
+        window.getSelection()?.removeAllRanges();
+      }}
       disabled={sideBusy}
       sideDisabled={!props.canAddToSide}
       onAddToSide={() => {

@@ -3229,6 +3229,7 @@ export default function ChatView({
   );
   const {
     pendingTranscriptSelectionAction,
+    canAddTranscriptAssistantSelection,
     commitTranscriptAssistantSelection,
     dismissTranscriptSelectionAction,
     onMessagesClickCapture,
@@ -6873,6 +6874,7 @@ export default function ChatView({
           canUseWorktree={isGitRepo && !isContainerLandingProject}
           canAddToSide={isServerThread && !isSidechatThread(activeThread)}
           onDismiss={dismissTranscriptSelectionAction}
+          canAddToChat={canAddTranscriptAssistantSelection}
           onAddToChat={commitTranscriptAssistantSelection}
           onAddToSide={(selection) =>
             addSelectionToSide({
