@@ -355,10 +355,14 @@ jobs:
       - name: Smoke packaged desktop startup
         shell: bash
         run: |
+          timeout_args=""
           if [[ "${{ inputs.platform }}" == "mac" && "${{ inputs.arch }}" == "x64" && "$(uname -m)" == "arm64" ]]; then
             arch -x86_64 /usr/bin/true || { echo "Rosetta 2 is required to smoke the Intel app on Apple Silicon." >&2; exit 1; }
+            # The first launch also translates the whole Intel Electron runtime.
+            timeout_args="--timeout-ms 180000"
           fi
-          node scripts/verify-packaged-desktop-startup.ts \
+          # shellcheck disable=SC2086
+          node scripts/verify-packaged-desktop-startup.ts $timeout_args \
             --assets-dir release-publish \
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
