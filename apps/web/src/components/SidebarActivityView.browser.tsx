@@ -700,4 +700,51 @@ describe("SidebarActivityView", () => {
     await vi.waitFor(() => expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([recent.id]));
     await mounted.unmount();
   });
+
+  it("folds working chats under a collapsed Working section and returns them when they finish", async () => {
+    const idle = makeThread(700);
+    const busy = makeThread(701);
+    const workingPill: ThreadStatusPill = {
+      label: "Working",
+      colorClass: "",
+      dotClass: "",
+      pulse: true,
+    };
+    const onVisibleThreadIdsChange = vi.fn();
+    const busyRows = () => document.querySelectorAll(`[data-testid="activity-thread-${busy.id}"]`);
+    const input = {
+      threads: [idle, busy],
+      onVisibleThreadIdsChange,
+      resolveThreadStatus: (thread: SidebarThreadSummary) =>
+        thread.id === busy.id ? workingPill : null,
+    };
+    const mounted = await render(renderActivity(input));
+
+    const working = page.getByRole("button", { name: "Working", exact: true });
+    await expect.element(working).toHaveAttribute("aria-expanded", "false");
+    await vi.waitFor(() => expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([idle.id]));
+    expect(busyRows()).toHaveLength(0);
+
+    // The open chat stays on screen under the folded header while it works.
+    await mounted.rerender(renderActivity({ ...input, activeThreadId: busy.id }));
+    await vi.waitFor(() => expect(busyRows()).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([idle.id, busy.id]),
+    );
+
+    await working.click();
+    await expect.element(working).toHaveAttribute("aria-expanded", "true");
+    expect(busyRows()).toHaveLength(1);
+    await working.click();
+
+    await mounted.rerender(
+      renderActivity({ ...input, activeThreadId: null, resolveThreadStatus: () => null }),
+    );
+    await expect.element(working).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(busyRows()).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([busy.id, idle.id]),
+    );
+    await mounted.unmount();
+  });
 });
