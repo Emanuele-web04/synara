@@ -26,6 +26,7 @@ import {
   type ServerSettings,
   type ProviderKind,
   ProviderSessionStartInput,
+  RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
   TurnId,
@@ -2654,6 +2655,18 @@ routing.layer("ProviderServiceLive routing", (it) => {
           payload: { streamKind: "assistant_text", delta: "invisible" },
         });
         staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-child-tool-closed"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          itemId: RuntimeItemId.makeUnsafe("toolu_child_bash"),
+          createdAt: "2026-07-14T14:00:00.500Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { itemType: "command_execution", status: "failed", title: "Command run" },
+        });
+        staleSettlementRouting.codex.emit({
           type: "turn.completed",
           eventId: asEventId("stale-child-turn-completed"),
           provider: "codex",
@@ -2672,6 +2685,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           "stale child turn.completed to be persisted",
         );
         assert.equal(staleSettlementPersistedEvents.has("stale-child-delta"), false);
+        assert.equal(staleSettlementPersistedEvents.has("stale-child-tool-closed"), true);
         const parentBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         assert.equal(
           asRuntimePayloadRecord(parentBinding?.runtimePayload).activeTurnId,
