@@ -3,7 +3,12 @@
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
-import { type MessageId, type TurnId } from "@synara/contracts";
+import {
+  type MessageId,
+  type OrchestrationLatestTurn,
+  type OrchestrationThreadActivity,
+  type TurnId,
+} from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import type { WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
@@ -249,6 +254,62 @@ export function findLastLiveWorkGroupId(rows: ReadonlyArray<MessagesTimelineRow>
   return null;
 }
 
+/** Provider-reported lifecycle of one turn, used for its settled header. */
+export interface TurnTiming {
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly interrupted: boolean;
+}
+
+// Collects what the thread knows about each turn's real start, end and outcome.
+// Checkpoints carry earlier turns, the latest turn carries the live one, and the
+// turn lifecycle activities say which turns were stopped.
+export function deriveTurnTimingByTurnId(input: {
+  turnDiffSummaries: ReadonlyArray<Pick<TurnDiffSummary, "turnId" | "startedAt" | "completedAt">>;
+  latestTurn: Pick<
+    OrchestrationLatestTurn,
+    "turnId" | "state" | "startedAt" | "completedAt"
+  > | null;
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+}): ReadonlyMap<TurnId, TurnTiming> {
+  const timings = new Map<TurnId, TurnTiming>();
+  for (const summary of input.turnDiffSummaries) {
+    timings.set(summary.turnId, {
+      startedAt: summary.startedAt ?? null,
+      completedAt: summary.completedAt,
+      interrupted: false,
+    });
+  }
+  for (const activity of input.activities) {
+    if (activity.turnId === null) continue;
+    const payload = activity.payload;
+    const stopped =
+      activity.kind === "turn.aborted" ||
+      (activity.kind === "turn.completed" &&
+        typeof payload === "object" &&
+        payload !== null &&
+        !Array.isArray(payload) &&
+        (payload as { readonly state?: unknown }).state === "interrupted");
+    if (!stopped) continue;
+    const timing = timings.get(activity.turnId);
+    timings.set(activity.turnId, {
+      startedAt: timing?.startedAt ?? null,
+      completedAt: timing?.completedAt ?? activity.createdAt,
+      interrupted: true,
+    });
+  }
+  const latestTurn = input.latestTurn;
+  if (latestTurn) {
+    const timing = timings.get(latestTurn.turnId);
+    timings.set(latestTurn.turnId, {
+      startedAt: latestTurn.startedAt ?? timing?.startedAt ?? null,
+      completedAt: latestTurn.completedAt ?? timing?.completedAt ?? null,
+      interrupted: latestTurn.state === "interrupted" || (timing?.interrupted ?? false),
+    });
+  }
+  return timings;
+}
+
 export interface TimelineDurationMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -269,6 +330,8 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       groupedEntries: WorkLogEntry[];
+      // Set on the last row of a stopped turn that has no settled header.
+      stoppedTurnElapsed?: string | null;
     }
   | {
       kind: "message";
@@ -281,6 +344,10 @@ export type MessagesTimelineRow =
       inlineWorkGroupId?: string;
       collapsedTurnItems?: CollapsedTurnItem[];
       collapsedWorkElapsed?: string | null;
+      // The folded turn was stopped by the user before it finished.
+      collapsedWorkInterrupted?: boolean;
+      // Set on the last row of a stopped turn that has no settled header.
+      stoppedTurnElapsed?: string | null;
       durationStart: string;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
@@ -633,6 +700,9 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
+  // Real per-turn start/end/outcome; settled headers fall back to message
+  // timestamps for turns missing here.
+  turnTimingByTurnId?: ReadonlyMap<TurnId, TurnTiming>;
   conversationOnly?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
@@ -843,7 +913,12 @@ export function deriveMessagesTimelineRows(input: {
       activeTurnInProgress:
         (input.activeTurnInProgress ?? false) || (input.subagentsRunning ?? false),
       activeTurnId: input.activeTurnId ?? null,
+      turnTimingByTurnId: input.turnTimingByTurnId,
     });
+  }
+
+  if (input.conversationOnly !== true && input.turnTimingByTurnId) {
+    markStoppedTurnsWithoutHeader(nextRows, input.turnTimingByTurnId);
   }
 
   // The live turn wears a "Working for Xs" header + divider — the counting-up
@@ -857,7 +932,7 @@ export function deriveMessagesTimelineRows(input: {
     input.activeTurnStartedAt &&
     !(input.worktreeSetup && input.worktreeSetupOpen)
   ) {
-    nextRows.splice(findLiveTurnHeaderInsertIndex(nextRows), 0, {
+    nextRows.splice(findLiveTurnHeaderInsertIndex(nextRows, input.activeTurnId ?? null), 0, {
       kind: "working-header",
       id: "working-header-row",
       createdAt: input.activeTurnStartedAt,
@@ -867,10 +942,55 @@ export function deriveMessagesTimelineRows(input: {
   return nextRows;
 }
 
-// The live turn starts at the most recent user message, so its header slots in
-// right after it. Absent any user message (degenerate transcripts) the header
-// leads the transcript so the "Working for" copy is never lost.
-function findLiveTurnHeaderInsertIndex(rows: ReadonlyArray<MessagesTimelineRow>): number {
+// A stopped turn folds under a "Stopped after Xs" header when it has a final
+// assistant message. One that was stopped before writing anything (or with
+// folding turned off) ends on its own rows, so its last row carries the mark.
+function markStoppedTurnsWithoutHeader(
+  rows: MessagesTimelineRow[],
+  turnTimingByTurnId: ReadonlyMap<TurnId, TurnTiming>,
+): void {
+  const headedTurnIds = new Set<TurnId>();
+  const lastRowIndexByTurnId = new Map<TurnId, number>();
+  rows.forEach((row, index) => {
+    if (row.kind === "message" && row.message.role === "assistant" && row.message.turnId) {
+      if (row.collapsedWorkInterrupted) headedTurnIds.add(row.message.turnId);
+      lastRowIndexByTurnId.set(row.message.turnId, index);
+    } else if (row.kind === "work") {
+      for (const entry of row.groupedEntries) {
+        if (entry.turnId) lastRowIndexByTurnId.set(entry.turnId, index);
+      }
+    }
+  });
+  for (const [turnId, index] of lastRowIndexByTurnId) {
+    const timing = turnTimingByTurnId.get(turnId);
+    if (!timing?.interrupted || headedTurnIds.has(turnId)) continue;
+    const row = rows[index]!;
+    if (row.kind !== "work" && row.kind !== "message") continue;
+    row.stoppedTurnElapsed =
+      timing.startedAt && timing.completedAt
+        ? (formatElapsed(timing.startedAt, timing.completedAt) ?? null)
+        : null;
+  }
+}
+
+// The live turn starts at the request that opened it, so its header slots in
+// right after it: requests queued behind the live turn stay below its work. A
+// request not yet bound to its turn falls back to the most recent user message.
+// Absent any user message (degenerate transcripts) the header leads the
+// transcript so the "Working for" copy is never lost.
+function findLiveTurnHeaderInsertIndex(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  activeTurnId: TurnId | null,
+): number {
+  if (activeTurnId !== null) {
+    const requestIndex = rows.findLastIndex(
+      (row) =>
+        row.kind === "message" &&
+        row.message.role === "user" &&
+        row.message.turnId === activeTurnId,
+    );
+    if (requestIndex >= 0) return requestIndex + 1;
+  }
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]!;
     if (row.kind === "message" && row.message.role === "user") {
@@ -917,9 +1037,11 @@ function collapseSettledTurns(
     terminalAssistantMessageIds: ReadonlySet<string>;
     activeTurnInProgress: boolean;
     activeTurnId: TurnId | null;
+    turnTimingByTurnId: ReadonlyMap<TurnId, TurnTiming> | undefined;
   },
 ): void {
-  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId } = options;
+  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId, turnTimingByTurnId } =
+    options;
   const lastTerminalAssistantMessageId = activeTurnInProgress
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
@@ -961,10 +1083,14 @@ function collapseSettledTurns(
     // mini-turns can have distinct turnIds inside one assistant answer, so the
     // user message boundary is the stable UI grouping point.
     const foldIndices: number[] = [];
+    let wokenAt: string | null = null;
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
       const prev = rows[scan]!;
       // The response started where a background task woke the agent.
-      if (isBackgroundTaskCompletionRow(prev)) break;
+      if (isBackgroundTaskCompletionRow(prev)) {
+        wokenAt = prev.kind === "work" ? prev.createdAt : null;
+        break;
+      }
       if (prev.kind === "work") {
         // Coordinator monitor rows are server-posted system pills, not turn
         // work — folding them into a collapsed turn would hide them on
@@ -1002,11 +1128,20 @@ function collapseSettledTurns(
     // (e.g. a failed attempt before a retry), which would report only the tail
     // of the turn instead of the full run.
     let collapsedStart = row.durationStart;
+    // Provider mini-turns can split one answer across turn ids; the group runs
+    // from the earliest of their starts.
+    const foldedTurnIds = new Set<TurnId>(turnId ? [turnId] : []);
     // All slices of one segmented message share the same ChatMessage, so the
     // message folds once (at its first slice) to keep narration identity stable.
     const foldedSegmentMessageIds = new Set<string>();
     for (const index of foldIndices) {
       const folded = rows[index]!;
+      if (
+        (folded.kind === "message" || folded.kind === "message-segment") &&
+        folded.message.turnId
+      ) {
+        foldedTurnIds.add(folded.message.turnId);
+      }
       if (folded.kind === "work") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
         collectWorkItems(folded.groupedEntries, collapsedItems);
@@ -1040,9 +1175,29 @@ function collapseSettledTurns(
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
     if (collapsedItems.length > 0) {
-      const elapsed = formatElapsed(collapsedStart, message.completedAt);
+      // Message timestamps only bound the visible output: a turn without a
+      // request (subagent child), a stopped turn, or a turn woken by a
+      // background task would report the wrong span. Prefer the turn's own.
+      const turnTiming = turnId ? turnTimingByTurnId?.get(turnId) : undefined;
+      let turnStart: string | null = null;
+      for (const foldedTurnId of foldedTurnIds) {
+        const startedAt = turnTimingByTurnId?.get(foldedTurnId)?.startedAt ?? null;
+        if (startedAt !== null) {
+          turnStart = turnStart === null ? startedAt : earliestTimestamp(turnStart, startedAt);
+        }
+      }
+      // A provider can open the turn a woken response belongs to only when it
+      // replies; that response started when the background task finished.
+      if (turnStart !== null && wokenAt !== null) {
+        turnStart = earliestTimestamp(turnStart, wokenAt);
+      }
+      const elapsed =
+        turnStart !== null && turnTiming?.completedAt
+          ? formatElapsed(turnStart, turnTiming.completedAt)
+          : formatElapsed(collapsedStart, message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
+      if (turnTiming?.interrupted) row.collapsedWorkInterrupted = true;
       delete row.leadingWorkEntries;
       delete row.leadingWorkGroupId;
       delete row.inlineWorkEntries;
@@ -1325,6 +1480,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "work":
       return (
         a.createdAt === (b as typeof a).createdAt &&
+        a.stoppedTurnElapsed === (b as typeof a).stoppedTurnElapsed &&
         workLogEntryArraysEqual(a.groupedEntries, (b as typeof a).groupedEntries)
       );
 
@@ -1338,6 +1494,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
         collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&
         a.collapsedWorkElapsed === bm.collapsedWorkElapsed &&
+        a.collapsedWorkInterrupted === bm.collapsedWorkInterrupted &&
+        a.stoppedTurnElapsed === bm.stoppedTurnElapsed &&
         a.durationStart === bm.durationStart &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&

@@ -1473,10 +1473,12 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = upsertThreadActivity(thread.activities, {
-            ...payload.activity,
-            sequence: payload.activity.sequence ?? event.sequence,
-          });
+          const activities = upsertThreadActivity(
+            thread.activities,
+            payload.activity.sequence !== undefined
+              ? payload.activity
+              : { ...payload.activity, sequence: event.sequence, sequenceSource: "orchestration" },
+          );
 
           return {
             ...nextBase,
