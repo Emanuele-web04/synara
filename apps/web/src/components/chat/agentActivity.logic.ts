@@ -193,7 +193,17 @@ export function deriveAgentActivityTimelineState(
     const groupEntries = group ? [...group.entries, entry] : [entry];
     const first = groupEntries[0]!;
     const groupId = `${SUBAGENT_PROGRESS_GROUP_PREFIX}:${first.id}`;
-    const latestPreview = findLatestPreview(groupEntries);
+    const latestStep = findLatestPreview(groupEntries);
+    // A subagent that was stopped or failed says so; its last step is not done.
+    const outcome = entry.subagentProgress?.outcome;
+    const outcomeLabel =
+      outcome === "stopped" ? "Stopped" : outcome === "failed" ? "Failed" : undefined;
+    const latestPreview =
+      outcomeLabel !== undefined
+        ? latestStep
+          ? `${outcomeLabel} - ${latestStep}`
+          : outcomeLabel
+        : latestStep;
     const displayPreview =
       groupEntries.length > 1
         ? latestPreview
@@ -209,7 +219,7 @@ export function deriveAgentActivityTimelineState(
       label: title,
       toolTitle: title,
       // Not a tool call: keep it out of "Ran N tool calls" summaries.
-      tone: "info",
+      tone: outcome === "failed" ? "error" : "info",
       ...(displayPreview ? { preview: displayPreview, detail: displayPreview } : {}),
     };
     if (group) {

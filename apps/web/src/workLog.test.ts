@@ -4118,6 +4118,59 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("records a subagent's final outcome on its progress rows", () => {
+    const progress = (id: string, toolUseId: string, title: string) =>
+      makeActivity({
+        id,
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.progress",
+        summary: "Subagent progress",
+        tone: "info",
+        payload: {
+          taskId: `task-${toolUseId}`,
+          detail: "Running sleep",
+          toolUseId,
+          subagentTitle: title,
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        progress("progress-stopped", "toolu_stopped", "Waiter A"),
+        progress("progress-failed", "toolu_failed", "Waiter B"),
+        progress("progress-running", "toolu_running", "Waiter C"),
+        // The launching call closed with the subagent stopped (parent interrupted).
+        makeActivity({
+          id: "launch-stopped",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.completed",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            status: "failed",
+            data: {
+              toolCallId: "toolu_stopped",
+              toolName: "Agent",
+              receiverThreadId: "toolu_stopped",
+              agentStates: { toolu_stopped: { status: "stopped" } },
+            },
+          },
+        }),
+        makeActivity({
+          id: "task-failed",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "task.completed",
+          tone: "error",
+          payload: { taskId: "task-toolu_failed", status: "failed", toolUseId: "toolu_failed" },
+        }),
+      ],
+      undefined,
+    );
+    const outcomeOf = (id: string) =>
+      entries.find((entry) => entry.id === id)?.subagentProgress?.outcome;
+    expect(outcomeOf("progress-stopped")).toBe("stopped");
+    expect(outcomeOf("progress-failed")).toBe("failed");
+    expect(outcomeOf("progress-running")).toBeUndefined();
+  });
+
   it("keeps the native subagent cap notice visible outside rendered turns", () => {
     const entries = deriveWorkLogEntries(
       [
