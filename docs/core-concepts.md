@@ -298,6 +298,13 @@ capabilities from the installed runtime and account.
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) lets another supported
 provider continue the same task and working environment using the context Synara passes to it.
 
+Enable **Settings → Continue handoffs here** to add **Continue here** alongside
+**New conversation** in the Hand off menu. This setting is off by default and changes only
+explicit handoff actions, not ordinary model-picker switching. Continue here preserves the
+conversation and workspace while starting the target provider with a bounded recap; it does
+not transfer a provider-native session or hidden reasoning. The compact header path derives
+from saved handoff events, marks return visits, and offers the full route on hover or focus.
+
 Use a handoff when:
 
 - Another provider is better suited to the next phase

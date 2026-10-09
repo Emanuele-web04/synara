@@ -4327,7 +4327,7 @@ describe("ChatView transcript geometry (full app)", () => {
       };
     }
 
-    async function openHandoffMenu() {
+    async function openHandoffMenu(enableSameThreadHandoffs = false) {
       const trigger = page.getByRole("button", { name: "Hand off thread" });
       await expect.element(trigger).toBeEnabled();
       // The first click can land while the chat is still hydrating and the menu
@@ -4341,8 +4341,16 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 10_000, interval: 500 },
       );
-      await expect.element(page.getByText("Continue in this thread")).toBeVisible();
-      await expect.element(page.getByText("Continue in a new thread")).toBeVisible();
+      if (enableSameThreadHandoffs) {
+        await expect
+          .element(page.getByRole("menuitem", { name: /^Continue here with/ }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("menuitem", { name: /^New conversation with/ }))
+          .toBeVisible();
+      } else {
+        expect(document.querySelector('[data-handoff-destination="this-thread"]')).toBeNull();
+      }
     }
 
     it.each([
@@ -4482,9 +4490,13 @@ describe("ChatView transcript geometry (full app)", () => {
     );
 
     it("continues in the same thread by rebinding its provider", async () => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({ enableSameThreadHandoffs: true }),
+      );
       const mounted = await mountWithCapturedCommands();
       try {
-        await openHandoffMenu();
+        await openHandoffMenu(true);
         const sameThreadItem = document.querySelector<HTMLElement>(
           '[data-handoff-destination="this-thread"]',
         );
