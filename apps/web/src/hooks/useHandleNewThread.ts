@@ -148,6 +148,9 @@ export function useHandleNewThread() {
         model: defaultModel,
       });
     };
+    // Puts back a composer draft that a draft-mapping change or the route swap removed. A
+    // draft still present is newer than the snapshot (typed, sent, or re-selected while the
+    // navigation settled) and must win, or the composer is rewritten mid-typing.
     const restoreComposerDraft = (
       threadId: ThreadId,
       draftState: ComposerThreadDraftState | null,
@@ -156,7 +159,7 @@ export function useHandleNewThread() {
         return;
       }
       useComposerDraftStore.setState((state) => {
-        if (state.draftsByThreadId[threadId] === draftState) {
+        if (state.draftsByThreadId[threadId] !== undefined) {
           return state;
         }
         return {
