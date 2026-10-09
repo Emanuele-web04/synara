@@ -14316,6 +14316,19 @@ describe("Claude subagent tracking", () => {
       );
       assert.isDefined(childCompleted);
       assert.equal(payloadRecord(childCompleted!).state, "interrupted");
+      // The parent's launching call ends with the subagent stopped, not done.
+      const launchClosed = events.find(
+        (event) =>
+          isRootEvent(event) &&
+          event.type === "item.completed" &&
+          event.providerRefs?.providerItemId === FG,
+      );
+      const agentStates = (
+        payloadRecord(launchClosed!).data as {
+          agentStates?: Record<string, { status: string }>;
+        }
+      ).agentStates;
+      assert.deepEqual(agentStates, { [FG]: { status: "stopped" } });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

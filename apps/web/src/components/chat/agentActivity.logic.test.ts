@@ -280,6 +280,25 @@ describe("subagent progress", () => {
     expect(state.detailById.get("subagent-progress:a-1")?.title).toBe("Agent A");
   });
 
+  it("shows a stopped or failed subagent's outcome instead of a done row", () => {
+    const withOutcome = (
+      id: string,
+      outcome: "completed" | "failed" | "stopped",
+    ): WorkLogEntry => ({
+      ...progress(id, `toolu_${id}`, `Agent ${id}`, "Running sleep 45", "turn-1"),
+      subagentProgress: { toolUseId: `toolu_${id}`, title: `Agent ${id}`, outcome },
+    });
+    const state = deriveAgentActivityTimelineState([
+      withOutcome("a", "stopped"),
+      withOutcome("b", "failed"),
+      withOutcome("c", "completed"),
+    ]);
+    const [stopped, failed, completed] = state.timelineWorkEntries;
+    expect(stopped).toMatchObject({ preview: "Stopped - sleep 45", tone: "info" });
+    expect(failed).toMatchObject({ preview: "Failed - sleep 45", tone: "error" });
+    expect(completed).toMatchObject({ preview: "sleep 45", tone: "info" });
+  });
+
   it("does not merge reasoning updates from different turns", () => {
     const state = deriveAgentActivityTimelineState([
       workEntry({

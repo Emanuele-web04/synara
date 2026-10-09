@@ -2618,6 +2618,63 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }),
     );
 
+    it.effect("keeps a stale item closure that names the binding's active turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-item-closure");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = String(asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId);
+
+        // An interrupt that rotated the generation still force-closes the
+        // turn's open calls (a subagent launch with its stopped state); those
+        // closures settle the same turn, while one for another turn stays dropped.
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-item-closure-active-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(activeTurnId),
+          itemId: RuntimeItemId.makeUnsafe("toolu_launch"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            status: "failed",
+            data: { agentStates: { toolu_launch: { status: "stopped" } } },
+          },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-item-closure-other-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-some-other"),
+          itemId: RuntimeItemId.makeUnsafe("toolu_other"),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { itemType: "command_execution", status: "failed" },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-item-closure-active-turn"),
+          500,
+          10,
+          "stale item closure for the active turn to be persisted",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-item-closure-other-turn"), false);
+      }),
+    );
+
     it.effect("settles a superseded session's subagent child turn", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;

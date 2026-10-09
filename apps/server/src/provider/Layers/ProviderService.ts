@@ -2123,13 +2123,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             //  - the event still names the turn the binding considers active
             //    (a newer epoch has not started a different turn, so settling
             //    this turn cannot clobber newer state).
+            // The items a dying turn force-closes (tool rows, a subagent call
+            // and its final per-agent state) are as final as the turn end, and
+            // are subject to the same active-turn check below.
             const staleEventIsSettling =
-              isStaleSettlingRuntimeEvent(event) &&
+              (isStaleSettlingRuntimeEvent(event) || event.type === "item.completed") &&
               (currentGeneration === undefined || event.turnId !== undefined);
             if (
               currentGeneration !== undefined &&
               isSubagentChildRuntimeEvent(event) &&
-              (staleEventIsSettling || event.type === "item.completed")
+              staleEventIsSettling
             ) {
               // A superseded session's subagent turns have no newer owner: the
               // replacement session never resumes them, and child events never

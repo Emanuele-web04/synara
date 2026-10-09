@@ -249,6 +249,8 @@ export interface WorkLogSubagentProgress {
   /** The spawning tool call id: the subagent's provider thread id. */
   toolUseId: string;
   title: string | null;
+  /** The subagent's final state, once it ended. */
+  outcome?: "completed" | "failed" | "stopped";
 }
 
 export interface WorkLogSynaraWorkerNotice {
@@ -476,7 +478,71 @@ export function deriveWorkLogEntries(
       }) => entry,
     );
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
-  return [...derived, ...completions, ...deriveTurnFailureEntries(ordered)];
+  return [
+    ...withSubagentProgressOutcomes(derived, ordered),
+    ...completions,
+    ...deriveTurnFailureEntries(ordered),
+  ];
+}
+
+function subagentOutcomeFromStatus(
+  status: string | null | undefined,
+): "completed" | "failed" | "stopped" | undefined {
+  switch (status?.trim().toLowerCase()) {
+    case "completed":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "interrupted":
+    case "cancelled":
+    case "killed":
+      return "stopped";
+    default:
+      return undefined;
+  }
+}
+
+// A subagent's progress rows take its final state from the task completion or
+// from the per-agent state on its launching call (set when the launcher's turn
+// was interrupted, or when a background subagent settled), whichever is latest.
+function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<Entry> {
+  if (!entries.some((entry) => entry.subagentProgress !== undefined)) {
+    return entries;
+  }
+  const outcomeByToolUseId = new Map<string, "completed" | "failed" | "stopped">();
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (activity.kind === "task.completed") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
+      if (toolUseId && outcome) outcomeByToolUseId.set(toolUseId, outcome);
+      continue;
+    }
+    if (
+      (activity.kind === "tool.updated" || activity.kind === "tool.completed") &&
+      extractWorkLogItemType(payload) === "collab_agent_tool_call"
+    ) {
+      for (const [threadId, state] of Object.entries(
+        decodeSubagentAgentStates(collabPayloadItem(payload)),
+      )) {
+        const outcome = subagentOutcomeFromStatus(state.status);
+        if (outcome) outcomeByToolUseId.set(threadId, outcome);
+      }
+    }
+  }
+  return entries.map((entry) => {
+    const outcome = entry.subagentProgress
+      ? outcomeByToolUseId.get(entry.subagentProgress.toolUseId)
+      : undefined;
+    return outcome && entry.subagentProgress
+      ? { ...entry, subagentProgress: { ...entry.subagentProgress, outcome } }
+      : entry;
+  });
 }
 
 function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {

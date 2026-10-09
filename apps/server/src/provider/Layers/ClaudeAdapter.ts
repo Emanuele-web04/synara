@@ -3471,6 +3471,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         for (const [index, tool] of context.inFlightTools.entries()) {
+          // A subagent whose launching call is still open when the launcher's
+          // turn is interrupted or fails ends with it: record that outcome on
+          // the call, so it never reads as a finished subagent.
+          const abortedSubagentStatus =
+            status !== "completed" &&
+            (tool.toolName === "Task" || tool.toolName === "Agent") &&
+            subagentRootContext(context).subagentRunHistory.get(tool.itemId)?.background !== true
+              ? status === "failed"
+                ? "failed"
+                : "stopped"
+              : undefined;
           const toolStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
             type: "item.completed",
@@ -3485,7 +3496,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               status: status === "completed" ? "completed" : "failed",
               title: tool.title,
               ...(tool.detail ? { detail: tool.detail } : {}),
-              data: toolLifecycleEventData(tool),
+              data: toolLifecycleEventData(
+                tool,
+                abortedSubagentStatus
+                  ? { agentStates: { [tool.itemId]: { status: abortedSubagentStatus } } }
+                  : undefined,
+              ),
             },
             providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
             raw: {
@@ -3504,12 +3520,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // An interrupted or failed launcher turn takes its foreground
           // subagents with it; close their child turns instead of leaving them
           // running forever. Background runs outlive the launching turn.
-          if (status !== "completed" && (tool.toolName === "Task" || tool.toolName === "Agent")) {
+          if (abortedSubagentStatus) {
             const root = subagentRootContext(context);
             const run = root.subagentRuns.get(tool.itemId);
             if (run && !run.background) {
               run.launchTool = tool;
-              yield* settleSubagentRun(root, run, status === "failed" ? "failed" : "stopped");
+              yield* settleSubagentRun(root, run, abortedSubagentStatus);
             }
           }
         }
