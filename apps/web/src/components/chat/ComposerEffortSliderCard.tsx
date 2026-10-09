@@ -12,6 +12,8 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 
+import type { CSSProperties } from "react";
+
 import { ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ProviderOptions } from "../../providerModelOptions";
@@ -72,6 +74,9 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const canReset = fastModeEnabled || !effortIsDefault;
 
   const lastIndex = Math.max(effortLevels.length - 1, 0);
+  // Fast-mode stars stream faster as effort rises: one loop takes 2.4s at the lowest
+  // stop and 0.6s at the highest.
+  const fastStarsDuration = `${(2.4 - 1.8 * (lastIndex > 0 ? ladderIndex / lastIndex : 0)).toFixed(2)}s`;
 
   const handleSliderChange = (nextIndex: number) => {
     if (nextIndex === ladderIndex) return;
@@ -134,7 +139,10 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           </TooltipPopup>
         </Tooltip>
       </div>
-      <div className="mt-1 px-0.5">
+      <div
+        className="mt-1 px-0.5"
+        style={{ "--fast-stars-duration": fastStarsDuration } as CSSProperties}
+      >
         <Slider
           value={ladderIndex}
           min={0}
@@ -143,6 +151,9 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           size="large"
           showStepMarks
           magnetic
+          {...(fastModeEnabled
+            ? { indicatorClassName: "fast-mode-slider-stars", hideFilledMarks: true }
+            : {})}
           disabled={ultrathinkPromptControlled}
           aria-label="Reasoning effort"
           getAriaValueText={(index) => effortLevels[index]?.label ?? String(index)}

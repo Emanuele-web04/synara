@@ -358,6 +358,84 @@
   }
 }
 
+/* One-shot "zap" on the fast-mode bolt when the user switches fast mode on: a quick
+   tilted pop with a glow in the icon's own color that settles back. */
+@keyframes fast-mode-icon-zap {
+  0% {
+    transform: scale(1) rotate(0deg);
+    filter: drop-shadow(0 0 0 currentColor);
+  }
+
+  35% {
+    transform: scale(1.4) rotate(-14deg);
+    filter: drop-shadow(0 0 5px currentColor);
+  }
+
+  60% {
+    transform: scale(0.9) rotate(6deg);
+    filter: drop-shadow(0 0 3px currentColor);
+  }
+
+  100% {
+    transform: scale(1) rotate(0deg);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+}
+
+.fast-mode-icon-zap {
+  animation: fast-mode-icon-zap 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fast-mode-icon-zap {
+    animation: none;
+  }
+}
+
+/* While fast mode is on, the effort slider's fill carries a field of small stars that
+   stream left, like speed lines. Each layer is one dot on its own tile size; tiles of
+   coprime widths keep the pattern from reading as a grid, and every layer shifts by
+   exactly one tile per cycle, so the loop is seamless and larger (nearer) stars move
+   faster. `--fast-stars-duration` lets the effort card speed the stream up per level. */
+.fast-mode-slider-stars {
+  background-image:
+    radial-gradient(circle at 30% 30%, rgb(255 255 255 / 0.55) 0 0.6px, transparent 1.2px),
+    radial-gradient(circle at 70% 72%, rgb(255 255 255 / 0.6) 0 0.7px, transparent 1.3px),
+    radial-gradient(circle at 15% 55%, rgb(255 255 255 / 0.7) 0 0.9px, transparent 1.5px),
+    radial-gradient(circle at 55% 22%, rgb(255 255 255 / 0.8) 0 1.1px, transparent 1.7px);
+  background-size:
+    41px 100%,
+    59px 100%,
+    83px 100%,
+    127px 100%;
+  background-repeat: repeat-x;
+  animation: fast-mode-slider-stars var(--fast-stars-duration, 1.6s) linear infinite;
+}
+
+@keyframes fast-mode-slider-stars {
+  from {
+    background-position:
+      0 0,
+      0 0,
+      0 0,
+      0 0;
+  }
+
+  to {
+    background-position:
+      -41px 0,
+      -59px 0,
+      -83px 0,
+      -127px 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fast-mode-slider-stars {
+    animation: none;
+  }
+}
+
 /* One-shot entry for the sidebar's segment surface swap (Studio <-> Projects).
    Keyed remounts play this on the incoming surface so the switch reads
    as a movement instead of a hard cut. Enter-only by design: no exit or height
