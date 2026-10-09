@@ -4,6 +4,7 @@ import { Schema } from "effect";
 import {
   SynaraCapabilitiesResult,
   SynaraCreateThreadsInput,
+  SynaraCreatedThreadResult,
   SynaraCreateThreadsResult,
   SynaraGatewayErrorResult,
   SynaraWaitForThreadsInput,
@@ -23,6 +24,33 @@ const thread = {
 } as const;
 
 describe("agent gateway contracts", () => {
+  it("returns inherited Auto without accepting it as an explicit creation input", () => {
+    assert.throws(() =>
+      decodeCreate({ requestId: "auto-input", threads: [{ ...thread, runtimeMode: "auto" }] }),
+    );
+    assert.throws(() =>
+      decodeCreate({
+        requestId: "internal-input",
+        threads: [{ ...thread, inheritedRuntimeMode: "auto" }],
+      }),
+    );
+    const result = Schema.decodeUnknownSync(SynaraCreatedThreadResult)({
+      index: 0,
+      threadId: "auto-worker",
+      projectId: "hub",
+      title: "Task",
+      target: thread.target,
+      provider: "codex",
+      model: thread.target.model,
+      runtimeMode: "auto",
+      environment: "local",
+      branch: null,
+      worktreePath: null,
+      status: "task_dispatched",
+    });
+    assert.equal(result.runtimeMode, "auto");
+  });
+
   it("accepts one through twenty exact creation entries", () => {
     assert.equal(decodeCreate({ requestId: "request-1", threads: [thread] }).threads.length, 1);
     assert.equal(

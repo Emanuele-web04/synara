@@ -8,7 +8,7 @@
 import { Schema } from "effect";
 
 import { ProjectId, ThreadId, TurnId } from "./baseSchemas";
-import { ModelSelection, ProviderKind } from "./orchestration";
+import { ModelSelection, ProviderKind, RuntimeMode } from "./orchestration";
 import { ProviderModelDescriptor } from "./providerDiscovery";
 import { ServerProviderAuthStatus } from "./server";
 
@@ -155,7 +155,7 @@ export const SynaraCreatedThreadResult = Schema.Struct({
   target: ModelSelection,
   provider: ProviderKind,
   model: Schema.String,
-  runtimeMode: Schema.Literals(["approval-required", "full-access"]),
+  runtimeMode: RuntimeMode,
   environment: Schema.Literals(["local", "worktree"]),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),

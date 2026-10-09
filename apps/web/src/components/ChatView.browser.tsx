@@ -4878,6 +4878,54 @@ describe("ChatView transcript geometry (full app)", () => {
     });
   });
 
+  it("uses the persisted thread access mode instead of a stale composer draft", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: "msg-runtime-stale-draft" as MessageId,
+      targetText: "Hub worker awaiting approval",
+    });
+    const snapshot: OrchestrationReadModel = {
+      ...base,
+      threads: base.threads.map((thread) =>
+        Object.assign({}, thread, {
+          runtimeMode: "approval-required" as const,
+          session: thread.session
+            ? { ...thread.session, runtimeMode: "approval-required" as const }
+            : null,
+        }),
+      ),
+    };
+    useComposerDraftStore.getState().setRuntimeMode(THREAD_ID, "full-access");
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Ask for approval", exact: true }))
+        .toBeVisible();
+      const trigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[title^="Ask for approval:"]'),
+        "Missing persisted access mode trigger",
+      );
+      trigger.click();
+      const fullAccess = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("Full access"),
+          ) ?? null,
+        "Missing Full access override",
+      );
+      fullAccess.click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.runtime-mode.set")
+            .map((command) => command?.runtimeMode),
+        ).toEqual(["full-access"]);
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
     const baseSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-runtime-reversal" as MessageId,

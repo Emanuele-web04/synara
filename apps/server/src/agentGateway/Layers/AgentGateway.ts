@@ -462,6 +462,8 @@ export const makeAgentGateway = Effect.gen(function* () {
                 runtimeMode: {
                   type: "string",
                   enum: ["approval-required", "full-access"],
+                  description:
+                    "Omit to inherit the creating Hub coordinator's approval mode, including Approve for me. An explicit mode takes precedence.",
                 },
               },
               required: ["prompt", "target"],
@@ -521,6 +523,8 @@ export const makeAgentGateway = Effect.gen(function* () {
           runtimeMode: {
             type: "string",
             enum: ["approval-required", "full-access"],
+            description:
+              "Omit to inherit the creating Hub coordinator's approval mode, including Approve for me. An explicit mode takes precedence.",
           },
         },
         required: ["requestId", "prompt"],
