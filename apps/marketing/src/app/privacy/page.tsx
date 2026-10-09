@@ -4,8 +4,8 @@
 // Layer: App Router page (static)
 // Depends on: Navbar, SiteFooter, react-icons/lu
 // Note: Claims verified against the synara codebase. Keep them in sync with the
-//       app: local SQLite, direct-to-provider, no Synara account, explicit
-//       feedback delivery, and anonymous analytics that are OFF by default.
+//       app: local workspaces, optional account features, explicit feedback,
+//       opt-in product analytics and separate Beta diagnostics.
 
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -17,17 +17,17 @@ import { SITE_URL, breadcrumbJsonLd, jsonLdScript, pageMetadata } from "@/lib/se
 export const metadata = pageMetadata({
   title: "Privacy — Synara",
   description:
-    "Synara's security and privacy boundary: local-first storage, direct-to-provider connections, no account, and anonymous analytics that are off by default.",
+    "Synara's security and privacy boundary: local workspaces, optional account features, opt-in product analytics and separate Beta diagnostics.",
   path: "/privacy",
 });
 
-const LAST_UPDATED = "July 15, 2026";
+const LAST_UPDATED = "October 5, 2026";
 
 const RECEIVED_IF_OPTED_IN = [
-  "An event name (e.g. “app launched”, “provider connected”)",
-  "An anonymous id (a random per-install id, or a one-way hash of your provider account id)",
-  "Your OS, CPU architecture, and Synara version",
-  "Whether you're on the desktop app or the web/CLI client",
+  "Fixed event names for app opens, selected features, connection outcomes and chat requests",
+  "A random installation identifier, event identifier and timestamp; unrelated to your account",
+  "Your app version, release channel, app surface and platform",
+  "Bounded durations and available token counts; no model names or conversation content",
 ];
 
 const NEVER_COLLECTED = [
@@ -44,9 +44,9 @@ const PRIVACY_JSONLD = [
     "@id": `${SITE_URL}/privacy#webpage`,
     name: "Synara privacy",
     url: `${SITE_URL}/privacy`,
-    dateModified: "2026-07-15",
+    dateModified: "2026-10-05",
     description:
-      "Synara security and privacy details covering local-first storage, direct-to-provider connections, no Synara account, and opt-in anonymous analytics.",
+      "Synara privacy details covering local workspaces, optional account features, opt-in product analytics and separate Beta diagnostics.",
   },
   breadcrumbJsonLd([
     { name: "Synara", path: "/" },
@@ -71,21 +71,19 @@ export default function PrivacyPage() {
           Private by default. Clear by design.
         </h1>
         <p className="mt-5 text-[14px] leading-[1.7] text-[var(--text-secondary)] sm:text-[15px]">
-          Synara is a desktop app that runs on your machine and connects straight to the providers
-          you already use. There&apos;s no Synara account, no Synara server holding your work, and
-          your code or prompts are not sent to us during normal use. The only exception is feedback
-          you explicitly write and submit through the Feedback Synara dialog, together with the
-          limited diagnostics described below. This page spells out exactly what that means — in
-          plain language, no &quot;just read the source&quot; required (though you can, it&apos;s
-          open source).
+          Synara stores workspace history on the computer running the workspace. Optional account
+          features, connections and mobile access use additional services as described below.
+          Product analytics are off by default. Synara Beta has separate, always-on crash and
+          release diagnostics; the product analytics switch does not disable those diagnostics.
         </p>
 
         <Section title="Where your data lives">
           <p>
-            Your chats, projects, settings, and history are stored in a local database (SQLite) on
-            your own device. Synara runs a small server process <em>locally</em> on your machine to
-            power the app — it is not a hosted cloud service, and your data never leaves your
-            computer just by using Synara.
+            Workspace chats, projects and operational state live in a local SQLite database on the
+            host computer. A connected device can access that host with your authorization. Optional
+            Synara account features store profile information, private usage aggregates and saved
+            Inbox recaps in our account database on PostgreSQL/Supabase, accessed through our
+            Cloudflare API. These saved account records are separate from product analytics.
           </p>
         </Section>
 
@@ -99,20 +97,23 @@ export default function PrivacyPage() {
           </p>
         </Section>
 
-        <Section title="No account, no lock-in">
+        <Section title="Optional accounts and connections">
           <p>
-            There&apos;s nothing to sign up for and no Synara login. Want to open Synara from your
-            phone or another laptop? That&apos;s self-hosted: you expose <em>your</em> machine over
-            your own network (LAN or Tailscale), protected by an auth token you generate and
-            control. Nothing routes through us.
+            Local desktop use does not require a Synara account. Signing in enables account features
+            and managed device connections. Authentication uses WorkOS; the account API and managed
+            tunnels use Cloudflare. Approved devices can access the selected host, including its
+            chats and files, through that connection. You can revoke device access. Information you
+            choose to publish on your profile is public; saved Inbox recaps are private.
           </p>
         </Section>
 
-        <Section title="Anonymous analytics — off by default">
+        <Section title="Product analytics — off by default">
           <p>
-            Synara can send <strong>anonymous, aggregate usage analytics</strong> (via PostHog) to
-            help us understand which features matter and where things break. This is{" "}
-            <strong>off by default</strong> — it never runs unless you explicitly opt in.
+            Desktop Stable, Beta and the native mobile apps can send limited product events to our
+            Cloudflare service when you enable <strong>Share product analytics</strong> in Settings.
+            Consent is local to each installation, off by default, and independent of your account
+            or another connected device. The random installation identifier allows events from that
+            consenting installation to be grouped; it is not your account identity.
           </p>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
@@ -125,14 +126,25 @@ export default function PrivacyPage() {
           </div>
 
           <p className="mt-6">
-            Analytics events carry no &quot;person profile&quot; and aren&apos;t tied to your
-            identity. You can keep them disabled (the default) or, if you&apos;d like to help, turn
-            them on by setting{" "}
-            <code className="rounded bg-[var(--block-elevated)] px-1.5 py-0.5 font-mono text-[12px]">
-              SYNARA_TELEMETRY_ENABLED=true
-            </code>
-            . An in-app <span className="text-[var(--text-primary)]">Settings → Privacy</span>{" "}
-            toggle is on the way.
+            Events are stored in a separate Cloudflare D1 table with a 30-day raw-data retention
+            policy and an authenticated dashboard. Turning collection off clears unsent events,
+            cancels uploads where possible and removes the local analytics identifier. It cannot
+            retract events already received. Re-enabling creates a new identifier. Usage counters
+            are best-effort observations, not billing records or complete account usage totals.
+          </p>
+        </Section>
+
+        <Section title="Separate Beta diagnostics">
+          <p>
+            Synara Beta sends crash, error, release-health and daily usage diagnostics
+            automatically. These may include bounded, redacted error stacks, log excerpts and recent
+            diagnostic context. Stable does not send Beta diagnostics. Product analytics consent
+            does not control this separate Beta path, whose retention policy is independent of the
+            30-day product-event policy. See the{" "}
+            <a href="https://github.com/Emanuele-web04/synara/blob/main/docs/diagnostics.md">
+              diagnostics documentation
+            </a>{" "}
+            for its field allowlist and storage details.
           </p>
         </Section>
 
@@ -143,8 +155,8 @@ export default function PrivacyPage() {
             modes, and session/turn status so we can understand the conditions around a problem.
           </p>
           <p>
-            Automated diagnostics do not include chat messages, prompts, project paths, repository
-            contents, session logs, or screenshots. Reports are delivered through our website and
+            Feedback context excludes chat messages, prompts, project paths, repository contents,
+            session logs and screenshots. Feedback reports are delivered through our website and
             email provider to the Synara maintainer for support and product improvement, rather than
             being added to an analytics profile.
           </p>

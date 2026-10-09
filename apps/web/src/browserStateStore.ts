@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 /**
  * Lightweight browser metadata cache keyed by thread.
  *
@@ -135,7 +136,7 @@ export function createDedupedBrowserStateStorage(
   };
 }
 
-const browserStateStorage = createDedupedBrowserStateStorage(() => localStorage);
+const browserStateStorage = createDedupedBrowserStateStorage(() => executionStorage);
 
 export const useBrowserStateStore = create<BrowserStateStore>()(
   persist(

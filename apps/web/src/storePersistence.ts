@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: storePersistence.ts
 // Purpose: Persists project-only renderer preferences without depending on the Zustand facade.
 // Exports: Persistence I/O plus read-only remembered project UI state.
@@ -139,12 +140,12 @@ export function forgetProjectState(cwd: string): void {
 export function readPersistedState(initialState: AppState): AppState {
   if (typeof window === "undefined") return initialState;
   try {
-    const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
+    const raw = executionStorage.getItem(PERSISTED_STATE_KEY);
     if (!raw) {
       resetRememberedProjectState();
       return initialState;
     }
-    // SAFETY: localStorage is only writable by same-origin scripts. We validate the
+    // SAFETY: executionStorage is only writable by same-origin scripts. We validate the
     // persisted shape below, discarding any malformed entries and falling back to defaults.
     const parsed = JSON.parse(raw) as {
       expandedProjectCwds?: string[];
@@ -210,7 +211,7 @@ export function persistState(state: AppState): void {
         projectAppearanceByCwd[projectCwdKey(project.cwd)] = project.appearance;
       }
     }
-    window.localStorage.setItem(
+    executionStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
         expandedProjectCwds: state.projects

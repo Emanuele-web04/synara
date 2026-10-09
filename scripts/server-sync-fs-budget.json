@@ -21,7 +21,7 @@
     "reason": "Startup-only one-way Stable to Beta import; excluded from the streaming hot path.",
     "references": {
       "readFileSync": 1,
-      "writeFileSync": 1,
+      "writeFileSync": 2,
       "renameSync": 5,
       "lstatSync": 7,
       "mkdirSync": 4,
@@ -290,6 +290,12 @@
       "rmSync": 3,
       "existsSync": 3,
       "renameSync": 1
+    }
+  },
+  "apps/server/src/remoteFeaturePolicy.ts": {
+    "reason": "Existing bounded marker lookup preserves the authoritative post-import remote suspension fence; frozen at one reference, no new synchronous operations.",
+    "references": {
+      "existsSync": 1
     }
   }
 }

@@ -16,6 +16,8 @@ import {
   parseThemeShareString,
   parseThemeShareStringForVariant,
   resolveThemePack,
+  resolveProfileThemeAccent,
+  updateChromeTheme,
   resetThemeVariant,
   setThemeCodeThemeId,
   setWindowTranslucency,
@@ -537,5 +539,29 @@ describe("window translucency", () => {
     expect(resetThemeVariant(edited, "dark").translucency.dark).toEqual(
       DEFAULT_THEME_STATE.translucency.dark,
     );
+  });
+});
+
+// Profiles publish both appearances, including custom accents and inactive packs.
+describe("resolveProfileThemeAccent", () => {
+  it("resolves selected packs and custom hex accents independently of appearance", () => {
+    const selected = setThemeCodeThemeId(DEFAULT_THEME_STATE, "dark", "linear");
+    const custom = updateChromeTheme(selected, "light", { accent: "#AABBCC" });
+    for (const mode of ["light", "dark", "system"] as const) {
+      expect(resolveProfileThemeAccent({ ...custom, mode })).toEqual({
+        light: "#aabbcc",
+        dark: "#606acc",
+      });
+    }
+  });
+
+  it("uses the same default fallback as the app for invalid stored accents", () => {
+    expect(
+      resolveProfileThemeAccent(
+        normalizeThemeState({
+          chromeThemes: { light: { accent: "red" }, dark: { accent: "#123" } },
+        }),
+      ),
+    ).toEqual({ light: "#339cff", dark: "#339cff" });
   });
 });

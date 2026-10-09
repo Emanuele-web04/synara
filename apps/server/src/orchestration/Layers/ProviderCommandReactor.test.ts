@@ -6842,12 +6842,13 @@ describe("ProviderCommandReactor", () => {
       outcome: "safe_retry",
       state: "succeeded",
     });
-    await waitFor(() => harness.interruptTurn.mock.calls.length === 4);
+    // The exempt Stop already settled the active turn. Retrying the rollback
+    // must not interrupt that retired runtime again.
+    await waitFor(() => harness.rollbackConversation.mock.calls.length === 1);
     expect(harness.interruptTurn.mock.calls.map(([request]) => request.threadId)).toEqual([
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
-      ThreadId.makeUnsafe("thread-1"),
     ]);
     // The authorized retry completed the previously blocked rollback and
     // replayed the side effect the quarantine had skipped.
@@ -19997,6 +19998,64 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
       threadId: "thread-1",
       turnId: "turn-live-current",
+    });
+  });
+
+  it("does not settle a replacement turn when an earlier interrupt finishes", async () => {
+    const interrupted = Promise.withResolvers<void>();
+    const harness = await createHarness({
+      interruptTurn: () => Effect.promise(() => interrupted.promise),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    const setProjectedTurn = (turnId: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`cmd-session-${turnId}`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId(turnId),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    await setProjectedTurn("turn-interrupted");
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("turn-interrupted"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-before-replacement"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+
+    // The next runtime turn already finished, but its terminal event is still
+    // pending. Absence of a live turn alone must not settle its projection.
+    await setProjectedTurn("turn-replacement");
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    interrupted.resolve();
+    await harness.drain();
+
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "running",
+      activeTurnId: "turn-replacement",
+    });
+    expect((await readHarnessThread(harness))?.latestTurn).toMatchObject({
+      turnId: "turn-replacement",
+      state: "running",
     });
   });
 

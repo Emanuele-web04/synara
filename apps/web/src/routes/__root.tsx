@@ -1,3 +1,6 @@
+import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
+import { subscribeWorkspaceKeybindings } from "../lib/hosts/workspaceKeybindings";
+import { onControllerStateChange } from "../lib/hosts/connectionClients";
 import { ServerBusyIndicator } from "../components/ServerBusyIndicator";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
@@ -49,6 +52,8 @@ import { useProjectImportDialogStore } from "../projectImport/projectImportDialo
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
+import { GlobalAccountDialogs } from "../components/account/GlobalAccountDialogs";
+import { HostDiscoverabilityPrompt } from "../components/hosts/HostDiscoverabilityPrompt";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
@@ -64,6 +69,7 @@ import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
+import { invalidateAccountStatus } from "../lib/accountReactQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   invalidateProviderUsageQueries,
@@ -355,18 +361,26 @@ function RootRouteView() {
           <GlobalShortcutsDialog />
           <BrowserVaultDialog />
           <GlobalFeedbackDialog />
-          <GlobalWhatsNewSurface />
+          <GlobalAccountDialogs />
+          {/* Mounted globally because the host it asks about registers itself
+              at sign-in, wherever the user happens to be in the app. */}
+          {!readWorkspaceFrame() && <HostDiscoverabilityPrompt />}
+          {!readWorkspaceFrame() && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
-          <BetaWelcomeDialog />
-          <SafariAccessOnboarding startup>
-            <AppSnapWelcomeDialog>
-              <FeatureTourDialog />
-            </AppSnapWelcomeDialog>
-          </SafariAccessOnboarding>
-          <GlobalOnboardingDialog />
-          <ProjectImportAnnouncementDialog />
+          {!readWorkspaceFrame() && (
+            <>
+              {/* Beta welcome resolves the first-run gate while Safari is queued. */}
+              <BetaWelcomeDialog />
+              <SafariAccessOnboarding startup>
+                <AppSnapWelcomeDialog>
+                  <FeatureTourDialog />
+                </AppSnapWelcomeDialog>
+              </SafariAccessOnboarding>
+              <GlobalOnboardingDialog />
+              <ProjectImportAnnouncementDialog />
+            </>
+          )}
           <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
@@ -2538,6 +2552,10 @@ function EventRouter() {
     // onServerConfigUpdated replays the latest cached value synchronously
     // during subscribe. Skip the toast for that replay so effect re-runs
     // don't produce duplicate toasts.
+    const unsubWorkspaceKeybindings = subscribeWorkspaceKeybindings(
+      queryClient,
+      serverQueryKeys.config(),
+    );
     let subscribed = false;
     const unsubServerConfigUpdated = onServerConfigUpdated((payload) => {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
@@ -2607,6 +2625,9 @@ function EventRouter() {
           queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode"),
         });
       }
+    });
+    const unsubControllerState = onControllerStateChange((state) => {
+      if (state === "open") void invalidateAccountStatus(queryClient).catch(() => undefined);
     });
     const unsubWsTransportState = addWsTransportStateListener(
       (state) => {
@@ -2763,8 +2784,10 @@ function EventRouter() {
       unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
+      unsubWorkspaceKeybindings?.();
       unsubProviderStatusesUpdated();
       unsubWsTransportState();
+      unsubControllerState();
       unsubServerSettingsUpdated();
     };
   }, [

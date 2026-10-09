@@ -263,6 +263,10 @@ a turn was interrupted, failed, or aborted for inactivity, Synara uses the full 
 recovery path. You can continue in the same task. Idle provider processes still shut down after
 10 minutes by default.
 
+Codex runtime preparation preserves an unchanged private configuration file so repeated
+session starts do not generate unnecessary config-change notifications. Changed content,
+linked files, and overly broad file permissions still use atomic replacement.
+
 ### Claude Auto / 200k / 1M selection
 
 The auto-compact selector chooses an override, not a measured context limit. Auto leaves the

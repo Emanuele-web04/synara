@@ -2,6 +2,7 @@ import {
   copyFileSync,
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -68,6 +69,25 @@ describe("hydrateCodexProviderCredentialEnvironment", () => {
 });
 
 describe("writeCodexOverlayConfigAtomically", () => {
+  it("leaves an unchanged private config in place across repeated preparations", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-stable-"));
+    const targetPath = path.join(root, "config.toml");
+    const contents = 'model = "same"\n';
+    try {
+      await writeCodexOverlayConfigAtomically(targetPath, contents);
+      const original = lstatSync(targetPath, { bigint: true });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await writeCodexOverlayConfigAtomically(targetPath, contents);
+        const current = lstatSync(targetPath, { bigint: true });
+        expect(current.ino).toBe(original.ino);
+        expect(current.mtimeNs).toBe(original.mtimeNs);
+      }
+      expect(readFileSync(targetPath, "utf8")).toBe(contents);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the old complete config when publication is interrupted", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-publish-"));
     const targetPath = path.join(root, "config.toml");
@@ -97,11 +117,35 @@ describe("writeCodexOverlayConfigAtomically", () => {
       expect(readFileSync(targetPath, "utf8")).toBe('model = "new"\n');
       if (process.platform !== "win32") {
         expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
+        chmodSync(targetPath, 0o644);
+        await writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n');
+        expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.each(process.platform === "win32" ? ["hardlink"] : ["hardlink", "symlink"])(
+    "replaces a config %s even when its contents match",
+    async (linkType) => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-link-"));
+      const sourcePath = path.join(root, "source.toml");
+      const targetPath = path.join(root, "config.toml");
+      const contents = 'model = "same"\n';
+      try {
+        writeFileSync(sourcePath, contents, { mode: 0o600 });
+        (linkType === "hardlink" ? linkSync : symlinkSync)(sourcePath, targetPath);
+        await writeCodexOverlayConfigAtomically(targetPath, contents);
+        expect(lstatSync(targetPath).isSymbolicLink()).toBe(false);
+        expect(lstatSync(targetPath).nlink).toBe(1);
+        expect(readFileSync(targetPath, "utf8")).toBe(contents);
+        expect(readFileSync(sourcePath, "utf8")).toBe(contents);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("preserves both publication and cleanup errors", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-cleanup-"));

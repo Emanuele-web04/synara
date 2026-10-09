@@ -1,3 +1,4 @@
+import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
@@ -5,6 +6,8 @@ import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
+import { ProductAnalytics } from "./productAnalytics";
+import { attachProductAnalyticsIpc } from "./productAnalyticsIpc";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
@@ -38,6 +41,7 @@ import {
   nativeTheme,
   protocol,
   powerMonitor,
+  powerSaveBlocker,
   screen,
   safeStorage,
   session,
@@ -319,6 +323,12 @@ import {
   writeAgentCursorPreference,
 } from "./agentCursorPreference";
 import {
+  createKeepAwakeController,
+  type KeepAwakeController,
+  readKeepAwakePreference,
+  writeKeepAwakePreference,
+} from "./keepAwake";
+import {
   readDesktopWindowState,
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
@@ -411,6 +421,7 @@ const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title
 // Written by the renderer-mirrored agent cursor colors; read at each driver
 // session open so a persisted custom cursor survives app restarts.
 const AGENT_CURSOR_PREFERENCE_PATH = Path.join(STATE_DIR, "agent-cursor-colors.json");
+const KEEP_AWAKE_PREFERENCE_PATH = Path.join(STATE_DIR, "keep-awake.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -423,6 +434,7 @@ const BACKEND_LOG_FILE_NAME = "server-child.log";
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
+const PRODUCT_ANALYTICS_STARTUP_AT = performance.now();
 const DESKTOP_BACKEND_SHUTDOWN_TOKEN = Crypto.randomBytes(32).toString("hex");
 const DESKTOP_BROWSER_HOST_CAPABILITY = Crypto.randomBytes(32).toString("base64url");
 const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
@@ -467,6 +479,12 @@ const betaDiagnostics =
       })
     : null;
 
+const productAnalytics = new ProductAnalytics({
+  homeDir: BASE_DIR,
+  channel: desktopFlavor === "beta" ? "beta" : "stable",
+  appVersion: app.getVersion(),
+  platform: process.platform,
+});
 if (betaDiagnostics) {
   crashReporter.start({
     productName: APP_DISPLAY_NAME,
@@ -1217,6 +1235,16 @@ function armInstallWatchdog(): void {
 }
 
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: REMOTE_RESOURCE_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
   {
     scheme: DESKTOP_SCHEME,
     privileges: {
@@ -4074,6 +4102,23 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_HOME: BASE_DIR,
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+    // Remote-host wiring is operator configuration, not app state: the account
+    // service to sign in against and the bundled remote connector. Passed
+    // through only when set so a plain launch keeps the defaults.
+    ...(process.env.SYNARA_ACCOUNT_URL
+      ? { SYNARA_ACCOUNT_URL: process.env.SYNARA_ACCOUNT_URL }
+      : {}),
+    ...(app.isPackaged
+      ? {
+          SYNARA_CLOUDFLARED_PATH: Path.join(
+            process.resourcesPath,
+            "cloudflared",
+            process.platform === "win32" ? "cloudflared.exe" : "cloudflared",
+          ),
+        }
+      : process.env.SYNARA_CLOUDFLARED_PATH
+        ? { SYNARA_CLOUDFLARED_PATH: process.env.SYNARA_CLOUDFLARED_PATH }
+        : {}),
   };
   // The backend runs the same login-shell probe at startup and does not begin listening
   // until it returns, so an unmarked child serializes a second ~1s hydration behind ours.
@@ -4852,6 +4897,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
         trackBetaDiagnostics("app.exit", { kind: "lifecycle" });
         await betaDiagnostics.dispose().catch(() => undefined);
       }
+      productAnalytics.dispose();
       desktopShutdownComplete = true;
       writeDesktopLogHeader(`${reason} shutdown complete`);
     },
@@ -4986,6 +5032,8 @@ function requestGracefulAppQuit(reason: string): void {
 
 function registerIpcHandlers(): void {
   const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+
+  attachProductAnalyticsIpc(productAnalytics, () => mainWindow?.webContents ?? null);
 
   ipcMain.removeAllListeners(IPC.betaDiagnostics.enabled);
   ipcMain.on(IPC.betaDiagnostics.enabled, (event: IpcMainEvent) => {
@@ -5278,6 +5326,23 @@ function registerIpcHandlers(): void {
     writeCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH, rawEnabled);
     return getDesktopCustomTitleBarState();
   });
+
+  ipcMain.removeHandler(IPC.keepAwake.getState);
+  ipcMain.handle(IPC.keepAwake.getState, async () => getKeepAwakeController().getState());
+
+  ipcMain.removeHandler(IPC.keepAwake.setEnabled);
+  ipcMain.handle(IPC.keepAwake.setEnabled, async (_event, rawEnabled: unknown) =>
+    typeof rawEnabled === "boolean"
+      ? getKeepAwakeController().setEnabled(rawEnabled)
+      : getKeepAwakeController().getState(),
+  );
+
+  ipcMain.removeHandler(IPC.keepAwake.setRemoteAccessAllowed);
+  ipcMain.handle(IPC.keepAwake.setRemoteAccessAllowed, async (_event, rawAllowed: unknown) =>
+    typeof rawAllowed === "boolean"
+      ? getKeepAwakeController().setRemoteAccessAllowed(rawAllowed)
+      : getKeepAwakeController().getState(),
+  );
 
   ipcMain.removeHandler(IPC.customTitleBarRelaunch);
   ipcMain.handle(IPC.customTitleBarRelaunch, async () => {
@@ -5605,6 +5670,20 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
   });
   customTitleBarActive = "frame" in frameOptions && frameOptions.frame === false;
   return frameOptions;
+}
+
+let keepAwakeController: KeepAwakeController | undefined;
+
+/** Created on first use after `app` is ready, which `powerMonitor` requires. */
+function getKeepAwakeController(): KeepAwakeController {
+  keepAwakeController ??= createKeepAwakeController({
+    monitor: powerMonitor,
+    blocker: powerSaveBlocker,
+    load: () => readKeepAwakePreference(KEEP_AWAKE_PREFERENCE_PATH),
+    save: (preference) => writeKeepAwakePreference(KEEP_AWAKE_PREFERENCE_PATH, preference),
+    onError: (error) => safeConsoleError("[desktop] keep-awake preference write failed", error),
+  });
+  return keepAwakeController;
 }
 
 function getDesktopCustomTitleBarState() {
@@ -6099,6 +6178,21 @@ async function bootstrap(): Promise<void> {
   }
 
   registerIpcHandlers();
+  // Apply the saved keep-awake preference at launch, before any window reports.
+  getKeepAwakeController();
+  app.once("will-quit", () => {
+    keepAwakeController?.dispose();
+    keepAwakeController = undefined;
+  });
+  const disposeRemoteResources = registerRemoteResourceBroker({
+    trustedRenderer: () =>
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
+    trustedOrigin: () =>
+      isDevelopment ? process.env.VITE_DEV_SERVER_URL! : desktopIdentity.entryUrl,
+    backendWsUrl: () =>
+      normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env),
+  });
+  app.once("will-quit", disposeRemoteResources);
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   try {
     await ensureBrowserHostPipeServer();
@@ -6199,6 +6293,16 @@ if (hasSingleInstanceLock) {
     .whenReady()
     .then(() => {
       writeDesktopLogHeader("app ready");
+      productAnalytics.start();
+      productAnalytics.track({ event: "app.open", outcome: "succeeded" });
+      productAnalytics.track({
+        event: "performance.startup",
+        outcome: "succeeded",
+        durationMs: Math.min(
+          86_400_000,
+          Math.round(performance.now() - PRODUCT_ANALYTICS_STARTUP_AT),
+        ),
+      });
       if (betaDiagnostics) {
         betaDiagnostics.start();
         const previousLaunchVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());

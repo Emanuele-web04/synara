@@ -180,7 +180,7 @@ test("privacy copy states both the local workspace boundary and provider boundar
     "Workspace state stays on your machine",
     "Provider traffic goes to the selected provider",
     "No Synara account is required",
-    "Anonymous analytics are opt-in",
+    "Product analytics are opt-in",
     "provider sessions receive the context",
   ]) {
     assert.ok(privacy.includes(marker), `privacy boundary is missing: ${marker}`);

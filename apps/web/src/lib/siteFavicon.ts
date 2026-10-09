@@ -6,7 +6,7 @@
 //          surface (composer, user bubble, markdown).
 // Layer: UI utilities
 
-import { resolveWsHttpUrl } from "./wsHttpUrl";
+import { resolveExecutionResource } from "./wsHttpUrl";
 
 /** Per-favicon-src load outcome, shared module-wide to avoid re-probing within a session. */
 export const siteFaviconStatusCache = new Map<string, "ok" | "fail">();
@@ -61,8 +61,7 @@ export function extractHostname(url: string): string | null {
  */
 export function resolveSiteFaviconUrl(urlOrHost: string): string {
   const host = extractHostname(urlOrHost) ?? urlOrHost;
-  const params = new URLSearchParams({ domain: host });
   // Route through the WS-derived HTTP helper so desktop/file-origin image tags
   // carry the same legacy token as attachments and local markdown images.
-  return resolveWsHttpUrl(`/api/site-favicon?${params.toString()}`);
+  return resolveExecutionResource({ kind: "site-favicon", domain: host });
 }

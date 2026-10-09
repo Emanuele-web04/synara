@@ -4,7 +4,9 @@ Synara Beta ships always-on diagnostics so the team can see crashes and release
 health on real machines instead of waiting for bug reports. This document is the
 authoritative description of what leaves your computer.
 
-**Stable builds collect nothing.** The diagnostics module is only constructed
+**Stable builds never send Beta diagnostics.** Separate, default-off product analytics
+are available in both channels; see [Product analytics](#product-analytics).
+The Beta diagnostics module is only constructed
 when the packaged build's `synaraDesktopFlavor` field equals `"beta"` — a field baked
 in at build time that cannot be flipped by an environment variable. (The module
 source is bundled into the shared desktop code, but in a stable build it is
@@ -114,7 +116,7 @@ main, renderer, GPU, and utility processes, retaining four samples. This does
 not measure the separate backend's Node heap. Recent activity and memory samples
 are attached to existing error stacks and crash log tails within their existing
 size limits and pass through the shared redactor. Actions and memory samples do
-not create their own uploads or disk records; Stable exposes no collection bridge
+not create their own uploads or disk records; Stable exposes no Beta diagnostics bridge
 and starts no sampler. Context can help correlate failures with preceding work,
 but is not a proof of causation and cannot reconstruct older reports.
 
@@ -184,14 +186,15 @@ External IP addresses remain redacted and external ports remain distinct.
 ## Transport and storage
 
 Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
-batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.workers.dev`
+batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.synara-orgs.workers.dev`
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
 or loopback targets are accepted). Events land in a Cloudflare D1 database and
-are kept with no expiry date, so crash and error trends can be compared across
-all beta releases. Crash dumps land in the `synara-beta-crash-dumps` R2 bucket
-and are also kept with no expiry date. The ingest worker
-and its private dashboard live outside this repository (they run on the
-maintainers' Cloudflare account). The worker re-runs the same allowlist and
+are retained without automatic expiry so crash and error trends can be compared
+across beta releases. Crash dumps land in the private `synara-beta-crash-dumps`
+R2 bucket and also have no automatic expiry. The ingest worker and its private
+dashboard live in [apps/analytics](../apps/analytics/README.md) and deploy to the
+Synara Orgs Cloudflare account.
+The worker re-runs the same allowlist and
 `redactDiagnosticText` and drops unknown events/fields, so the documented
 schema is enforced at the endpoint, not just the client.
 
@@ -205,3 +208,45 @@ If the endpoint is unreachable the queue stays on disk and retries on the next
 flush; if it grows past 1 MiB the client trims it to the newest 512 KiB of
 events rather than letting it grow. Diagnostics never blocks the app: every
 failure is swallowed.
+
+Previously shipped Beta builds still use `https://synara-beta-diagnostics.kartik-9f9.workers.dev`;
+that endpoint forwards ingestion to the new service. The migration preserves
+existing diagnostics and does not change collection or retention.
+
+## Product analytics
+
+Desktop Settings → General → Privacy offers **Share product analytics**, off by
+default in Stable and Beta. Consent belongs to the controlling installation,
+not the account or a connected host. Browser/CLI clients do not expose this
+desktop sender. iPhone/iPad provide their own local consent control.
+
+When enabled, fixed events record app readiness, selected feature opens, pairing,
+connection/reconnection outcomes, chat request acknowledgements and startup
+duration. The desktop also observes live terminal turn activities; available
+usage counters are included without model names. Missing counters stay unknown.
+These observations are not complete host execution totals: closed clients,
+history and native completion events are not included. They are not billing data.
+
+Each envelope contains a random per-installation UUID, event UUID, timestamp,
+app version, channel, surface and platform. Additional fields are restricted to
+fixed enums and bounded durations/token counts. No account/provider identifiers,
+model names, task/project names, routes, URLs, prompts, files or error text enter
+this path. The UUID is independent of the Beta diagnostics identity.
+
+Events go to the Cloudflare Worker `/v1/product-events` and a separate D1
+`product_events` table, viewed through its authenticated Product dashboard.
+They are unrelated to private account usage, Saved Inbox and public profile
+data. Raw product events have a 30-day retention policy, enforced through
+bounded scheduled cleanup; Beta diagnostic retention is unchanged.
+
+The desktop uses its flavor-specific `product-analytics` directory for consent,
+the random identifier and an expiring queue (at most 500 events, seven days).
+Uploads are limited to 50 events/64 KiB, with timeout and backoff. Turning off
+collection aborts pending uploads where possible, clears unsent events and
+removes the identifier. Re-enabling generates a new identifier; it does not
+link the new installation identity to earlier events. Turning off cannot
+retract a request already received by Cloudflare; retention applies there.
+
+Release dependency: deploy the product D1 migration and receiving Worker before
+shipping these clients. The existing `/v1/events` and `/v1/crash` routes remain
+Beta-only and are not controlled by this new switch.

@@ -97,6 +97,62 @@ describe("runBetaImportIfRequested", () => {
     expect(existsSync(join(betaHome, "userdata"))).toBe(false);
   });
 
+  it.each([false, true])(
+    "isolates installation identity and suspends imported account data (existing=%s)",
+    async (existing) => {
+      const stableHome = await seedStableHome(makeRoot());
+      const source = join(stableHome, "userdata");
+      const betaHome = join(stableHome, ".synara-beta");
+      const destination = join(betaHome, "userdata");
+      const remoteFiles = [
+        "host-identity.json",
+        "device-identity.json",
+        "host-secrets-sync-key.json",
+        "remote-tls.json",
+      ];
+      writeFileSync(join(source, "environment-id"), "stable-environment");
+      for (const name of remoteFiles)
+        writeFileSync(join(source, "secrets", name), "stable-private-fixture");
+      if (existing) {
+        mkdirSync(join(destination, "secrets"), { recursive: true });
+        writeFileSync(join(destination, "environment-id"), "beta-environment");
+        for (const name of remoteFiles)
+          writeFileSync(join(destination, "secrets", name), "beta-private-fixture");
+      }
+      const { DatabaseSync } = await import("node:sqlite");
+      const db = new DatabaseSync(join(source, "state.sqlite"));
+      db.exec(
+        "CREATE TABLE account_usage_sync (id INTEGER PRIMARY KEY, watermark_minute TEXT, last_failure_at TEXT, account_identity TEXT)",
+      );
+      db.exec("INSERT INTO account_usage_sync VALUES (1, 'minute', 'failure', 'account-a')");
+      db.close();
+      const original = readFileSync(join(source, "state.sqlite"));
+      writeMarker(betaHome, stableHome);
+      expect(await run({ betaHomeDir: betaHome, stateDir: destination })).toEqual({
+        consumed: true,
+        ok: true,
+      });
+      expect(readFileSync(join(source, "state.sqlite"))).toEqual(original);
+      expect(existsSync(join(destination, "remote-suspended-after-import.json"))).toBe(true);
+      expect(existsSync(join(destination, "environment-id"))).toBe(existing);
+      for (const name of remoteFiles) {
+        expect(existsSync(join(destination, "secrets", name))).toBe(existing);
+        if (existing)
+          expect(readFileSync(join(destination, "secrets", name), "utf8")).toBe(
+            "beta-private-fixture",
+          );
+      }
+      if (existing)
+        expect(readFileSync(join(destination, "environment-id"), "utf8")).toBe("beta-environment");
+      expect(existsSync(join(destination, "secrets", "token.json"))).toBe(true);
+      const imported = new DatabaseSync(join(destination, "state.sqlite"), { readOnly: true });
+      expect(imported.prepare("SELECT * FROM account_usage_sync").all()).toEqual([
+        { id: 1, watermark_minute: null, last_failure_at: null, account_identity: null },
+      ]);
+      imported.close();
+    },
+  );
+
   it("imports the stable snapshot and reports success", async () => {
     const root = await seedStableHome(makeRoot());
     const betaHome = join(root, ".synara-beta");

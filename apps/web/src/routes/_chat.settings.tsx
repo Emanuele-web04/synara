@@ -38,6 +38,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { ProductAnalyticsSettingsPanel } from "~/components/settings/ProductAnalyticsSettingsPanel";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import { AppIconPicker } from "~/components/settings/AppIconPicker";
 import {
@@ -64,6 +65,7 @@ import {
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
+import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -647,6 +649,7 @@ function SettingsRouteView() {
     <div className="space-y-6">
       <SafariAccessSetupButton />
       <BetaChannelSettingsPanel active={true} />
+      <ProductAnalyticsSettingsPanel />
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
@@ -1739,6 +1742,7 @@ function SettingsRouteView() {
                   resetEpoch={resetEpoch}
                 />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
+                <ConnectionsSettingsPanel active={activeSection === "connections"} />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}
                   onOpenReleaseHistory={() => setReleaseHistoryOpen(true)}

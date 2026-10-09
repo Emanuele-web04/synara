@@ -55,6 +55,25 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequenc
   }
 }
 
+it.each(["codex", "claudeAgent", "pi"] as const)(
+  "preserves %s on terminal turn activities",
+  (provider) => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider,
+        type: "turn.completed",
+        eventId: "terminal-provider",
+        turnId: TURN_ID,
+        payload: { state: "completed" },
+      }),
+    );
+    expect(activity).toMatchObject({
+      kind: "turn.completed",
+      payload: { provider, state: "completed" },
+    });
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+  },
+);
 it("persists terminal error identity and announced retry state in chat activities", () => {
   const error = projectProviderRuntimeActivities(
     runtimeEvent({

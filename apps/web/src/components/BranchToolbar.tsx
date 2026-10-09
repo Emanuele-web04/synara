@@ -1,3 +1,4 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 import { requestCurrentAppSnap } from "../appSnap.logic";
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
@@ -243,7 +244,9 @@ export function RuntimeUsageControls({
                 icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
-            {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
+            {!readExecutionContext()?.remote &&
+            typeof window !== "undefined" &&
+            window.desktopBridge?.appSnap?.captureCurrentApp ? (
               <>
                 <MenuSeparator />
                 <MenuItem onClick={requestCurrentAppSnap}>Share current app</MenuItem>

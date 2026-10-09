@@ -25,6 +25,13 @@ export const GROUPS_BETA_FEATURE = "groups";
 export const INBOX_BETA_FEATURE = "inbox";
 
 /**
+ * Account-saved Inbox history (Beta only): automatic private recap upload to
+ * the account and the saved-recap RPCs. Separate from the local Inbox so its
+ * Stable promotion stays an explicit decision.
+ */
+export const ACCOUNT_INBOX_BETA_FEATURE = "accountInbox";
+
+/**
  * Audio trail (Stable and Beta): the chat message trail moves with the Mac's
  * audio output and/or the microphone, read by the AppSnap helper's `--audio-level` mode.
  */
@@ -33,7 +40,12 @@ export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
 /** Auto-fix CI (Stable and Beta): the PR menu checkbox, RPCs, and check watcher. */
 export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [GROUPS_BETA_FEATURE];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
+  GROUPS_BETA_FEATURE,
+  "remoteConnections",
+  "accountProfileSync",
+  ACCOUNT_INBOX_BETA_FEATURE,
+];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable
@@ -90,3 +102,6 @@ export function desktopFlavorFromProtocol(
       return "unknown";
   }
 }
+
+/** Deferred features retain their data but have no active consumers. */
+export const HOST_SECRETS_SYNC_ENABLED = false;

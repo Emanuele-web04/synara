@@ -39,6 +39,7 @@ function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
 export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
+  name?: string;
   /** Extra source folders of a multi-folder project; `workspaceRoot` is the primary one. */
   additionalFolders?: ReadonlyArray<string>;
   createIfMissing?: boolean;
@@ -66,7 +67,7 @@ export async function createOrRecoverProjectFromPath(input: {
   const delayMs = input.delayMs ?? DEFAULT_PROJECT_CREATE_RECOVERY_DELAY_MS;
   const projectId = newProjectId();
   const createdAt = new Date().toISOString();
-  const title = buildProjectTitleFromWorkspaceRoot(workspaceRoot);
+  const title = input.name?.trim() || buildProjectTitleFromWorkspaceRoot(workspaceRoot);
   const additionalFolders = (input.additionalFolders ?? [])
     .map((folder) => folder.trim())
     .filter((folder) => folder.length > 0);

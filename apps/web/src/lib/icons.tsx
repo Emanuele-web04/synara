@@ -202,8 +202,14 @@ export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 // local servers): the Central glyph, so it matches the other work-row icons.
 export const GlobeIcon: LucideIcon = centralIconWrapper("globe");
 export const WebSearchIcon: LucideIcon = GlobeIcon;
+// Hosts — the machines an account can reach. A rack rather than a
+// laptop: a host is as often a VPS as it is someone's desk.
+export const ServerIcon: LucideIcon = centralIconWrapper("server");
 // Handset glyph for the iOS Simulator dock pane.
 export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
+// Connections device rows: a paired iPad, and any paired computer.
+export const DeviceTabletIcon: LucideIcon = centralIconWrapper("tablet");
+export const DeviceComputerIcon: LucideIcon = centralIconWrapper("macbook");
 // Hardware-button glyphs for the simulator's control rail.
 export const DeviceHomeIcon: LucideIcon = centralIconWrapper("home");
 export const DeviceShutterIcon: LucideIcon = centralIconWrapper("camera-1");

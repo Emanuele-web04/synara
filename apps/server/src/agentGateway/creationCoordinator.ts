@@ -11,6 +11,7 @@ import {
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
+  type RemoteAgentCallerPolicy,
   type OrchestrationThreadShell,
   type ProviderInteractionMode,
   type ProviderKind,
@@ -123,6 +124,7 @@ interface CreationCoordinatorDependencies {
 export type GatewayCreationContext =
   | {
       readonly kind: "provider-session";
+      readonly remoteCaller?: RemoteAgentCallerPolicy;
       readonly callerThreadId: string;
       readonly callerTurnId: string | null;
       readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
@@ -353,7 +355,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         );
       }
       if (
-        context.kind !== "provider-session" &&
+        (context.kind !== "provider-session" || context.remoteCaller) &&
         input.threads.some((spec) => spec.notifyCreatorOnComplete)
       ) {
         return yield* Effect.fail(
@@ -370,9 +372,11 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             ? `hub-work:${context.workItemId}`
             : null;
       const caller =
-        context.kind !== "external-client"
-          ? yield* requireThreadShell(context.callerThreadId)
-          : null;
+        context.kind === "provider-session" && context.remoteCaller
+          ? context.remoteCaller
+          : context.kind !== "external-client"
+            ? yield* requireThreadShell(context.callerThreadId)
+            : null;
       const operationId = `gateway:create:${stableGatewayDigest({
         principalKind: context.kind,
         principalId:
@@ -501,7 +505,12 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           context.assertAuthority,
         );
       }
-      if (authorizeManagedGoalCreation && caller && context.kind === "provider-session") {
+      if (
+        authorizeManagedGoalCreation &&
+        caller &&
+        "id" in caller &&
+        context.kind === "provider-session"
+      ) {
         yield* authorizeManagedGoalCreation({
           callerThreadId: caller.id,
           requestedCount: input.threads.length,
@@ -520,12 +529,16 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
-          if (context.kind === "external-client" && spec.projectId === undefined) {
+          if (
+            (context.kind === "external-client" ||
+              (context.kind === "provider-session" && context.remoteCaller)) &&
+            spec.projectId === undefined
+          ) {
             return yield* Effect.fail(
-              new ToolInputError("External MCP task creation requires an explicit projectId."),
+              new ToolInputError("Creating on another scope requires an explicit projectId."),
             );
           }
-          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller!.projectId);
+          const projectId = ProjectId.makeUnsafe((spec.projectId ?? caller?.projectId)!);
           if (context.kind === "external-client" && !context.allowedProjectIds.has(projectId)) {
             return yield* Effect.fail(
               new GatewayToolError(
@@ -1142,7 +1155,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
                   const interactionMode = interactionModeForGatewayTarget(entry.target);
                   yield* context.assertAuthority();
-                  if (context.kind !== "external-client" && assertCreateTargetProject) {
+                  // Remote caller roles were checked by their owning server. Their replay
+                  // identity is not a local thread and must not resolve against this DB.
+                  if (
+                    context.kind !== "external-client" &&
+                    !(context.kind === "provider-session" && context.remoteCaller) &&
+                    assertCreateTargetProject
+                  ) {
                     yield* assertCreateTargetProject({
                       callerThreadId: context.callerThreadId,
                       targetProjectId: entry.projectId,
@@ -1163,7 +1182,8 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       worktreePath,
                       creationSource:
                         context.kind === "external-client" ? "external_mcp" : "synara_mcp",
-                      ...(context.kind !== "external-client"
+                      ...(context.kind !== "external-client" &&
+                      !(context.kind === "provider-session" && context.remoteCaller)
                         ? {
                             sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
                             ...((
@@ -1272,7 +1292,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           yield* operationStore.complete(
             { operationId, resultJson: JSON.stringify(result), now: gatewayIsoNow() },
             Effect.gen(function* () {
-              if (recordManagedWorkerThreads && caller)
+              if (recordManagedWorkerThreads && caller && "id" in caller)
                 yield* recordManagedWorkerThreads({
                   callerThreadId: caller.id,
                   requestId: input.requestId,
@@ -1304,7 +1324,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       if (outcome.kind === "replay") return outcome.result;
       const result = outcome.result;
-      if (context.kind === "provider-session") {
+      if (context.kind === "provider-session" && !context.remoteCaller) {
         yield* appendThreadCreationRecap({
           callerThreadId: context.callerThreadId,
           callerTurnId: callerTurnId!,

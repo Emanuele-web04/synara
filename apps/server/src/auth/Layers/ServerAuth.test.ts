@@ -275,6 +275,33 @@ describe("ServerAuthLive", () => {
     );
   });
 
+  it("keeps an explicit paired client ticket restricted on an accountless loopback server", async () => {
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const pairing = yield* serverAuth.issuePairingCredential({ role: "client" });
+        const token = pairing.credential;
+        const exchanged = yield* serverAuth.exchangeBootstrapCredential(token, requestMetadata);
+        const client = yield* serverAuth.authenticateHttpRequest(
+          makeCookieRequest(exchanged.sessionToken),
+        );
+        const ticket = yield* serverAuth.issueWebSocketToken(client);
+        const authenticated = yield* authenticateRpcWebSocketUpgrade({
+          config: { host: "127.0.0.1", authToken: undefined, publicUrl: undefined },
+          legacyToken: null,
+          request: {
+            headers: {},
+            cookies: {},
+            url: new URL(`http://127.0.0.1/ws?wsToken=${encodeURIComponent(ticket.token)}`),
+          },
+          serverAuth,
+        });
+        expect(authenticated?.role).toBe("client");
+        expect(authenticated?.sessionId).toBe(client.sessionId);
+      }),
+    );
+  });
+
   it("bootstraps a remote owner session without accepting the legacy websocket token", async () => {
     await runServerAuthTest(
       Effect.gen(function* () {

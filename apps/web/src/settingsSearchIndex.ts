@@ -59,6 +59,12 @@ export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | 
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   // ── General ────────────────────────────────────────────────────────────────
   {
+    id: "general:share-product-analytics",
+    section: "general",
+    title: "Share product analytics",
+    keywords: "Privacy consent anonymous statistics collection tracking performance Cloudflare",
+  },
+  {
     id: "general:default-provider",
     section: "general",
     title: "Default provider",
@@ -606,6 +612,47 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "External MCP integrations",
     keywords:
       "Pair Codex Claude and other local MCP clients with scoped project access. revoke credential task create wait read worktree approval",
+  },
+  // ── Connections ───────────────────────────────────────────────────────
+  {
+    id: "connections:this-computer",
+    section: "connections",
+    title: "Control this computer",
+    keywords:
+      "Devices that can control this Mac or computer. allow connections add iphone ipad qr code pairing approve revoke access trusted devices",
+    target: null,
+  },
+  {
+    id: "connections:keep-awake",
+    section: "connections",
+    title: "Keep this computer awake",
+    keywords:
+      "Keep the Mac awake while plugged in and remote access is on. prevent sleep power battery",
+    target: null,
+  },
+  {
+    id: "connections:other-computers",
+    section: "connections",
+    title: "Control other devices",
+    keywords:
+      "Computers you can control from this one. host server laptop connect open remote relay back to this computer disconnect forget pairing code share workspace discoverable",
+    target: null,
+  },
+  {
+    id: "connections:ssh",
+    section: "connections",
+    title: "SSH",
+    keywords:
+      "Link a headless machine with a short code, or forward the SSH port. device code link approve vps cli browserless",
+    target: null,
+  },
+  {
+    id: "connections:advanced",
+    section: "connections",
+    title: "Account devices and sessions",
+    keywords:
+      "Advanced: devices signed in to your account, active sessions, and unlinking this machine. revoke sign out lost stolen last used end session unlink",
+    target: null,
   },
   {
     id: "advanced:version",

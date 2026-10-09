@@ -15,6 +15,7 @@ import {
   DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
   DEFAULT_MODEL_BY_PROVIDER,
   EventId,
+  type ExecutionEnvironmentDescriptor,
   MessageId,
   DEVICE_WS_METHODS,
   COMPUTER_WS_METHODS,
@@ -110,6 +111,16 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { readExecutionContext } from "../lib/hosts/executionContext";
+import {
+  addWorkspaceSession,
+  removeWorkspaceSession,
+  updateWorkspaceSession,
+} from "../lib/hosts/workspaceSessions";
+import { WorkspacePanels } from "./hosts/WorkspacePanels";
+
+vi.mock("../lib/hosts/executionContext", { spy: true });
+vi.mock("./hosts/WorkspacePanels", { spy: true });
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
@@ -10824,7 +10835,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       await page.getByRole("button", { name: "New space", exact: true }).click();
       await expect.element(page.getByRole("heading", { name: "New space" })).toBeInTheDocument();
-      await page.getByLabelText("Name").fill("Focus");
+      await page.getByLabelText("Name", { exact: true }).fill("Focus");
       await page.getByRole("button", { name: "Create space", exact: true }).click();
 
       // The nested editor closes, the space.create command is dispatched, and
@@ -12394,6 +12405,134 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["shortcut", "palette", "native terminal"] as const)(
+    "keeps the selected remote owner for the outer %s action",
+    async (action) => {
+      const controller = {
+        environmentId: "controller-test",
+        label: "This computer",
+        channel: "dev",
+        capabilities: { remoteConnections: true },
+      } as ExecutionEnvironmentDescriptor;
+      vi.mocked(readExecutionContext).mockReturnValue({
+        controller,
+        execution: controller,
+        remote: null,
+      });
+      // Keep the real controlling shell and router; the remote execution boundary is
+      // represented by its registered owner actions instead of loading a second app.
+      vi.mocked(WorkspacePanels).mockReturnValue(null);
+      const menuListeners = new Set<(action: string) => void>();
+      const previousBridge = Object.getOwnPropertyDescriptor(window, "desktopBridge");
+      let restored = false;
+      const restoreBridges = () => {
+        if (restored) return;
+        restored = true;
+        vi.mocked(readExecutionContext).mockRestore();
+        vi.mocked(WorkspacePanels).mockRestore();
+        if (previousBridge) Object.defineProperty(window, "desktopBridge", previousBridge);
+        else delete window.desktopBridge;
+      };
+      onTestFinished(restoreBridges);
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("remote-owner-action"),
+        targetText: "Preserve the selected computer",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            keybindings: [
+              {
+                command: "chat.new",
+                shortcut: {
+                  key: "o",
+                  metaKey: false,
+                  ctrlKey: false,
+                  shiftKey: true,
+                  altKey: false,
+                  modKey: true,
+                },
+              },
+            ],
+          };
+        },
+      });
+      const navigation = {
+        newChat: vi.fn().mockResolvedValue("/remote-draft"),
+        createChat: vi.fn().mockResolvedValue(undefined),
+        openTerminal: vi.fn(),
+        browseFolders: vi.fn(),
+        createProject: vi.fn(),
+        openProject: vi.fn(),
+        navigate: vi.fn(),
+        recover: vi.fn(),
+      };
+      try {
+        await waitForServerConfigToApply();
+        Object.defineProperty(window, "desktopBridge", {
+          configurable: true,
+          value: {
+            ...window.desktopBridge,
+            getWsUrl: () => "",
+            setTheme: async () => {},
+            browser: { ...window.desktopBridge?.browser },
+            onMenuAction: (listener: (action: string) => void) => {
+              menuListeners.add(listener);
+              return () => menuListeners.delete(listener);
+            },
+          },
+        });
+        addWorkspaceSession({
+          hostId: "remote-owner-test",
+          hostName: "Remote computer",
+          wsPath: "/ws/remote/owner-test",
+          executionScope: {
+            environmentId: "remote-owner-test",
+            accountAuthority: "https://account.example",
+            userId: "alice",
+            organizationId: "org",
+            channel: "dev",
+          },
+        });
+        updateWorkspaceSession("remote-owner-test", {
+          navigation,
+          summary: { state: "open", path: "/remote-thread", projects: [], threads: [] },
+        });
+        await mounted.router.navigate({
+          to: "/remote",
+          search: { environment: "remote-owner-test", path: "/remote-thread" },
+        });
+        await waitForLayout();
+        if (action === "shortcut") {
+          document.querySelector<HTMLElement>('[data-testid="new-thread-button"]')!.focus();
+          await dispatchConfiguredShortcutWhenReady(window, { key: "o", shiftKey: true });
+        } else if (action === "palette") {
+          await page.getByRole("button", { name: "Search", exact: true }).click();
+          await page.getByPlaceholder("Search chats or run a command").fill("New chat");
+          await page.getByRole("option", { name: /^New chat/ }).click();
+        } else {
+          for (const listener of menuListeners) listener("new-terminal-tab");
+        }
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.pathname).toBe("/remote");
+          if (action === "native terminal") expect(navigation.openTerminal).toHaveBeenCalledOnce();
+          else
+            expect(navigation.createChat).toHaveBeenCalledWith(
+              action === "shortcut" ? "chat.new" : "chat.newChat",
+            );
+        });
+        expect(useComposerDraftStore.getState().draftThreadsByThreadId).toEqual({});
+      } finally {
+        await mounted.cleanup();
+        removeWorkspaceSession("remote-owner-test");
+        restoreBridges();
+      }
+    },
+  );
 
   it("creates a new thread from the global chat.new shortcut", async () => {
     const mounted = await mountChatView({

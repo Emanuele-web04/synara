@@ -3,9 +3,13 @@
 // Layer: Release verification entrypoint
 
 import { strict as assert } from "node:assert";
+import { verifyRemoteTlsRuntime } from "./remoteTransport/runtimeSmoke";
 
 import { loadAcpSdk } from "./provider/acp/AcpSdk.ts";
 import { loadClaudeAgentSdk } from "./provider/claudeAgentSdk.ts";
+
+await verifyRemoteTlsRuntime();
+if (process.env.SYNARA_RUNTIME_SMOKE === "remote-tls") process.exit(0);
 
 // Keep these imports external, just like the server. Running this entrypoint
 // from app.asar exposes missing peers that the development install can hide.

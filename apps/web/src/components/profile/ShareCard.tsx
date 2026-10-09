@@ -1,3 +1,4 @@
+import { ProfileUsageCoverage } from "./ProfileUsageCoverage";
 // FILE: ShareCard.tsx
 // Purpose: Fixed-size, theme-independent "virality" card rendered to PNG via html-to-image.
 // Uses explicit colors (not theme tokens) so the exported image looks identical in light
@@ -6,14 +7,12 @@
 // Layer: web profile feature.
 
 import { forwardRef, type ReactNode } from "react";
-import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
 import { ProviderIcon } from "~/components/ProviderIcon";
-import { SynaraLogo } from "~/components/SynaraLogo";
-import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "./ActivityHeatmap";
-import { ProfileAvatar } from "./ProfileAvatar";
-import { ProfileUsageCoverage } from "./ProfileUsageCoverage";
-import { formatCompact, formatDays, formatProfileUsageBasis } from "./profileFormatting";
-import { selectProfileHeatmap, selectProfileTopProvider } from "./profileSelectors";
+import { SynaraLogo } from "@synara/profile-ui/logo";
+import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "@synara/profile-ui/heatmap";
+import { ProfileAvatar } from "@synara/profile-ui/avatar";
+import { formatCompact, formatDays, formatProfileUsageBasis } from "@synara/profile-ui/formatting";
+import type { ShareCardStats } from "./profileSelectors";
 
 export const SHARE_CARD_WIDTH = 860;
 export const SHARE_CARD_HEIGHT = 440;
@@ -27,8 +26,9 @@ const CARD_HEATMAP_DAYS = 183;
 const VALUE_CLASS = "text-2xl font-normal leading-none tracking-tight";
 
 interface ShareCardProps {
-  readonly stats: ProfileStats;
-  readonly tokenStats: ProfileTokenStats | null;
+  /** Scope-neutral card numbers — device or account, whichever the panel shows. */
+  readonly cardStats: ShareCardStats;
+  readonly initials: string;
   readonly displayName: string;
   readonly handle: string;
   readonly avatarColor: string;
@@ -42,61 +42,53 @@ interface Tile {
 }
 
 export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function ShareCard(
-  { stats, tokenStats, displayName, handle, avatarColor, avatarImage },
+  { cardStats, initials, displayName, handle, avatarColor, avatarImage },
   ref,
 ) {
-  const topProvider = selectProfileTopProvider(stats, tokenStats);
-
   const tiles: Tile[] = [
     {
       key: "lifetime",
-      value: (
-        <span className={VALUE_CLASS}>
-          {formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
-        </span>
-      ),
+      value: <span className={VALUE_CLASS}>{formatCompact(cardStats.lifetimeTokens)}</span>,
       label: "lifetime tokens",
     },
     {
       key: "peak",
-      value: (
-        <span className={VALUE_CLASS}>{formatCompact(tokenStats?.peakDayTokens ?? null)}</span>
-      ),
+      value: <span className={VALUE_CLASS}>{formatCompact(cardStats.peakDayTokens)}</span>,
       label: "peak day",
     },
     {
       key: "current",
-      value: <span className={VALUE_CLASS}>{formatDays(stats.activity.currentStreakDays)}</span>,
+      value: <span className={VALUE_CLASS}>{formatDays(cardStats.currentStreakDays)}</span>,
       label: "current streak",
     },
     {
       key: "longest",
-      value: <span className={VALUE_CLASS}>{formatDays(stats.activity.longestStreakDays)}</span>,
+      value: <span className={VALUE_CLASS}>{formatDays(cardStats.longestStreakDays)}</span>,
       label: "longest streak",
     },
     {
       key: "provider",
       // Most-used provider: token telemetry when available, otherwise turn count. An explicit
       // slate color keeps currentColor glyphs visible on the white card in every theme.
-      value: topProvider.provider ? (
+      value: cardStats.topProvider.provider ? (
         <span className="flex items-center gap-2">
           <ProviderIcon
-            provider={topProvider.provider}
+            provider={cardStats.topProvider.provider}
             className="size-6 shrink-0 text-slate-700"
           />
-          {topProvider.percent !== null ? (
-            <span className={VALUE_CLASS}>{`${Math.round(topProvider.percent)}%`}</span>
+          {cardStats.topProvider.percent !== null ? (
+            <span className={VALUE_CLASS}>{`${Math.round(cardStats.topProvider.percent)}%`}</span>
           ) : null}
         </span>
       ) : (
         <span className={VALUE_CLASS}>—</span>
       ),
-      label: `top provider · ${formatProfileUsageBasis(topProvider.metric)}`,
+      label: `top provider · ${formatProfileUsageBasis(cardStats.topProvider.metric ?? "tokens")}`,
     },
   ];
 
-  // Same tokens-first series as the profile page so the exported card matches the app.
-  const heatmapCells = selectProfileHeatmap(stats, tokenStats).cells.slice(-CARD_HEATMAP_DAYS);
+  // Same series as the profile page's selected scope so the exported card matches the app.
+  const heatmapCells = cardStats.heatmapCells.slice(-CARD_HEATMAP_DAYS);
 
   return (
     <div
@@ -108,7 +100,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
       <div className="flex min-w-0 items-center justify-between gap-6">
         <div className="flex min-w-0 flex-1 items-center gap-4">
           <ProfileAvatar
-            initials={stats.identity.initials}
+            initials={initials}
             color={avatarColor}
             image={avatarImage}
             className="size-16 shrink-0 text-lg font-medium"
@@ -146,7 +138,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
         ))}
       </div>
       <ProfileUsageCoverage
-        unavailableProviders={topProvider.unavailableProviders}
+        unavailableProviders={cardStats.topProvider.unavailableProviders ?? []}
         className="text-xs leading-4 text-slate-500"
       />
     </div>

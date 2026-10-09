@@ -237,6 +237,7 @@ function render(
     routeThreadId?: ThreadId | null;
     threadsHydrated?: boolean;
     archiveDeletesOrphanedWorktree?: boolean;
+    confirmThreadArchive?: boolean;
     sidebarTreeThreads?: readonly SidebarThreadSummary[];
   } = {},
 ) {
@@ -245,7 +246,7 @@ function render(
     activeSplitView: overrides.activeSplitView ?? null,
     appSettings: {
       archiveDeletesOrphanedWorktree: overrides.archiveDeletesOrphanedWorktree ?? false,
-      confirmThreadArchive: false,
+      confirmThreadArchive: overrides.confirmThreadArchive ?? false,
       confirmThreadDelete: false,
       sidebarThreadSortOrder: "updated_at",
     },
@@ -595,6 +596,34 @@ describe("useSidebarThreadActions", () => {
       expect.objectContaining({ params: { threadId: FALLBACK_ID }, replace: true }),
     );
   });
+
+  it.each([true, false])(
+    "checks owner availability after archive confirmation (available: %s)",
+    async (availableAfterConfirmation) => {
+      let confirm!: (value: boolean) => void;
+      harness.confirm.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            confirm = resolve;
+          }),
+      );
+      let available = true;
+      const pending = render({ confirmThreadArchive: true }).confirmAndArchiveThread(
+        THREAD_ID,
+        () => available,
+      );
+      expect(harness.confirm).toHaveBeenCalledOnce();
+      available = availableAfterConfirmation;
+      confirm(true);
+      if (availableAfterConfirmation) {
+        await pending;
+        expect(harness.archiveThread).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).rejects.toThrow(/no longer available/);
+        expect(harness.archiveThread).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("restores the saved chat draft when archiving the last thread leaves no fallback", async () => {
     sidebarThreads = [makeThread(THREAD_ID)];

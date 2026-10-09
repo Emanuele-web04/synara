@@ -11,6 +11,7 @@ import {
   SidebarTrigger,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
   useSidebar,
+  type SidebarContextProps,
 } from "./sidebar";
 
 function Controls({ name }: { name: string }) {
@@ -35,6 +36,31 @@ function ControlledSidebar() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("sidebar toggles", () => {
+  it("keeps a controller desktop dock visible in a narrow workspace viewport", async () => {
+    await page.viewport(700, 800);
+    const controls: SidebarContextProps = {
+      state: "expanded",
+      open: true,
+      openMobile: false,
+      isMobile: false,
+      setOpen: () => {},
+      setOpenMobile: () => {},
+      toggleSidebar: () => {},
+    };
+    const screen = await render(
+      <SidebarProvider controls={controls}>
+        <Sidebar side="right">Remote file contents</Sidebar>
+      </SidebarProvider>,
+    );
+    try {
+      await expect.element(page.getByText("Remote file contents")).toBeVisible();
+      const panel = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
+      expect(panel.getBoundingClientRect().width).toBeGreaterThan(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it.each(["left", "right"] as const)(
     "settles the %s panel and layout gap immediately with reduced motion",
     async (side) => {

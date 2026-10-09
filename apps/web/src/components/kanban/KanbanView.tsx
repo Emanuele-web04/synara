@@ -20,6 +20,7 @@ import { useStore } from "../../store";
 import { NewTaskButton } from "../tasks/NewTaskButton";
 import { TasksViewSwitch } from "../tasks/TasksViewSwitch";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
+import { WorkspaceSurfaceComputerPicker } from "../hosts/ComputerPicker";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
 import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
@@ -158,6 +159,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     <RouteInsetSurface>
       <RouteSurface>
         <RouteSurfaceHeader>
+          <WorkspaceSurfaceComputerPicker path="/kanban" />
           <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
             {projectBoard ? (
               <Button

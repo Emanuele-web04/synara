@@ -1,3 +1,9 @@
+export * from "./account";
+export * from "./hostAuth";
+export * from "./hostSecrets";
+export * from "./hostSessions";
+export * from "./hostConnection";
+export * from "./accountUsage";
 export * from "./auth";
 export * from "./automation";
 export * from "./baseSchemas";
@@ -51,4 +57,12 @@ export * from "./computerAudit";
 export * from "./computerBrowser";
 export * from "./rpc";
 export * from "./claudeCache";
+
+export * from "./remotePairing";
+
+export * from "./remoteResources";
+
+export * from "./remoteAgentGateway";
 export * from "./todo";
+export * from "./inboxRecaps";
+export * from "./productAnalytics";

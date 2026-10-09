@@ -213,6 +213,30 @@ export async function writeCodexOverlayConfigAtomically(
   contents: string,
   hooks: CodexOverlayConfigPublicationHooks = {},
 ): Promise<void> {
+  // Replacing identical config still emits filesystem change notifications. Keep
+  // a private regular file stable, but repair links and loose permissions.
+  try {
+    const before = await fs.lstat(targetPath, { bigint: true });
+    if (
+      before.isFile() &&
+      before.nlink === 1n &&
+      (process.platform === "win32" || (before.mode & 0o7777n) === 0o600n) &&
+      (await fs.readFile(targetPath, "utf8")) === contents
+    ) {
+      const after = await fs.lstat(targetPath, { bigint: true });
+      if (
+        after.dev === before.dev &&
+        after.ino === before.ino &&
+        after.mode === before.mode &&
+        after.mtimeNs === before.mtimeNs &&
+        after.ctimeNs === before.ctimeNs
+      ) {
+        return;
+      }
+    }
+  } catch {
+    // A missing or unreadable existing file still follows atomic publication.
+  }
   const temporaryPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporaryPath, contents, {

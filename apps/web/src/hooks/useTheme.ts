@@ -4,7 +4,7 @@
 // Exports: useTheme for mode, resolved variant, theme-pack import/export, and active theme metadata.
 
 import { useEffect, useSyncExternalStore } from "react";
-import { isElectron } from "../env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import {
   DEFAULT_THEME_STATE,
@@ -24,6 +24,7 @@ import {
   parseStoredThemeState,
   resetThemeVariant as resetThemeVariantState,
   resolveThemePack,
+  resolveProfileThemeAccent,
   resolveThemeVariant,
   serializeThemeState,
   setThemeCodeThemeId,
@@ -183,7 +184,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   const activeTheme = resolveThemePack(state, variant);
   const translucency = state.translucency[variant];
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
-    electron: isElectron,
+    electron: isDesktopPresentation,
     isMac: isMacNavigatorPlatform(),
     systemUiFont: state.systemUiFont,
     translucency,
@@ -308,6 +309,11 @@ function setWindowTranslucency(variant: ThemeVariant, patch: Partial<WindowTrans
 
 function setCodeThemeId(variant: ThemeVariant, codeThemeId: string) {
   updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
+}
+
+/** Read at mutation time so every profile writer publishes the current selection. */
+export function readProfileThemeAccent() {
+  return resolveProfileThemeAccent(readStoredThemeState());
 }
 
 export function useTheme() {

@@ -1,8 +1,20 @@
+import { readWorkspaceFrame, type WorkspaceChatCreationCommand } from "../lib/hosts/workspaceFrame";
+import {
+  dispatchSelectedWorkspaceChatCreation,
+  dispatchSelectedWorkspaceTerminalCreation,
+  isWorkspaceChatCreationCommand,
+  registerWorkspaceChatCreation,
+} from "../lib/hosts/workspaceCommands";
+import {
+  WorkspacePanels,
+  WorkspaceFrameNavigation,
+  useWorkspaceSidebarControls,
+} from "../components/hosts/WorkspacePanels";
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
-import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChatShell } from "../components/ChatShell";
 
 import {
   goBackInAppHistory,
@@ -44,6 +56,7 @@ import {
   isShortcutDispatchSuspended,
   resolveShortcutCommand,
 } from "../keybindings";
+import { isModelPickerShortcutScopeActive } from "../components/chat/ComposerModelPicker.logic";
 import { useStore } from "../store";
 import { createProjectLastActivityAtSelector } from "../storeSelectors";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -61,7 +74,6 @@ import {
   Sidebar,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
   SidebarInstanceProvider,
-  SidebarProvider,
   SidebarRail,
   useSidebar,
 } from "~/components/ui/sidebar";
@@ -196,6 +208,7 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
+  const href = useLocation({ select: (location) => location.href });
   const isGroupsRoute = useLocation({
     select: (location) =>
       location.pathname.startsWith("/hubs") ||
@@ -340,6 +353,70 @@ function ChatRouteGlobalShortcuts() {
     }
   }, [clearLatestProjectId, latestProjectId, persistedLatestProjectStillExists, threadsHydrated]);
 
+  const createChat = useCallback(
+    async (command: WorkspaceChatCreationCommand, isAvailable?: () => boolean) => {
+      if (isAvailable && !isAvailable())
+        throw new Error("Reconnect this computer before creating a chat.");
+      if (command === "chat.newChat" || command === "chat.newLocal") {
+        const result = await handleNewChatForActiveSurface();
+        if (!result.ok) throw new Error(result.error);
+        return;
+      }
+      if (command === "chat.newLatestProject") {
+        if (latestUsableProjectId) await handleNewThread(latestUsableProjectId);
+        return;
+      }
+      const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+      if (!target) return;
+      if (command === "chat.newTerminal") {
+        await handleNewThread(target.projectId, {
+          ...(target.inheritContext
+            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+            : {}),
+          entryPoint: "terminal",
+        });
+        return;
+      }
+      if (
+        command === "chat.newClaude" ||
+        command === "chat.newCodex" ||
+        command === "chat.newCursor"
+      ) {
+        const provider =
+          command === "chat.newClaude"
+            ? "claudeAgent"
+            : command === "chat.newCodex"
+              ? "codex"
+              : "cursor";
+        const providerInstanceId = resolveSelectableProviderInstanceId(settings, provider);
+        const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
+          provider,
+          instanceId: providerInstanceId,
+          statuses: providerStatuses,
+          refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+        });
+        if (isAvailable && !isAvailable())
+          throw new Error("Reconnect this computer before creating a chat.");
+        if (!providerAvailability.usable) throw new Error(providerAvailability.unavailableReason);
+        await handleNewThread(target.projectId, { provider });
+        return;
+      }
+      await handleNewThread(target.projectId);
+    },
+    [
+      activeDraftThread,
+      activeThread,
+      currentProjectId,
+      handleNewChatForActiveSurface,
+      handleNewThread,
+      latestUsableProjectId,
+      providerStatuses,
+      refreshProviderStatuses,
+      settings,
+    ],
+  );
+  useEffect(() => registerWorkspaceChatCreation(createChat), [createChat]);
+
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       // The shortcut recorder owns the keyboard while it is open, including the fixed
@@ -350,6 +427,14 @@ function ChatRouteGlobalShortcuts() {
         terminalOpen,
         terminalWorkspaceOpen,
       };
+      const frame = readWorkspaceFrame();
+      if (
+        frame?.controller.sidebarKeydown(event, shortcutContext, isModelPickerShortcutScopeActive())
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       if (recentSwitcherState && event.key === "Escape") {
         event.preventDefault();
@@ -413,102 +498,43 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (command === "chat.newChat" || command === "chat.newLocal") {
-        event.preventDefault();
-        event.stopPropagation();
-        void handleNewChatForActiveSurface();
-        return;
-      }
-
-      if (command === "chat.newLatestProject") {
-        if (!latestUsableProjectId) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void handleNewThread(latestUsableProjectId);
-        return;
-      }
-
-      if (command === "chat.newTerminal") {
-        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
-        if (!target) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void handleNewThread(target.projectId, {
-          ...(target.inheritContext
-            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-            : {}),
-          entryPoint: "terminal",
-        });
-        return;
-      }
-
-      if (
-        command === "chat.newClaude" ||
-        command === "chat.newCodex" ||
-        command === "chat.newCursor"
-      ) {
-        const provider =
-          command === "chat.newClaude"
-            ? "claudeAgent"
-            : command === "chat.newCodex"
-              ? "codex"
-              : "cursor";
-        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
-        if (!target) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void (async () => {
-          const providerInstanceId = resolveSelectableProviderInstanceId(settings, provider);
-          const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
-            provider,
-            instanceId: providerInstanceId,
-            statuses: providerStatuses,
-            refreshStatuses: () => refreshProviderStatuses({ silent: true }),
-          });
-          if (!providerAvailability.usable) {
-            toastManager.add({
-              type: "error",
-              title: providerAvailability.unavailableReason,
-            });
-            return;
-          }
-          await handleNewThread(target.projectId, { provider });
-        })();
-        return;
-      }
-
-      if (command !== "chat.new") return;
-      // Fall back to the most recent project when none is focused and let the
-      // shared bootstrap apply that project's preferred environment.
-      const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
-      if (!target) return;
+      if (!isWorkspaceChatCreationCommand(command)) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(target.projectId);
+      void dispatchSelectedWorkspaceChatCreation(command, href)
+        .then((handled) => (handled ? undefined : createChat(command)))
+        .catch((error: unknown) =>
+          toastManager.add({
+            type: "error",
+            title: "Could not create chat",
+            description: error instanceof Error ? error.message : "Try again.",
+          }),
+        );
     };
 
+    const onWindowKeyUp = (event: KeyboardEvent) =>
+      readWorkspaceFrame()?.controller.sidebarKeyup(event, {
+        terminalFocus: isTerminalFocused(),
+        terminalOpen,
+        terminalWorkspaceOpen,
+      });
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });
+    window.addEventListener("keyup", onWindowKeyUp, { capture: true });
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
+      window.removeEventListener("keyup", onWindowKeyUp, { capture: true });
     };
   }, [
-    activeDraftThread,
-    activeThread,
     cancelRecentSwitcher,
+    createChat,
+    href,
     clearSelection,
     commitRecentSwitcherSelection,
-    currentProjectId,
-    handleNewChatForActiveSurface,
-    handleNewThread,
     keybindings,
-    latestUsableProjectId,
     openOrAdvanceRecentSwitcher,
     platform,
-    providerStatuses,
-    refreshProviderStatuses,
     recentSwitcherState,
     selectedThreadIdsSize,
-    settings,
     terminalOpen,
     terminalWorkspaceOpen,
     toggleSidebar,
@@ -521,6 +547,18 @@ function ChatRouteGlobalShortcuts() {
     }
 
     const unsubscribe = onMenuAction((action) => {
+      if (action === "new-terminal-tab") {
+        try {
+          dispatchSelectedWorkspaceTerminalCreation(href);
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not open terminal",
+            description: error instanceof Error ? error.message : "Try again.",
+          });
+        }
+        return;
+      }
       if (action === "toggle-sidebar") {
         toggleSidebar();
         return;
@@ -532,7 +570,7 @@ function ChatRouteGlobalShortcuts() {
     return () => {
       unsubscribe?.();
     };
-  }, [navigate, toggleSidebar]);
+  }, [href, navigate, toggleSidebar]);
 
   return (
     <>
@@ -559,6 +597,7 @@ function ChatRouteGlobalShortcuts() {
 }
 
 function ChatRouteLayout() {
+  const workspaceSidebarControls = useWorkspaceSidebarControls();
   const isEditorView = useLocation({
     select: (location) => (location.search as { view?: unknown }).view === "editor",
   });
@@ -619,8 +658,21 @@ function ChatRouteLayout() {
         </SidebarInstanceProvider>
       )}
       <Outlet />
+      <WorkspacePanels />
     </div>
   );
+
+  if (readWorkspaceFrame()) {
+    return (
+      <ChatShell open={false} controls={workspaceSidebarControls}>
+        <WorkspaceFrameNavigation />
+        <ChatRouteGlobalShortcuts />
+        <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
+          <Outlet />
+        </div>
+      </ChatShell>
+    );
+  }
 
   // The shell (Codex-style): the left column holds the window-chrome strip over the fixed
   // rail and the off-canvas panel; the route column keeps its own header on the shell band.
@@ -628,15 +680,7 @@ function ChatRouteLayout() {
   // the existing <Sidebar> offcanvas slide and resize run unchanged below the strip and are
   // clipped at the rail. The strip height reaches CSS as a variable (see index.css).
   return (
-    <SidebarProvider
-      defaultOpen
-      open={resolvedSidebarOpen}
-      onOpenChange={handleSidebarOpenChange}
-      className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
-      style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
-      data-sidebar-side="left"
-      data-sidebar-layout="rail"
-    >
+    <ChatShell defaultOpen open={resolvedSidebarOpen} onOpenChange={handleSidebarOpenChange}>
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
       <AppRailSlotProvider value={railSlot}>
@@ -659,7 +703,7 @@ function ChatRouteLayout() {
           {mainContentShell}
         </SidebarLeadingControlsDock>
       </AppRailSlotProvider>
-    </SidebarProvider>
+    </ChatShell>
   );
 }
 

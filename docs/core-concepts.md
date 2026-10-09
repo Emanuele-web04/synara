@@ -8,7 +8,7 @@ work** — its conversation, provider session, working environment, tool activit
 | Concept          | Meaning                                                             |
 | ---------------- | ------------------------------------------------------------------- |
 | Workspace        | The complete Synara application and the projects available in it    |
-| Project          | A local folder, preferably a Git repository                         |
+| Project          | A folder on its execution computer, preferably a Git repository     |
 | Task             | One durable unit of work inside a project                           |
 | Goal             | An explicit persistent objective attached to one task               |
 | Turn             | One user instruction followed by the provider's work and response   |
@@ -92,7 +92,21 @@ asking.
 
 ## Projects
 
-A project is the folder Synara works with.
+A project is the folder Synara works with. When remote connections are available, **Create project**
+lets you name it, choose a computer, and browse a source folder on that computer. A new chat's
+**Run on** picker chooses its computer; the project picker then shows that computer's folders.
+Existing chats and drafts keep their original computer when you open work elsewhere.
+
+Connected computers share the same Projects, Chats, Pinned, and Activity lists. A remote row names
+its computer; opening it changes the selected chat without switching the whole app. Empty remote
+folders stay in the project picker until they have a chat, are pinned, or are the active new project.
+Projects with the same name or path on different computers remain separate physical folders.
+
+The selected computer also owns chat creation from keyboard shortcuts and search, and terminal
+creation from the desktop menu. If that connection is unavailable, these actions ask you to
+reconnect instead of creating work locally. Window appearance, zoom, and app keybindings belong
+to the controlling app; project-script shortcuts stay with the project on its computer. Opening
+Keybindings from a remote chat takes you to the controlling app's settings.
 
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps

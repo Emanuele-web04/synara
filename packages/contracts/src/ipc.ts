@@ -1,3 +1,12 @@
+import type {
+  AccountSaveInboxRecapInput,
+  SavedInboxRecap,
+  ListSavedInboxRecapsInput,
+  ListSavedInboxRecapsResponse,
+  SavedInboxRecapIdInput,
+} from "./inboxRecaps";
+import type { RemoteResourceReference } from "./remoteResources";
+import type { DesktopProductAnalyticsBridge } from "./productAnalytics";
 import { Schema } from "effect";
 import type {
   LoadProjectImportHistoryInput,
@@ -8,6 +17,20 @@ import type {
   ListProjectImportsResult,
 } from "./projectImport";
 
+import type {
+  AccountAuthenticateOtpInput,
+  AccountBeginSsoInput,
+  AccountBeginSsoResult,
+  AccountCompleteSsoInput,
+  AccountMe,
+  AccountOpenVerificationUrlInput,
+  AccountSendOtpInput,
+  AccountSendOtpResult,
+  AccountStatus,
+  AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
+} from "./account";
+import type { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import type {
   AuthBearerBootstrapResult,
   AuthBootstrapInput,
@@ -789,6 +812,17 @@ export interface DesktopCustomTitleBarState {
   restartRequired: boolean;
 }
 
+/**
+ * "Keep this computer awake" for remote access. `enabled` is the persisted
+ * preference; `active` says whether the sleep blocker is held right now, which
+ * also needs remote access allowed and (where the OS reports it) AC power.
+ */
+export interface DesktopKeepAwakeState {
+  enabled: boolean;
+  active: boolean;
+  onBattery: boolean;
+}
+
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
@@ -947,6 +981,7 @@ export const DESKTOP_DIAGNOSTIC_ISSUE_PREFIX = "SYNARA_DIAGNOSTIC_ISSUE ";
 export type DesktopDiagnosticReportStatus = "queued" | "sent" | "unavailable";
 
 export interface DesktopBridge {
+  productAnalytics?: DesktopProductAnalyticsBridge;
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;
@@ -961,6 +996,7 @@ export interface DesktopBridge {
     revealApp: () => Promise<boolean>;
   };
   getWsUrl: () => string | null;
+  remoteResourceUrl?: (hostId: string, reference: RemoteResourceReference) => string | null;
   /**
    * Absolute filesystem path for a File from drag/drop or file inputs.
    * Electron only (`webUtils.getPathForFile`). Returns null when unavailable.
@@ -1005,6 +1041,16 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopCustomTitleBarState>;
     setPreference: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
     relaunch: () => Promise<void>;
+  };
+  /**
+   * Keep the computer awake while remote access is allowed and it runs on AC
+   * power. The renderer reports the owner's "Allow connections" switch; the
+   * main process persists both and owns the sleep blocker.
+   */
+  keepAwake?: {
+    getState: () => Promise<DesktopKeepAwakeState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopKeepAwakeState>;
+    setRemoteAccessAllowed: (allowed: boolean) => Promise<DesktopKeepAwakeState>;
   };
   /**
    * Live desktop frames from the native computer frame tap, desktop app only.
@@ -1399,6 +1445,72 @@ export interface NativeApi {
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
+  };
+  /**
+   * The Synara account session for this machine. The server owns the stored
+   * credentials and every WorkOS round trip; the app only ever sees the state.
+   */
+  account: {
+    /**
+     * The current session, refreshing the access token if it has expired. A
+     * refresh token that can no longer be redeemed reports `signed-out` rather
+     * than failing — an expired session is a state, not an error.
+     */
+    status: () => Promise<AccountStatus>;
+    /**
+     * Asks WorkOS to email a 6-digit sign-in code to `email`. Answers the
+     * same shape whether or not the address has an account — signing up and
+     * signing in are one path, decided when the code is redeemed.
+     */
+    sendOtp: (input: AccountSendOtpInput) => Promise<AccountSendOtpResult>;
+    /**
+     * Email OTP sign-in, entirely in-app: redeems the emailed 6-digit code.
+     * The code is a credential forwarded to WorkOS through the server and
+     * account service and stored nowhere along the way — do not log the
+     * input, and do not retain it in component state longer than the form
+     * lives.
+     */
+    authenticateOtp: (input: AccountAuthenticateOtpInput) => Promise<AccountStatus>;
+    /**
+     * Starts the desktop SSO path for one provider: authorization code +
+     * PKCE with a loopback redirect, so "Continue with Google/GitHub"
+     * genuinely deep-links to that provider. The server owns the loopback
+     * listener, the PKCE verifier, and the state; the app only receives the
+     * attempt id and the URL to open.
+     */
+    beginSso: (input: AccountBeginSsoInput) => Promise<AccountBeginSsoResult>;
+    /**
+     * Waits for the browser callback, exchanges the code server-side, and
+     * persists the session. Issued without an RPC timeout; a dropped socket
+     * loses nothing.
+     */
+    completeSso: (
+      input: AccountCompleteSsoInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<AccountStatus>;
+    /** Abandons a pending SSO attempt, closing its loopback listener. */
+    cancelSso: (input: AccountCompleteSsoInput) => Promise<void>;
+    /**
+     * The account-wide usage summary — the "Account" side of the usage
+     * tab's device/account toggle. Server-brokered like every account call.
+     */
+    usageSummary: (input: AccountUsageSummaryInput) => Promise<UsageSummary>;
+    saveInboxRecap: (input: AccountSaveInboxRecapInput) => Promise<SavedInboxRecap>;
+    listInboxRecaps: (input: ListSavedInboxRecapsInput) => Promise<ListSavedInboxRecapsResponse>;
+    deleteInboxRecap: (input: SavedInboxRecapIdInput) => Promise<void>;
+    /** Writes the profile, and renames the workspace when `workspaceName` differs. */
+    updateProfile: (input: AccountUpdateProfileInput) => Promise<AccountMe>;
+    /**
+     * Uploads a compressed avatar image (base64 over the WS JSON protocol)
+     * and switches the avatar source to "uploaded". Answers the refreshed
+     * `/me`, exactly like updateProfile.
+     */
+    uploadAvatar: (input: AccountUploadAvatarInput) => Promise<AccountMe>;
+    /** Removes the uploaded avatar; the source reverts to "sso" server-side. */
+    deleteAvatar: () => Promise<AccountMe>;
+    signOut: () => Promise<void>;
+    /** Opens an SSO authorize page this server issued in the system browser. */
+    openVerificationUrl: (input: AccountOpenVerificationUrlInput) => Promise<void>;
   };
   projectAgent: {
     getOverview: (input: ProjectAgentGetOverviewInput) => Promise<ProjectAgentOverview>;

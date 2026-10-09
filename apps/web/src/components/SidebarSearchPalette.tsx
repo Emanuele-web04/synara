@@ -55,6 +55,7 @@ import {
 
 import {
   type SidebarSearchAction,
+  type SidebarSearchHost,
   type SidebarSearchProject,
   type SidebarSearchTheme,
   type SidebarSearchThread,
@@ -124,8 +125,8 @@ interface SidebarSearchPaletteProps {
   onOpenSettings: (section?: SettingsSectionId, options?: { target?: string }) => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
-  onOpenProject: (projectId: string) => void;
-  onOpenThread: (threadId: string) => void;
+  onOpenProject: (projectId: string, host?: SidebarSearchHost) => void;
+  onOpenThread: (threadId: string, host?: SidebarSearchHost) => void;
   importTargets: readonly ThreadImportTarget[];
   onImportThread: (target: ThreadImportTarget, externalId: string) => Promise<void>;
   onImportProjects: (providers: readonly ProjectImportProvider[]) => void;
@@ -314,7 +315,7 @@ const THEME_MODE_ICONS: Record<"system" | "light" | "dark", IconComponent> = {
 };
 
 function threadMatchLabel(input: {
-  matchKind: "message" | "project" | "title";
+  matchKind: "message" | "project" | "title" | "host";
   messageMatchCount: number;
 }): string | null {
   if (input.matchKind === "message") {
@@ -322,6 +323,9 @@ function threadMatchLabel(input: {
   }
   if (input.matchKind === "project") {
     return "Project match";
+  }
+  if (input.matchKind === "host") {
+    return "Computer match";
   }
   return null;
 }
@@ -1020,34 +1024,39 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       const normalizedQuery = trimmedQuery.replaceAll(/\s+/g, " ").toLowerCase();
                       const matchContext =
                         snippet ??
-                        (matchKind === "project"
-                          ? [
-                              ...new Set([
-                                thread.projectName,
-                                thread.projectRemoteName,
-                                thread.spaceName,
-                              ]),
-                            ]
-                              .filter((name) =>
-                                name
-                                  .trim()
-                                  .replaceAll(/\s+/g, " ")
-                                  .toLowerCase()
-                                  .includes(normalizedQuery),
-                              )
-                              .join(" · ")
-                          : null);
+                        (matchKind === "host"
+                          ? thread.host?.name
+                          : matchKind === "project"
+                            ? [
+                                ...new Set([
+                                  thread.projectName,
+                                  thread.projectRemoteName,
+                                  thread.spaceName,
+                                ]),
+                              ]
+                                .filter((name) =>
+                                  name
+                                    .trim()
+                                    .replaceAll(/\s+/g, " ")
+                                    .toLowerCase()
+                                    .includes(normalizedQuery),
+                                )
+                                .join(" · ")
+                            : null);
                       return (
                         <CommandItem
                           key={id}
                           value={id}
+                          disabled={thread.host?.unavailable}
                           className={cn(PALETTE_ITEM_CLASS, matchContext ? "py-1" : undefined)}
                           onMouseDown={(event) => {
                             event.preventDefault();
                           }}
                           onClick={() => {
+                            if (thread.host?.unavailable) return;
                             props.onOpenChange(false);
-                            props.onOpenThread(thread.id);
+                            if (thread.host) props.onOpenThread(thread.id, thread.host);
+                            else props.onOpenThread(thread.id);
                           }}
                         >
                           <span className="flex size-3.5 shrink-0 items-center justify-center">
@@ -1067,7 +1076,15 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                 />
                               </div>
                               {/* Keep the idle row compact; metadata search context appears below. */}
-                              <span className={PALETTE_META_CLASS}>{thread.projectName}</span>
+                              <span className={cn(PALETTE_META_CLASS, "flex min-w-0 gap-2")}>
+                                <span className="min-w-0 truncate">{thread.projectName}</span>
+                                {thread.host ? (
+                                  <span className="min-w-0 truncate" title={thread.host.name}>
+                                    <HighlightedText text={thread.host.name} query={query} />
+                                    {thread.host.unavailable ? " · Unavailable" : null}
+                                  </span>
+                                ) : null}
+                              </span>
                             </div>
                             {matchContext ? (
                               <div className="flex items-start gap-3">
@@ -1136,13 +1153,16 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       <CommandItem
                         key={id}
                         value={id}
+                        disabled={project.host?.unavailable}
                         className={PALETTE_ITEM_CLASS}
                         onMouseDown={(event) => {
                           event.preventDefault();
                         }}
                         onClick={() => {
+                          if (project.host?.unavailable) return;
                           props.onOpenChange(false);
-                          props.onOpenProject(project.id);
+                          if (project.host) props.onOpenProject(project.id, project.host);
+                          else props.onOpenProject(project.id);
                         }}
                       >
                         {project.appearance ? (
@@ -1162,10 +1182,18 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         </span>
                         {/* Opening a project from here can switch Space, so the destination
                             is worth naming; the path is what identifies the project. */}
-                        <span className={PALETTE_META_CLASS}>
-                          {project.spaceName
-                            ? `${project.spaceName} · ${project.cwd}`
-                            : project.cwd}
+                        <span className={cn(PALETTE_META_CLASS, "flex min-w-0 gap-2")}>
+                          {project.host ? (
+                            <span className="min-w-0 truncate" title={project.host.name}>
+                              <HighlightedText text={project.host.name} query={query} />
+                              {project.host.unavailable ? " · Unavailable" : null}
+                            </span>
+                          ) : null}
+                          <span className="min-w-0 truncate">
+                            {project.spaceName
+                              ? `${project.spaceName} · ${project.cwd}`
+                              : project.cwd}
+                          </span>
                         </span>
                       </CommandItem>
                     ))}

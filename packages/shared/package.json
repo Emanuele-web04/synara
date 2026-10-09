@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./inboxDay": {
+      "types": "./src/inboxDay.ts",
+      "import": "./src/inboxDay.ts"
+    },
     "./diagnosticIssue": {
       "types": "./src/diagnosticIssue.ts",
       "import": "./src/diagnosticIssue.ts"
@@ -32,6 +36,14 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./socialLinks": {
+      "types": "./src/socialLinks.ts",
+      "import": "./src/socialLinks.ts"
+    },
+    "./modelName": {
+      "types": "./src/modelName.ts",
+      "import": "./src/modelName.ts"
+    },
     "./runtimeMode": {
       "types": "./src/runtimeMode.ts",
       "import": "./src/runtimeMode.ts"
@@ -43,6 +55,10 @@
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"
+    },
+    "./account": {
+      "types": "./src/account.ts",
+      "import": "./src/account.ts"
     },
     "./kanban": {
       "types": "./src/kanban.ts",
@@ -396,6 +412,18 @@
       "types": "./src/deviceHelperCache.ts",
       "import": "./src/deviceHelperCache.ts"
     },
+    "./deviceKey": {
+      "types": "./src/deviceKey.ts",
+      "import": "./src/deviceKey.ts"
+    },
+    "./transportRace": {
+      "types": "./src/transportRace.ts",
+      "import": "./src/transportRace.ts"
+    },
+    "./hostSecrets": {
+      "types": "./src/hostSecrets.ts",
+      "import": "./src/hostSecrets.ts"
+    },
     "./computerKeyNames": {
       "types": "./src/computerKeyNames.ts",
       "import": "./src/computerKeyNames.ts"
@@ -428,6 +456,18 @@
       "types": "./src/asyncUserInput.ts",
       "import": "./src/asyncUserInput.ts"
     },
+    "./remoteResources": {
+      "types": "./src/remoteResources.ts",
+      "import": "./src/remoteResources.ts"
+    },
+    "./remoteCapabilities": {
+      "types": "./src/remoteCapabilities.ts",
+      "import": "./src/remoteCapabilities.ts"
+    },
+    "./cloudflared": {
+      "types": "./src/cloudflared.ts",
+      "import": "./src/cloudflared.ts"
+    },
     "./groupThreadState": {
       "types": "./src/groupThreadState.ts",
       "import": "./src/groupThreadState.ts"
@@ -450,7 +490,8 @@
   },
   "dependencies": {
     "@synara/contracts": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "jose": "^6.1.0"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",

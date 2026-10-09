@@ -1,3 +1,5 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { REMOTE_NATIVE_UNAVAILABLE } from "@synara/shared/remoteCapabilities";
 // FILE: RightDock.tsx
 // Purpose: Tabbed multi-pane right sidebar shell (browser, diff, terminal, sidechat, git).
 // Layer: Chat right-dock UI
@@ -60,6 +62,12 @@ const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
   device: 38 * 16,
 };
 
+function remotePaneUnavailable(kind: RightDockPaneKind): boolean {
+  return (
+    Boolean(readExecutionContext()?.remote) && ["browser", "computer", "device"].includes(kind)
+  );
+}
+
 interface RightDockProps {
   state: RightDockThreadState;
   minWidth: number;
@@ -114,6 +122,8 @@ function RightDockLauncher(props: {
             variant="subtle"
             size="xl"
             className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-ui-lg font-normal"
+            disabled={remotePaneUnavailable(kind)}
+            title={remotePaneUnavailable(kind) ? REMOTE_NATIVE_UNAVAILABLE : undefined}
             aria-label={`Open ${label}`}
             onClick={() => props.onOpen(kind)}
           >
@@ -350,7 +360,12 @@ export function RightDock(props: RightDockProps) {
                   {props.addMenuKinds.map((kind) => {
                     const { Icon, label } = getRightDockPaneMeta(kind);
                     return (
-                      <MenuItem key={kind} onClick={() => props.onAddPane(kind)}>
+                      <MenuItem
+                        key={kind}
+                        disabled={remotePaneUnavailable(kind)}
+                        title={remotePaneUnavailable(kind) ? REMOTE_NATIVE_UNAVAILABLE : undefined}
+                        onClick={() => props.onAddPane(kind)}
+                      >
                         <Icon className="size-3.5 shrink-0" />
                         <span>{label}</span>
                       </MenuItem>
@@ -433,7 +448,11 @@ export function RightDock(props: RightDockProps) {
                       : undefined
                   }
                 >
-                  {props.renderPane(pane, { runtimeMode, isActive, isVisible })}
+                  {remotePaneUnavailable(pane.kind) ? (
+                    <p className="p-6 text-ui text-muted-foreground">{REMOTE_NATIVE_UNAVAILABLE}</p>
+                  ) : (
+                    props.renderPane(pane, { runtimeMode, isActive, isVisible })
+                  )}
                 </div>
               );
             })}

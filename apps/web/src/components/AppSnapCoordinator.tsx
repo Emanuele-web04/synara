@@ -1,3 +1,4 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 // FILE: AppSnapCoordinator.tsx
 // Purpose: Routes native macOS AppSnaps into the correct Synara composer draft.
 // Layer: Root web coordinator
@@ -184,6 +185,10 @@ async function hydratePersistedAppSnaps(
 }
 
 export function AppSnapCoordinator() {
+  return readExecutionContext()?.remote ? null : <LocalAppSnapCoordinator />;
+}
+
+function LocalAppSnapCoordinator() {
   const navigate = useNavigate();
   const { settings } = useAppSettings();
   const { handleNewChat } = useHandleNewChat();

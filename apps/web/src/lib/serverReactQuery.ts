@@ -12,6 +12,7 @@ import type {
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 import { EXPENSIVE_READ_RETRY_OPTIONS } from "./expensiveReadRetry";
+import { withWorkspaceKeybindings } from "./hosts/workspaceKeybindings";
 
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
 const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
@@ -49,7 +50,7 @@ export function serverConfigQueryOptions() {
     queryKey: serverQueryKeys.config(),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.server.getConfig();
+      return withWorkspaceKeybindings(await api.server.getConfig());
     },
     staleTime: Infinity,
   });

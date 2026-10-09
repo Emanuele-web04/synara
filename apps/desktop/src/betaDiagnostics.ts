@@ -49,7 +49,7 @@ import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
 import { Schema } from "effect";
 
 /** Override point for self-hosted / dev ingestion; production default ships in the binary. */
-export const BETA_DIAGNOSTICS_ENDPOINT = "https://synara-beta-diagnostics.kartik-9f9.workers.dev";
+export const BETA_DIAGNOSTICS_ENDPOINT = "https://synara-beta-diagnostics.synara-orgs.workers.dev";
 export const BETA_DIAGNOSTICS_ENDPOINT_ENV = "SYNARA_BETA_DIAGNOSTICS_URL";
 
 const FLUSH_INTERVAL_MS = 5 * 60 * 1000;

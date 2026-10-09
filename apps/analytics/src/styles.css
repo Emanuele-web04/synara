@@ -1,0 +1,1215 @@
+/* FILE: src/styles.css
+   Purpose: The whole dashboard design system. Tokens and type roles follow
+   Vercel's published Geist values — colors taken from
+   https://vercel.com/geist/vercel-brand.css (the published foundation) and
+   scale semantics from https://vercel.com/geist/colors; type roles per
+   https://vercel.com/geist/typography. No Vercel marks or assets are used. */
+
+@font-face {
+  font-family: "Geist";
+  src: url("./fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+
+  --background-100: oklch(1 0 0);
+  --background-200: oklch(0.984 0 0);
+
+  --gray-100: oklch(0.961 0 0);
+  --gray-200: oklch(0.94 0 0);
+  --gray-300: oklch(0.925 0 0);
+  --gray-400: oklch(0.937 0 0);
+  --gray-500: oklch(0.836 0 0);
+  --gray-600: oklch(0.732 0 0);
+  --gray-700: oklch(0.65 0 0);
+  --gray-800: oklch(0.59 0 0);
+  --gray-900: oklch(0.42 0 0);
+  --gray-1000: oklch(0.205 0 0);
+
+  --gray-alpha-100: oklch(0 0 0 / 0.05);
+  --gray-alpha-200: oklch(0 0 0 / 0.081);
+  --gray-alpha-300: oklch(0 0 0 / 0.1);
+  --gray-alpha-400: oklch(0 0 0 / 0.08);
+  --gray-alpha-500: oklch(0 0 0 / 0.21);
+  --gray-alpha-600: oklch(0 0 0 / 0.24);
+  --gray-alpha-700: oklch(0 0 0 / 0.44);
+
+  --blue-100: oklch(97.32% 0.0141 251.56);
+  --blue-700: oklch(57.61% 0.2508 258.23);
+  --blue-900: oklch(53.18% 0.2399 256.99);
+  --blue-1000: oklch(26.67% 0.1099 254.34);
+
+  --red-100: oklch(96.5% 0.0223 13.09);
+  --red-700: oklch(62.56% 0.2524 23.03);
+  --red-900: oklch(54.99% 0.232 25.29);
+  --red-1000: oklch(24.8% 0.1041 18.86);
+
+  --amber-900: oklch(52.79% 0.1496 54.65);
+  --amber-1000: oklch(30.83% 0.099 45.48);
+  --green-900: oklch(51.75% 0.1453 147.65);
+  --green-1000: oklch(29.15% 0.1197 147.38);
+
+  --text-primary: var(--gray-1000);
+  --text-secondary: var(--gray-900);
+  --focus: var(--blue-700);
+  --error: var(--red-900);
+  --warning: var(--amber-900);
+  --success: var(--green-900);
+  --hairline: var(--gray-alpha-400);
+  --border-strong: var(--gray-alpha-700);
+  --hover-bg: var(--gray-alpha-100);
+
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background-100: oklch(0 0 0);
+  --background-200: oklch(0.027 0 0);
+
+  --gray-100: oklch(0.218 0 0);
+  --gray-200: oklch(0.239 0 0);
+  --gray-300: oklch(0.281 0 0);
+  --gray-400: oklch(0.301 0 0);
+  --gray-500: oklch(0.39 0 0);
+  --gray-600: oklch(0.623 0 0);
+  --gray-700: oklch(0.65 0 0);
+  --gray-800: oklch(0.59 0 0);
+  --gray-900: oklch(0.706 0 0);
+  --gray-1000: oklch(0.946 0 0);
+
+  --gray-alpha-100: oklch(1 0 0 / 0.07);
+  --gray-alpha-200: oklch(1 0 0 / 0.09);
+  --gray-alpha-300: oklch(1 0 0 / 0.13);
+  --gray-alpha-400: oklch(1 0 0 / 0.14);
+  --gray-alpha-500: oklch(1 0 0 / 0.24);
+  --gray-alpha-600: oklch(1 0 0 / 0.51);
+  --gray-alpha-700: oklch(1 0 0 / 0.54);
+
+  --blue-100: oklch(22.17% 0.069 259.89);
+  --blue-700: oklch(57.61% 0.2321 258.23);
+  --blue-900: oklch(71.7% 0.1648 250.794);
+  --blue-1000: oklch(96.75% 0.0179 242.423);
+
+  --red-100: oklch(22.1% 0.0657 15.11);
+  --red-700: oklch(62.56% 0.2234 23.03);
+  --red-900: oklch(69.96% 0.2136 22.03);
+  --red-1000: oklch(95.6% 0.0293 6.61);
+
+  --amber-900: oklch(77.21% 0.1991 64.28);
+  --amber-1000: oklch(96.7% 0.0418 84.59);
+  --green-900: oklch(73.1% 0.2158 148.29);
+  --green-1000: oklch(96.76% 0.056 154.18);
+}
+
+/* ---- Type roles (https://vercel.com/geist/typography) ---- */
+
+.heading-32 {
+  font-size: 32px;
+  line-height: 40px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.heading-24 {
+  font-size: 24px;
+  line-height: 32px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.heading-20 {
+  font-size: 20px;
+  line-height: 26px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.label-16,
+.label-14,
+.label-13 {
+  font-weight: 400;
+}
+
+.label-16 {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.label-14 {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.label-13 {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.label-13-mono {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.copy-14 {
+  font-size: 14px;
+  line-height: 24px;
+}
+
+.strong {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.secondary {
+  color: var(--text-secondary);
+}
+
+.mono,
+.label-13-mono,
+.issue-key-line,
+.code-block {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Base ---- */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background-100);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 24px;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: fixed;
+  left: 16px;
+  top: 16px;
+  z-index: 10;
+  padding: 8px 12px;
+  background: var(--background-100);
+  color: var(--text-primary);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  visibility: hidden;
+  transform: translateY(-8px);
+  transition:
+    visibility 150ms ease,
+    transform 150ms ease;
+}
+
+.skip-link:focus {
+  visibility: visible;
+  transform: none;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Shell ---- */
+
+.shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 48px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 20px 0 0;
+  flex-wrap: wrap;
+}
+
+.masthead-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.main-nav {
+  display: flex;
+  gap: 24px;
+  margin-top: 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.main-nav a {
+  padding: 8px 0 10px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.main-nav a:hover {
+  color: var(--text-primary);
+}
+
+.main-nav a.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+  font-weight: 500;
+}
+
+.main {
+  flex: 1;
+  padding-top: 32px;
+}
+
+.footer {
+  padding: 32px 0 0;
+  color: var(--text-secondary);
+}
+
+/* ---- Controls ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.btn-primary {
+  background: var(--gray-1000);
+  color: var(--background-100);
+  border-color: var(--gray-1000);
+}
+
+.btn-primary:hover {
+  background: var(--gray-800);
+  border-color: var(--gray-800);
+}
+
+.btn-secondary {
+  background: var(--background-100);
+  color: var(--text-primary);
+  border-color: var(--hairline);
+}
+
+.btn-secondary:hover {
+  border-color: var(--gray-alpha-500);
+}
+
+.btn-tertiary {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0;
+  height: auto;
+  min-height: 32px;
+}
+
+.btn-tertiary:hover {
+  color: var(--text-primary);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.select,
+.input {
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--background-100);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.input {
+  padding-right: 10px;
+}
+
+.select {
+  appearance: none;
+  cursor: pointer;
+}
+
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 1.5px stroke chevron-down; the mask keeps it on the secondary text token. */
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translateY(-50%);
+  background: var(--text-secondary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5l3.5 3.5 3.5-3.5' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5l3.5 3.5 3.5-3.5' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  pointer-events: none;
+}
+
+.select:hover,
+.input:hover {
+  border-color: var(--gray-alpha-500);
+}
+
+/* Focus shows the 2px focus ring from the global rule; no extra border
+   change, which stacked two blues on inputs. */
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.filter-sentence {
+  margin-left: 8px;
+  color: var(--text-secondary);
+}
+
+/* ---- Stat strip ---- */
+
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  margin: 20px 0 40px;
+}
+
+.headline-delta {
+  margin-top: 6px;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+}
+
+.stat-value {
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.stat-detail {
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.worse {
+  color: var(--red-900);
+}
+
+/* ---- Stale data while refetching ---- */
+
+[aria-busy] {
+  transition: opacity 150ms ease;
+}
+
+.stale {
+  opacity: 0.6;
+}
+
+/* ---- Sections ---- */
+
+.section {
+  margin-bottom: 40px;
+}
+
+h1 + .section,
+h1 + .section-head {
+  margin-top: 24px;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.section-head .spacer {
+  flex: 1;
+}
+
+.section-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.section-link:hover {
+  color: var(--text-primary);
+}
+
+/* ---- Tables ---- */
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table-wrap.fading {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+table.data caption {
+  text-align: left;
+}
+
+table.data th {
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: left;
+  padding: 6px 16px 6px 0;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+
+table.data th:last-child {
+  padding-right: 0;
+}
+
+table.data td {
+  padding: 10px 16px 10px 0;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+table.data td:last-child {
+  padding-right: 0;
+}
+
+table.data tbody tr {
+  transition: background-color 150ms ease;
+}
+
+table.data tbody tr.clickable {
+  position: relative;
+}
+
+table.data tbody tr.clickable:hover {
+  background: var(--hover-bg);
+}
+
+table.data .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Fixed layout so the title column keeps a real share of the width and
+   truncation happens inside the cell, not across the table. */
+table.data-fixed {
+  table-layout: fixed;
+  min-width: 680px;
+}
+
+/* Column shares live in classes so the ≤560px rules can restyle them. */
+table.data-fixed col.c-issue {
+  width: 33%;
+}
+table.data-fixed col.c-type {
+  width: 8%;
+}
+table.data-fixed col.c-status {
+  width: 9%;
+}
+table.data-fixed col.c-users {
+  width: 7%;
+}
+table.data-fixed col.c-events {
+  width: 7%;
+}
+table.data-fixed col.c-trend {
+  width: 10%;
+}
+table.data-fixed col.c-versions {
+  width: 14%;
+}
+table.data-fixed col.c-last {
+  width: 12%;
+}
+
+/* Fixed layout must clip at the cell edge or nowrap text bleeds into the
+   next column. */
+table.data-fixed td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The stretched link makes the whole row a keyboard-reachable target. */
+.issue-title-link {
+  display: block;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.issue-title-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+
+.issue-key-line {
+  display: block;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.issue-title-cell .t {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Sparkline ---- */
+
+.sparkline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* ---- Activity list ---- */
+
+.activity-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity-item,
+button.activity-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  color: inherit;
+  text-align: left;
+}
+
+button.activity-item {
+  cursor: pointer;
+}
+
+button.activity-item:hover .activity-title {
+  color: var(--blue-900);
+}
+
+.activity-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-meta {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* ---- Provider share bar (inline in the Installs cell) ---- */
+
+.share-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.share-track {
+  display: block;
+  width: 96px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--gray-alpha-200);
+  overflow: hidden;
+}
+
+.share-fill {
+  display: block;
+  height: 100%;
+  background: var(--gray-1000);
+}
+
+.share-value {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- Code block ---- */
+
+.code-block-wrap {
+  position: relative;
+}
+
+.code-block {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--background-200);
+  margin: 0;
+}
+
+.code-block-wrap .btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+/* ---- Skeletons ---- */
+
+.skeleton-block {
+  background: var(--gray-alpha-100);
+  border-radius: 4px;
+}
+
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skeleton-h1 {
+  height: 40px;
+  width: 55%;
+}
+
+.skeleton-stats {
+  display: flex;
+  gap: 48px;
+  margin: 24px 0 40px;
+}
+
+.skeleton-stat {
+  width: 140px;
+  height: 76px;
+}
+
+.skeleton-chart {
+  height: 240px;
+}
+
+.skeleton-row {
+  height: 18px;
+}
+
+/* ---- Status / helpers ---- */
+
+.empty-line {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 20px;
+  padding: 4px 0 8px;
+}
+
+.error-line {
+  color: var(--red-900);
+  font-size: 14px;
+}
+
+.error-line .btn {
+  margin-left: 8px;
+}
+
+.status-word {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.health-watch {
+  color: var(--amber-900);
+}
+
+.health-unhealthy {
+  color: var(--red-900);
+}
+
+.meta-line {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.chart-caption {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 18px;
+  margin-top: 8px;
+}
+
+.chart-labels {
+  display: flex;
+  gap: 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.chart-labels .swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+
+.split-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.back-link {
+  display: inline-block;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.back-link:hover {
+  color: var(--text-primary);
+}
+
+/* ---- Login ---- */
+
+.login-wrap {
+  min-height: 80vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-form {
+  width: 320px;
+  display: grid;
+  gap: 12px;
+}
+
+.login-form .input {
+  width: 100%;
+}
+
+.login-error {
+  color: var(--red-900);
+  font-size: 13px;
+  min-height: 18px;
+}
+
+/* ---- Responsive ---- */
+
+@media (max-width: 1000px) {
+  .split-2 {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+}
+
+@media (min-width: 701px) {
+  .stat-strip--four {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .stat-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .shell {
+    padding: 0 16px 32px;
+  }
+
+  .masthead-meta {
+    gap: 12px;
+  }
+
+  /* Drop the secondary columns instead of clipping the header. */
+  .col-hide-sm {
+    display: none;
+  }
+
+  table.data-fixed {
+    min-width: 0;
+  }
+
+  /* Fixed pixel widths for what remains: the Issue column takes the rest. */
+  table.data-fixed col.c-issue {
+    width: auto;
+  }
+  table.data-fixed col.c-type {
+    width: 72px;
+  }
+  table.data-fixed col.c-status {
+    width: 80px;
+  }
+  table.data-fixed col.c-users {
+    width: 52px;
+  }
+  table.data-fixed col.c-events {
+    width: 52px;
+  }
+
+  /* Meta wraps under the title; the title keeps its full width. */
+  .activity-item,
+  button.activity-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .activity-title {
+    white-space: normal;
+  }
+
+  .activity-meta {
+    white-space: normal;
+  }
+}
+
+@media (max-width: 420px) {
+  .stat-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* Issues page status tabs — same underline pattern as the main nav. */
+.status-tabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.status-tab {
+  padding: 6px 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.status-tab:hover {
+  color: var(--text-primary);
+}
+
+.status-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+}
+
+/* Product analytics reuses the dashboard's type, chart and table primitives. */
+.product-title-row,
+.product-chart-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.product-range,
+.product-metric-label,
+.product-comparison,
+.product-footnote {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.product-hero {
+  margin: 28px 0 40px;
+  padding: 28px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--background-100);
+}
+.product-headlines {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 28px;
+  margin-bottom: 44px;
+}
+.product-headline {
+  min-width: 0;
+}
+.product-big-number {
+  font-size: clamp(32px, 4vw, 48px);
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+  margin: 12px 0 4px;
+}
+.product-provider {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.product-provider-logo {
+  width: 22px;
+  height: 22px;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+.product-provider-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.product-comparison {
+  margin-top: 10px;
+  min-height: 20px;
+}
+.product-chart-title {
+  margin-bottom: 12px;
+}
+.product-share {
+  display: grid;
+  gap: 12px;
+  margin: 24px 0;
+}
+.product-share-row {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr) 60px;
+  gap: 16px;
+  align-items: center;
+  font-size: 13px;
+}
+.product-share-row > :last-child {
+  text-align: right;
+}
+.product-share-track {
+  height: 5px;
+  background: var(--hover-bg);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.product-share-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+.product-footnote {
+  border-top: 1px solid var(--hairline);
+  padding-top: 16px;
+  line-height: 1.6;
+}
+.product-empty {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+.product-presets {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  gap: 2px;
+}
+.product-preset {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.product-preset[aria-pressed="true"] {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+.product-preset:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+@media (max-width: 700px) {
+  .product-hero {
+    padding: 18px 12px;
+    border-radius: 12px;
+  }
+  .product-headlines {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+  .product-ratio {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--hairline);
+    padding-top: 16px;
+  }
+  .product-ratio .product-big-number {
+    font-size: 28px;
+  }
+  .product-share-row {
+    grid-template-columns: 85px minmax(0, 1fr) 52px;
+    gap: 10px;
+  }
+}
+
+:root {
+  --provider-codex: #2563eb;
+  --provider-claude: #aa5336;
+  --provider-other: #7652a3;
+  --provider-unknown: #646b76;
+}
+[data-theme="dark"] {
+  --provider-codex: #679bff;
+  --provider-claude: #d98d73;
+  --provider-other: #b394db;
+  --provider-unknown: #8b929e;
+}
+
+.product-section-nav {
+  margin-top: 16px;
+  margin-bottom: 24px;
+  overflow-x: auto;
+}
+.product-section-nav a {
+  flex: 0 0 auto;
+}
+.product-section-nav a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}

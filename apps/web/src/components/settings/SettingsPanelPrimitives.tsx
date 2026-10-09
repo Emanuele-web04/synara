@@ -161,12 +161,15 @@ export function SettingsListRow({
   title,
   description,
   actions,
+  leading,
   align: alignProp,
   onContextMenu,
 }: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
+  /** Glyph before the text block (a device or platform icon). */
+  leading?: ReactNode;
   align?: "center" | "start";
   onContextMenu?: ComponentProps<"div">["onContextMenu"];
 }) {
@@ -183,11 +186,18 @@ export function SettingsListRow({
           align === "start" ? "sm:items-start" : "sm:items-center",
         )}
       >
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>{title}</div>
-          {description != null ? (
-            <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{description}</div>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          {leading != null ? (
+            <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+              {leading}
+            </span>
           ) : null}
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>{title}</div>
+            {description != null ? (
+              <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{description}</div>
+            ) : null}
+          </div>
         </div>
         {actions != null ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">

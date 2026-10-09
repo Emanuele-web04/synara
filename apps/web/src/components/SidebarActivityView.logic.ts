@@ -1,3 +1,5 @@
+import { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
+export { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
 // FILE: SidebarActivityView.logic.ts
 // Purpose: Pure grouping/sorting model for the sidebar Activity view (threads as tasks).
 // Exports: eligibility, stable ordering, settle helpers, and the view-model builder.
@@ -326,21 +328,6 @@ export function resolveActivityScope(
 }
 
 export const ACTIVITY_RECENT_LIMIT = 5;
-
-/**
- * Recent turns over at 4am, not midnight: a session that runs past midnight is
- * still the same working day, and resetting the section out from under a live
- * session is worse than carrying it a few hours longer.
- */
-export const ACTIVITY_DAY_START_HOUR = 4;
-
-/** Start of the working day `nowMs` belongs to, in local time. */
-export function resolveActivityDayStartMs(nowMs: number): number {
-  const dayStart = new Date(nowMs);
-  dayStart.setHours(ACTIVITY_DAY_START_HOUR, 0, 0, 0);
-  if (dayStart.getTime() > nowMs) dayStart.setDate(dayStart.getDate() - 1);
-  return dayStart.getTime();
-}
 
 /** The five most recent human sends or reminders in the current working day. */
 export function splitRecentActivityThreads(

@@ -8,20 +8,27 @@ import "./index.css";
 import { appHistory } from "./appNavigation";
 import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
-import { isElectron } from "./env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
+import { readWorkspaceFrame } from "./lib/hosts/workspaceFrame";
 import { isMacPlatform } from "./lib/utils";
 import { installGlassOverlayCutout } from "./lib/glassOverlayCutout";
+import { trackProductNavigation } from "./lib/productAnalytics";
 import { installRendererErrorDiagnostics } from "./lib/rendererErrorDiagnostics";
 
 const disposeRendererDiagnostics = installRendererErrorDiagnostics();
 if (import.meta.hot) import.meta.hot.dispose(() => disposeRendererDiagnostics?.());
 
 const router = getRouter(appHistory);
+const disposeProductNavigation = router.subscribe("onResolved", ({ toLocation, pathChanged }) => {
+  if (pathChanged) trackProductNavigation(toLocation.pathname);
+});
+if (import.meta.hot) import.meta.hot.dispose(disposeProductNavigation);
 const rootElement = document.getElementById("root") as HTMLElement;
 
 document.title = APP_DISPLAY_NAME;
+if (readWorkspaceFrame()) document.documentElement.dataset.workspaceFrame = "true";
 
-if (isElectron) {
+if (isDesktopPresentation) {
   document.documentElement.dataset.runtime = "electron";
   // macOS desktop windows are transparent vibrancy windows (see getWindowMaterialOptions
   // in apps/desktop). A `backdrop-filter` cannot hide page content over a see-through

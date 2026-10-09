@@ -62,6 +62,20 @@ describe("createOrRecoverProjectFromPath", () => {
     useSpacesUiStore.getState().setActiveSpaceId(null);
   });
 
+  it("uses the explicit project name without changing the selected folder", async () => {
+    const dispatchCommand = vi.fn().mockResolvedValue({ sequence: 2 });
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      name: "  My workspace  ",
+      maxAttempts: 1,
+      loadSnapshot: async () => null,
+    });
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "My workspace", workspaceRoot: WORKSPACE_ROOT }),
+    );
+  });
+
   it("dispatches project.create and returns the synced project", async () => {
     let createdProjectId: ProjectId | null = null;
     const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {

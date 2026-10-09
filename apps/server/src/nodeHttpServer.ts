@@ -6,9 +6,36 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Scope } from "effect";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import { ServeError } from "effect/unstable/http/HttpServerError";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
+
+// A one-shot capability tied to the actual request, not a socket-shaped shim.
+// Only a route that has completed its admission checks may consume it.
+const nativeUpgrades = new WeakMap<object, (accept: (socket: WebSocket) => void) => void>();
+
+export function upgradeNativeWebSocket(source: object) {
+  return Effect.acquireRelease(
+    Effect.callback<WebSocket, Error>((resume) => {
+      const upgrade = nativeUpgrades.get(source);
+      nativeUpgrades.delete(source);
+      if (!upgrade) {
+        resume(
+          Effect.fail(
+            new Error("Native Node WebSocket upgrade is unavailable or already consumed"),
+          ),
+        );
+        return;
+      }
+      try {
+        upgrade((socket) => resume(Effect.succeed(socket)));
+      } catch (cause) {
+        resume(Effect.fail(new Error("Native WebSocket upgrade failed", { cause })));
+      }
+    }),
+    (socket) => Effect.sync(() => socket.terminate()),
+  );
+}
 
 /**
  * Node's HTTP parser owns the socket error listener until an upgrade starts.
@@ -214,6 +241,11 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
         socket: Parameters<typeof featureUpgradeHandler>[1],
         head: Parameters<typeof featureUpgradeHandler>[2],
       ) => {
+        nativeUpgrades.set(nodeRequest, (accept) => {
+          // Native TLS streams never negotiate per-message compression.
+          bootstrapWebSocketServer.handleUpgrade(nodeRequest, socket, head, accept);
+        });
+        socket.once("close", () => nativeUpgrades.delete(nodeRequest));
         const dispatch = upgradePathAllowsCompression(nodeRequest.url)
           ? featureUpgradeHandler
           : bootstrapUpgradeHandler;

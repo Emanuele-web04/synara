@@ -1,0 +1,5 @@
+dist/
+.wrangler/
+.dev.vars
+node_modules/
+export/

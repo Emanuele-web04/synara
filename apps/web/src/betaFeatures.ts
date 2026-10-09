@@ -4,6 +4,7 @@
 // Exports: isBetaFeatureOn, visibleProviderDescriptors, VISIBLE_PROVIDER_DESCRIPTORS
 
 import {
+  ACCOUNT_INBOX_BETA_FEATURE,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
@@ -36,6 +37,9 @@ export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
  * Inbox is available in Stable and Beta. Tasks within it retain their separate gate.
  */
 export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
+
+/** Account-saved Inbox history is Beta-only; Stable shows only the local recap. */
+export const ACCOUNT_INBOX_ON = isBetaFeatureOn(ACCOUNT_INBOX_BETA_FEATURE);
 
 /**
  * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.

@@ -110,7 +110,12 @@ export function createDesktopPlatformBuildConfig(
     diagnostics: preserveDependencyDiagnostics(process.env),
     linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
   });
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
+  const connectorResources = { from: "apps/desktop/resources/cloudflared", to: "cloudflared" };
+  const nativePackaging = {
+    asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    files,
+    extraResources: [connectorResources],
+  };
 
   if (input.platform === "mac") {
     const mac = {
@@ -133,11 +138,12 @@ export function createDesktopPlatformBuildConfig(
         MAC_APPSNAP_HELPER_BUNDLE_PATH,
         MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH,
         "Contents/Resources/cua-driver/cua-driver",
+        "Contents/Resources/cloudflared/cloudflared",
       ],
       // The universal build stages the same pre-lipo'd helper and addon in both app trees.
       // @electron/universal needs this pattern to preserve those existing fat binaries.
       x64ArchFiles:
-        "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
+        "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver,Resources/cloudflared/cloudflared}",
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
         NSAudioCaptureUsageDescription: AUDIO_CAPTURE_USAGE_DESCRIPTION,
@@ -216,7 +222,10 @@ export function createDesktopPlatformBuildConfig(
         "!apps/desktop/resources/cua-driver/**",
         "!apps/desktop/prod-resources/cua-driver/**",
       ],
-      extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
+      extraResources: [
+        connectorResources,
+        { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+      ],
       linux: {
         target: [input.target],
         executableName: "synara",

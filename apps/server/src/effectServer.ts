@@ -1,3 +1,4 @@
+import { remoteConnectionsUnavailableReason } from "./remoteFeaturePolicy";
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
 import http from "node:http";
 
@@ -56,6 +57,8 @@ import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
+import { hostRemoteWebSocketRouteLayer } from "./remoteSessions";
+import { hostConnectionRouteLayer } from "./hostConnections/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 
@@ -224,6 +227,9 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    ...(remoteConnectionsUnavailableReason(config.stateDir)
+      ? []
+      : [hostRemoteWebSocketRouteLayer, hostConnectionRouteLayer]),
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer

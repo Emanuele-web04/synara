@@ -190,6 +190,18 @@ export const ProviderCompactThreadInput = Schema.Struct({
 });
 export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
 
+/** Start a chat's stopped provider runtime ahead of its next turn, e.g. when a client opens it. */
+export const ProviderPrewarmThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderPrewarmThreadInput = typeof ProviderPrewarmThreadInput.Type;
+
+export const ProviderPrewarmThreadResult = Schema.Struct({
+  /** False when the runtime was already live or there was nothing to resume. */
+  started: Schema.Boolean,
+});
+export type ProviderPrewarmThreadResult = typeof ProviderPrewarmThreadResult.Type;
+
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,

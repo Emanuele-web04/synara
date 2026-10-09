@@ -1,3 +1,14 @@
+import Migration0136 from "./Migrations/136_RemoteAccessControls.ts";
+import Migration0135 from "./Migrations/135_RemoteConnectionPreferences.ts";
+import Migration0134 from "./Migrations/134_RemoteDeviceTrust.ts";
+import {
+  classifyAccountMigrationLineage,
+  migrationTrackerFingerprint,
+  validateAccountMigrationSchema,
+  type MigrationIdentity,
+} from "./AccountMigrationLineage.ts";
+import Migration0132 from "./Migrations/132_AccountUsageSync.ts";
+import Migration0133 from "./Migrations/133_AccountUsageSyncIdentity.ts";
 /**
  * MigrationsLive - Migration runner with inline loader
  *
@@ -294,6 +305,11 @@ export const migrationEntries = [
   [129, "ProjectionThreadsSnooze", Migration0129],
   [130, "PullRequestAutoFix", Migration0130],
   [131, "ProjectSourceFolders", Migration0131],
+  [132, "AccountUsageSync", Migration0132],
+  [133, "AccountUsageSyncIdentity", Migration0133],
+  [134, "RemoteDeviceTrust", Migration0134],
+  [135, "RemoteConnectionPreferences", Migration0135],
+  [136, "RemoteAccessControls", Migration0136],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -324,6 +340,30 @@ export const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id
 const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
+
+export const planAccountMigrationRepair = (rows: readonly MigrationIdentity[]) =>
+  classifyAccountMigrationLineage(rows, canonicalMigrationNamesById);
+
+export const inspectAccountMigrationRepair = (rows: readonly MigrationIdentity[]) =>
+  Effect.gen(function* () {
+    const fail = (cause: unknown) =>
+      new MigrationLineageError({
+        firstDivergedId: rows.find((r) => r.name.startsWith("AccountUsageSync"))?.migration_id ?? 0,
+        expectedName: "recognized account lineage and schema",
+        recordedName: cause instanceof Error ? cause.message : String(cause),
+      });
+    const plan = yield* Effect.try({ try: () => planAccountMigrationRepair(rows), catch: fail });
+    if (!plan) return null;
+    const sql = yield* SqlClient.SqlClient;
+    const columns = yield* sql<Record<string, unknown>>`PRAGMA table_info(account_usage_sync)`;
+    if (columns.length === 0) return yield* Effect.fail(fail("Missing account_usage_sync table"));
+    const values = yield* sql<Record<string, unknown>>`SELECT * FROM account_usage_sync`;
+    yield* Effect.try({
+      try: () => validateAccountMigrationSchema(columns, values, plan.requiresIdentity),
+      catch: fail,
+    });
+    return plan;
+  });
 
 const IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID = 32;
 
@@ -489,6 +529,31 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   let recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
   `;
+  // Classify and validate before even a legacy rename can mutate this database.
+  // Startup holds the lifecycle lock and has persisted the recovery marker first.
+  const accountRepair = yield* inspectAccountMigrationRepair(recorded);
+  if (accountRepair) {
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const current =
+          yield* sql<MigrationIdentity>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC`;
+        if (migrationTrackerFingerprint(current) !== accountRepair.fingerprint) {
+          return yield* Effect.fail(
+            new MigrationLineageError({
+              firstDivergedId: accountRepair.resumeAfter + 1,
+              expectedName: "unchanged tracker",
+              recordedName: "tracker changed during repair",
+            }),
+          );
+        }
+        for (const row of accountRepair.removeTrackerRows) {
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${row.migration_id} AND name = ${row.name}`;
+        }
+      }),
+    );
+    recorded =
+      yield* sql<MigrationIdentity>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC`;
+  }
   const recordedNamesBeforeCanonicalization = new Map(
     recorded.map((row) => [row.migration_id, row.name]),
   );

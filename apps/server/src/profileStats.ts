@@ -638,7 +638,11 @@ export function turnModelSelectionCte(sql: SqlClient.SqlClient, scope?: TokenSta
         json_extract(e.payload_json, '$.modelSelection.instanceId'),
         json_extract(e.payload_json, '$.modelSelection.provider')
       )) AS instanceId,
-      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model
+      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model,
+      MAX(COALESCE(
+        json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+        json_extract(e.payload_json, '$.modelSelection.options.effort')
+      )) AS reasoning
     FROM orchestration_events e
     JOIN projection_turns pt
       ON pt.thread_id = ${turnThreadMatch}
@@ -786,6 +790,14 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           END,
           'unknown'
         ) AS model,
+        COALESCE(
+          tm.reasoning,
+          CASE WHEN tm.model IS NULL AND json_valid(th.model_selection_json)
+          THEN COALESCE(
+            json_extract(th.model_selection_json, '$.options.reasoningEffort'),
+            json_extract(th.model_selection_json, '$.options.effort')
+          ) END
+        ) AS reasoning,
         CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
         CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
         pm.dispatch_origin AS dispatch_origin,
@@ -829,6 +841,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         provider,
         instanceId,
         model,
+        reasoning,
         tp AS tot,
         dispatch_origin,
         sequence,
@@ -844,6 +857,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         provider,
         instanceId,
         model,
+        reasoning,
         dispatch_origin,
         CASE
           WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
@@ -856,6 +870,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           provider,
           instanceId,
           model,
+          reasoning,
           dispatch_origin,
           tot,
           LAG(tot) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder}) AS previous_tot
@@ -869,6 +884,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         ev.provider AS provider,
         ev.instanceId AS instanceId,
         ev.model AS model,
+        ev.reasoning AS reasoning,
         ev.ut AS tot,
         ev.dispatch_origin AS dispatch_origin,
         ev.sequence AS sequence,
@@ -891,6 +907,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         provider,
         instanceId,
         model,
+        reasoning,
         dispatch_origin,
         CASE
           WHEN previous_tot IS NULL THEN tot
@@ -910,6 +927,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           provider,
           instanceId,
           model,
+          reasoning,
           dispatch_origin,
           tot,
           LAG(tot) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder}) AS previous_tot,
@@ -923,10 +941,10 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
       )
     ),
     token_delta_rows AS (
-      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens
+      SELECT thread_id, created_at, provider, instanceId, model, reasoning, dispatch_origin, d AS tokens
       FROM cumulative_delta
       UNION ALL
-      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens
+      SELECT thread_id, created_at, provider, instanceId, model, reasoning, dispatch_origin, d AS tokens
       FROM used_only_delta
       UNION ALL
       SELECT
@@ -935,6 +953,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         'claudeAgent',
         COALESCE(tm.instanceId, s.provider_instance_id, 'claudeAgent'),
         c.model,
+        tm.reasoning,
         c.dispatch_origin,
         c.tokens
       FROM claude_token_rows c

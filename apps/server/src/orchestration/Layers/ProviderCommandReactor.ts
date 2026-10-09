@@ -1686,6 +1686,7 @@ const make = Effect.gen(function* () {
   const settleInterruptedProviderTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly createdAt: string;
+    readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
   }) {
     const thread = yield* resolveThread(input.threadId);
     const session = thread?.session;
@@ -1697,6 +1698,7 @@ const make = Effect.gen(function* () {
     }
     yield* setThreadSession({
       threadId: input.threadId,
+      expectedSession: input.expectedSession ?? session,
       session: {
         ...session,
         threadId: input.threadId,
@@ -5907,6 +5909,23 @@ const make = Effect.gen(function* () {
       }),
     });
     if (result._tag === "ok") {
+      if (providerThreadId === undefined) {
+        // A parent interrupt retires the runtime generation, so its terminal
+        // event may already be fenced out. Settle only after confirmed teardown,
+        // without overwriting a replacement turn. Some callers already hold
+        // the start lease, so use the session compare-and-set instead of relocking.
+        const current = yield* resolveThread(input.threadId);
+        const currentTurnId = current?.latestTurn?.turnId;
+        if (
+          current?.session &&
+          (currentTurnId === thread.latestTurn?.turnId || currentTurnId === turnId) &&
+          (current.session.activeTurnId !== null ||
+            current.session.updatedAt === thread.session?.updatedAt) &&
+          !(yield* hasLiveProviderTurn(input.threadId))
+        ) {
+          yield* settleInterruptedProviderTurn({ ...input, expectedSession: current.session });
+        }
+      }
       return;
     }
 
