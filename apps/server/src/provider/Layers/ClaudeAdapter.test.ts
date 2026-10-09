@@ -14213,6 +14213,18 @@ describe("Claude subagent tracking", () => {
         (event) => event.type === "turn.completed" && onChild(event, BG),
       );
       assert.equal(payloadRecord(childCompleted!).state, "failed");
+      // A background spawn never forwards its prompt; the launching call supplies the brief.
+      assert.deepEqual(
+        events
+          .filter(
+            (event) =>
+              onChild(event, BG) &&
+              event.type === "item.completed" &&
+              payloadRecord(event).itemType === "user_message",
+          )
+          .map((event) => payloadRecord(event).detail),
+        ["Do the slow thing."],
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
