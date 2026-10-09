@@ -6,6 +6,7 @@
 //             items and their handlers and portals the rail into the slot the route shell
 //             places left of the panel, so no handler moves out of ThreadSidebar.
 
+import type { ProjectId } from "@synara/contracts";
 import {
   type ComponentType,
   createContext,
@@ -61,16 +62,16 @@ export function railCentralGlyphs(name: string): AppRailGlyphs {
 
 /** Rail glyphs for a project shortcut: the same glyph its sidebar row shows. */
 export function railProjectGlyphs(
-  cwd: string,
+  projectId: ProjectId,
   appearance: ProjectAppearance | null,
 ): AppRailGlyphs {
-  const cacheKey = `project:${cwd}:${projectAppearanceKey(appearance)}`;
+  const cacheKey = `project:${projectId}:${projectAppearanceKey(appearance)}`;
   const cached = glyphCache.get(cacheKey);
   if (cached) return cached;
   function ProjectRailGlyph({ className }: { className?: string }) {
     return (
       <ProjectSidebarIcon
-        cwd={cwd}
+        projectId={projectId}
         expanded={false}
         appearance={appearance}
         {...(className ? { glyphClassName: className } : {})}
