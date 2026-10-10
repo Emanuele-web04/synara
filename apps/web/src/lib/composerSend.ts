@@ -19,6 +19,7 @@ import {
   ATTACHMENT_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
+import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 
 import {
   cloneComposerImageAttachment,
@@ -31,8 +32,9 @@ import { readComposerImageBlob } from "./composerImageBlobStore";
 import {
   ComposerImagePreparationError,
   prepareComposerImageFile,
+  prepareModelScreenImage,
 } from "./composerImagePreparation";
-import { normalizeComposerImageSource } from "./composerImageSource";
+import { appSnapUploadName, normalizeComposerImageSource } from "./composerImageSource";
 import { randomUUID } from "./utils";
 import { resolveWsHttpUrl } from "./wsHttpUrl";
 
@@ -202,6 +204,14 @@ export function formatOutgoingComposerPrompt(params: {
 }): string {
   const caps = getModelCapabilities(params.provider, params.model);
   if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
+    const computerInvocation = parseComputerInvocation(params.text);
+    if (computerInvocation) {
+      const prompt = applyClaudePromptEffortPrefix(
+        computerInvocation.prompt,
+        params.effort as ClaudeCodeEffort | null,
+      );
+      return `/computer-use ${prompt}`;
+    }
     return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeCodeEffort | null);
   }
   return params.text;
@@ -223,8 +233,13 @@ export function resolvePromptEffortFromModelSelection(
     case "droid":
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
+    case "omp":
       return modelSelection.options?.thinkingLevel ?? null;
-    case "kilo":
+    case "devin":
+      return (
+        modelSelection.options?.reasoningEffort ??
+        (modelSelection.options?.fastMode === true ? "fast" : null)
+      );
     case "opencode":
       return null;
   }
@@ -298,18 +313,23 @@ export async function stageUploadComposerAttachments(input: {
   const managedAttachmentIds: string[] = [];
   try {
     for (const attachment of [...input.images, ...(input.files ?? [])]) {
+      const appSnapSource =
+        attachment.type === "image" ? normalizeComposerImageSource(attachment.source) : null;
+      const uploadFile = appSnapSource
+        ? await prepareModelScreenImage(attachment.file)
+        : attachment.file;
       const params = new URLSearchParams({
         threadId: input.threadId,
         type: attachment.type,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
+        name: appSnapSource ? appSnapUploadName(appSnapSource, uploadFile.name) : attachment.name,
+        mimeType: appSnapSource ? uploadFile.type : attachment.mimeType,
       });
       const response = await fetch(
         resolveWsHttpUrl(`${ATTACHMENT_UPLOAD_ROUTE_PATH}?${params.toString()}`),
         {
           method: "POST",
           credentials: "include",
-          body: attachment.file,
+          body: uploadFile,
         },
       );
       const payload = (await response.json().catch(() => null)) as
@@ -355,17 +375,6 @@ export async function stageUploadComposerAttachments(input: {
   };
 
   return { attachments, commit, cleanup, runWithDispatch };
-}
-
-// Compatibility wrapper for callers that have not yet adopted the explicit
-// commit/cleanup lifecycle. Sequential upload failure compensation still applies.
-export async function buildUploadComposerAttachments(input: {
-  threadId: string;
-  images: ReadonlyArray<ComposerImageAttachment>;
-  files?: ReadonlyArray<ComposerFileAttachment>;
-  assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
-}): Promise<UploadChatAttachment[]> {
-  return (await stageUploadComposerAttachments(input)).attachments;
 }
 
 /**

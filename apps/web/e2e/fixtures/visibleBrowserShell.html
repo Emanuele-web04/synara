@@ -106,6 +106,21 @@
         const tabId = latestState?.activeTabId;
         const tab = latestState?.tabs?.find((candidate) => candidate.id === tabId);
         if (!latestState?.open || !tabId || !tab) return;
+        if (tab.runtimeSurface === "native") {
+          if (webview) {
+            webview.style.visibility = "hidden";
+            webview.style.pointerEvents = "none";
+          }
+          // BrowserPanel keeps its renderer binding while a native popup is
+          // visible. Clearing it here would reload the opener on popup close.
+          if (!latestState.tabs.some((candidate) => candidate.openerTabId === mountedTabId)) {
+            mountedTabId = null;
+            attachedWebviewKey = null;
+          }
+          document.documentElement.dataset.nativeRuntimeTabId = tabId;
+          return;
+        }
+        delete document.documentElement.dataset.nativeRuntimeTabId;
         if (!webview) {
           webview = document.createElement("webview");
           webview.setAttribute("partition", "persist:synara-browser");
@@ -123,9 +138,9 @@
           });
           host.append(webview);
         }
-        if (mountedTabId === tabId) return;
         webview.style.visibility = "visible";
         webview.style.pointerEvents = "auto";
+        if (mountedTabId === tabId) return;
         // BrowserPanel deliberately reuses the visible guest across logical tab
         // switches. Removing an opener WebView while Electron is unwinding a
         // denied target=_blank activation can deadlock the browser process.
@@ -140,6 +155,7 @@
         latestState = state;
         document.documentElement.dataset.browserVersion = String(state.version);
         if (!state.open || !state.activeTabId) {
+          delete document.documentElement.dataset.nativeRuntimeTabId;
           if (webview) {
             webview.style.visibility = "hidden";
             webview.style.pointerEvents = "none";

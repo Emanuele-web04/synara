@@ -7,7 +7,7 @@ import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
@@ -21,14 +21,9 @@ import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createThreadShellsSelector } from "~/storeSelectors";
-import { formatWorktreePathForDisplay } from "~/worktreeCleanup";
+import { formatWorktreePathForDisplay, isThreadAssociatedWithWorktree } from "~/worktreeCleanup";
 import { toastManager } from "../ui/toast";
 import { SettingsEmptyState, SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
-
-type WorktreeAssociation = {
-  worktreePath?: string | null | undefined;
-  associatedWorktreePath?: string | null | undefined;
-};
 
 type ArchivedSortableThread = {
   id: string;
@@ -36,16 +31,6 @@ type ArchivedSortableThread = {
   updatedAt?: string | null | undefined;
   createdAt: string;
 };
-
-function isThreadAssociatedWithWorktree(
-  thread: WorktreeAssociation,
-  worktreePath: string,
-): boolean {
-  return [thread.worktreePath, thread.associatedWorktreePath].some((candidate) => {
-    const normalized = candidate?.trim();
-    return Boolean(normalized) && normalized === worktreePath;
-  });
-}
 
 function compareArchivedThreads(left: ArchivedSortableThread, right: ArchivedSortableThread) {
   const leftKey = left.archivedAt ?? left.updatedAt ?? left.createdAt;
@@ -209,7 +194,7 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
                     {worktree.path}
                   </div>
                   <div className="space-y-1">
-                    <div className="text-[11px] font-medium text-muted-foreground">
+                    <div className="text-ui-sm font-medium text-muted-foreground">
                       Conversations
                     </div>
                     {worktree.linkedThreads.length > 0 ? (
@@ -276,11 +261,17 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
   const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
   const projects = useStore((store) => store.projects);
   const archivedGroups = useMemo(() => {
-    // Subagent threads are archived and restored through their parent, so only
-    // top-level threads are listed here.
-    const archivedThreads = threadShells.filter(
-      (thread) => thread.archivedAt != null && (thread.parentThreadId ?? null) === null,
+    // Represent each archived subtree once. Normally that is a top-level thread;
+    // a child whose parent is still active/missing is also a root and must remain
+    // visible so legacy retention state can be recovered.
+    const archivedThreadIds = new Set(
+      threadShells.filter((thread) => thread.archivedAt != null).map((thread) => thread.id),
     );
+    const archivedThreads = threadShells.filter((thread) => {
+      if (thread.archivedAt == null) return false;
+      const parentThreadId = thread.parentThreadId ?? null;
+      return parentThreadId === null || !archivedThreadIds.has(parentThreadId);
+    });
     const knownProjectIds = new Set(projects.map((project) => project.id));
     const groups: Array<{
       project: (typeof projects)[number] | null;
@@ -319,6 +310,19 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
     }
   }, []);
 
+  // Subagent threads are hidden from this list and unreachable without their
+  // parent, so deleting the parent removes the whole subtree. Children go
+  // first so a mid-flight failure cannot strand them without a parent entry.
+  const collectSubtreeDeletionOrder = useCallback(
+    (threadId: ThreadId): ThreadId[] => [
+      ...collectSubagentDescendants(threadShells, threadId)
+        .map((thread) => thread.id)
+        .toReversed(),
+      threadId,
+    ],
+    [threadShells],
+  );
+
   const deleteArchivedThread = useCallback(
     async (threadId: ThreadId, threadTitle: string) => {
       const api = readNativeApi();
@@ -328,15 +332,9 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
       );
       if (!confirmed) return;
       try {
-        // Subagent threads are hidden from this list and unreachable without their
-        // parent, so deleting the parent removes the whole subtree. Children go
-        // first so a mid-flight failure cannot strand them without a parent entry.
-        const subagentThreadIds = collectSubagentDescendants(threadShells, threadId).map(
-          (thread) => thread.id,
-        );
         await deleteArchivedThreadsFromClient({
           api: api.orchestration,
-          threadIds: [...subagentThreadIds.toReversed(), threadId],
+          threadIds: collectSubtreeDeletionOrder(threadId),
           removeDeletedThreadFromClientState,
         });
         toastManager.add({
@@ -352,8 +350,47 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
         });
       }
     },
-    [removeDeletedThreadFromClientState, threadShells],
+    [collectSubtreeDeletionOrder, removeDeletedThreadFromClientState],
   );
+
+  const archivedThreadCount = archivedGroups.reduce(
+    (count, group) => count + group.threads.length,
+    0,
+  );
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const deleteAllArchivedThreads = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) return;
+    const rootThreadIds = archivedGroups.flatMap((group) =>
+      group.threads.map((thread) => thread.id),
+    );
+    if (rootThreadIds.length === 0) return;
+    const confirmed = await api.dialogs.confirm(
+      `Permanently delete all ${rootThreadIds.length} archived ${pluralize(rootThreadIds.length, "thread")}?\n\nThis will remove them and their conversation history forever.`,
+    );
+    if (!confirmed) return;
+    setIsDeletingAll(true);
+    try {
+      await deleteArchivedThreadsFromClient({
+        api: api.orchestration,
+        threadIds: rootThreadIds.flatMap(collectSubtreeDeletionOrder),
+        removeDeletedThreadFromClientState,
+      });
+      toastManager.add({
+        type: "success",
+        title: "Archived threads deleted",
+        description: `${rootThreadIds.length} archived ${pluralize(rootThreadIds.length, "thread was", "threads were")} permanently removed.`,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not delete all archived threads",
+        description: error instanceof Error ? error.message : "Unable to delete the threads.",
+      });
+    } finally {
+      setIsDeletingAll(false);
+    }
+  }, [archivedGroups, collectSubtreeDeletionOrder, removeDeletedThreadFromClientState]);
 
   const handleContextMenu = useCallback(
     async (threadId: ThreadId, threadTitle: string, position: { x: number; y: number }) => {
@@ -383,8 +420,8 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
         <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
           <ArchiveIcon className="size-5" />
         </div>
-        <div className="text-sm font-medium text-foreground">No archived threads</div>
-        <div className="mt-1 text-sm text-muted-foreground">
+        <div className="text-ui-lg font-medium text-foreground">No archived threads</div>
+        <div className="mt-1 text-ui leading-snug text-muted-foreground">
           Archived threads will appear here and can be restored to the sidebar.
         </div>
       </SettingsEmptyState>
@@ -393,6 +430,19 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-ui-sm text-muted-foreground">
+          {archivedThreadCount} archived {pluralize(archivedThreadCount, "thread")}
+        </span>
+        <Button
+          size="xs"
+          variant="destructive"
+          disabled={isDeletingAll}
+          onClick={() => void deleteAllArchivedThreads()}
+        >
+          Delete all
+        </Button>
+      </div>
       {archivedGroups.map(({ project, threads }) => (
         <SettingsSection
           key={project?.id ?? "unknown-project"}

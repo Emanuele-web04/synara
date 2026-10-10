@@ -217,9 +217,10 @@ export const AGENT_MENTION_ALIASES_BY_PROVIDER: Record<
   antigravity: {},
   grok: {},
   droid: {},
-  kilo: OPENCODE_AGENT_MENTION_ALIASES,
+  devin: {},
   opencode: OPENCODE_AGENT_MENTION_ALIASES,
   pi: {},
+  omp: {},
 } as const satisfies Record<ProviderKind, Record<string, AgentAliasDefinition>>;
 
 // Backward compatibility for legacy call sites that still expect a flat alias table.
@@ -235,9 +236,10 @@ const AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER: Record<ProviderKind, reado
   antigravity: [],
   grok: [],
   droid: [],
-  kilo: [],
+  devin: [],
   opencode: [],
   pi: [],
+  omp: [],
 };
 
 function mapAgentEntries(input: Record<string, AgentAliasDefinition>): ResolvedAgentAlias[] {

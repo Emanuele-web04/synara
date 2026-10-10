@@ -3,10 +3,14 @@ import type { WorkLogEntry } from "../../session-logic";
 import {
   deriveAgentActivityTimelineState,
   formatAgentActivityEntryPreview,
+  formatAgentActivityEntryTitle,
   isAgentActivityWorkEntry,
   isCodexActivityStatusWorkEntry,
+  isPlainRuntimeNoticeWorkEntry,
   isReasoningUpdateWorkEntry,
+  isUnmappedProviderEventWorkEntry,
 } from "./agentActivity.logic";
+import { deriveTimelineEntries } from "../../workLog";
 
 function workEntry(overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">): WorkLogEntry {
   return {
@@ -49,18 +53,6 @@ describe("deriveAgentActivityTimelineState", () => {
       preview: "2 updates - Verify diffToggleControl uses valid props",
     });
     expect(state.detailById.get("agent-reasoning:reasoning-1")?.entries).toHaveLength(2);
-  });
-
-  it("cleans reasoning prefixes for single update previews", () => {
-    const entry = workEntry({
-      id: "reasoning-1",
-      label: "Reasoning update",
-      detail: "Reasoning update Running Complete analysis of the floating panel issue",
-    });
-
-    expect(formatAgentActivityEntryPreview(entry)).toBe(
-      "Complete analysis of the floating panel issue",
-    );
   });
 
   it("keeps canonical reasoning tool calls as separate timeline rows", () => {
@@ -196,5 +188,92 @@ describe("deriveAgentActivityTimelineState", () => {
     expect(state.timelineWorkEntries[0]).toMatchObject({
       detail: "Full changelog report\nwith many file references and implementation notes.",
     });
+  });
+
+  it("anchors a reasoning group spanning an interleaved tool row to its first update", () => {
+    const firstReasoningAt = "2026-06-05T00:00:01.000Z";
+    const interleavedToolAt = "2026-06-05T00:00:02.000Z";
+    const secondReasoningAt = "2026-06-05T00:00:03.000Z";
+    const trailingToolAt = "2026-06-05T00:00:04.000Z";
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "reasoning-1",
+        label: "Reasoning update",
+        tone: "info",
+        createdAt: firstReasoningAt,
+      }),
+      workEntry({
+        id: "reasoning-2",
+        label: "Reasoning update",
+        tone: "info",
+        createdAt: secondReasoningAt,
+      }),
+      workEntry({ id: "tool-1", label: "bash", createdAt: interleavedToolAt }),
+      workEntry({ id: "tool-2", label: "bash", createdAt: trailingToolAt }),
+    ]);
+
+    expect(state.timelineWorkEntries[0]!.createdAt).toBe(firstReasoningAt);
+    const timeline = deriveTimelineEntries([], [], state.timelineWorkEntries);
+    expect(timeline.map((entry) => entry.id)).toEqual([
+      "agent-reasoning:reasoning-1",
+      "tool-1",
+      "tool-2",
+    ]);
+  });
+});
+
+describe("unmapped provider events", () => {
+  it("labels an unmapped event with its native type and safe detail", () => {
+    const entry = workEntry({
+      id: "unmapped-1",
+      label: "item/agentMessage/completed",
+      toolTitle: "item/agentMessage/completed",
+      activityKind: "provider.event.unmapped",
+      nativeEventType: "item/agentMessage/completed",
+      detail: "Finished the refactor",
+      tone: "info",
+    });
+
+    expect(isUnmappedProviderEventWorkEntry(entry)).toBe(true);
+    // Raw native type/label is the title instead of the generic "Activity".
+    expect(formatAgentActivityEntryTitle(entry)).toBe("Item/agentMessage/completed");
+    expect(formatAgentActivityEntryPreview(entry)).toBe("Finished the refactor");
+    // The unmapped fallback never hijacks explicit, working mappings.
+    expect(isCodexActivityStatusWorkEntry(entry)).toBe(false);
+    expect(isAgentActivityWorkEntry(entry)).toBe(false);
+  });
+
+  it("still derives a native-type title when the normalized heading is empty", () => {
+    const entry = workEntry({
+      id: "unmapped-2",
+      label: "done",
+      activityKind: "provider.event.unmapped",
+      nativeEventType: "done",
+      tone: "info",
+    });
+    // normalizeCompactToolLabel strips the trailing "done", which previously
+    // fell through to the generic "Activity" label.
+    expect(formatAgentActivityEntryTitle(entry)).toBe("Done");
+  });
+});
+
+describe("isPlainRuntimeNoticeWorkEntry", () => {
+  it("matches generic runtime warnings but not notices with their own icon", () => {
+    const warning = workEntry({
+      id: "warning-1",
+      label: "Runtime warning",
+      tone: "info",
+      activityKind: "runtime.warning",
+      detail: "Unhandled Claude system message subtype 'api_retry'.",
+    });
+
+    expect(isPlainRuntimeNoticeWorkEntry(warning)).toBe(true);
+    expect(
+      isPlainRuntimeNoticeWorkEntry({
+        ...warning,
+        nativeEventType: "background_tasks_changed",
+      }),
+    ).toBe(false);
+    expect(isPlainRuntimeNoticeWorkEntry(workEntry({ id: "tool-1" }))).toBe(false);
   });
 });

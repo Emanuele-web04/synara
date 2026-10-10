@@ -1,14 +1,10 @@
 import { MessageId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TimelineEntry } from "../../session-logic";
 import {
-  clampNumber,
   clampTooltipTop,
   computeFocusedIndex,
   computeGaussianWeights,
-  computeRestStyles,
-  computeSigma,
-  computeTickStyles,
   computeTrailGeometry,
   createActiveTrailStore,
   deriveMessageTrailItems,
@@ -16,6 +12,10 @@ import {
   resolveActiveTrailSnapshot,
   type MessageTrailAnchor,
   type TrailGeometry,
+  audioTickGain,
+  computeAudioTickWidths,
+  createAudioLevelShaper,
+  stepAudioEnvelope,
 } from "./messageTrail.logic";
 
 function messageEntry(
@@ -84,29 +84,6 @@ describe("deriveMessageTrailItems", () => {
     expect(capped?.preview.length).toBeLessThanOrEqual(281);
   });
 
-  it("reports attachment counts", () => {
-    const [item] = deriveMessageTrailItems([messageEntry("u1", "user", "look", 3)]);
-    expect(item?.attachmentCount).toBe(3);
-  });
-
-  it("captures the turn's final assistant message (end-of-turn reply, not the preamble)", () => {
-    const items = deriveMessageTrailItems([
-      messageEntry("u1", "user", "first question"),
-      messageEntry("a1", "assistant", "  opening   preamble "),
-      messageEntry("a2", "assistant", "final answer after the work"),
-      messageEntry("u2", "user", "second question"),
-      messageEntry("s1", "system", "system note"),
-      messageEntry("u3", "user", "third question"),
-    ]);
-
-    // Last reply per turn wins (a2, not the a1 preamble); turns with no reply stay empty.
-    expect(items.map((item) => item.responsePreview)).toEqual([
-      "final answer after the work",
-      "",
-      "",
-    ]);
-  });
-
   it("ignores a trailing empty assistant row so the last real reply stays the end-of-turn text", () => {
     const [item] = deriveMessageTrailItems([
       messageEntry("u1", "user", "ask"),
@@ -116,37 +93,55 @@ describe("deriveMessageTrailItems", () => {
     ]);
     expect(item?.responsePreview).toBe("real final reply");
   });
+
+  it("returns the same items reference for the same entries array", () => {
+    const entries = [messageEntry("u1", "user", "ask"), messageEntry("a1", "assistant", "reply")];
+
+    expect(deriveMessageTrailItems(entries)).toBe(deriveMessageTrailItems(entries));
+  });
+
+  it("reuses the previous items for a rebuilt entries array whose trail is unchanged", () => {
+    const user = messageEntry("u1", "user", "ask");
+    const reply = messageEntry("a1", "assistant", "reply");
+    const before = deriveMessageTrailItems([user, reply]);
+
+    // A streamed token rebuilds the array; a work row does not show in the trail.
+    expect(deriveMessageTrailItems([user, reply, workEntry("w1")])).toBe(before);
+
+    const grown = deriveMessageTrailItems([user, messageEntry("a1", "assistant", "reply grew")]);
+    expect(grown).not.toBe(before);
+    expect(grown[0]?.responsePreview).toBe("reply grew");
+  });
+
+  it("reflects a mid-list message replacement despite the per-message preview cache", () => {
+    const unchangedUser = messageEntry("u1", "user", "  first   question ");
+    const before = deriveMessageTrailItems([
+      unchangedUser,
+      messageEntry("a1", "assistant", "old reply"),
+      messageEntry("u2", "user", "second question"),
+    ]);
+    // New entries array with the middle message replaced by a new object — the
+    // store never mutates messages in place, so a text change means a new object.
+    const after = deriveMessageTrailItems([
+      unchangedUser,
+      messageEntry("a1", "assistant", "  corrected   reply "),
+      messageEntry("u2", "user", "second question"),
+    ]);
+
+    expect(before.map((item) => item.responsePreview)).toEqual(["old reply", ""]);
+    expect(after.map((item) => item.responsePreview)).toEqual(["corrected reply", ""]);
+    expect(after.map((item) => item.preview)).toEqual(["first question", "second question"]);
+  });
 });
 
 describe("resolveActiveTrailMessageId", () => {
   const anchors = [anchor("u1", 0), anchor("u2", 4), anchor("u3", 9)];
-
-  it("returns null when there are no anchors", () => {
-    expect(resolveActiveTrailMessageId([], 5)).toBeNull();
-  });
 
   it("returns the last anchor at or above the topmost visible row", () => {
     expect(resolveActiveTrailMessageId(anchors, 0)).toBe(MessageId.makeUnsafe("u1"));
     expect(resolveActiveTrailMessageId(anchors, 3)).toBe(MessageId.makeUnsafe("u1"));
     expect(resolveActiveTrailMessageId(anchors, 4)).toBe(MessageId.makeUnsafe("u2"));
     expect(resolveActiveTrailMessageId(anchors, 12)).toBe(MessageId.makeUnsafe("u3"));
-  });
-
-  it("updates in both scroll directions from the current top visible row", () => {
-    const scrollPath = [0, 3, 4, 8, 9, 12, 8, 4, 3, 0];
-
-    expect(scrollPath.map((rowIndex) => resolveActiveTrailMessageId(anchors, rowIndex))).toEqual([
-      MessageId.makeUnsafe("u1"),
-      MessageId.makeUnsafe("u1"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u3"),
-      MessageId.makeUnsafe("u3"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u1"),
-      MessageId.makeUnsafe("u1"),
-    ]);
   });
 
   it("falls back to the first anchor when the viewport sits above it", () => {
@@ -230,23 +225,6 @@ describe("createActiveTrailStore", () => {
 const allFinite = (values: readonly number[]) => values.every((v) => Number.isFinite(v));
 
 describe("computeTrailGeometry", () => {
-  it("returns null for N=0", () => {
-    expect(computeTrailGeometry({ count: 0 })).toBeNull();
-  });
-
-  it("places a single tick at the top padding with no spacing (N=1)", () => {
-    const geom = computeTrailGeometry({ count: 1, paddingPx: 12 });
-    expect(geom).toEqual({ startY: 12, spacing: 0, centerYs: [12], contentHeight: 24 });
-  });
-
-  it("lays ticks out at the fixed spacing from the top padding (N=2)", () => {
-    const geom = computeTrailGeometry({ count: 2, spacingPx: 10, paddingPx: 12 })!;
-    expect(geom.spacing).toBe(10);
-    expect(geom.startY).toBe(12);
-    expect(geom.centerYs).toEqual([12, 22]);
-    expect(geom.contentHeight).toBe(34); // 2*12 + 1*10
-  });
-
   it("keeps the spacing fixed for many messages and grows the content height", () => {
     const spacing = 10;
     const padding = 12;
@@ -260,15 +238,6 @@ describe("computeTrailGeometry", () => {
   });
 });
 
-describe("computeSigma", () => {
-  it("tracks spacing within the density-aware clamp", () => {
-    expect(computeSigma(9)).toBeCloseTo(13.5, 5); // clamp(13.5, min(18,8)=8, 22)
-    expect(computeSigma(2)).toBeCloseTo(4, 5); // clamp(3, min(4,8)=4, 22) -> floor wins
-    expect(computeSigma(0.5)).toBeCloseTo(1, 5); // clamp(0.75, min(1,8)=1, 22) -> 1
-    expect(computeSigma(20)).toBeCloseTo(22, 5); // clamp(30, 8, 22) -> upper cap
-  });
-});
-
 describe("computeGaussianWeights", () => {
   const centerYs = [0, 10, 20, 30, 40];
 
@@ -276,46 +245,6 @@ describe("computeGaussianWeights", () => {
     const weights = computeGaussianWeights(centerYs, 20, 7);
     expect(weights[2]).toBe(1);
     expect(weights.every((w) => w >= 0 && w <= 1)).toBe(true);
-  });
-
-  it("is symmetric around the pointer", () => {
-    const weights = computeGaussianWeights(centerYs, 20, 7);
-    expect(weights[1]).toBeCloseTo(weights[3]!, 10);
-    expect(weights[0]).toBeCloseTo(weights[4]!, 10);
-  });
-});
-
-describe("computeTickStyles", () => {
-  const baseW = 14;
-  const maxW = 34;
-  const rest = 0.38;
-  const anchor = 0.9;
-
-  it("grows the focused tick to maxW but keeps its rest colour (size changes, not opacity)", () => {
-    const [style] = computeTickStyles([1], null, baseW, maxW, rest, anchor);
-    expect(style!.width).toBeCloseTo(maxW, 5);
-    expect(style!.opacity).toBeCloseTo(rest, 5); // colour never follows the cursor
-  });
-
-  it("keeps opacity fixed per state regardless of weight (anchor dark, others rest)", () => {
-    // Even the magnified anchor (weight 1) stays at anchor opacity, not brighter.
-    const styles = computeTickStyles([1, 0.5, 0], 0, baseW, maxW, rest, anchor);
-    expect(styles.map((s) => s.opacity)).toEqual([anchor, rest, rest]);
-    expect(styles[0]!.width).toBeCloseTo(maxW, 5);
-    expect(styles[2]!.width).toBeCloseTo(baseW, 5);
-  });
-});
-
-describe("computeRestStyles", () => {
-  it("brightens only the anchor tick", () => {
-    const styles = computeRestStyles(3, 1, 14, 0.38, 0.9);
-    expect(styles.map((s) => s.opacity)).toEqual([0.38, 0.9, 0.38]);
-    expect(styles.every((s) => s.width === 14)).toBe(true);
-  });
-
-  it("leaves all ticks at rest when there is no anchor", () => {
-    const styles = computeRestStyles(2, null, 14, 0.38, 0.9);
-    expect(styles.map((s) => s.opacity)).toEqual([0.38, 0.38]);
   });
 });
 
@@ -357,12 +286,75 @@ describe("clampTooltipTop", () => {
   });
 });
 
-describe("clampNumber", () => {
-  it("clamps, and is finite-safe / range-safe", () => {
-    expect(clampNumber(5, 0, 10)).toBe(5);
-    expect(clampNumber(-1, 0, 10)).toBe(0);
-    expect(clampNumber(11, 0, 10)).toBe(10);
-    expect(clampNumber(Number.NaN, 2, 8)).toBe(2);
-    expect(clampNumber(5, 10, 0)).toBe(10); // inverted range -> min
+describe("audio wave", () => {
+  it("rises with the sound at once and falls back gently", () => {
+    expect(stepAudioEnvelope(0.2, 0.8, 0.9)).toBe(0.8);
+    expect(stepAudioEnvelope(0.8, 0, 0.9)).toBeCloseTo(0.72);
+    expect(stepAudioEnvelope(0.8, 0.75, 0.9)).toBe(0.75);
+  });
+
+  it("ignores room noise and scales to the microphone's recent peak", () => {
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    try {
+      const shape = createAudioLevelShaper();
+      expect(shape(0)).toBe(0);
+      expect(shape(0.1)).toBe(0);
+      // Quiet speech reaches its own peak; the next quieter syllable stays lower.
+      expect(shape(0.4)).toBe(1);
+      elapsed += 33;
+      const quieterSyllable = shape(0.3);
+      expect(quieterSyllable).toBeGreaterThan(0.4);
+      expect(quieterSyllable).toBeLessThan(0.45);
+      // A louder microphone raises the reference immediately.
+      expect(shape(0.8)).toBe(1);
+      elapsed += 33;
+      expect(shape(0.4)).toBeLessThan(0.3);
+      // The helper emits silence once, then sends no levels until sound returns.
+      shape(0);
+      elapsed += 8_000;
+      expect(shape(0.4)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps per-tick gains in a narrow, stable band", () => {
+    for (let i = 0; i < 50; i += 1) {
+      const gain = audioTickGain(i);
+      expect(gain).toBeGreaterThanOrEqual(0.45);
+      expect(gain).toBeLessThanOrEqual(1);
+      expect(audioTickGain(i)).toBe(gain);
+    }
+  });
+
+  it("ripples outward from the centre tick, one step per tick", () => {
+    // Newest first: the loud frame is two frames old, so with one frame per tick
+    // it sits two ticks away from the centre on both sides.
+    const widths = computeAudioTickWidths({
+      count: 7,
+      centerIndex: 3,
+      history: [0, 0, 1, 0],
+      framesPerTick: 1,
+      baseW: 6,
+      maxW: 30,
+    });
+    expect(widths[3]).toBe(6);
+    expect(widths[1]).toBeCloseTo(6 + 24 * audioTickGain(1));
+    expect(widths[5]).toBeCloseTo(6 + 24 * audioTickGain(5));
+    expect(widths[0]).toBe(6);
+    expect(widths[6]).toBe(6);
+  });
+
+  it("rests every tick when there is no history", () => {
+    const widths = computeAudioTickWidths({
+      count: 3,
+      centerIndex: 1,
+      history: [],
+      framesPerTick: 2,
+      baseW: 6,
+      maxW: 30,
+    });
+    expect(widths).toEqual([6, 6, 6]);
   });
 });

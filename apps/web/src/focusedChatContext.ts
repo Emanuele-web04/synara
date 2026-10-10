@@ -1,7 +1,7 @@
 // FILE: focusedChatContext.ts
 // Purpose: Resolves the currently focused chat context across single and split chat surfaces.
 // Layer: Route-aware UI helpers
-// Exports: pure resolver and hook used by shortcut, discovery, and thread creation flows
+// Exports: hook used by shortcut, discovery, and thread creation flows
 
 import { ThreadId, type ThreadId as ThreadIdType } from "@synara/contracts";
 import { useMemo } from "react";
@@ -15,54 +15,23 @@ import {
   useSplitViewStore,
 } from "./splitViewStore";
 import { useStore } from "./store";
-import { createProjectSelector, createThreadSelector } from "./storeSelectors";
-import type { Project, Thread } from "./types";
+import {
+  createProjectSelector,
+  createThreadShellSettingsSelector,
+  type ThreadShellSettings,
+} from "./storeSelectors";
+import type { Project } from "./types";
 
 export interface FocusedChatContext {
   routeThreadId: ThreadIdType | null;
   splitView: SplitView | null;
   focusedThreadId: ThreadIdType | null;
-  activeThread: Thread | null;
+  // Settings only, never the transcript: this context is read all over the shell (sidebar,
+  // tabs, global shortcuts), which must not re-render for every streamed token.
+  activeThread: ThreadShellSettings | null;
   activeDraftThread: DraftThreadState | null;
   activeProject: Project | null;
   activeProjectId: Project["id"] | null;
-}
-
-export function resolveFocusedChatContext(input: {
-  routeThreadId: ThreadIdType | null;
-  splitView: SplitView | null;
-  threads: readonly Thread[];
-  projects: readonly Project[];
-  draftThreadsByThreadId: Record<string, DraftThreadState | undefined>;
-}): FocusedChatContext {
-  const focusedThreadId = input.splitView
-    ? resolveSplitViewFocusedPaneThreadId(input.splitView)
-    : input.routeThreadId;
-  const activeThread =
-    focusedThreadId !== null
-      ? (input.threads.find((thread) => thread.id === focusedThreadId) ?? null)
-      : null;
-  const activeDraftThread =
-    focusedThreadId !== null ? (input.draftThreadsByThreadId[focusedThreadId] ?? null) : null;
-  const activeProjectId =
-    activeDraftThread?.projectId ??
-    activeThread?.projectId ??
-    input.splitView?.ownerProjectId ??
-    null;
-  const activeProject =
-    activeProjectId !== null
-      ? (input.projects.find((project) => project.id === activeProjectId) ?? null)
-      : null;
-
-  return {
-    routeThreadId: input.routeThreadId,
-    splitView: input.splitView,
-    focusedThreadId,
-    activeThread,
-    activeDraftThread,
-    activeProject,
-    activeProjectId,
-  };
 }
 
 export function useFocusedChatContext(): FocusedChatContext {
@@ -79,7 +48,7 @@ export function useFocusedChatContext(): FocusedChatContext {
     ? resolveSplitViewFocusedPaneThreadId(activeSplitView)
     : routeThreadId;
   const activeThread = useStore(
-    useMemo(() => createThreadSelector(focusedThreadId), [focusedThreadId]),
+    useMemo(() => createThreadShellSettingsSelector(focusedThreadId), [focusedThreadId]),
   );
   const activeDraftThread =
     focusedThreadId !== null ? (draftThreadsByThreadId[focusedThreadId] ?? null) : null;

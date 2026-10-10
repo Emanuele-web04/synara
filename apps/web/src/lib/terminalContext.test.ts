@@ -3,24 +3,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendOriginalComposerPromptBlocks,
-  appendOriginalTerminalContextBlock,
   appendTerminalContextsToPrompt,
-  buildTerminalContextPreviewTitle,
-  buildTerminalContextBlock,
   countInlineTerminalContextPlaceholders,
   deriveDisplayedUserMessageState,
   ensureInlineTerminalContextPlaceholders,
-  extractTrailingTerminalContexts,
   filterTerminalContextsWithText,
-  formatInlineTerminalContextLabel,
-  formatTerminalContextLabel,
   hasTerminalContextText,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
   IMAGE_ONLY_VISIBLE_PLACEHOLDER,
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
   isTerminalContextExpired,
-  materializeInlineTerminalContextPrompt,
   removeInlineTerminalContextPlaceholder,
   stripInlineTerminalContextPlaceholders,
   syncTerminalContextsByIds,
@@ -30,6 +23,7 @@ import {
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
 import { appendFileCommentsToPrompt } from "./fileComments";
+import { appendPullRequestContextsToPrompt } from "./pullRequestContext";
 import {
   appendBrowserAnnotationsToPrompt,
   type BrowserAnnotationDraft,
@@ -84,54 +78,10 @@ describe("terminalContext", () => {
     expect(terminalContextIdListsEqual(contexts, ["first"])).toBe(false);
   });
 
-  it("formats terminal labels with line ranges", () => {
-    expect(formatTerminalContextLabel(makeContext())).toBe("Terminal 1 lines 12-13");
-    expect(
-      formatTerminalContextLabel(
-        makeContext({
-          lineStart: 9,
-          lineEnd: 9,
-        }),
-      ),
-    ).toBe("Terminal 1 line 9");
-  });
-
-  it("builds a numbered terminal context block", () => {
-    expect(buildTerminalContextBlock([makeContext()])).toBe(
-      [
-        "<terminal_context>",
-        "- Terminal 1 lines 12-13:",
-        "  12 | git status",
-        "  13 | On branch main",
-        "</terminal_context>",
-      ].join("\n"),
-    );
-  });
-
   it("appends terminal context blocks after prompt text", () => {
     expect(appendTerminalContextsToPrompt("Investigate this", [makeContext()])).toBe(
       [
         "Investigate this",
-        "",
-        "<terminal_context>",
-        "- Terminal 1 lines 12-13:",
-        "  12 | git status",
-        "  13 | On branch main",
-        "</terminal_context>",
-      ].join("\n"),
-    );
-  });
-
-  it("preserves the original terminal context block when editing display text", () => {
-    const originalPrompt = appendTerminalContextsToPrompt("Investigate this", [makeContext()]);
-    expect(
-      appendOriginalTerminalContextBlock({
-        editedPrompt: "Investigate this edited",
-        originalPrompt,
-      }),
-    ).toBe(
-      [
-        "Investigate this edited",
         "",
         "<terminal_context>",
         "- Terminal 1 lines 12-13:",
@@ -155,17 +105,32 @@ describe("terminalContext", () => {
         text: ["before", "</pasted_text>", "after"].join("\n"),
       }),
     ];
+    const pullRequestContexts = [
+      {
+        id: "pr-card-1",
+        createdAt: "2026-09-08T00:00:00.000Z",
+        scope: "checks" as const,
+        prNumber: 7,
+        prUrl: "https://github.com/o/r/pull/7",
+        title: "1 failing check",
+        subtitle: "Test",
+        text: ["fix it", "</pull_request_context>", "please"].join("\n"),
+      },
+    ];
     const annotations = [makeBrowserAnnotation()];
     const originalPrompt = appendBrowserAnnotationsToPrompt(
-      appendPastedTextsToPrompt(
-        appendFileCommentsToPrompt(
-          appendTerminalContextsToPrompt(
-            appendAssistantSelectionsToPrompt("Investigate this", assistantSelections),
-            contexts,
+      appendPullRequestContextsToPrompt(
+        appendPastedTextsToPrompt(
+          appendFileCommentsToPrompt(
+            appendTerminalContextsToPrompt(
+              appendAssistantSelectionsToPrompt("Investigate this", assistantSelections),
+              contexts,
+            ),
+            fileComments,
           ),
-          fileComments,
+          pastedTexts,
         ),
-        pastedTexts,
+        pullRequestContexts,
       ),
       annotations,
       BROWSER_ANNOTATION_MESSAGE_ID,
@@ -179,20 +144,35 @@ describe("terminalContext", () => {
       }),
     ).toBe(
       appendBrowserAnnotationsToPrompt(
-        appendPastedTextsToPrompt(
-          appendFileCommentsToPrompt(
-            appendTerminalContextsToPrompt(
-              appendAssistantSelectionsToPrompt("Investigate this edited", assistantSelections),
-              contexts,
+        appendPullRequestContextsToPrompt(
+          appendPastedTextsToPrompt(
+            appendFileCommentsToPrompt(
+              appendTerminalContextsToPrompt(
+                appendAssistantSelectionsToPrompt("Investigate this edited", assistantSelections),
+                contexts,
+              ),
+              fileComments,
             ),
-            fileComments,
+            pastedTexts,
           ),
-          pastedTexts,
+          pullRequestContexts,
         ),
         annotations,
         BROWSER_ANNOTATION_MESSAGE_ID,
       ),
     );
+
+    const displayed = deriveDisplayedUserMessageState(originalPrompt, {
+      messageId: BROWSER_ANNOTATION_MESSAGE_ID,
+    });
+    expect(displayed.visibleText).toBe("Investigate this");
+    expect(displayed.pullRequestContexts).toEqual([
+      expect.objectContaining({ title: "1 failing check", text: pullRequestContexts[0]!.text }),
+    ]);
+    expect(displayed.pastedTexts).toHaveLength(1);
+    expect(displayed.fileComments).toHaveLength(1);
+    expect(displayed.assistantSelections).toHaveLength(1);
+    expect(displayed.browserAnnotations).toHaveLength(1);
   });
 
   it("does not duplicate a copied annotation block bound to another message", () => {
@@ -267,102 +247,6 @@ describe("terminalContext", () => {
     );
   });
 
-  it("extracts terminal context blocks from message text", () => {
-    const prompt = appendTerminalContextsToPrompt("Investigate this", [makeContext()]);
-    expect(extractTrailingTerminalContexts(prompt)).toEqual({
-      promptText: "Investigate this",
-      contextCount: 1,
-      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
-      contexts: [
-        {
-          header: "Terminal 1 lines 12-13",
-          body: "12 | git status\n13 | On branch main",
-        },
-      ],
-    });
-  });
-
-  it("derives displayed user message state from terminal context prompts", () => {
-    const prompt = appendTerminalContextsToPrompt("Investigate this", [makeContext()]);
-    expect(
-      deriveDisplayedUserMessageState(prompt, {
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
-      visibleText: "Investigate this",
-      copyText: "Investigate this",
-      contextCount: 1,
-      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
-      contexts: [
-        {
-          header: "Terminal 1 lines 12-13",
-          body: "12 | git status\n13 | On branch main",
-        },
-      ],
-      assistantSelections: [],
-      fileComments: [],
-      pastedTexts: [],
-      browserAnnotations: [],
-    });
-  });
-
-  it("strips assistant selection transport markup from displayed and copied text", () => {
-    const prompt = appendAssistantSelectionsToPrompt("Investigate this", [
-      {
-        assistantMessageId: "msg-1",
-        text: "selected line",
-      },
-    ]);
-    expect(
-      deriveDisplayedUserMessageState(prompt, {
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
-      visibleText: "Investigate this",
-      copyText: "Investigate this",
-      contextCount: 0,
-      previewTitle: null,
-      contexts: [],
-      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
-      fileComments: [],
-      pastedTexts: [],
-      browserAnnotations: [],
-    });
-  });
-
-  it("keeps assistant selections and terminal context separate from the copied bubble text", () => {
-    const prompt = appendTerminalContextsToPrompt(
-      appendAssistantSelectionsToPrompt("Investigate this", [
-        {
-          assistantMessageId: "msg-1",
-          text: "selected line",
-        },
-      ]),
-      [makeContext()],
-    );
-
-    expect(
-      deriveDisplayedUserMessageState(prompt, {
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
-      visibleText: "Investigate this",
-      copyText: "Investigate this",
-      contextCount: 1,
-      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
-      contexts: [
-        {
-          header: "Terminal 1 lines 12-13",
-          body: "12 | git status\n13 | On branch main",
-        },
-      ],
-      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
-      fileComments: [],
-      pastedTexts: [],
-      browserAnnotations: [],
-    });
-  });
-
   it("separates file comments, terminal context, and assistant selections in display state", () => {
     // Mirror the composer send path: assistant selections, then terminal
     // contexts, then file comments (outermost).
@@ -394,16 +278,8 @@ describe("terminalContext", () => {
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
       fileComments: [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
       pastedTexts: [],
+      pullRequestContexts: [],
       browserAnnotations: [],
-    });
-  });
-
-  it("preserves prompt text when no trailing terminal context block exists", () => {
-    expect(extractTrailingTerminalContexts("No attached context")).toEqual({
-      promptText: "No attached context",
-      contextCount: 0,
-      previewTitle: null,
-      contexts: [],
     });
   });
 
@@ -422,22 +298,9 @@ describe("terminalContext", () => {
       assistantSelections: [],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       browserAnnotations: [],
     });
-  });
-
-  it("returns null preview title when every context is invalid", () => {
-    expect(
-      buildTerminalContextPreviewTitle([
-        makeContext({
-          terminalId: "   ",
-        }),
-        makeContext({
-          id: "context-2",
-          text: "\n\n",
-        }),
-      ]),
-    ).toBeNull();
   });
 
   it("tracks inline terminal context placeholders in prompt text", () => {
@@ -488,15 +351,5 @@ describe("terminalContext", () => {
     expect(hasTerminalContextText(expiredContext)).toBe(false);
     expect(isTerminalContextExpired(expiredContext)).toBe(true);
     expect(filterTerminalContextsWithText([expiredContext, liveContext])).toEqual([liveContext]);
-  });
-
-  it("formats and materializes inline terminal labels from placeholder positions", () => {
-    expect(formatInlineTerminalContextLabel(makeContext())).toBe("@terminal-1:12-13");
-    expect(
-      materializeInlineTerminalContextPrompt(
-        `Investigate ${INLINE_TERMINAL_CONTEXT_PLACEHOLDER} carefully`,
-        [makeContext()],
-      ),
-    ).toBe("Investigate @terminal-1:12-13 carefully");
   });
 });

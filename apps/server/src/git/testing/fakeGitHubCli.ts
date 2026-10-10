@@ -2,29 +2,33 @@
 // Purpose: Shared test fake for the GitHubCli service — scripted `gh` responses (PR lists,
 //          views, checkout, repo lookups) plus a call log for command assertions.
 // Layer: Server test utility (imported by *.test.ts only; never by production code)
-// Note: list responses decode through the live layer's decodePullRequestListJson so raw
-//       gh-shaped fixtures ("OPEN", "CONFLICTING", …) normalize exactly like production.
+// Note: list and inbox responses decode through the live layer's decoders so raw gh-shaped
+//       fixtures ("OPEN", "CONFLICTING", GraphQL nodes, …) normalize exactly like production.
 
 import { spawnSync } from "node:child_process";
 
-import { Effect } from "effect";
+import { Effect, Semaphore } from "effect";
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestMergeCapabilities,
+  PullRequestStack,
 } from "@synara/contracts";
 
 import { GitHubCliError } from "../Errors.ts";
+import { GITHUB_READ_SLOTS } from "../githubReadGate.ts";
 import {
   decodePullRequestListJson,
-  decodeRepositoryPullRequestListJson,
-  PULL_REQUEST_LIST_JSON_FIELDS,
+  decodeRepositoryInboxJson,
+  decodeRepositoryInvolvementJson,
 } from "../Layers/GitHubCli.ts";
 import {
   type GitHubCliShape,
+  type GitHubIssueDetailData,
   type GitHubPullRequestDetailData,
-  type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
+  type GitHubRepositoryChangeProbe,
+  type GitHubRepositoryInboxLookup,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
 } from "../Services/GitHubCli.ts";
 
@@ -46,18 +50,26 @@ export interface FakeGhScenario {
   };
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
   pullRequestChecks?: GitPullRequestCheck[];
+  pullRequestHeadSha?: string;
   pullRequestReviewComments?: GitPullRequestComment[];
   pullRequestReviewCommentsTruncated?: boolean;
   failWith?: GitHubCliError;
   reviewCommentsError?: GitHubCliError;
   createPullRequestError?: GitHubCliError;
   viewerLogin?: string;
-  repositoryPullRequestListJson?: string;
+  /** Raw `gh api graphql` inbox JSON, keyed by `owner/repo:state` (see {@link fakeInboxGraphQlJson}). */
+  repositoryInboxJson?: Record<string, string>;
+  /** Change-probe answer; defaults to "changed" with a fresh ETag per call. */
+  repositoryChangeProbe?: GitHubRepositoryChangeProbe;
+  /** Fails only the involvement search (`listRepositoryInboxInvolvement`). */
+  repositoryInvolvementError?: GitHubCliError;
+  repositoryInboxItems?: Record<number, GitHubRepositoryInboxLookup>;
+  issueDetail?: GitHubIssueDetailData;
   pullRequestDetail?: GitHubPullRequestDetailData;
-  pullRequestListItems?: GitHubPullRequestListItem[];
-  reviewRequestedPullRequestNumbers?: number[];
+  pullRequestStack?: PullRequestStack | null;
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
+  mergeOutcome?: "merged" | "enqueued";
 }
 
 export type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -271,8 +283,17 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       ],
     }).pipe(Effect.flatMap((result) => decodePullRequestListJson(result.stdout)));
 
+  const fakeInboxFixture = (input: { repository: string; state: string }) =>
+    scenario.repositoryInboxJson?.[`${input.repository}:${input.state}`] ??
+    fakeInboxGraphQlJson({ viewer: scenario.viewerLogin ?? "viewer" });
+
+  // Queue only: tests drive rate-limit pauses with their own clocks, which the live gate's
+  // wall-clock pause would outlast.
+  const readSlots = Semaphore.makeUnsafe(GITHUB_READ_SLOTS);
+
   return {
     service: {
+      withRead: (effect) => readSlots.withPermits(1)(effect),
       execute,
       getViewerLogin: (input) => {
         ghCalls.push(`api user --jq .login [cwd=${input.cwd}]`);
@@ -280,19 +301,49 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           ? Effect.fail(scenario.failWith)
           : Effect.succeed(scenario.viewerLogin ?? "viewer");
       },
-      listRepositoryPullRequests: (input) => {
-        const involvementArgs =
-          input.involvement === "authored"
-            ? ` --author ${input.viewer}`
-            : input.involvement === "reviewing"
-              ? ` --search review-requested:${input.viewer}`
-              : "";
-        ghCalls.push(
-          `pr list --repo ${input.repository}${involvementArgs} --state ${input.state} --limit ${input.limit ?? 50} --json ${PULL_REQUEST_LIST_JSON_FIELDS}`,
+      listRepositoryInbox: (input) => {
+        ghCalls.push(`api graphql inbox ${input.repository} ${input.state}`);
+        if (scenario.failWith) return Effect.fail(scenario.failWith);
+        return decodeRepositoryInboxJson(fakeInboxFixture(input));
+      },
+      // The one fixture answers both documents; each decoder reads only its own fields.
+      listRepositoryInboxInvolvement: (input) => {
+        ghCalls.push(`api graphql inbox-involvement ${input.repository} ${input.state}`);
+        const failure = scenario.failWith ?? scenario.repositoryInvolvementError;
+        if (failure) return Effect.fail(failure);
+        return decodeRepositoryInvolvementJson(fakeInboxFixture(input));
+      },
+      probeRepositoryInboxChanges: (input) => {
+        ghCalls.push(`api -i repos/${input.repository}/issues (etag=${input.etag ?? "none"})`);
+        if (scenario.failWith) return Effect.fail(scenario.failWith);
+        return Effect.succeed(
+          scenario.repositoryChangeProbe ?? { changed: true, etag: `"etag-${ghCalls.length}"` },
         );
-        return scenario.failWith
-          ? Effect.fail(scenario.failWith)
-          : decodeRepositoryPullRequestListJson(scenario.repositoryPullRequestListJson ?? "[]");
+      },
+      getRepositoryInboxItems: (input) => {
+        ghCalls.push(`api graphql inbox-items ${input.repository} ${input.numbers.join(",")}`);
+        if (scenario.failWith) return Effect.fail(scenario.failWith);
+        const results = new Map<number, GitHubRepositoryInboxLookup>();
+        for (const number of input.numbers) {
+          results.set(number, scenario.repositoryInboxItems?.[number] ?? { _tag: "not-found" });
+        }
+        return Effect.succeed(results);
+      },
+      getIssueDetail: (input) => {
+        ghCalls.push(`issue view ${input.number} --repo ${input.repository}`);
+        if (scenario.failWith) return Effect.fail(scenario.failWith);
+        return scenario.issueDetail
+          ? Effect.succeed(scenario.issueDetail)
+          : Effect.fail(
+              new GitHubCliError({
+                operation: "getIssueDetail",
+                detail: "Fake issue detail was not configured.",
+              }),
+            );
+      },
+      commentOnIssue: (input) => {
+        ghCalls.push(`issue comment ${input.number} --repo ${input.repository}`);
+        return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
       },
       getPullRequestDetail: (input) => {
         ghCalls.push(`pr view ${input.number} --repo ${input.repository}`);
@@ -305,6 +356,12 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
                 detail: "Fake pull request detail was not configured.",
               }),
             );
+      },
+      getPullRequestStack: (input) => {
+        ghCalls.push(`graphql stack ${input.number} --repo ${input.repository}`);
+        return scenario.failWith
+          ? Effect.fail(scenario.failWith)
+          : Effect.succeed(scenario.pullRequestStack ?? null);
       },
       getRepositoryMergeCapabilities: (input) => {
         ghCalls.push(`repo view ${input.repository} --json merge-capabilities`);
@@ -325,29 +382,9 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         ghCalls.push(
           `pr action ${input.action} ${input.number} --repo ${input.repository}${input.mergeMethod ? ` --${input.mergeMethod}` : ""}`,
         );
-        return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
-      },
-      getPullRequestListItem: (input) => {
-        ghCalls.push(`pr view ${input.number} --repo ${input.repository} (list-item)`);
-        const item = scenario.pullRequestListItems?.find((entry) => entry.number === input.number);
-        return item
-          ? Effect.succeed(item)
-          : Effect.fail(
-              scenario.failWith ??
-                new GitHubCliError({
-                  operation: "getPullRequestListItem",
-                  detail: "Pull request not found.",
-                  reason: "other",
-                }),
-            );
-      },
-      listReviewRequestedPullRequestNumbers: (input) => {
-        ghCalls.push(
-          `search prs --repo ${input.repository} --review-requested ${input.viewer} --state open --limit ${input.limit ?? 1_000} --json number`,
-        );
         return scenario.failWith
           ? Effect.fail(scenario.failWith)
-          : Effect.succeed(scenario.reviewRequestedPullRequestNumbers ?? []);
+          : Effect.succeed({ mergeOutcome: scenario.mergeOutcome ?? null });
       },
       commentOnPullRequest: (input) => {
         ghCalls.push(`pr comment ${input.number} --repo ${input.repository}`);
@@ -371,6 +408,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             input.title,
             "--body-file",
             input.bodyFile,
+            ...(input.draft === true ? ["--draft"] : []),
           ],
         }).pipe(Effect.asVoid),
       getDefaultBranch: (input) =>
@@ -406,12 +444,13 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "view",
             input.reference,
             "--json",
-            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
           ],
         }).pipe(
           Effect.map((result) => ({
             summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
             checks: scenario.pullRequestChecks ?? [],
+            headSha: scenario.pullRequestHeadSha ?? null,
           })),
         ),
       getPullRequestReviewComments: (input) => {
@@ -428,4 +467,107 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     },
     ghCalls,
   };
+}
+
+type FakeInboxNode = Record<string, unknown>;
+
+/** Raw pull request node in the inbox GraphQL shape. Override any field per test. */
+export function fakeInboxPullRequestNode(
+  number: number,
+  overrides: FakeInboxNode = {},
+): FakeInboxNode {
+  return {
+    __typename: "PullRequest",
+    number,
+    title: `PR ${number}`,
+    url: `https://github.com/acme/app/pull/${number}`,
+    state: "OPEN",
+    isDraft: false,
+    additions: 1,
+    deletions: 0,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    closedAt: null,
+    mergedAt: null,
+    headRefName: `feature-${number}`,
+    baseRefName: "main",
+    reviewDecision: null,
+    mergeable: "MERGEABLE",
+    author: { __typename: "User", login: "someone", avatarUrl: null, url: null, name: null },
+    reviewRequests: { nodes: [] },
+    labels: { nodes: [] },
+    assignees: { nodes: [] },
+    comments: { totalCount: 0 },
+    stackEntry: null,
+    stack: null,
+    ...overrides,
+  };
+}
+
+/** Raw issue node in the inbox GraphQL shape. Override any field per test. */
+export function fakeInboxIssueNode(number: number, overrides: FakeInboxNode = {}): FakeInboxNode {
+  return {
+    __typename: "Issue",
+    number,
+    title: `Issue ${number}`,
+    url: `https://github.com/acme/app/issues/${number}`,
+    state: "OPEN",
+    stateReason: null,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    closedAt: null,
+    author: { __typename: "User", login: "someone", avatarUrl: null, url: null, name: null },
+    labels: { nodes: [] },
+    assignees: { nodes: [] },
+    comments: { totalCount: 0 },
+    ...overrides,
+  };
+}
+
+/** Inbox GraphQL response body, as `gh api graphql` prints it. It carries the fields of both the
+ * lists and the involvement documents, so one fixture answers both. */
+export function fakeInboxGraphQlJson(input: {
+  viewer?: string;
+  pullRequests?: FakeInboxNode[];
+  pullRequestTotalCount?: number;
+  issues?: FakeInboxNode[];
+  issueTotalCount?: number;
+  /** Items matching `involves:@me`; read by the involvement document only. */
+  mine?: FakeInboxNode[];
+  mineIssueCount?: number;
+  reviewRequested?: number[] | null;
+  reviewRequestedCount?: number;
+  rateLimit?: { cost?: number; remaining: number; resetAt: string } | null;
+  errors?: Array<{ type?: string; message: string; path?: Array<string | number> }>;
+}): string {
+  const pullRequests = input.pullRequests ?? [];
+  const issues = input.issues ?? [];
+  const mine = input.mine ?? [];
+  const reviewRequested = input.reviewRequested === undefined ? [] : input.reviewRequested;
+  return JSON.stringify({
+    data: {
+      viewer: { login: input.viewer ?? "viewer" },
+      rateLimit:
+        input.rateLimit === undefined
+          ? { cost: 5, remaining: 4_900, resetAt: "2026-07-15T01:00:00Z" }
+          : input.rateLimit,
+      repository: {
+        pullRequests: {
+          totalCount: input.pullRequestTotalCount ?? pullRequests.length,
+          nodes: pullRequests,
+        },
+        issues: { totalCount: input.issueTotalCount ?? issues.length, nodes: issues },
+      },
+      mine: { issueCount: input.mineIssueCount ?? mine.length, nodes: mine },
+      ...(reviewRequested === null
+        ? {}
+        : {
+            reviewRequested: {
+              issueCount: input.reviewRequestedCount ?? reviewRequested.length,
+              nodes: reviewRequested.map((number) => ({ number })),
+            },
+          }),
+    },
+    ...(input.errors ? { errors: input.errors } : {}),
+  });
 }

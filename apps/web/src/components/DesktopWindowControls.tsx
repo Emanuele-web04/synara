@@ -1,9 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { DesktopWindowState } from "@synara/contracts";
 
+import { useDesktopCustomTitleBarActive } from "~/hooks/useDesktopCustomTitleBar";
 import { isElectron } from "~/env";
-import { cn, isWindowsPlatform } from "~/lib/utils";
+import { Maximize2, Minimize2, MinusIcon, XIcon } from "~/lib/icons";
+import { cn, getNavigatorPlatform, isWindowsPlatform } from "~/lib/utils";
+
+import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import { toastManager } from "./ui/toast";
 
 const DEFAULT_WINDOW_STATE: DesktopWindowState = {
   isMaximized: false,
@@ -18,8 +23,8 @@ const GLYPH_MAXIMIZE = "\uE922";
 const GLYPH_RESTORE = "\uE923";
 const GLYPH_CLOSE = "\uE8BB";
 
-// Match the native Windows caption-button footprint: 46px wide, full title-bar
-// height, flat (no radius/border), glyph centered. These are deliberately plain
+// Match the native Windows caption-button footprint: 46px wide, full top-bar
+// height (CHAT_SURFACE_HEADER_HEIGHT_CLASS), flat (no radius/border), glyph centered. These are deliberately plain
 // <button>s rather than the app's Button/Tooltip primitives — those inject a
 // rounded "chrome" variant, conflicting size overrides, and a base-ui trigger that
 // intercepts the click — so the chrome stays pixel-native and onClick routes
@@ -29,6 +34,14 @@ const CAPTION_BUTTON_CLASS =
 
 // Windows close-button accent: red fill on hover with a white glyph.
 const CLOSE_BUTTON_CLASS = "hover:bg-[#c42b1c] hover:text-white active:bg-[#b9281b]";
+
+function reportWindowControlError(title: string, error: unknown): void {
+  toastManager.add({
+    type: "error",
+    title,
+    description: error instanceof Error ? error.message : "Please try again.",
+  });
+}
 
 function CaptionGlyph({ glyph }: { glyph: string }) {
   return (
@@ -42,19 +55,33 @@ function CaptionGlyph({ glyph }: { glyph: string }) {
   );
 }
 
+function CaptionSvg({ children }: { children: ReactNode }) {
+  return (
+    <span aria-hidden="true" className="flex size-3.5 items-center justify-center">
+      {children}
+    </span>
+  );
+}
+
 export function DesktopWindowControls({ className }: { className?: string }) {
   const [windowState, setWindowState] = useState<DesktopWindowState>(DEFAULT_WINDOW_STATE);
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
-  const isWindowsDesktop = isWindowsPlatform(platform);
+  const customTitleBarActive = useDesktopCustomTitleBarActive();
+  const platform = getNavigatorPlatform();
+  const useWindowsGlyphs = isWindowsPlatform(platform);
   const controls = typeof window === "undefined" ? undefined : window.desktopBridge?.windowControls;
 
   useEffect(() => {
     if (!controls) return;
     let cancelled = false;
 
-    void controls.getState().then((state) => {
-      if (!cancelled) setWindowState(state);
-    });
+    void controls
+      .getState()
+      .then((state) => {
+        if (!cancelled) setWindowState(state);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) reportWindowControlError("Could not read window state", error);
+      });
     const unsubscribe = controls.onState(setWindowState);
 
     return () => {
@@ -63,24 +90,38 @@ export function DesktopWindowControls({ className }: { className?: string }) {
     };
   }, [controls]);
 
-  if (!isElectron || !isWindowsDesktop || !controls) {
+  if (!isElectron || !customTitleBarActive || !controls) {
     return null;
   }
 
   const { isMaximized } = windowState;
 
   return (
-    <div className={cn("flex h-[46px] items-stretch [-webkit-app-region:no-drag]", className)}>
+    <div
+      className={cn(
+        "flex items-stretch [-webkit-app-region:no-drag]",
+        CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+        className,
+      )}
+    >
       <button
         type="button"
         aria-label="Minimize"
         title="Minimize"
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
-          void controls.minimize();
+          void controls.minimize().catch((error: unknown) => {
+            reportWindowControlError("Could not minimize window", error);
+          });
         }}
       >
-        <CaptionGlyph glyph={GLYPH_MINIMIZE} />
+        {useWindowsGlyphs ? (
+          <CaptionGlyph glyph={GLYPH_MINIMIZE} />
+        ) : (
+          <CaptionSvg>
+            <MinusIcon className="size-3.5" />
+          </CaptionSvg>
+        )}
       </button>
       <button
         type="button"
@@ -88,10 +129,21 @@ export function DesktopWindowControls({ className }: { className?: string }) {
         title={isMaximized ? "Restore" : "Maximize"}
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
-          void controls.toggleMaximize().then(setWindowState);
+          void controls
+            .toggleMaximize()
+            .then(setWindowState)
+            .catch((error: unknown) => {
+              reportWindowControlError("Could not resize window", error);
+            });
         }}
       >
-        <CaptionGlyph glyph={isMaximized ? GLYPH_RESTORE : GLYPH_MAXIMIZE} />
+        {useWindowsGlyphs ? (
+          <CaptionGlyph glyph={isMaximized ? GLYPH_RESTORE : GLYPH_MAXIMIZE} />
+        ) : (
+          <CaptionSvg>
+            {isMaximized ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+          </CaptionSvg>
+        )}
       </button>
       <button
         type="button"
@@ -99,10 +151,18 @@ export function DesktopWindowControls({ className }: { className?: string }) {
         title="Close"
         className={cn(CAPTION_BUTTON_CLASS, CLOSE_BUTTON_CLASS)}
         onClick={() => {
-          void controls.close();
+          void controls.close().catch((error: unknown) => {
+            reportWindowControlError("Could not close window", error);
+          });
         }}
       >
-        <CaptionGlyph glyph={GLYPH_CLOSE} />
+        {useWindowsGlyphs ? (
+          <CaptionGlyph glyph={GLYPH_CLOSE} />
+        ) : (
+          <CaptionSvg>
+            <XIcon className="size-3.5" />
+          </CaptionSvg>
+        )}
       </button>
     </div>
   );

@@ -5,7 +5,7 @@
 // read-only "sign in via CLI" hint used when a credential is missing or expired.
 // Layer: cross-cutting (no runtime deps beyond the ProviderKind type).
 
-import type { ProviderKind } from "@synara/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS, PROVIDER_DESCRIPTOR_BY_KIND } from "./providerMetadata";
 
 /** Providers, in display order, that expose a live usage source. */
@@ -44,4 +44,19 @@ export function providerUsageNeedsAuthDetail(provider: string | null | undefined
     return "Sign in with the provider CLI to see usage.";
   }
   return `Sign in with \`${meta.usage!.signInCommand}\` to see usage.`;
+}
+
+/**
+ * Settings shows every usage-capable provider when none are signed in, so the
+ * panel can still explain how to connect. Once any provider has credentials,
+ * only those connected snapshots stay visible.
+ */
+export function selectVisibleProviderUsageSnapshots(
+  snapshots: ReadonlyArray<ServerProviderUsageSnapshot>,
+): ReadonlyArray<ServerProviderUsageSnapshot> {
+  const ordered = PROVIDER_USAGE_PROVIDERS.flatMap((provider) =>
+    snapshots.filter((snapshot) => snapshot.provider === provider),
+  );
+  const connected = ordered.filter((snapshot) => (snapshot.status ?? "ok") !== "needs-auth");
+  return connected.length > 0 ? connected : ordered;
 }

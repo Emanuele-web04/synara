@@ -13,11 +13,15 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Option, Schedule } from "effect";
+import { Cause, Duration, Effect, Layer, Schedule } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
+  ProviderRuntimeEventRepository,
+} from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import {
   bindingActiveTurnId,
   DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS,
@@ -44,9 +48,14 @@ export interface ProviderRuntimeReconcilerLiveOptions {
 }
 
 function reconciliationKey(plan: ProviderRuntimeReconciliationPlan): string {
+  // A stale turn can move through multiple settlement plans while the session
+  // and turn projections converge. Those are retries/refinements of one
+  // recovery, not separate user-visible recoveries. Runtime realignment stays
+  // distinct because each live runtime turn is independent evidence.
+  const operation = plan.action === "align-running-turn" ? plan.action : "settle-running-turn";
   return `provider-runtime-reconcile:${JSON.stringify([
     plan.provider,
-    plan.action,
+    operation,
     plan.threadId,
     plan.projectedTurnId,
     plan.runtimeTurnId,
@@ -60,6 +69,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
+    const runtimeEvents = yield* ProviderRuntimeEventRepository;
     const intervalMs = Math.max(
       250,
       Math.floor(options?.intervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS),
@@ -84,6 +94,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       current !== null &&
       current.status === next.status &&
       current.providerName === next.providerName &&
+      current.providerInstanceId === next.providerInstanceId &&
       current.runtimeMode === next.runtimeMode &&
       current.activeTurnId === next.activeTurnId &&
       current.lastError === next.lastError;
@@ -110,6 +121,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           plan.action === "settle-terminal-projection"
             ? plan.terminalSession.providerName
             : plan.provider,
+        providerInstanceId:
+          plan.action === "settle-terminal-projection"
+            ? plan.terminalSession.providerInstanceId
+            : (input.binding?.providerInstanceId ??
+              thread.session?.providerInstanceId ??
+              thread.modelSelection.instanceId ??
+              thread.modelSelection.provider),
         runtimeMode:
           plan.action === "settle-terminal-projection"
             ? plan.terminalSession.runtimeMode
@@ -203,24 +221,26 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
 
     const reconcileNow = Effect.gen(function* () {
       const nowMs = Date.now();
-      const [candidateThreadIds, bindings, liveSessions, pumpHealth] = yield* Effect.all(
+      const candidateThreadIds = yield* projectionSnapshotQuery.listStaleInFlightThreadIds({
+        updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
+        limit: candidateLimit,
+      });
+      if (candidateThreadIds.length === 0) return;
+      const [bindings, liveSessions, pumpHealth, runtimeJournalLagging] = yield* Effect.all(
         [
-          projectionSnapshotQuery.listStaleInFlightThreadIds({
-            updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
-            limit: candidateLimit,
-          }),
           directory.listBindings(),
           providerService.listSessions(),
           providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
+          runtimeEvents.hasPendingEventsForThreads({
+            consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+            threadIds: candidateThreadIds,
+          }),
         ],
-        { concurrency: 5 },
+        { concurrency: 4 },
       );
-      if (candidateThreadIds.length === 0) return;
-      const threads = (yield* Effect.forEach(
-        candidateThreadIds,
-        (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
-        { concurrency: 8 },
-      )).flatMap(Option.toArray);
+      // One batched read instead of up to `candidateLimit` point reads
+      // contending on the single SQLite handle every reconciliation tick.
+      const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(candidateThreadIds);
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const bindingByThreadId = new Map(bindings.map((binding) => [binding.threadId, binding]));
       const plans = planProviderRuntimeReconciliation({
@@ -228,6 +248,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         bindings,
         liveSessions,
         pumpHealth,
+        runtimeJournalLagging,
         nowMs,
         staleAfterMs,
       });

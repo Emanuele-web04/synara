@@ -6,6 +6,7 @@
 import type {
   ModelSlug,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderSkillReference,
@@ -58,7 +59,11 @@ interface UseKanbanTaskComposerEditorInput {
   readonly composerMentions: readonly ProviderMentionReference[];
   readonly scratchThreadId: ThreadId;
   readonly selectedProvider: ProviderKind;
-  readonly handleProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  readonly handleProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
   readonly setInteractionMode: Dispatch<SetStateAction<ProviderInteractionMode>>;
   readonly onCreate: () => void;
 }
@@ -279,7 +284,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
       return;
     }
     if (item.type === "model") {
-      handleProviderModelChange(item.provider, item.model);
+      handleProviderModelChange(item.provider, item.model, item.instanceId);
       applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
       return;
     }
@@ -299,8 +304,8 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
         setComposerTrigger(null);
         return;
       }
-      if (item.command === "plan" || item.command === "default") {
-        setInteractionMode(item.command === "plan" ? "plan" : "default");
+      if (item.command === "plan" || item.command === "debug" || item.command === "default") {
+        setInteractionMode(item.command);
         applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
       }
     }

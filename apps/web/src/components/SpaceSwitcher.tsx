@@ -33,7 +33,7 @@ import {
   type VoidSpacePresentation,
 } from "~/lib/spaceGrouping";
 import { cn } from "~/lib/utils";
-import { PencilIcon, PlusIcon, RotateCcwIcon, Trash2 } from "~/lib/icons";
+import { PencilIcon, PlusIcon, ResetIcon, Trash2 } from "~/lib/icons";
 import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "~/sidebarRowStyles";
 import { SpaceIcon, type SpaceIconValue } from "./SpaceIcon";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -683,7 +683,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                     props.onResetVoid();
                   }}
                 >
-                  <SidebarContextMenuIcon icon={RotateCcwIcon} />
+                  <SidebarContextMenuIcon icon={ResetIcon} />
                   <span>Reset to {DEFAULT_VOID_SPACE.name}</span>
                 </MenuItem>
               ) : null}

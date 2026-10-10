@@ -7,10 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   RENDERER_CRASH_STREAK_WINDOW_MS,
   RENDERER_MAX_AUTOMATIC_RELOADS,
-  RENDERER_RELOAD_MAX_DELAY_MS,
   RendererCrashPolicy,
-  isRecoverableRendererCrashReason,
-  rendererReloadDelayMs,
 } from "./rendererCrashRecovery";
 
 const crash = (
@@ -20,31 +17,6 @@ const crash = (
   quitting = false,
 ): ReturnType<RendererCrashPolicy["respondToCrash"]> =>
   policy.respondToCrash({ reason, nowMs, quitting });
-
-describe("isRecoverableRendererCrashReason", () => {
-  it("only auto-reloads crashes a fresh renderer can recover from", () => {
-    expect(isRecoverableRendererCrashReason("crashed")).toBe(true);
-    expect(isRecoverableRendererCrashReason("oom")).toBe(true);
-    for (const reason of [
-      "clean-exit",
-      "abnormal-exit",
-      "killed",
-      "launch-failed",
-      "integrity-failure",
-    ]) {
-      expect(isRecoverableRendererCrashReason(reason)).toBe(false);
-    }
-  });
-});
-
-describe("rendererReloadDelayMs", () => {
-  it("backs off exponentially up to the cap", () => {
-    expect(rendererReloadDelayMs(1)).toBe(500);
-    expect(rendererReloadDelayMs(2)).toBe(1_000);
-    expect(rendererReloadDelayMs(3)).toBe(2_000);
-    expect(rendererReloadDelayMs(99)).toBe(RENDERER_RELOAD_MAX_DELAY_MS);
-  });
-});
 
 describe("RendererCrashPolicy", () => {
   it("reloads an OOM kill with a growing backoff", () => {
@@ -61,8 +33,13 @@ describe("RendererCrashPolicy", () => {
   it("stops reloading after the cap and asks the user instead", () => {
     const policy = new RendererCrashPolicy();
 
-    for (let attempt = 1; attempt <= RENDERER_MAX_AUTOMATIC_RELOADS; attempt += 1) {
-      expect(crash(policy, "crashed", attempt * 100).kind).toBe("reload");
+    for (const [index, delayMs] of [500, 1_000, 2_000].entries()) {
+      const attempt = index + 1;
+      expect(crash(policy, "crashed", attempt * 100)).toEqual({
+        kind: "reload",
+        delayMs,
+        attempt,
+      });
     }
 
     // The reload budget is a cap, not a throttle: further crashes in the same streak
@@ -72,19 +49,25 @@ describe("RendererCrashPolicy", () => {
       expect(response).toEqual({
         kind: "prompt",
         cause: "reload-budget-exhausted",
-        crashes: RENDERER_MAX_AUTOMATIC_RELOADS + 1 + extra,
+        crashes: 4 + extra,
       });
     }
   });
 
   it("prompts immediately for reasons that would repeat on reload", () => {
-    const policy = new RendererCrashPolicy();
-
-    expect(crash(policy, "launch-failed", 0)).toEqual({
-      kind: "prompt",
-      cause: "unrecoverable",
-      crashes: 1,
-    });
+    for (const reason of [
+      "abnormal-exit",
+      "killed",
+      "launch-failed",
+      "integrity-failure",
+      "unknown-reason",
+    ]) {
+      expect(crash(new RendererCrashPolicy(), reason, 0)).toEqual({
+        kind: "prompt",
+        cause: "unrecoverable",
+        crashes: 1,
+      });
+    }
   });
 
   it("ignores a clean exit and any crash observed while quitting", () => {

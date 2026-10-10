@@ -3,14 +3,17 @@
 // Layer: UI state helpers
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
+import { arrayMove } from "@dnd-kit/sortable";
 import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import { resolveTabAfterClose } from "./lib/tabStrip";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 // Single source of truth for the dock pane kinds. The union type, the runtime
 // validator, the per-kind metadata map, and the add-menu order are all derived
 // from this list so they can never drift apart.
-export const RIGHT_DOCK_PANE_KINDS = [
+const RIGHT_DOCK_PANE_KINDS = [
   "browser",
+  "device",
   "diff",
   "explorer",
   "file",
@@ -41,19 +44,26 @@ export interface RightDockPane {
   pullRequestInitialTab: PullRequestInitialTab | null;
 }
 
+/**
+ * The GitHub inbox hosts a dock without a thread: standalone side chats about the selected
+ * item. It is keyed by this fixed id, which can never collide with a thread id.
+ */
+export const GITHUB_INBOX_DOCK_HOST_ID = "github-inbox";
+/** Who owns a dock: a chat thread, or the GitHub inbox page. */
+export type RightDockHostId = ThreadId | typeof GITHUB_INBOX_DOCK_HOST_ID;
+
 export interface RightDockThreadState {
   open: boolean;
   panes: RightDockPane[];
   activePaneId: string | null;
 }
 
-// Kinds that allow multiple concurrent panes per host thread: sidechat opens
-// one pane per embedded thread, file opens one tab per previewed file.
-const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(["sidechat", "file"]);
+// Terminals and file previews have independent tabs. Side chats share one destination.
+const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(["file", "terminal"]);
 
 // Kinds that can only ever have one instance per host thread, derived as
 // "every kind that is not multi-instance" so the two sets can never drift.
-export const SINGLETON_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(
+const SINGLETON_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(
   RIGHT_DOCK_PANE_KINDS.filter((kind) => !MULTI_INSTANCE_PANE_KINDS.has(kind)),
 );
 
@@ -118,15 +128,29 @@ export function sanitizeRightDockThreadState(value: unknown): RightDockThreadSta
     return createDefaultRightDockState();
   }
   const candidate = value;
-  const panes = Array.isArray(candidate.panes)
+  const sanitizedPanes = Array.isArray(candidate.panes)
     ? candidate.panes
         .map(sanitizePersistedPane)
         .filter((pane): pane is RightDockPane => pane !== null)
     : [];
+  const persistedActivePaneId =
+    typeof candidate.activePaneId === "string" ? candidate.activePaneId : null;
+  const keptSingletonPaneIdByKind = new Map<RightDockPaneKind, string>();
+  for (const pane of sanitizedPanes) {
+    if (
+      isSingletonPaneKind(pane.kind) &&
+      (pane.id === persistedActivePaneId || !keptSingletonPaneIdByKind.has(pane.kind))
+    ) {
+      keptSingletonPaneIdByKind.set(pane.kind, pane.id);
+    }
+  }
+  const panes = sanitizedPanes.filter(
+    (pane) =>
+      !isSingletonPaneKind(pane.kind) || keptSingletonPaneIdByKind.get(pane.kind) === pane.id,
+  );
   const activePaneId =
-    typeof candidate.activePaneId === "string" &&
-    panes.some((pane) => pane.id === candidate.activePaneId)
-      ? candidate.activePaneId
+    persistedActivePaneId && panes.some((pane) => pane.id === persistedActivePaneId)
+      ? persistedActivePaneId
       : (panes[0]?.id ?? null);
   return {
     open: candidate.open === true,
@@ -175,6 +199,9 @@ function createPane(input: OpenPaneInput): RightDockPane {
 // overwrite content metadata when the caller explicitly targets new content,
 // so a bare re-open/toggle keeps the pane focused on what it currently shows.
 function singletonPaneReopenPatch(input: OpenPaneInput): Partial<RightDockPane> | null {
+  if (input.kind === "sidechat" && input.threadId !== undefined) {
+    return { threadId: input.threadId ?? null };
+  }
   if (
     input.kind === "diff" &&
     (input.diffTurnId !== undefined || input.diffFilePath !== undefined)
@@ -198,20 +225,12 @@ function singletonPaneReopenPatch(input: OpenPaneInput): Partial<RightDockPane> 
   return null;
 }
 
-// Multi-instance kinds reuse an existing pane only when it already shows the
-// requested content: sidechat panes match on the embedded thread, file panes
-// on the previewed file (so re-clicking an open file focuses its tab instead
-// of duplicating it, and a bare open reuses an existing empty file pane).
+// Multi-instance file panes reuse an existing pane when it already shows the
+// requested path, so re-clicking a file focuses its tab instead of duplicating it.
 function findMatchingMultiInstancePane(
   state: RightDockThreadState,
   input: OpenPaneInput,
 ): RightDockPane | undefined {
-  if (input.kind === "sidechat") {
-    if (!input.threadId) {
-      return undefined;
-    }
-    return state.panes.find((pane) => pane.kind === "sidechat" && pane.threadId === input.threadId);
-  }
   if (input.kind === "file") {
     const filePath = input.filePath ?? null;
     return state.panes.find((pane) => pane.kind === "file" && pane.filePath === filePath);
@@ -266,11 +285,7 @@ function resolveActiveAfterRemoval(
   if (previousActiveId !== removedId) {
     return previousActiveId;
   }
-  if (panes.length === 0) {
-    return null;
-  }
-  const neighborIndex = Math.min(removedIndex, panes.length - 1);
-  return panes[neighborIndex]?.id ?? null;
+  return resolveTabAfterClose(panes, removedIndex)?.id ?? null;
 }
 
 export function closePaneInState(
@@ -295,6 +310,19 @@ export function closePaneInState(
     panes: nextPanes,
     activePaneId: nextActiveId,
   };
+}
+
+/** Drops a dragged tab onto another tab's slot; the active pane and the dock stay as they are. */
+export function movePaneInState(
+  state: RightDockThreadState,
+  paneId: string,
+  overPaneId: string,
+): RightDockThreadState {
+  const fromIndex = state.panes.findIndex((pane) => pane.id === paneId);
+  const toIndex = state.panes.findIndex((pane) => pane.id === overPaneId);
+  return fromIndex < 0 || toIndex < 0 || fromIndex === toIndex
+    ? state
+    : { ...state, panes: arrayMove(state.panes, fromIndex, toIndex) };
 }
 
 export function setActivePaneInState(
@@ -358,6 +386,24 @@ export function updatePaneInState(
   return changed ? { ...state, panes: nextPanes } : state;
 }
 
+// Points the (singleton) side chat pane at another thread, or removes it for null, without
+// opening or closing the dock. A host whose side chat follows a selection (the GitHub inbox)
+// uses it so a closed dock stays closed and an open one shows the new target.
+export function setSidechatPaneThreadInState(
+  state: RightDockThreadState,
+  input: { paneId: string; threadId: ThreadId | null },
+): RightDockThreadState {
+  const existing = findSingletonPane(state, "sidechat");
+  if (input.threadId === null) {
+    return existing ? closePaneInState(state, existing.id) : state;
+  }
+  if (existing) {
+    return updatePaneInState(state, existing.id, { threadId: input.threadId });
+  }
+  const pane = createPane({ paneId: input.paneId, kind: "sidechat", threadId: input.threadId });
+  return { open: state.open, panes: [...state.panes, pane], activePaneId: pane.id };
+}
+
 // Header toggles behave like a visibility switch for a singleton kind: if that
 // kind is the active visible pane, collapse the dock (preserving tabs);
 // otherwise open/focus it.
@@ -377,4 +423,47 @@ export function resolveActivePane(state: RightDockThreadState): RightDockPane | 
     return null;
   }
   return state.panes.find((pane) => pane.id === state.activePaneId) ?? null;
+}
+
+export function findMissingSidechatPaneIds(
+  state: RightDockThreadState,
+  existingThreadIds: ReadonlySet<ThreadId>,
+): readonly string[] {
+  return state.panes.flatMap((pane) =>
+    pane.kind === "sidechat" && pane.threadId && !existingThreadIds.has(pane.threadId)
+      ? [pane.id]
+      : [],
+  );
+}
+
+// An active sidechat embeds a full chat, so it needs a detail lease just like a
+// split-view pane. Persisted inactive or currently unrendered docks stay out of
+// the scarce live-stream budget.
+export function resolveVisibleDockSidechatThreadIds(input: {
+  dockRendered: boolean;
+  dockStateByThreadId: Record<string, RightDockThreadState | undefined>;
+  hostThreadIds: readonly RightDockHostId[];
+}): ThreadId[] {
+  if (!input.dockRendered) {
+    return [];
+  }
+
+  const sidechatThreadIds: ThreadId[] = [];
+  const seenThreadIds = new Set<string>(input.hostThreadIds);
+  for (const hostThreadId of input.hostThreadIds) {
+    const dockState = input.dockStateByThreadId[hostThreadId];
+    if (!dockState) {
+      continue;
+    }
+    const activePane = resolveActivePane(dockState);
+    if (
+      activePane?.kind === "sidechat" &&
+      activePane.threadId &&
+      !seenThreadIds.has(activePane.threadId)
+    ) {
+      seenThreadIds.add(activePane.threadId);
+      sidechatThreadIds.push(activePane.threadId);
+    }
+  }
+  return sidechatThreadIds;
 }

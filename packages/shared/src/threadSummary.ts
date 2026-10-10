@@ -1,12 +1,14 @@
 import type {
   OrchestrationLatestTurn,
   OrchestrationMessage,
+  OrchestrationPendingInteraction,
   OrchestrationProposedPlan,
   OrchestrationThreadActivity,
 } from "@synara/contracts";
 
 export interface ThreadSummaryMetadata {
   latestUserMessageAt: string | null;
+  latestHumanMessageAt: string | null;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
@@ -23,7 +25,7 @@ export interface PendingThreadRequestIds {
 }
 
 export type PendingThreadRequestKind = "approval" | "user-input";
-export type ApprovalRequestKind = "command" | "file-read" | "file-change" | "permissions";
+export type ApprovalRequestKind = "command" | "file-read" | "file-change" | "permissions" | "tool";
 
 export function pendingRequestInstanceKey(requestId: string, lifecycleGeneration?: string): string {
   return `${requestId}\u0000${lifecycleGeneration ?? "legacy"}`;
@@ -49,6 +51,40 @@ function compareActivitiesByOrder(
   );
 }
 
+type OrderableActivity = Pick<OrchestrationThreadActivity, "createdAt" | "id" | "sequence">;
+
+const orderedActivitiesCache = new WeakMap<
+  ReadonlyArray<OrderableActivity>,
+  ReadonlyArray<OrderableActivity>
+>();
+
+function isActivityOrderStable(activities: ReadonlyArray<OrderableActivity>): boolean {
+  for (let index = 1; index < activities.length; index += 1) {
+    if (compareActivitiesByOrder(activities[index - 1]!, activities[index]!) > 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Store activity arrays are immutable and appended in order, so the common case is already
+// sorted; a linear pre-check plus a per-array cache avoids re-copying and re-sorting the full
+// list on every summary recomputation (this runs per store flush while a thread streams).
+function orderedActivities<TActivity extends OrderableActivity>(
+  activities: ReadonlyArray<TActivity>,
+): ReadonlyArray<TActivity> {
+  const cached = orderedActivitiesCache.get(activities);
+  if (cached) {
+    return cached as ReadonlyArray<TActivity>;
+  }
+
+  const ordered = isActivityOrderStable(activities)
+    ? activities
+    : [...activities].toSorted(compareActivitiesByOrder);
+  orderedActivitiesCache.set(activities, ordered);
+  return ordered;
+}
+
 function toPayloadRecord(payload: unknown): Record<string, unknown> | null {
   return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
 }
@@ -67,12 +103,20 @@ export function approvalRequestKindFromRequestType(
       return "file-change";
     case "permissions_approval":
       return "permissions";
+    case "tool_approval":
+      return "tool";
+    // Adapters historically classified generic/MCP tool approvals by item type
+    // instead of the canonical "tool_approval". A request.opened is always an
+    // approval, and an approval without a kind is unrenderable — the turn hangs
+    // with no way to respond — so map the legacy value rather than dropping it.
+    case "dynamic_tool_call":
+      return "tool";
     default:
       return null;
   }
 }
 
-function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
+export function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
   if (!detail) {
     return false;
   }
@@ -188,11 +232,44 @@ export function derivePendingThreadRequestIds(input: {
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
+  readonly pendingInteractions?: ReadonlyArray<
+    Pick<
+      OrchestrationPendingInteraction,
+      "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
+    >
+  >;
 }): PendingThreadRequestIds {
+  // A present settlement projection is authoritative for every interaction
+  // kind, including an empty array and terminal-but-unconfirmed rows such as
+  // `uncertain`. Only snapshots that omit the projection entirely fall back to
+  // activity replay for legacy/imported compatibility.
+  const projectedOpenApprovals = new Map<string, string>();
+  const projectedOpenUserInputs = new Map<string, string>();
+  for (const interaction of input.pendingInteractions ?? []) {
+    const isApproval = interaction.interactionKind === "approval";
+    if (interaction.status !== "pending" && interaction.status !== "retryable") {
+      continue;
+    }
+    const openRequests = isApproval ? projectedOpenApprovals : projectedOpenUserInputs;
+    openRequests.set(
+      pendingRequestInstanceKey(
+        interaction.requestId,
+        interaction.lifecycleGeneration ?? undefined,
+      ),
+      interaction.requestId,
+    );
+  }
+
+  if (input.pendingInteractions !== undefined) {
+    return {
+      approvalRequestIds: [...projectedOpenApprovals.values()],
+      userInputRequestIds: [...projectedOpenUserInputs.values()],
+    };
+  }
+
   const openApprovals = new Map<string, string>();
   const openUserInputs = new Map<string, string>();
-  const orderedActivities = [...input.activities].toSorted(compareActivitiesByOrder);
-  for (const activity of orderedActivities) {
+  for (const activity of orderedActivities(input.activities)) {
     const payload = toPayloadRecord(activity.payload);
     const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
     const detail = typeof payload?.detail === "string" ? payload.detail : undefined;
@@ -203,7 +280,8 @@ export function derivePendingThreadRequestIds(input: {
         payload?.requestKind === "command" ||
         payload?.requestKind === "file-read" ||
         payload?.requestKind === "file-change" ||
-        payload?.requestKind === "permissions"
+        payload?.requestKind === "permissions" ||
+        payload?.requestKind === "tool"
           ? payload.requestKind
           : approvalRequestKindFromRequestType(payload?.requestType);
       if (requestKind) {
@@ -253,10 +331,29 @@ export function derivePendingThreadRequestIds(input: {
   };
 }
 
+type ThreadSummaryMessage = Pick<OrchestrationMessage, "role" | "createdAt" | "dispatchOrigin"> &
+  Partial<Pick<OrchestrationMessage, "updatedAt">>;
+
+/** User-message updates preserve the send time on turn binding and advance it on resend. */
+export function resolveHumanMessageAt(message: ThreadSummaryMessage): string | null {
+  if (
+    message.role !== "user" ||
+    (message.dispatchOrigin != null && message.dispatchOrigin !== "user")
+  )
+    return null;
+  return maxIso(message.createdAt, message.updatedAt ?? message.createdAt);
+}
+
 export function deriveThreadSummaryState(input: {
-  readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
+  readonly messages: ReadonlyArray<ThreadSummaryMessage>;
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly pendingInteractions?: ReadonlyArray<
+    Pick<
+      OrchestrationPendingInteraction,
+      "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
+    >
   >;
   readonly proposedPlans: ReadonlyArray<
     Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
@@ -264,13 +361,23 @@ export function deriveThreadSummaryState(input: {
   readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
 }): ThreadSummaryState {
   let latestUserMessageAt: string | null = null;
+  let latestHumanMessageAt: string | null = null;
   for (const message of input.messages) {
     if (message.role === "user") {
       latestUserMessageAt = maxIso(latestUserMessageAt, message.createdAt);
+      const humanMessageAt = resolveHumanMessageAt(message);
+      if (humanMessageAt !== null) {
+        latestHumanMessageAt = maxIso(latestHumanMessageAt, humanMessageAt);
+      }
     }
   }
 
-  const pendingRequestIds = derivePendingThreadRequestIds({ activities: input.activities });
+  const pendingRequestIds = derivePendingThreadRequestIds({
+    activities: input.activities,
+    ...(input.pendingInteractions !== undefined
+      ? { pendingInteractions: input.pendingInteractions }
+      : {}),
+  });
 
   const latestProposedPlan = resolveLatestProposedPlan({
     proposedPlans: input.proposedPlans,
@@ -279,6 +386,7 @@ export function deriveThreadSummaryState(input: {
 
   return {
     latestUserMessageAt,
+    latestHumanMessageAt,
     pendingApprovalCount: pendingRequestIds.approvalRequestIds.length,
     pendingUserInputCount: pendingRequestIds.userInputRequestIds.length,
     hasPendingApprovals: pendingRequestIds.approvalRequestIds.length > 0,
@@ -288,9 +396,15 @@ export function deriveThreadSummaryState(input: {
 }
 
 export function deriveThreadSummaryMetadata(input: {
-  readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
+  readonly messages: ReadonlyArray<ThreadSummaryMessage>;
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly pendingInteractions?: ReadonlyArray<
+    Pick<
+      OrchestrationPendingInteraction,
+      "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
+    >
   >;
   readonly proposedPlans: ReadonlyArray<
     Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
@@ -300,6 +414,7 @@ export function deriveThreadSummaryMetadata(input: {
   const summary = deriveThreadSummaryState(input);
   return {
     latestUserMessageAt: summary.latestUserMessageAt,
+    latestHumanMessageAt: summary.latestHumanMessageAt,
     hasPendingApprovals: summary.hasPendingApprovals,
     hasPendingUserInput: summary.hasPendingUserInput,
     hasActionableProposedPlan: summary.hasActionableProposedPlan,

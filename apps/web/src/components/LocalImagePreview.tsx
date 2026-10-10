@@ -37,9 +37,17 @@ export function useLocalImagePreview(input: {
   src: string;
   cwd: string | null | undefined;
   previewGrant?: string | null | undefined;
+  cacheKey?: string | number | undefined;
+  onPreviewReady?: (() => void) | undefined;
+  onPreviewError?: (() => void) | undefined;
 }): LocalImagePreviewState {
   const { src, cwd, previewGrant } = input;
-  const previewUrl = buildLocalImageUrl({ src, cwd: cwd ?? undefined, grant: previewGrant });
+  const previewUrl = buildLocalImageUrl({
+    src,
+    cwd: cwd ?? undefined,
+    grant: previewGrant,
+    cacheKey: input.cacheKey,
+  });
   const downloadUrl = buildLocalImageUrl({
     src,
     cwd: cwd ?? undefined,
@@ -76,8 +84,14 @@ export function useLocalImagePreview(input: {
     loading: "lazy",
     decoding: "async",
     draggable: false,
-    onLoad: () => settleLoad("ready"),
-    onError: () => settleLoad("error"),
+    onLoad: () => {
+      settleLoad("ready");
+      input.onPreviewReady?.();
+    },
+    onError: () => {
+      settleLoad("error");
+      input.onPreviewError?.();
+    },
   };
 
   return {
@@ -96,21 +110,24 @@ export function useLocalImageDownloadClick(input: {
   downloadUrl: string;
   downloadName: string;
   errorTitle?: string | undefined;
+  resolveDownloadUrl?: (() => Promise<string>) | undefined;
 }) {
   return (event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    void downloadUrlAsBlob({
-      url: input.downloadUrl,
-      filename: input.downloadName,
-    }).catch((error: unknown) => {
-      toastManager.add({
-        type: "error",
-        title: input.errorTitle ?? "Could not download image",
-        description:
-          error instanceof Error ? error.message : "The file may have moved or be unavailable.",
+    void Promise.resolve()
+      .then(async () => {
+        const url = input.resolveDownloadUrl ? await input.resolveDownloadUrl() : input.downloadUrl;
+        await downloadUrlAsBlob({ url, filename: input.downloadName });
+      })
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: input.errorTitle ?? "Could not download image",
+          description:
+            error instanceof Error ? error.message : "The file may have moved or be unavailable.",
+        });
       });
-    });
   };
 }
 
@@ -152,14 +169,20 @@ export function LocalImagePreview(props: {
   src: string;
   cwd: string | null | undefined;
   previewGrant?: string | null | undefined;
+  cacheKey?: string | number | undefined;
   alt: string;
   className?: string;
   imageClassName?: string;
+  onPreviewReady?: (() => void) | undefined;
+  onPreviewError?: (() => void) | undefined;
 }) {
   const { downloadUrl, downloadName, status, imgProps } = useLocalImagePreview({
     src: props.src,
     cwd: props.cwd,
     previewGrant: props.previewGrant,
+    cacheKey: props.cacheKey,
+    onPreviewReady: props.onPreviewReady,
+    onPreviewError: props.onPreviewError,
   });
   const handleDownloadClick = useLocalImageDownloadClick({ downloadUrl, downloadName });
 

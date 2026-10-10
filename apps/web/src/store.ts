@@ -15,6 +15,11 @@ import { Debouncer } from "@tanstack/react-pacer";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import { create } from "zustand";
 
+import {
+  normalizeProjectAppearance,
+  projectAppearanceEquals,
+  type ProjectAppearance,
+} from "./lib/projectAppearance";
 import { resolveCreateBranchFlowCompletedMerge } from "./storeNormalization";
 import {
   applySpaceOrder,
@@ -31,13 +36,9 @@ import {
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
-import {
-  persistState,
-  readPersistedState,
-  rememberProjectLocalNames,
-  rememberProjectUiState,
-} from "./storePersistence";
+import { persistState, readPersistedState, rememberProjectState } from "./storePersistence";
 import { initialState, type AppState } from "./storeState";
+import { persistThreadVisitedState } from "./threadVisitedPersistence";
 import type { Project, ThreadWorkspacePatch } from "./types";
 
 type ReadModelThread = OrchestrationReadModel["threads"][number];
@@ -59,12 +60,18 @@ export {
 } from "./storeProjection";
 export { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 
-const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
+const debouncedPersistState = new Debouncer(
+  (state: AppState) => {
+    persistState(state);
+    persistThreadVisitedState(state);
+  },
+  { wait: 500 },
+);
 
 export function persistAppStateNow(state: AppState = useStore.getState()): void {
   persistState(state);
+  persistThreadVisitedState(state, { force: true });
 }
-
 export function markThreadVisited(
   state: AppState,
   threadId: ThreadId,
@@ -183,6 +190,22 @@ export function renameProjectLocally(
   return changed ? { ...state, projects } : state;
 }
 
+export function setProjectAppearanceLocally(
+  state: AppState,
+  projectId: Project["id"],
+  appearance: ProjectAppearance | null,
+): AppState {
+  const nextAppearance = normalizeProjectAppearance(appearance);
+  let changed = false;
+  const projects = state.projects.map((project) => {
+    if (project.id !== projectId) return project;
+    if (projectAppearanceEquals(project.appearance ?? null, nextAppearance)) return project;
+    changed = true;
+    return { ...project, appearance: nextAppearance };
+  });
+  return changed ? { ...state, projects } : state;
+}
+
 export function setError(state: AppState, threadId: ThreadId, error: string | null): AppState {
   return applyThreadUpdate(state, threadId, (thread) => {
     if (thread.error === error) return thread;
@@ -264,7 +287,7 @@ export function setThreadWorkspace(
 interface AppStore extends AppState {
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
-  syncServerThreadDetailHotPath: (thread: ReadModelThread) => void;
+  syncServerThreadDetailHotPath: (thread: ReadModelThread, snapshotSequence?: number) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
   applyShellEvent: (event: OrchestrationShellStreamEvent) => void;
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
@@ -284,6 +307,10 @@ interface AppStore extends AppState {
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   reorderSpacesLocally: (orderedSpaceIds: ReadonlyArray<SpaceId>) => void;
   renameProjectLocally: (projectId: Project["id"], name: string | null) => void;
+  setProjectAppearanceLocally: (
+    projectId: Project["id"],
+    appearance: ProjectAppearance | null,
+  ) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
 }
@@ -292,8 +319,8 @@ export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(initialState),
   syncServerShellSnapshot: (snapshot) => set((state) => syncServerShellSnapshot(state, snapshot)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
-  syncServerThreadDetailHotPath: (thread) =>
-    set((state) => syncServerThreadDetailHotPath(state, thread)),
+  syncServerThreadDetailHotPath: (thread, snapshotSequence) =>
+    set((state) => syncServerThreadDetailHotPath(state, thread, snapshotSequence)),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
   applyShellEvent: (event) => set((state) => applyShellEvent(state, event)),
   applyOrchestrationEvents: (events) => set((state) => applyOrchestrationEvents(state, events)),
@@ -341,15 +368,24 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => renameProjectLocally(state, projectId, name));
     persistAppStateNow();
   },
+  setProjectAppearanceLocally: (projectId, appearance) => {
+    set((state) => setProjectAppearanceLocally(state, projectId, appearance));
+    persistAppStateNow();
+  },
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadWorkspace: (threadId, patch) =>
     set((state) => setThreadWorkspace(state, threadId, patch)),
 }));
 
-// Persist state changes with debouncing to avoid localStorage thrashing
+// Persist state changes with debouncing to avoid localStorage thrashing.
+// Project snapshots only depend on `state.projects` (immutable — every project mutation
+// produces a new array), so skip them on the streaming hot path where only thread slices move.
+let lastRememberedProjects: readonly Project[] | undefined;
 useStore.subscribe((state) => {
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  if (state.projects !== lastRememberedProjects) {
+    lastRememberedProjects = state.projects;
+    rememberProjectState(state.projects);
+  }
   debouncedPersistState.maybeExecute(state);
 });
 

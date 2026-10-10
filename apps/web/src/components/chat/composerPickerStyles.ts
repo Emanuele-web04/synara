@@ -3,7 +3,8 @@
 // Layer: UI styling helper
 // Exports: surface/option/radius tokens; open panels via ComposerPickerMenuPopup / ComposerPickerSelectPopup
 
-import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 
 export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerSize";
 
@@ -14,15 +15,27 @@ export const COMPOSER_SURFACE_SHADOW_CLASS_NAME =
 // Uses the UI-sm token so picker labels sit slightly below the editor text size.
 // The sm: override is required to beat the Button component's base responsive text classes.
 export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
-  "text-[length:var(--app-font-size-ui-sm,11px)] text-[var(--color-text-foreground-secondary)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal hover:text-[var(--color-text-foreground)] data-pressed:text-[var(--color-text-foreground)]";
+  "text-ui-sm text-[var(--color-text-foreground-secondary)] sm:text-ui-sm font-normal hover:text-[var(--color-text-foreground)] data-pressed:text-[var(--color-text-foreground)]";
 
 /**
  * Compact pill trigger for the composer-footer toolbar pickers (environment + branch).
  * Matches `PickerTriggerButton` sizing (ui-sm label) so the project / environment / branch
  * row in the empty-state footer reads as one set. Pair with a `size-3.5` leading icon and a
  * `size-3` `ChevronDownIcon` so the three triggers stay on identical icon + chevron sizes.
+ * Capsule radius so the hover fill reads as a pill, matching the other toolbar chips.
  */
-export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 ${ELEVATED_HOVER_SURFACE_CLASS_NAME} ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
+export const COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME =
+  "rounded-full transition-colors hover:bg-[var(--color-background-button-secondary-hover)]";
+
+export const COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME = `${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} group-hover/project-picker-trigger:bg-[var(--color-background-button-secondary-hover)]`;
+
+/** Primary-text variant of the picker trigger typography for the composer toolbar tray
+ *  (project chip, environment, branch, temporary): these read as the thread's headline
+ *  context, so they sit on the primary foreground rather than the secondary picker tone. */
+export const COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME =
+  "text-ui-sm text-[var(--color-text-foreground)] sm:text-ui-sm font-normal";
+
+export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 ${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME}`;
 
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
@@ -44,28 +57,31 @@ export const COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME =
 export const COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME = "composer-picker-scroll";
 
 /** Corner radius for picker panel chrome and panel-level surfaces. */
-export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.65rem]";
+export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.875rem]";
 
 /** Tighter corner radius for option rows / selection pills inside picker panels. */
-export const COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME = "rounded-[0.5rem]";
+export const COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME = "rounded-[0.625rem]";
 
 /** Collapsible section headers inside model provider lists. */
-export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
+export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-ui-xs font-medium text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
 
 /** Indents model row labels under collapsible group headers. */
 export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]";
 
-/** Muted accent text for effort labels and empty-landing folder names. */
-export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
+/** Muted accent text for effort labels and empty-landing folder names.
+ *  Aliases the shared quiet-label tone so the picker and the transcript tool rows
+ *  can never drift onto two different grays. */
+export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = MUTED_LABEL_TEXT_CLASS_NAME;
 
 // NOTE: Composer picker section headers (Effort, Thinking, Mode, …) now render
 // through the shared `MenuGroupLabel` primitive (../ui/menu) so they stay in
 // sync with dropdown group labels like "Git actions". Picker padding is still
 // tuned via the `--picker-section-py` token on `[data-slot="menu-label"]`.
 
-export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[46rem]";
-/** Main chat column background — matches the theme Background setting exactly. */
-export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]";
+export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[var(--app-chat-max-width,46rem)]";
+/** Main chat column background — the theme Background setting exactly, or clear when the
+ *  whole window is translucent (see `.app-content-surface` in index.css). */
+export const CHAT_BACKGROUND_CLASS_NAME = "app-content-surface";
 
 /** Turns the main content column into a distinct, opaque surface over the
  *  (optionally translucent) sidebar instead of sharing one continuous material with it.
@@ -111,45 +127,46 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
 /**
  * Frame for rows stacked above the composer (queued steer/queue rows, live file
- * changes, active task list). Sits at `w-11/12` and is centered (`mx-auto`) so the
+ * changes, active task list). Sits at `w-14/15` and is centered (`mx-auto`) so the
  * stack reads as an inset rail above the full-width composer input.
  *
  * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
  * token directly so chrome and attached-radius behavior stay centralized.
  */
-export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-14/15 min-w-0";
 
-/** Opaque base behind the composer shell: the composer overlaps the scrolling
- *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
- *  transcript text bleed through its top edge. Match the chat surface to stay seamless.
+/** Shell around the composer surface. Deliberately has NO background: the composer
+ *  floats over the scrolling transcript (see `composerOverlay.ts`) and its frosted
+ *  material is meant to reveal and blur the content passing behind it — an opaque
+ *  backing here would be the only thing its `backdrop-filter` ever sampled.
  *  `relative z-[1]` keeps the full input outline above the inset stacked rail
  *  (`-mb-px`), so the top border is never covered by live-changes / task / queue chrome. */
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
-  "group relative z-[1] chat-composer-shell bg-[var(--color-background-surface)] transition-colors duration-200";
+  "group relative z-[1] chat-composer-shell squircle transition-colors duration-200";
 
-/** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
-export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
-  "border-[color:color-mix(in_srgb,var(--color-border-heavy)_95%,var(--foreground)_5%)]";
+/** The one border for raised chrome floating over the transcript: composer shell and
+ *  its attached banners, the Environment panel, kanban cards. Light and dark values
+ *  live on `--surface-border` in `index.css`, behind the shared
+ *  `--surface-border-strength` knob, so these surfaces can never drift apart. */
+export const RAISED_SURFACE_BORDER_CLASS_NAME = "border-[color:var(--surface-border)]";
 
 /** Shared border for panels stacked above the composer; dark mode matches the live changes strip. */
-export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
-  COMPOSER_SURFACE_BORDER_CLASS_NAME,
-  "dark:border-[color:color-mix(in_srgb,var(--color-border-heavy)_50%,transparent)]",
-].join(" ");
+export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME =
+  "border-[color:var(--composer-stacked-border)]";
 
-/** Border + shadow chrome for raised opaque surfaces (composer shell, kanban cards):
- *  a real border follows squircle/corner-shape geometry more evenly than an outer
- *  ring (box-shadow). Dark mode drops the border and leans on the shadow for separation. */
-export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
+/** Border + shadow chrome for raised opaque surfaces (kanban cards): a real border
+ *  follows squircle/corner-shape geometry more evenly than an outer ring (box-shadow).
+ *  Dark mode drops the border and leans on the shadow for separation. */
+export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
 
 /** Composer input shell. Like RAISED_SURFACE_CHROME but keeps a visible border in
- *  dark mode using the same `border-border` token as the Environment panel, instead
- *  of dropping to shadow-only separation. */
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} dark:border-border ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
+ *  dark mode (via `--surface-border`) instead of dropping to shadow-only separation. */
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface squircle border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
-/** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
-export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
-  "relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150";
+/** Shell for floating menus, pickers, and popovers: the shared overlay fill over a backdrop
+ *  blur. FLOATING_OVERLAY_SURFACE_CLASS_NAME hands the fill to index.css and, on a translucent
+ *  window where the blur cannot hide what sits behind the popup, marks it for the cutout. */
+export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150`;
 
 /** Default floating popup shell (dropdown menus, selects, popovers). */
 export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-2xl shadow-xl`;
@@ -180,10 +197,13 @@ export const COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME =
 
 /** Option row shared by composer menus and composer-surface select popups. Sizing via picker size CSS vars.
  *  Leading-icon rules are declared for both `<svg>` (Tabler/Lucide) and the Central
- *  icon `<span data-slot=central-icon>` so a masked Central glyph (e.g. the Explorer
- *  "folders" or Terminal "console" icon) lines up and dims exactly like the SVG icons
+ *  icon `<span data-slot=central-icon>` so a masked Central glyph (e.g. the Skill cube
+ *  or Plugin puzzle icon) lines up and dims exactly like the SVG icons
  *  instead of sitting brighter and 2px out of alignment. */
-export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME = `[&>svg,&>[data-slot=central-icon]]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-']),&>[data-slot=central-icon]:not([class*='opacity-'])]:opacity-80 [&>svg,&>[data-slot=central-icon]]:pointer-events-none [&>svg,&>[data-slot=central-icon]]:shrink-0`;
+export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME = `[&>svg,&>[data-slot=central-icon]]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-ui text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-']),&>[data-slot=central-icon]:not([class*='opacity-'])]:opacity-80 [&>svg,&>[data-slot=central-icon]]:pointer-events-none [&>svg,&>[data-slot=central-icon]]:shrink-0`;
+
+/** Leading glyph of a menu option: one size for every icon in these popups. */
+export const MENU_ICON_CLASS_NAME = "size-3.5 shrink-0";
 
 /** Same as menu options, adapted for select item grid layout. */
 export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME = `${COMPOSER_PICKER_MENU_OPTION_CLASS_NAME} grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]`;
@@ -195,18 +215,29 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
  *  Picker border/radius/shadow, but a solid fill: the menu floats over the
  *  transcript, so frosted bg-popover/70 would let chat content bleed through. */
 export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
-  "relative overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground";
+  "relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground";
 
-/** Opaque Environment panel card — same rationale as the command menu (overlays transcript). */
-export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+/** Environment panel card. Opaque for the same reason as the command menu (it overlays the
+ *  transcript), except on a whole-window glass shell, where it takes the shared raised
+ *  tint (see `.app-glass-raised` in index.css).
+ *  Docks alongside the composer, so it carries the shared raised-chrome border rather
+ *  than plain `border-border`: the two cards sit side by side and must read as one weight. */
+export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} chat-raised-panel-surface text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
-/** Slide + inset timing matched to `SIDEBAR_OFFCANVAS_MOTION_CLASS` (right dock / thread sidebar). */
+/** Top-right overlay host shared by the right-side surface panels (Environment, Group,
+ *  Library). Clip horizontal slide overflow so a caller enabling vertical scrolling cannot
+ *  expose a horizontal scrollbar for the offscreen, closed card. Panels that stack extra
+ *  chrome (Environment's bottom rail) extend it. */
+export const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
+  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col overflow-x-clip p-3";
+
+/** Slide + inset timing matched to shared disclosure motion (220ms). */
 export const ENVIRONMENT_PANEL_MOTION_CLASS =
-  "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+  "transition-[translate,opacity] duration-220 ease-out motion-reduce:transition-none";
 
 /** Transcript/composer right inset when the docked Environment card opens. */
 export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
-  "transition-[padding-right] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+  "transition-[padding-right] duration-220 ease-out motion-reduce:transition-none";
 
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
@@ -219,15 +250,22 @@ export const COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME =
 /** Default command menu row — transparent until hover or keyboard highlight.
  *  Highlight tints the surface darker (button-secondary), matching every other
  *  composer picker. The `elevated-secondary-opaque` token lightens toward white,
- *  which is invisible on the near-white popover surface, so it is not used here. */
+ *  which is invisible on the near-white popover surface, so it is not used here.
+ *  `rounded-xl` keeps the row concentric with the `rounded-2xl` surface behind the
+ *  list's 0.25rem padding. */
 export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
-  "flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)]";
+  "flex cursor-pointer select-none items-center gap-2 rounded-xl px-2 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)]";
 
 /** Active command menu row — keyboard-selected pill fill. */
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =
   "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]";
 
-export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner border-b ${COMPOSER_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
+export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner squircle border-b ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
+
+/** Compact bordered action pill for inline composer chrome (Review changes, hint
+ *  actions). One token so every trailing action in a composer strip reads alike. */
+export const COMPOSER_INLINE_ACTION_PILL_CLASS_NAME =
+  "shrink-0 rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background";
 
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";
@@ -238,11 +276,15 @@ export const RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME = "text-[var(--color-text-accen
 /** Minimum composer editor height — two lines at the element's line-height.
  *  `leading-relaxed` (1.625) keeps the input in step with the transcript/bubble leading. */
 export const COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME = "leading-relaxed";
-export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-chat,12px)]";
+export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-chat";
 /** Font, size, and leading shared by the composer editor and its placeholder so the
  *  placeholder always aligns with typed text. Keep both surfaces on this one token. */
 export const COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME = `font-system-ui ${COMPOSER_EDITOR_TEXT_CLASS_NAME} ${COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME}`;
-/** Muted empty-state copy for the composer prompt editor. */
+/** Muted empty-state copy for the composer prompt editor.
+ *  Deliberately fainter than MUTED_LABEL_TEXT_CLASS_NAME and NOT aliased to it: a
+ *  placeholder sits in the exact position typed text will occupy, so at the label
+ *  tone it stops reading as an empty field and starts reading as content already
+ *  in the input. The quiet-label token is for chrome that sits *next to* text. */
 export const COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME = "text-muted-foreground/40";
 export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME =
   "min-h-[var(--app-density-composer-editor-min-height,2lh)]";

@@ -4,6 +4,8 @@ import type { Effect } from "effect";
 
 import type { PersistenceDecodeError, PersistenceSqlError } from "../Errors.ts";
 
+export const CHECKPOINT_RUNTIME_CONSUMER = "checkpoint-reactor.runtime.v1";
+
 export const PROVIDER_RUNTIME_INGESTION_CONSUMER = "provider-runtime-ingestion.v1";
 export const PROVIDER_RUNTIME_EVENT_MAX_BYTES = 2 * 1024 * 1024;
 export const PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED = 512;
@@ -24,6 +26,8 @@ export interface ProviderRuntimeEventRepositoryShape {
     readonly sequenceExclusive: number;
     readonly throughSequenceInclusive: number;
     readonly limit: number;
+    /** Filter checkpoint inputs in SQL before limiting and decoding; raw reads are unchanged. */
+    readonly checkpointRelevantOnly?: boolean;
   }) => Effect.Effect<
     ReadonlyArray<PersistedProviderRuntimeEvent>,
     ProviderRuntimeEventRepositoryError
@@ -59,9 +63,29 @@ export interface ProviderRuntimeEventRepositoryShape {
   readonly getConsumerCursor: (
     consumerName: string,
   ) => Effect.Effect<number, ProviderRuntimeEventRepositoryError>;
+  readonly hasPendingEventsForThreads: (input: {
+    readonly consumerName: string;
+    readonly threadIds: ReadonlyArray<string>;
+  }) => Effect.Effect<boolean, ProviderRuntimeEventRepositoryError>;
   readonly advanceConsumerCursor: (input: {
     readonly consumerName: string;
     readonly eventSequence: number;
+    readonly updatedAt: string;
+  }) => Effect.Effect<boolean, PersistenceSqlError>;
+  /**
+   * Acknowledge every stored row in (cursor, throughSequence] in one
+   * transaction. Equivalent to calling advanceConsumerCursor for each of those
+   * rows in order, including ingestion-owned open-turn bookkeeping and retention only for the
+   * ingestion consumer. Checkpoint acknowledgement validates only its stored
+   * target and releases at most 1024 accepted rows under the ingestion cursor,
+   * preserving pending checkpoints, open-turn replay and the accepted tail.
+   * Existing open-turn maintenance continues bounded retention passes.
+   * Pays one commit per settled range instead of one per event. Returns false when
+   * the cursor is not positioned exactly below those rows.
+   */
+  readonly advanceConsumerCursorThrough: (input: {
+    readonly consumerName: string;
+    readonly throughSequence: number;
     readonly updatedAt: string;
   }) => Effect.Effect<boolean, PersistenceSqlError>;
 }

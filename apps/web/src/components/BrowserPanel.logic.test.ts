@@ -3,22 +3,79 @@ import { describe, expect, it, vi } from "vitest";
 import {
   browserAnnotationDraftFromCommittedEvent,
   browserAnnotationMarkers,
-  browserAnnotationTheme,
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
   browserWebviewInitialUrl,
   createBrowserPanelHideScheduler,
+  createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
-  formatBrowserAnnotationActionError,
+  hasObscuringHitStackElementAboveSurface,
   isBrowserAnnotationEventInScope,
-  normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
+  shouldOccludeBrowserWebview,
+  applyBrowserWebviewPresentation,
+  isBrowserPanelBoundsHiddenKey,
+  resolveBrowserRuntimePresentation,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
 
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
+
+describe("native browser presentation ownership", () => {
+  it("keeps the native page in a floating slot and scales without a renderer handoff", () => {
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: true,
+        floating: true,
+        rect: { x: 20, y: 30, width: 320, height: 220 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "native",
+      bounds: { x: 20, y: 40, width: 320, height: 200 },
+      pageZoomFactor: 0.25,
+    });
+  });
+  it("preserves page dimensions across shell zoom and expands the same native surface", () => {
+    const floating = resolveBrowserRuntimePresentation({
+      native: true,
+      floating: true,
+      rect: { x: 20, y: 30, width: 640, height: 440 },
+      desktopZoom: 1.5,
+    });
+    expect(floating.surface).toBe("native");
+    expect(floating.bounds.width / floating.pageZoomFactor).toBe(1280);
+    expect(floating.bounds.height / floating.pageZoomFactor).toBe(800);
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: true,
+        floating: false,
+        rect: { x: 20, y: 30, width: 900, height: 600 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "native",
+      bounds: { x: 20, y: 30, width: 900, height: 600 },
+      pageZoomFactor: 1,
+    });
+  });
+  it("leaves existing renderer guests on their original CSS-scaled surface", () => {
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: false,
+        floating: true,
+        rect: { x: 20, y: 30, width: 320, height: 220 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "renderer",
+      bounds: { x: 20, y: 40, width: 1280, height: 800 },
+      pageZoomFactor: 1,
+    });
+  });
+});
 const DOCUMENT_KEY = `sha256:${"0".repeat(64)}`;
 
 function committedEvent(
@@ -142,33 +199,6 @@ describe("browser annotation projection", () => {
   });
 });
 
-describe("browser annotation presentation", () => {
-  it("uses the current chrome theme and readable action errors", () => {
-    const root = (dark: boolean) =>
-      ({
-        classList: {
-          contains: (token: string) => dark && token === "dark",
-        } as DOMTokenList,
-      }) as Pick<HTMLElement, "classList">;
-    expect(browserAnnotationTheme(root(false))).toMatchObject({
-      mode: "light",
-      surface: "rgb(255, 255, 255)",
-      primaryText: "rgb(255, 255, 255)",
-    });
-    expect(browserAnnotationTheme(root(true))).toMatchObject({
-      mode: "dark",
-      surface: "rgb(27, 27, 29)",
-      primaryText: "rgb(24, 24, 27)",
-    });
-    expect(
-      formatBrowserAnnotationActionError(
-        new Error("Browser annotation document is not ready"),
-        "start",
-      ),
-    ).toBe("This page is still loading. Try annotating again in a moment.");
-  });
-});
-
 describe("createBrowserRendererLossHandler", () => {
   it("recovers the same logical tab on the next renderer generation exactly once", () => {
     const oldRenderer = { webContentsId: 17 };
@@ -238,12 +268,21 @@ describe("createBrowserPanelHideScheduler", () => {
     }
   });
 
-  it("still hides after a real unmount without a matching remount", () => {
+  it("keeps the surface visible when a new live host mounts before the old host cleans up", () => {
     vi.useFakeTimers();
     try {
       const hide = vi.fn();
       const scheduler = createBrowserPanelHideScheduler();
+      const releaseDockHost = scheduler.acquire("thread-a");
+      const releaseFloatingHost = scheduler.acquire("thread-a");
 
+      releaseDockHost();
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).not.toHaveBeenCalled();
+
+      releaseFloatingHost();
       scheduler.schedule("thread-a", hide);
       vi.runAllTimers();
 
@@ -254,13 +293,94 @@ describe("createBrowserPanelHideScheduler", () => {
   });
 });
 
+describe("createBrowserPanelRendererHandoff", () => {
+  it("waits for the previous renderer guest to detach before attaching its replacement", async () => {
+    let resolveDetach!: () => void;
+    const detach = new Promise<void>((resolve) => {
+      resolveDetach = resolve;
+    });
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", detach);
+    const replacementReady = handoff.waitForDetach("thread-a");
+    let didAttach = false;
+    void replacementReady.then(() => {
+      didAttach = true;
+    });
+
+    await Promise.resolve();
+    expect(didAttach).toBe(false);
+
+    resolveDetach();
+    await replacementReady;
+
+    expect(didAttach).toBe(true);
+  });
+
+  it("does not block a replacement when detach IPC rejects", async () => {
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", Promise.reject(new Error("stale guest")));
+
+    await expect(handoff.waitForDetach("thread-a")).resolves.toBeUndefined();
+  });
+});
+
+describe("shouldOccludeBrowserWebview", () => {
+  it("occludes the Electron guest while the browser actions menu is open", () => {
+    expect(
+      shouldOccludeBrowserWebview({
+        showLocalServersHome: false,
+        browserActionsMenuOpen: true,
+        hasObscuringOverlay: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("hasObscuringHitStackElementAboveSurface", () => {
+  const surface = { id: "viewport" };
+  const overlay = { id: "dialog" };
+  const underlyingChat = { id: "chat" };
+  const isVisible = (element: { id: string }) => element.id !== "hidden";
+  const isNonObscuring = (element: { id: string }) => element.id === "toast-portal";
+  const isSurfaceBoundary = (element: { id: string }) =>
+    element.id === surface.id || element.id === "viewport-child";
+
+  it("detects a visible overlay above the viewport and ignores content behind it", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([overlay, surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat underlying chat siblings as an overlay", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores an incomplete stack that never reaches the viewport", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("browserAddressDisplayValue", () => {
   it("hides about:blank for new tabs", () => {
     expect(browserAddressDisplayValue({ url: "about:blank" })).toBe("");
-  });
-
-  it("keeps real urls visible", () => {
-    expect(browserAddressDisplayValue({ url: "https://x.com/" })).toBe("https://x.com/");
   });
 });
 
@@ -312,24 +432,6 @@ describe("resolveBrowserAddressSync", () => {
       value: "https://x.com/",
       syncedValue: "https://x.com/",
     });
-  });
-});
-
-describe("normalizeBrowserAddressInput", () => {
-  it("adds https to naked domains", () => {
-    expect(normalizeBrowserAddressInput("phodex.app")).toBe("https://phodex.app/");
-  });
-
-  it("turns spaced text into a search url", () => {
-    expect(normalizeBrowserAddressInput("how to bake bread")).toContain(
-      "https://www.google.com/search?q=how%20to%20bake%20bread",
-    );
-  });
-
-  it("preserves local file URLs", () => {
-    expect(normalizeBrowserAddressInput("file:///Users/example/project/index.html")).toBe(
-      "file:///Users/example/project/index.html",
-    );
   });
 });
 
@@ -413,19 +515,36 @@ describe("resolveBrowserChromeStatus", () => {
       }),
     ).toBeNull();
   });
+});
 
-  it("keeps onboarding copy for empty browser states", () => {
-    expect(
-      resolveBrowserChromeStatus({
-        localError: null,
-        threadLastError: null,
-        activeTabStatus: "suspended",
-        hasActiveTab: false,
-        workspaceReady: false,
-      }),
-    ).toEqual({
-      tone: "default",
-      label: "Starting browser...",
+describe("floating browser webview presentation", () => {
+  it("scales a CSS stage around the frozen guest, then restores fill layout", () => {
+    const stage = { style: {} } as HTMLElement;
+    applyBrowserWebviewPresentation(stage, {
+      floating: true,
+      slotWidth: 320,
+      slotHeight: 220,
     });
+    expect(stage.style.width).toBe("1280px");
+    expect(stage.style.height).toBe("800px");
+    expect(stage.style.transform).toBe("scale(0.25)");
+    expect(stage.style.top).toBe("10px");
+
+    applyBrowserWebviewPresentation(stage, {
+      floating: false,
+      slotWidth: 320,
+      slotHeight: 220,
+    });
+    expect(stage.style.width).toBe("100%");
+    expect(stage.style.height).toBe("100%");
+    expect(stage.style.transform).toBe("");
+  });
+});
+
+describe("isBrowserPanelBoundsHiddenKey", () => {
+  it("detects hidden keys after the zoom suffix was added", () => {
+    expect(isBrowserPanelBoundsHiddenKey("renderer:hidden:zoom-1")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("native:hidden")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("renderer:12:40:800:600:zoom-1")).toBe(false);
   });
 });

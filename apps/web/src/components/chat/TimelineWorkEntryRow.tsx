@@ -3,7 +3,8 @@
 // Layer: Web chat presentation component
 // Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
 
-import type { TurnId } from "@synara/contracts";
+import type { ModelSelection, TurnId } from "@synara/contracts";
+import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   createElement,
   memo,
@@ -21,13 +22,19 @@ import type { TimestampFormat } from "../../appSettings";
 import {
   ArrowUpCircleIcon,
   BackgroundTrayIcon,
+  BookOpenIcon,
   BotIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleQuestionIcon,
+  ContextCompactionIcon,
+  ComputerUseIcon,
   EyeIcon,
   GitHubIcon,
+  GlobeIcon,
   HammerIcon,
+  HandoffIcon,
+  HistoryIcon,
   type LucideIcon,
   McpIcon,
   PencilIcon,
@@ -38,16 +45,21 @@ import {
   ZapIcon,
 } from "~/lib/icons";
 import { describeLinkChip } from "~/lib/linkChips";
+import { computerToolName, describeComputerToolCall } from "~/lib/computerToolPresentation";
 import { cn } from "~/lib/utils";
+import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import {
   formatAgentActivityEntryPreview,
   isAgentActivityWorkEntry,
   isCodexActivityStatusWorkEntry,
+  isPlainRuntimeNoticeWorkEntry,
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
+import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -67,6 +79,8 @@ import {
   deriveFriendlyCommandTarget,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
+  isGenericToolTitle,
+  isSynaraBrowserToolCall,
   normalizeToolTextForComparison,
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
@@ -74,14 +88,16 @@ import {
 } from "../../lib/toolCallLabel";
 import { formatLiveActivityMeta, useLiveActivityNow } from "../../lib/liveActivityPresentation";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
+import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
 
 const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
 const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
+// Rest tone is the shared quiet-label gray (same one the composer pickers use for
+// their effort/thinking labels) so a tool row and the picker below it read as one
+// muted tone; hover still lifts the whole row to full foreground.
 const WORK_ROW_MUTED_HOVER_TONE: Record<"tool-row" | "file-row", string> = {
-  "tool-row":
-    "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
-  "file-row":
-    "text-muted-foreground/70 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground",
+  "tool-row": `${MUTED_LABEL_TEXT_CLASS_NAME} transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground`,
+  "file-row": `${MUTED_LABEL_TEXT_CLASS_NAME} transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground`,
 };
 const EMPTY_FILE_DIFF_STATS: ReadonlyMap<string, { additions: number; deletions: number }> =
   new Map();
@@ -116,8 +132,9 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
       className: "text-muted-foreground/50",
     };
   }
+  // Generic tool calls with no recognizable kind read as "consulted something".
   return {
-    icon: ZapIcon,
+    icon: BookOpenIcon,
     className: "text-muted-foreground/45",
   };
 }
@@ -229,12 +246,28 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   // (answer submitted) rather than the generic "info" checkmark.
   if (workEntry.activityKind === "user-input.requested") return CircleQuestionIcon;
   if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
+  if (workEntry.activityKind === "context-compaction") return ContextCompactionIcon;
+  if (workEntry.activityKind === "checkpoint.baseline.skipped") return CircleAlertIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
+  if (workEntry.backgroundTaskCompletion) {
+    return workEntry.backgroundTaskCompletion.taskType === "local_agent"
+      ? AgentTaskIcon
+      : BackgroundTrayIcon;
+  }
+  if (workEntry.providerHandoff) {
+    return workEntry.providerHandoff.status === "failed" ? CircleAlertIcon : HandoffIcon;
+  }
+  if (workEntry.providerContextLifecycle) {
+    return workEntry.providerContextLifecycle.nativeHistory === "unavailable"
+      ? CircleAlertIcon
+      : HistoryIcon;
+  }
 
   if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
   if (workEntry.requestKind === "file-read") return SearchIcon;
   if (workEntry.requestKind === "file-change") return PencilIcon;
+  if (workEntry.requestKind === "tool") return McpIcon;
 
   if (workEntry.itemType === "command_execution" || workEntry.command) {
     return commandWorkEntryIcon(workEntry);
@@ -270,10 +303,19 @@ export function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactE
 // over the kind-derived entry icon. Shared with the collapsed tool-group summary
 // row, which borrows its first entry's icon.
 export function workEntryLeftIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  if (isComputerWorkEntry(workEntry)) return ComputerUseIcon;
   if (isGitHubMcpToolCall(workEntry)) return GitHubIcon;
+  if (isSynaraBrowserWorkEntry(workEntry)) return GlobeIcon;
   if (isSynaraToolCall(workEntry)) return SynaraToolIcon;
   if (workEntry.itemType === "mcp_tool_call") return McpIcon;
   return workEntryIcon(workEntry);
+}
+
+function isComputerWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return (
+    computerToolName(workEntry.toolName) !== null ||
+    /^Computer Use:/i.test(workEntry.toolTitle ?? "")
+  );
 }
 
 function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
@@ -291,6 +333,15 @@ function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus 
   return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
     ? "running"
     : "completed";
+}
+
+function isSynaraBrowserWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return isSynaraBrowserToolCall({
+    toolName: workEntry.toolName,
+    title: workEntry.toolTitle,
+    fallbackLabel: workEntry.label,
+    status: toolWorkEntryStatus(workEntry),
+  });
 }
 
 function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
@@ -338,6 +389,20 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  if (computerToolName(workEntry.toolName)) {
+    // Work-log projection already resolves the action and target. The generic
+    // MCP presentation would replace that with "Synara clicked the desktop".
+    const title = normalizeCompactToolLabel(workEntry.toolTitle ?? "");
+    if (title && !isGenericToolTitle(title) && !computerToolName(title))
+      return capitalizePhrase(title);
+    return describeComputerToolCall({ toolName: workEntry.toolName, args: undefined })!.summary;
+  }
+  // Task progress is semantic copy, not a tool lifecycle status. Preserve the
+  // trailing "completed" instead of passing it through the compact tool-label
+  // normalizer, which intentionally strips lifecycle suffixes.
+  if (workEntry.activityKind === "turn.tasks.updated") {
+    return capitalizePhrase(workEntry.label);
+  }
   const synaraTitle = deriveSynaraMcpToolTitle({
     toolName: workEntry.toolName,
     title: workEntry.toolTitle,
@@ -362,6 +427,40 @@ function combineWorkEntryDisplayText(heading: string, preview: string | null): s
     : `${heading} ${preview}`;
 }
 
+// One sentence per row, live or settled: the tool's own verb plus what it acted
+// on ("Searched for foo in src"). Lifecycle state is never spelled out here —
+// the verb already carries the tense and `liveActivityMetaText` covers the rest.
+// Shared with the live tool-group line, which wears its newest call's sentence.
+function workEntryDisplayParts(workEntry: TimelineWorkEntry): {
+  heading: string;
+  preview: string | null;
+  displayText: string;
+} {
+  const webFetchUrl = extractWebFetchUrl(workEntry);
+  const heading = toolWorkEntryHeading(workEntry);
+  const rawPreview = workEntryPreview(workEntry);
+  const preview =
+    !isGitHubMcpToolCall(workEntry) &&
+    (isSynaraBrowserWorkEntry(workEntry) || isSynaraToolCall(workEntry))
+      ? sanitizeSynaraMcpToolPreview({
+          preview: rawPreview,
+          heading,
+          status: toolWorkEntryStatus(workEntry),
+        })
+      : rawPreview;
+  const displayText = webFetchUrl
+    ? describeLinkChip(webFetchUrl).label
+    : (isReasoningUpdateWorkEntry(workEntry) || workEntry.activityKind === "tool.summary") &&
+        preview
+      ? preview
+      : combineWorkEntryDisplayText(heading, preview);
+  return { heading, preview, displayText };
+}
+
+export function workEntryDisplayText(workEntry: TimelineWorkEntry): string {
+  return workEntryDisplayParts(workEntry).displayText;
+}
+
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
   return isFileChangeWorkLogEntry(workEntry);
 }
@@ -376,7 +475,7 @@ function commandTooltipContent(command: string, displayText: string) {
         </div>
         <div className="space-y-0.5">
           <div className="text-muted-foreground/70">Raw call</div>
-          <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
+          <code className="block whitespace-pre-wrap break-words font-chat-code text-chat-code text-foreground/92">
             {command}
           </code>
         </div>
@@ -429,6 +528,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenAutomation?: (automationId: string) => void;
+  computerControlEnabled?: boolean;
+  onEnableComputerControl?: () => void;
   timestampFormat: TimestampFormat;
 }) {
   // Defaults are applied in the body (not in the destructuring pattern): a default
@@ -446,12 +547,15 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     onOpenTurnDiff,
     onOpenAgentActivity,
     onOpenAutomation,
+    computerControlEnabled,
+    onEnableComputerControl,
     timestampFormat,
   } = props;
   const textFontSizePx = textFontSizePxProp ?? chatMetaFontSizePx;
   const density = densityProp ?? "default";
   const compact = density === "compact";
   const isCodexStatusRow = isCodexActivityStatusWorkEntry(workEntry);
+  const isPlainRuntimeNoticeRow = isPlainRuntimeNoticeWorkEntry(workEntry);
   const EntryIcon = workEntryIcon(workEntry);
   // Web-fetch tool calls surface the target site (favicon + URL) instead of the raw
   // `WebFetch: {json}` arguments, reusing the same link-chip icon/label path as
@@ -460,42 +564,30 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // Standard tool rows keep one discoverable left glyph. Codex status rows
   // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
+  const isComputerToolRow = isComputerWorkEntry(workEntry);
+  const isSynaraBrowserToolRow = !isGitHubToolRow && isSynaraBrowserWorkEntry(workEntry);
+  const isSynaraToolRow =
+    !isGitHubToolRow && !isSynaraBrowserToolRow && isSynaraToolCall(workEntry);
   const isMcpToolRow =
-    workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
-  const LeftIcon = isGitHubToolRow
-    ? GitHubIcon
-    : isSynaraToolRow
-      ? SynaraToolIcon
-      : isMcpToolRow
-        ? McpIcon
-        : EntryIcon;
+    workEntry.itemType === "mcp_tool_call" &&
+    !isGitHubToolRow &&
+    !isSynaraBrowserToolRow &&
+    !isSynaraToolRow;
+  const LeftIcon = workEntryLeftIcon(workEntry);
   const leftIconKind = webFetchUrl
     ? "web-fetch"
-    : isGitHubToolRow || EntryIcon === GitHubIcon
-      ? "github"
-      : isSynaraToolRow
-        ? "synara"
-        : isMcpToolRow
-          ? "mcp"
-          : undefined;
-  const heading = toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry);
-  const preview = isSynaraToolRow
-    ? sanitizeSynaraMcpToolPreview({
-        preview: rawPreview,
-        heading,
-        status: toolWorkEntryStatus(workEntry),
-      })
-    : rawPreview;
-  // One sentence per row, live or settled: the tool's own verb plus what it acted
-  // on ("Searched for foo in src"). Lifecycle state is never spelled out here —
-  // the verb already carries the tense and `liveActivityMetaText` covers the rest.
-  const displayText = webFetchUrl
-    ? describeLinkChip(webFetchUrl).label
-    : isReasoningUpdateWorkEntry(workEntry) && preview
-      ? preview
-      : combineWorkEntryDisplayText(heading, preview);
+    : isComputerToolRow
+      ? "computer"
+      : isGitHubToolRow || EntryIcon === GitHubIcon
+        ? "github"
+        : isSynaraBrowserToolRow
+          ? "browser"
+          : isSynaraToolRow
+            ? "synara"
+            : isMcpToolRow
+              ? "mcp"
+              : undefined;
+  const { heading, preview, displayText } = workEntryDisplayParts(workEntry);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     Boolean(preview) &&
@@ -510,6 +602,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
   const hasToolDetails = Boolean(workEntry.toolDetails);
+  const providerContextLifecycle = workEntry.providerContextLifecycle;
+  const providerHandoff = workEntry.providerHandoff;
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -525,8 +619,37 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   );
   const liveActivityNowMs = useLiveActivityNow(workEntry.liveActivity);
   const liveActivityMetaText = workEntry.liveActivity
-    ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs)
+    ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
+        subagent: workEntry.itemType === "collab_agent_tool_call",
+      })
     : null;
+
+  // A computer-control denial renders as an actionable card (enable + retry)
+  // instead of a buried tool-error line. Kept after the hooks above so the
+  // early return never changes hook order.
+  if (workEntry.computerSetupRequired) {
+    return (
+      <ConnectedComputerSetupRequiredCard
+        {...workEntry.computerSetupRequired}
+        textFontSizePx={textFontSizePx}
+        metaFontSizePx={chatMetaFontSizePx}
+      />
+    );
+  }
+
+  const computerControlDenied = workEntry.computerControlDenied;
+  if (computerControlDenied) {
+    return (
+      <div className={cn(compact ? "py-0.5" : "py-1")}>
+        <ComputerControlDeniedCard
+          {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+          textFontSizePx={textFontSizePx}
+          metaFontSizePx={chatMetaFontSizePx}
+          {...(onEnableComputerControl ? { onEnable: onEnableComputerControl } : {})}
+        />
+      </div>
+    );
+  }
 
   // A created-automation row renders as its own card instead of a tool-call line.
   // Kept after the hooks above so the early return never changes hook order.
@@ -557,7 +680,12 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const canOpenReadFile = readFilePath !== null;
   const canOpenToolDetails =
     !canOpenAgentActivity &&
-    Boolean(workEntry.toolDetails || (workEntry.liveActivity && !canOpenReadFile));
+    Boolean(
+      providerContextLifecycle ||
+      providerHandoff ||
+      workEntry.toolDetails ||
+      (workEntry.liveActivity && !canOpenReadFile),
+    );
   const openReadFile = readFilePath
     ? () => openWorkspaceFileReference(opener, readFilePath)
     : undefined;
@@ -640,7 +768,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              {!isCodexStatusRow ? (
+              {!isCodexStatusRow && !isPlainRuntimeNoticeRow ? (
                 <span
                   className={cn(
                     "flex shrink-0 items-center justify-center",
@@ -669,7 +797,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
                     <p
-                      className="truncate font-medium leading-5 text-muted-foreground/72"
+                      className={cn("truncate font-medium leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}
                       style={{ fontSize: `${rowFontSizePx}px` }}
                     >
                       <span data-work-entry-display-text="true">{heading}</span>
@@ -683,7 +811,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       isStreaming={false}
                       className="leading-relaxed"
                       style={{
-                        color: "color-mix(in srgb, var(--muted-foreground) 72%, transparent)",
+                        color: MUTED_LABEL_TEXT_COLOR,
                         fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
                         lineHeight: compact ? "18px" : "19px",
                       }}
@@ -697,7 +825,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       // Match the leading icon's tone so the row reads as one muted unit, and
                       // brighten the whole row to foreground on hover/focus instead of a fill.
                       WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+                      isPlainRuntimeNoticeRow && "italic",
                     )}
+                    data-runtime-notice-row={isPlainRuntimeNoticeRow ? "true" : undefined}
                     data-codex-status-row={isCodexStatusRow ? "true" : undefined}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
@@ -715,6 +845,13 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
               <ToolDetailsDisclosure
                 details={workEntry.toolDetails}
                 activity={workEntry.liveActivity}
+                detailContent={
+                  providerContextLifecycle ? (
+                    <ProviderContextLifecycleDetails info={providerContextLifecycle} />
+                  ) : providerHandoff ? (
+                    <ProviderHandoffDetails info={providerHandoff} />
+                  ) : undefined
+                }
                 compact={compact}
                 timestampFormat={timestampFormat}
                 tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
@@ -841,12 +978,133 @@ function AgentActivityOpenSurface(props: {
   return <ToolRowTooltip content={props.tooltip}>{surface}</ToolRowTooltip>;
 }
 
+function providerContextLifecycleReasonLabel(
+  reason: NonNullable<TimelineWorkEntry["providerContextLifecycle"]>["restartReason"],
+): string {
+  switch (reason) {
+    case "conversation-rebuilt":
+      return "Conversation rebuilt from a summary";
+    case "fresh-session":
+      return "New session started";
+    case "interrupt-escalation":
+      return "Turn stop escalated to a session restart";
+    case "native-history-unavailable":
+      return "Previous history unavailable";
+    case "native-resume-failed":
+      return "Could not resume the previous session";
+  }
+}
+
+function ProviderContextLifecycleDetails(props: {
+  info: NonNullable<TimelineWorkEntry["providerContextLifecycle"]>;
+}) {
+  const { info } = props;
+  const provider =
+    PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === info.provider)?.displayName ??
+    info.provider;
+  return (
+    <div className="space-y-3" data-provider-context-lifecycle-details="true">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
+        <dt className="text-muted-foreground/56">Provider</dt>
+        <dd className="text-foreground/84">{provider}</dd>
+        <dt className="text-muted-foreground/56">Previous history</dt>
+        <dd className="text-foreground/84">
+          {info.nativeHistory === "available" ? "Available" : "Lost"}
+        </dd>
+        <dt className="text-muted-foreground/56">Session restarted</dt>
+        <dd className="text-foreground/84">{info.sessionRestarted ? "Yes" : "No"}</dd>
+        <dt className="text-muted-foreground/56">Why</dt>
+        <dd className="text-foreground/84">
+          {providerContextLifecycleReasonLabel(info.restartReason)}
+        </dd>
+        <dt className="text-muted-foreground/56">Summary included</dt>
+        <dd className="text-foreground/84">
+          {info.recapInjected ? `${info.recapCharacters.toLocaleString()} characters` : "No"}
+        </dd>
+      </dl>
+      {info.recapPreview ? (
+        <section className="space-y-2">
+          <h3 className="text-ui-sm font-medium text-muted-foreground/56">Summary preview</h3>
+          <pre
+            className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-chat-code leading-relaxed text-foreground/84"
+            data-session-context-recap-preview="true"
+          >
+            {info.recapPreview}
+          </pre>
+          {info.recapPreviewTruncated ? (
+            <p className="text-ui-xs text-muted-foreground/56">
+              Showing a short preview of the summary sent with your message.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function providerModelLabel(selection: ModelSelection): string {
+  const displayName =
+    PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === selection.provider)
+      ?.displayName ?? selection.provider;
+  const summary = resolveThreadModelSummary(selection);
+  const modelLabel = summary
+    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? " · Fast" : ""}`
+    : selection.model;
+  return `${displayName} · ${modelLabel}`;
+}
+
+export function ProviderHandoffDetails(props: {
+  info: NonNullable<TimelineWorkEntry["providerHandoff"]>;
+}) {
+  const { info } = props;
+  return (
+    <div className="space-y-3" data-provider-handoff-details="true">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
+        <dt className="text-muted-foreground/56">From</dt>
+        <dd className="text-foreground/84">{providerModelLabel(info.sourceModelSelection)}</dd>
+        <dt className="text-muted-foreground/56">To</dt>
+        <dd className="text-foreground/84">{providerModelLabel(info.targetModelSelection)}</dd>
+        {info.status === "failed" ? (
+          <>
+            <dt className="text-muted-foreground/56">Error</dt>
+            <dd className="text-foreground/84">
+              {info.failureDetail ?? "The session did not start."}
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt className="text-muted-foreground/56">Context</dt>
+            <dd className="text-foreground/84">
+              {info.contextText ? `${info.contextText.length.toLocaleString()} characters` : "None"}
+            </dd>
+          </>
+        )}
+      </dl>
+      {info.status === "completed" && info.contextText ? (
+        <section className="space-y-2">
+          <h3 className="text-ui-sm font-medium text-muted-foreground/56">Transferred context</h3>
+          <pre
+            className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-chat-code leading-relaxed text-foreground/84"
+            data-provider-handoff-context="true"
+          >
+            {info.contextText}
+          </pre>
+          <p className="text-ui-xs text-muted-foreground/56">
+            Sent ahead of your next message so the new model can continue this thread.
+          </p>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 function ToolDetailsDisclosure(props: {
   children: ReactNode;
   compact: boolean;
   dataFileChangeRow?: boolean | undefined;
   details?: TimelineWorkEntry["toolDetails"] | undefined;
   activity?: TimelineWorkEntry["liveActivity"] | undefined;
+  detailContent?: ReactNode;
   summaryClassName?: string | undefined;
   timestampFormat: TimestampFormat;
   tooltip?: ReactNode;
@@ -915,7 +1173,7 @@ function ToolDetailsDisclosure(props: {
       {props.children}
       <DisclosureChevron
         open={open}
-        className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
+        className="text-muted-foreground/70 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
       />
     </button>
   );
@@ -929,11 +1187,13 @@ function ToolDetailsDisclosure(props: {
           contentClassName={cn("min-w-0 pt-2", props.compact ? "ml-5" : "ml-7")}
         >
           <div data-tool-details-inline="true">
-            <ToolCallDetailsContent
-              details={props.details}
-              activity={props.activity}
-              timestampFormat={props.timestampFormat}
-            />
+            {props.detailContent ?? (
+              <ToolCallDetailsContent
+                details={props.details}
+                activity={props.activity}
+                timestampFormat={props.timestampFormat}
+              />
+            )}
           </div>
         </DisclosureRegion>
       ) : null}

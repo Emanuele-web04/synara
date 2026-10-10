@@ -1,5 +1,21 @@
 import type { ThreadId } from "@synara/contracts";
 
+type TerminalRuntimeCleanup = (activeThreadIds: ReadonlySet<string>) => void;
+let cleanupRuntimes: TerminalRuntimeCleanup | undefined;
+
+// The lazy terminal module registers its cleanup here, so snapshot/lifecycle
+// reconciliation can dispose loaded xterms without eagerly importing them.
+export function registerTerminalRuntimeCleanup(cleanup: TerminalRuntimeCleanup): () => void {
+  cleanupRuntimes = cleanup;
+  return () => {
+    if (cleanupRuntimes === cleanup) cleanupRuntimes = undefined;
+  };
+}
+
+export function removeOrphanedTerminalRuntimes(activeThreadIds: ReadonlySet<string>): void {
+  cleanupRuntimes?.(activeThreadIds);
+}
+
 interface TerminalRetentionThread {
   id: ThreadId;
   deletedAt: string | null;

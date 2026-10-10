@@ -2,7 +2,7 @@
 // Purpose: Hover-revealed archive action shared by classic thread rows and
 //          Activity rows — one icon, label, sizing, and row-activation guard.
 // Layer: Sidebar UI primitive
-// Exports: ThreadArchiveActionButton
+// Exports: ThreadArchiveActionButton, THREAD_ARCHIVE_ICON
 
 import { HiOutlineArchiveBox } from "react-icons/hi2";
 
@@ -11,6 +11,8 @@ import type { ThreadId } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SidebarIconButton } from "./SidebarIconButton";
+
+export const THREAD_ARCHIVE_ICON = HiOutlineArchiveBox;
 
 export function ThreadArchiveActionButton({
   threadId,
@@ -27,7 +29,7 @@ export function ThreadArchiveActionButton({
   const isCompact = compact === true;
   return (
     <SidebarIconButton
-      icon={HiOutlineArchiveBox}
+      icon={THREAD_ARCHIVE_ICON}
       label="Archive thread"
       title="Archive thread"
       data-testid={`thread-archive-${threadId}`}

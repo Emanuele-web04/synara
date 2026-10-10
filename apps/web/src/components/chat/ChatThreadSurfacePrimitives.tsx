@@ -10,13 +10,17 @@ import {
   DiffPanelShell,
   type DiffPanelMode,
 } from "../DiffPanelShell";
+import type { DiffFileEditRequest } from "../../lib/diffEditBaseRev";
 import type { SplitViewPanePanelState } from "../../splitViewStore";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
+import { DelayedLoaderFade } from "./DelayedLoaderFade";
 import { Spinner } from "../ui/spinner";
 import { cn } from "~/lib/utils";
+import { scheduleDeferredChatMount } from "./deferredChatMount";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
 export const LazyBrowserPanel = lazy(() => import("../BrowserPanel"));
+export const LazyDevicePanel = lazy(() => import("../DevicePanel"));
 
 export const noopChatSurfaceAction = () => {};
 
@@ -44,6 +48,8 @@ export function LazyDiffPanel(props: {
   hideHeader?: boolean;
   onRenderableFilesChange?: (files: ReadonlyArray<FileDiffMetadata>, isLoading: boolean) => void;
   onEditorDiffOptionsChange?: (control: ReactNode | null) => void;
+  onVisibleFileChange?: (filePath: string | null) => void;
+  onEditFile?: (request: DiffFileEditRequest) => void;
 }) {
   return (
     <DiffWorkerPoolProvider>
@@ -66,12 +72,14 @@ export function LazyDiffPanel(props: {
             : {})}
           {...(props.queriesEnabled !== undefined ? { queriesEnabled: props.queriesEnabled } : {})}
           {...(props.hideHeader !== undefined ? { hideHeader: props.hideHeader } : {})}
+          {...(props.onEditFile ? { onEditFile: props.onEditFile } : {})}
           {...(props.onRenderableFilesChange
             ? { onRenderableFilesChange: props.onRenderableFilesChange }
             : {})}
           {...(props.onEditorDiffOptionsChange
             ? { onEditorDiffOptionsChange: props.onEditorDiffOptionsChange }
             : {})}
+          {...(props.onVisibleFileChange ? { onVisibleFileChange: props.onVisibleFileChange } : {})}
         />
       </Suspense>
     </DiffWorkerPoolProvider>
@@ -86,19 +94,18 @@ export function ChatMountLoader() {
         CHAT_BACKGROUND_CLASS_NAME,
       )}
     >
-      {/* Inline @keyframes so the delayed fade needs no global stylesheet; the
-          delay keeps the common fast mount (a couple of frames) from flashing a
+      {/* The delay keeps the common fast mount (a couple of frames) from flashing a
           spinner — short waits show only the plain chat background. */}
-      <style>{`@keyframes chat-mount-loader-in { from { opacity: 0; } to { opacity: 1; } }`}</style>
-      <div className="opacity-0 [animation:chat-mount-loader-in_200ms_ease-out_150ms_forwards] motion-reduce:animate-none motion-reduce:opacity-100">
+      <DelayedLoaderFade>
         <Spinner className="size-5 text-muted-foreground" />
-      </div>
+      </DelayedLoaderFade>
     </div>
   );
 }
 
 export function DeferredChatView(props: {
   threadId: ThreadId;
+  hideHeader?: boolean;
   paneScopeId: string;
   deferMount: boolean;
   surfaceMode: "single" | "split";
@@ -108,43 +115,34 @@ export function DeferredChatView(props: {
   onToggleDiff: () => void;
   onToggleRightDock?: () => void;
   onToggleBrowser: () => void;
+  onToggleDevice?: () => void;
   onOpenBrowserUrl: (url: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
-  onMaximize?: () => void;
   viewModeAction?: {
     label: string;
     active: boolean;
     onClick: () => void;
   } | null;
-  onChangeThread?: () => void;
   onCloseThreadPane?: () => void;
   onMounted?: () => void;
 }) {
   const onMounted = props.onMounted ?? noopChatSurfaceAction;
-  const mountKey = `${props.paneScopeId}:${props.threadId}`;
-  const [readyMountKey, setReadyMountKey] = useState<string | null>(() =>
-    props.deferMount ? null : mountKey,
-  );
-  const canMountChatView = !props.deferMount || readyMountKey === mountKey;
+  // Only defer the initial mount. Switching to another draft must not tear
+  // down an already visible chat (including its tab strip) to replay the loader.
+  const [mountPending, setMountPending] = useState(props.deferMount);
+  if (mountPending && !props.deferMount) {
+    // A saved chat reached while the initial draft is still waiting can mount
+    // immediately, and subsequent drafts must not re-arm that initial delay.
+    setMountPending(false);
+  }
+  const canMountChatView = !mountPending || !props.deferMount;
 
   useEffect(() => {
-    if (!props.deferMount) {
-      return;
-    }
-    // readyMountKey is keyed by mountKey, so a changed mountKey already makes
-    // canMountChatView false (loader) without an eager reset here; the double
-    // rAF then stamps the new key once the paint has settled.
-    let firstFrame = 0;
-    let secondFrame = 0;
-    firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => setReadyMountKey(mountKey));
-    });
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      window.cancelAnimationFrame(secondFrame);
-    };
-  }, [mountKey, props.deferMount]);
+    if (canMountChatView) return;
+    // Keep the bounded fallback for background-throttled Electron windows.
+    return scheduleDeferredChatMount(window, () => setMountPending(false));
+  }, [canMountChatView]);
 
   useEffect(() => {
     if (canMountChatView) {
@@ -158,8 +156,8 @@ export function DeferredChatView(props: {
 
   return (
     <ChatView
-      key={props.paneScopeId}
       threadId={props.threadId}
+      hideHeader={props.hideHeader ?? false}
       paneScopeId={props.paneScopeId}
       surfaceMode={props.surfaceMode}
       presentationMode={props.presentationMode ?? "default"}
@@ -168,12 +166,11 @@ export function DeferredChatView(props: {
       onToggleDiffPanel={props.onToggleDiff}
       {...(props.onToggleRightDock ? { onToggleRightDock: props.onToggleRightDock } : {})}
       onToggleBrowserPanel={props.onToggleBrowser}
+      {...(props.onToggleDevice ? { onToggleDevicePanel: props.onToggleDevice } : {})}
       onOpenBrowserUrl={props.onOpenBrowserUrl}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
       {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}
-      {...(props.onMaximize ? { onMaximizeSurface: props.onMaximize } : {})}
       {...(props.viewModeAction !== undefined ? { viewModeAction: props.viewModeAction } : {})}
-      {...(props.onChangeThread ? { onChangeThreadInSplitPane: props.onChangeThread } : {})}
       {...(props.onCloseThreadPane ? { onCloseThreadPane: props.onCloseThreadPane } : {})}
     />
   );

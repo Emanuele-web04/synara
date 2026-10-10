@@ -33,6 +33,7 @@ import { Effect, Encoding, Layer, Schema } from "effect";
 import { createLogger } from "../../logger";
 import { PtyAdapter, PtyAdapterShape, type PtyExitEvent, type PtyProcess } from "../Services/PTY";
 import { ServerConfig } from "../../config";
+import { ServerSettingsService } from "../../serverSettings";
 import {
   ensurePrivateDirectorySync,
   PRIVATE_FILE_MODE,
@@ -41,7 +42,15 @@ import {
 import {
   applyManagedTerminalAgentWrapperEnv,
   prepareManagedTerminalAgentWrappers,
+  type ManagedTerminalProfile,
 } from "../managedTerminalWrappers";
+import { prepareProcess } from "@synara/shared/platformProcess";
+import {
+  prepareProviderAuthenticationSettings,
+  resolveProviderAuthenticationLaunch,
+  type ProviderAuthenticationLaunch,
+} from "../providerAuthentication";
+import { deriveManagedTerminalProfiles } from "../providerTerminalProfiles";
 import {
   ShellCandidate,
   TerminalError,
@@ -69,6 +78,10 @@ import {
   inspectSubprocessActivity,
   type TerminalSubprocessActivity,
 } from "../subprocessActivity";
+import {
+  createWindowsProcessSnapshotObserver,
+  type ProcessChildrenSnapshotObserver,
+} from "../windowsProcessSnapshot";
 
 export type { TerminalSubprocessActivity } from "../subprocessActivity";
 
@@ -743,10 +756,13 @@ interface TerminalManagerOptions {
   ptyAdapter: PtyAdapterShape;
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
+  processSnapshotObserver?: ProcessChildrenSnapshotObserver;
   processTreeKiller?: ProcessTreeKiller;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
+  managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
+  providerAuthResolver?: (instanceId: string) => Promise<ProviderAuthenticationLaunch>;
 }
 
 interface KillEscalationHandle {
@@ -761,6 +777,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly logsDir: string;
   private managedWrapperBinDir: string | null;
   private managedWrapperZshDir: string | null;
+  private readonly managedWrapperRootDir: string | null;
+  private readonly managedWrapperZshRootDir: string | null;
   private readonly historyLineLimit: number;
   private readonly historyByteLimit: number;
   private readonly ptyAdapter: PtyAdapterShape;
@@ -780,6 +798,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly subprocessChecker: TerminalSubprocessChecker;
   private readonly processTreeKiller: ProcessTreeKiller;
   private readonly useDefaultSubprocessChecker: boolean;
+  private readonly processSnapshotObserver: ProcessChildrenSnapshotObserver | null;
   private readonly subprocessPollIntervalMs: number;
   private readonly processKillGraceMs: number;
   private readonly maxRetainedInactiveSessions: number;
@@ -789,16 +808,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private currentSubprocessPollDelayMs = 0;
   private readonly killEscalationTimers = new Map<PtyProcess, KillEscalationHandle>();
   private readonly logger = createLogger("terminal");
+  private readonly managedProfileResolver:
+    | (() => Promise<ReadonlyArray<ManagedTerminalProfile>>)
+    | undefined;
+  private readonly providerAuthResolver: TerminalManagerOptions["providerAuthResolver"];
+  private managedProfileRefresh: Promise<void> | null = null;
 
   constructor(options: TerminalManagerOptions) {
     super();
     this.logsDir = options.logsDir ?? path.resolve(process.cwd(), ".logs", "terminals");
-    this.managedWrapperBinDir =
+    this.managedWrapperRootDir =
       process.platform === "win32"
         ? null
         : path.join(this.logsDir, MANAGED_TERMINAL_WRAPPER_DIRNAME);
-    this.managedWrapperZshDir =
+    this.managedWrapperZshRootDir =
       process.platform === "win32" ? null : path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME);
+    this.managedWrapperBinDir = this.managedWrapperRootDir;
+    this.managedWrapperZshDir = this.managedWrapperZshRootDir;
     this.historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
     this.historyByteLimit = options.historyByteLimit ?? DEFAULT_HISTORY_BYTE_LIMIT;
     this.ptyAdapter = options.ptyAdapter;
@@ -809,11 +835,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     // Only the built-in checker can share a single process snapshot across the
     // poll cycle; injected checkers (tests) keep the per-pid path.
     this.useDefaultSubprocessChecker = options.subprocessChecker === undefined;
+    this.processSnapshotObserver =
+      options.processSnapshotObserver ??
+      (this.useDefaultSubprocessChecker && process.platform === "win32"
+        ? createWindowsProcessSnapshotObserver()
+        : null);
     this.subprocessPollIntervalMs =
       options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
     this.processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
     this.maxRetainedInactiveSessions =
       options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
+    this.managedProfileResolver = options.managedProfileResolver;
+    this.providerAuthResolver = options.providerAuthResolver;
     ensurePrivateDirectorySync(this.logsDir);
     if (this.managedWrapperBinDir) {
       try {
@@ -837,12 +870,43 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
+  private async refreshManagedProfileWrappers(): Promise<void> {
+    if (!this.managedProfileResolver || !this.managedWrapperRootDir) return;
+    if (this.managedProfileRefresh) return this.managedProfileRefresh;
+    const targetDir = this.managedWrapperRootDir;
+    const refresh = (async () => {
+      try {
+        const profiles = await this.managedProfileResolver!();
+        const preparedWrappers = prepareManagedTerminalAgentWrappers({
+          baseEnv: process.env,
+          profiles,
+          targetDir,
+          zshDir:
+            this.managedWrapperZshRootDir ?? path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME),
+        });
+        this.managedWrapperBinDir = preparedWrappers.binDir;
+        this.managedWrapperZshDir = preparedWrappers.zshDir;
+      } catch (error) {
+        this.logger.warn("failed to refresh provider terminal profiles", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    this.managedProfileRefresh = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.managedProfileRefresh === refresh) this.managedProfileRefresh = null;
+    }
+  }
+
   private historyLimits(): HistoryLimits {
     return { maxLines: this.historyLineLimit, maxBytes: this.historyByteLimit };
   }
 
   async open(raw: TerminalOpenInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalOpenInput(raw);
+    await this.refreshManagedProfileWrappers();
     return this.runWithThreadLock(input.threadId, async () => {
       await this.assertValidCwd(input.cwd);
 
@@ -850,7 +914,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const existing = this.sessions.get(sessionKey);
       if (!existing) {
         await this.flushPersistQueue(input.threadId, input.terminalId);
-        const history = await this.readHistory(input.threadId, input.terminalId);
+        const history = input.providerAuthInstanceId
+          ? ""
+          : await this.readHistory(input.threadId, input.terminalId);
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
         const openedAt = new Date().toISOString();
@@ -878,6 +944,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           managedAgentState: null,
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
+          ...(input.providerAuthInstanceId
+            ? { providerAuthInstanceId: input.providerAuthInstanceId }
+            : {}),
           pendingInputBuffer: "",
           modeReplayTracker: null,
           pendingOutputChunks: [],
@@ -900,7 +969,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(session);
       }
 
+      if (existing.providerAuthInstanceId !== input.providerAuthInstanceId) {
+        throw new Error("A terminal cannot switch its authentication account.");
+      }
       existing.lastOpenedAt = new Date().toISOString();
+      // Reconnect preserves a finished login; it must never start another login.
+      if (existing.providerAuthInstanceId) {
+        if (existing.process) {
+          existing.cols = input.cols ?? existing.cols;
+          existing.rows = input.rows ?? existing.rows;
+          existing.process.resize(existing.cols, existing.rows);
+        }
+        return this.snapshot(existing);
+      }
       // A re-open may flip headless mode (e.g. a viewer attaching later); honor it
       // when explicitly provided, otherwise keep the session's current mode.
       if (input.streamOutput !== undefined) {
@@ -978,6 +1059,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   async write(raw: TerminalWriteInput): Promise<void> {
     const input = decodeTerminalWriteInput(raw);
+    if (input.onlyIfIdle) {
+      return this.runWithThreadLock(input.threadId, async () => {
+        await this.assertSessionIdle(input.threadId, input.terminalId);
+        await this.write({ ...input, onlyIfIdle: false });
+      });
+    }
     const session = this.requireSession(input.threadId, input.terminalId);
     if (!session.process || session.status !== "running") {
       if (session.status === "exited") {
@@ -1057,11 +1144,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   async restart(raw: TerminalRestartInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalRestartInput(raw);
+    await this.refreshManagedProfileWrappers();
     return this.runWithThreadLock(input.threadId, async () => {
       await this.assertValidCwd(input.cwd);
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
       let session = this.sessions.get(sessionKey);
+      if (session?.providerAuthInstanceId)
+        throw new Error("Close this authentication window and start a new sign-in attempt.");
       if (!session) {
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
@@ -1136,13 +1226,57 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   async close(raw: TerminalCloseInput): Promise<void> {
     const input = decodeTerminalCloseInput(raw);
     await this.runWithThreadLock(input.threadId, async () => {
+      if (input.onlyIfIdle && !input.terminalId) {
+        throw new Error("An idle-only close requires a terminalId.");
+      }
       if (input.terminalId) {
+        if (input.onlyIfIdle) {
+          await this.assertSessionIdle(input.threadId, input.terminalId);
+        }
         await this.closeSession(input.threadId, input.terminalId, input.deleteHistory === true);
         return;
       }
 
       await this.closeThreadSessions(input.threadId, input.deleteHistory === true);
     });
+  }
+
+  private async assertSessionIdle(threadId: string, terminalId: string): Promise<void> {
+    const session = this.sessions.get(toSessionKey(threadId, terminalId));
+    if (!session?.process) return;
+    if (session.status !== "running" || session.pid === null) {
+      throw new Error("Unable to verify terminal activity. Try again when it is ready.");
+    }
+
+    const inspectionStartedAt = Date.now();
+    let activity: TerminalSubprocessActivity;
+    if (this.processSnapshotObserver || this.useDefaultSubprocessChecker) {
+      // Unlike activity polling, destructive operations cannot fall back to a
+      // best-effort probe that treats a failed process lookup as an idle shell.
+      // An observer shares an in-flight poll. Drain it first so the snapshot
+      // authorizing this operation was requested after the operation began.
+      const pendingSnapshot = this.processSnapshotObserver
+        ? await this.processSnapshotObserver.capture()
+        : undefined;
+      const children = this.processSnapshotObserver
+        ? pendingSnapshot === null
+          ? null
+          : await this.processSnapshotObserver.capture()
+        : await captureProcessChildrenMap();
+      if (children === null) {
+        throw new Error("Unable to verify terminal activity. The terminal was kept open.");
+      }
+      activity = inspectSubprocessActivity(session.pid, children);
+    } else {
+      activity = normalizeSubprocessActivity(await this.subprocessChecker(session.pid));
+    }
+    if (
+      activity.hasRunningSubprocess ||
+      session.managedAgentRunning ||
+      (session.lastInputAt !== null && session.lastInputAt >= inspectionStartedAt)
+    ) {
+      throw new Error("The terminal is busy. Stop its command before running this action.");
+    }
   }
 
   async closeSessionsOpenedAtOrBefore(input: TerminalCloseOpenedAtOrBeforeInput): Promise<void> {
@@ -1200,6 +1334,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private disposeInternal(options: { keepEscalationTimers: boolean }): number {
     this.stopSubprocessPolling();
+    this.processSnapshotObserver?.dispose();
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     for (const session of sessions) {
@@ -1258,11 +1393,28 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     let ptyProcess: PtyProcess | null = null;
     let startedShell: string | null = null;
     try {
-      const shellCandidates = resolveShellCandidates(this.shellResolver);
-      const terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv, {
-        binDir: this.managedWrapperBinDir,
-        zshDir: this.managedWrapperZshDir,
-      });
+      let shellCandidates: ShellCandidate[];
+      let terminalEnv: NodeJS.ProcessEnv;
+      let windowsVerbatimArguments: true | undefined;
+      if (session.providerAuthInstanceId) {
+        if (!this.providerAuthResolver) throw new Error("Provider authentication is unavailable.");
+        const launch = await this.providerAuthResolver(session.providerAuthInstanceId);
+        const plan = prepareProcess(launch.command, launch.args, {
+          env: launch.env,
+          cwd: launch.cwd,
+          requireExecutable: true,
+        });
+        shellCandidates = [{ shell: plan.command, args: plan.args }];
+        windowsVerbatimArguments = plan.windowsVerbatimArguments;
+        terminalEnv = launch.env;
+        session.cwd = launch.cwd;
+      } else {
+        shellCandidates = resolveShellCandidates(this.shellResolver);
+        terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv, {
+          binDir: this.managedWrapperBinDir,
+          zshDir: this.managedWrapperZshDir,
+        });
+      }
       let lastSpawnError: unknown = null;
 
       const spawnWithCandidate = (candidate: ShellCandidate) =>
@@ -1270,6 +1422,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           this.ptyAdapter.spawn({
             shell: candidate.shell,
             ...(candidate.args ? { args: candidate.args } : {}),
+            ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}),
             cwd: session.cwd,
             cols: session.cols,
             rows: session.rows,
@@ -1735,8 +1888,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         includeRootTree: options.includeRootTree,
         onError: (error, context) => {
           this.logger.warn(
-            context.source === "tree-kill"
-              ? `tree-kill ${signal} failed`
+            context.source === "root-tree"
+              ? `root tree ${signal} failed`
               : `captured process ${signal} failed`,
             {
               threadId,
@@ -1786,7 +1939,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private evictInactiveSessionsIfNeeded(): void {
     const inactiveSessions = [...this.sessions.values()].filter(
-      (session) => session.status !== "running",
+      (session) => session.status !== "running" && !session.providerAuthInstanceId,
     );
     if (inactiveSessions.length <= this.maxRetainedInactiveSessions) {
       return;
@@ -1826,6 +1979,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
    * always persists the latest content, even after the session is removed.
    */
   private queuePersist(session: TerminalSessionState): void {
+    if (session.providerAuthInstanceId) return;
     const persistenceKey = toSessionKey(session.threadId, session.terminalId);
     this.pendingPersistHistory.set(persistenceKey, () => session.history.toString());
     this.schedulePersist(session.threadId, session.terminalId);
@@ -1836,6 +1990,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     terminalId: string,
     history: string,
   ): Promise<void> {
+    if (this.sessions.get(toSessionKey(threadId, terminalId))?.providerAuthInstanceId) return;
     const persistenceKey = toSessionKey(threadId, terminalId);
     this.clearPersistTimer(threadId, terminalId);
     this.pendingPersistHistory.delete(persistenceKey);
@@ -2045,10 +2200,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     for (const session of this.sessions.values()) {
       if (session.status !== "running" || session.pid === null) continue;
       if (session.hasRunningSubprocess || isProviderSessionBusy(session, now)) {
-        return base;
+        return Math.max(base, this.processSnapshotObserver?.retryDelayMs() ?? 0);
       }
     }
-    return base * SUBPROCESS_IDLE_POLL_MULTIPLIER;
+    return Math.max(
+      base * SUBPROCESS_IDLE_POLL_MULTIPLIER,
+      this.processSnapshotObserver?.retryDelayMs() ?? 0,
+    );
   }
 
   private async runSubprocessPollCycle(): Promise<void> {
@@ -2113,16 +2271,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
 
     this.subprocessPollInFlight = true;
-    // Capture the whole process tree once per cycle (built-in POSIX checker
-    // only); every running terminal is then inspected against this shared
-    // snapshot instead of each spawning its own full-system `ps`.
-    const sharedChildrenMap =
-      this.useDefaultSubprocessChecker && process.platform !== "win32"
+    // Capture the whole process tree once per cycle. POSIX uses one `ps`; Windows
+    // uses one persistent observer process. Every running terminal is then
+    // inspected synchronously against the same immutable snapshot.
+    const sharedChildrenMap = this.processSnapshotObserver
+      ? await this.processSnapshotObserver.capture()
+      : this.useDefaultSubprocessChecker && process.platform !== "win32"
         ? await captureProcessChildrenMap()
         : null;
+    const sharedSnapshotUnavailable =
+      this.processSnapshotObserver !== null && sharedChildrenMap === null;
     try {
       await Promise.all(
         runningSessions.map(async (session) => {
+          // A failed Windows snapshot proves nothing. Preserve the last known
+          // activity state while the observer backs off instead of reporting a
+          // false idle transition or falling back to per-terminal processes.
+          if (sharedSnapshotUnavailable) return;
           const terminalPid = session.pid;
           let hasRunningSubprocess = false;
           let shouldClearDetectedCliKind = false;
@@ -2347,11 +2512,54 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 export const TerminalManagerLive = Layer.effect(
   TerminalManager,
   Effect.gen(function* () {
-    const { terminalLogsDir } = yield* ServerConfig;
+    const { homeDir, stateDir, terminalLogsDir } = yield* ServerConfig;
+    const serverSettings = yield* ServerSettingsService;
 
     const ptyAdapter = yield* PtyAdapter;
     const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() => new TerminalManagerRuntime({ logsDir: terminalLogsDir, ptyAdapter })),
+      Effect.sync(
+        () =>
+          new TerminalManagerRuntime({
+            logsDir: terminalLogsDir,
+            ptyAdapter,
+            providerAuthResolver: async (instanceId) => {
+              let settings = await Effect.runPromise(serverSettings.getSettings);
+              const patch = prepareProviderAuthenticationSettings({
+                settings,
+                instanceId,
+                homeDir,
+                stateDir,
+              });
+              if (patch)
+                settings = await Effect.runPromise(
+                  serverSettings.updateSettings(
+                    patch,
+                    (current) =>
+                      prepareProviderAuthenticationSettings({
+                        settings: current,
+                        instanceId,
+                        homeDir,
+                        stateDir,
+                      }) ?? {},
+                  ),
+                );
+              return resolveProviderAuthenticationLaunch({
+                settings,
+                instanceId,
+                homeDir,
+                stateDir,
+                baseEnv: process.env,
+              });
+            },
+            managedProfileResolver: async () =>
+              deriveManagedTerminalProfiles({
+                settings: await Effect.runPromise(serverSettings.getSettings),
+                baseEnv: process.env,
+                homeDir,
+                stateDir,
+              }),
+          }),
+      ),
       (r) => Effect.promise(() => r.disposeForShutdown()),
     );
 

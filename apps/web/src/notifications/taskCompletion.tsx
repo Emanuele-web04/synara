@@ -12,8 +12,13 @@ import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
-import { createAllThreadsSelector } from "../storeSelectors";
+import {
+  collectSnoozedThreadIds,
+  createAllThreadsSelector,
+  createSidebarThreadSummariesSelector,
+} from "../storeSelectors";
 import { useTerminalStateStore } from "../terminalStateStore";
 import type { Thread } from "../types";
 import {
@@ -22,12 +27,16 @@ import {
   buildInputNeededCopy,
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
+  completedThreadNotificationKey,
   collectCompletedTerminalCandidates,
   collectInputNeededThreadCandidates,
   collectTerminalAttentionCandidates,
+  collectSnoozeReminderCandidates,
   isNotificationRuntimeFreshTimestamp,
+  shouldAttemptSystemTaskNotification,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
+import { claimSnoozeReminder } from "./snoozeReminderReceipts";
 
 export type BrowserNotificationPermissionState =
   | NotificationPermission
@@ -97,7 +106,13 @@ async function showSystemThreadNotification(
     if (!supported) {
       return false;
     }
-    return window.desktopBridge.notifications.show({ title, body, silent: false, threadId });
+    return window.desktopBridge.notifications.show({
+      title,
+      body,
+      silent: false,
+      suppressWhenForeground: true,
+      threadId,
+    });
   }
 
   if (readBrowserNotificationPermissionState() !== "granted") {
@@ -152,17 +167,33 @@ export function TaskCompletionNotifications() {
   const splitView = useSplitViewStore(
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
+  const rightDockState = useRightDockStore(
+    useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
+  );
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);
+  const [sidebarSummariesSelector] = useState(() => createSidebarThreadSummariesSelector());
+  const sidebarSummaries = useStore(sidebarSummariesSelector);
+  const snoozedThreadIds = useMemo(
+    () => collectSnoozedThreadIds(sidebarSummaries),
+    [sidebarSummaries],
+  );
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const terminalStateByThreadId = useTerminalStateStore((store) => store.terminalStateByThreadId);
-  const visibleThreadIds = resolveVisibleToastThreadIds({ activeThreadId, splitView });
+  const visibleThreadIds = resolveVisibleToastThreadIds({
+    activeThreadId,
+    splitView,
+    rightDockRendered: routeSearch.view !== "editor",
+    rightDockState,
+  });
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
   // Lazy state init: evaluated once, keeping the impure Date.now() call out
   // of re-renders (useRef(Date.now()) re-evaluates its argument every render).
   const [runtimeStartedAtMs] = useState(() => Date.now());
   const readyRef = useRef(false);
+  const notifiedCompletionKeysRef = useRef(new Set<string>());
+  const notifiedSnoozeKeysRef = useRef(new Set<string>());
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -188,6 +219,51 @@ export function TaskCompletionNotifications() {
   }, [navigate]);
 
   useEffect(() => {
+    if (!threadsHydrated) return;
+    // Parent ToastProvider subscribes in its passive effect, after this child.
+    // Deliver after those effects so hydration cannot consume a lost toast.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      let storage: Storage | undefined;
+      try {
+        storage = window.localStorage;
+      } catch {
+        // In-memory receipts keep this runtime usable with storage blocked.
+      }
+      const systemEnabled = shouldAttemptSystemTaskNotification({
+        enabled: settings.enableSystemTaskCompletionNotifications,
+        isWindowForeground: isWindowForeground(),
+      });
+      for (const reminder of collectSnoozeReminderCandidates(sidebarSummaries)) {
+        const key = `${reminder.threadId}:${reminder.reminderAt}`;
+        if (notifiedSnoozeKeysRef.current.has(key)) continue;
+        notifiedSnoozeKeysRef.current.add(key);
+        if (!claimSnoozeReminder(reminder.threadId, reminder.reminderAt, storage)) continue;
+        const copy = {
+          title: reminder.title.trim() || "Untitled thread",
+          body: "Ready to pick this thread back up.",
+        };
+        if (settings.enableTaskCompletionToasts) {
+          showThreadToast(copy, reminder.threadId, "success", navigate);
+        }
+        if (systemEnabled) {
+          void showSystemThreadNotification(copy, reminder.threadId, navigate);
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    navigate,
+    settings.enableSystemTaskCompletionNotifications,
+    settings.enableTaskCompletionToasts,
+    sidebarSummaries,
+    threadsHydrated,
+  ]);
+
+  useEffect(() => {
     if (!threadsHydrated) {
       return;
     }
@@ -199,26 +275,30 @@ export function TaskCompletionNotifications() {
       return;
     }
 
-    const completions = collectCompletedThreadCandidates(
-      previousThreadsRef.current,
-      threads,
-    ).filter((candidate) =>
-      isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMs),
+    const completions = collectCompletedThreadCandidates(previousThreadsRef.current, threads, {
+      waitForSubagents: settings.notifyAfterSubagentsFinish,
+    }).filter(
+      (candidate) =>
+        isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMs) &&
+        !snoozedThreadIds.has(candidate.threadId) &&
+        !notifiedCompletionKeysRef.current.has(completedThreadNotificationKey(candidate)),
     );
     const terminalCompletions = collectCompletedTerminalCandidates(
       previousTerminalStateRef.current,
       terminalStateByThreadId,
-    );
+    ).filter((candidate) => !snoozedThreadIds.has(candidate.threadId));
     const inputNeededCandidates = collectInputNeededThreadCandidates(
       previousThreadsRef.current,
       threads,
-    ).filter((candidate) =>
-      isNotificationRuntimeFreshTimestamp(candidate.createdAt, runtimeStartedAtMs),
+    ).filter(
+      (candidate) =>
+        isNotificationRuntimeFreshTimestamp(candidate.createdAt, runtimeStartedAtMs) &&
+        !snoozedThreadIds.has(candidate.threadId),
     );
     const terminalAttentionCandidates = collectTerminalAttentionCandidates(
       previousTerminalStateRef.current,
       terminalStateByThreadId,
-    );
+    ).filter((candidate) => !snoozedThreadIds.has(candidate.threadId));
     previousThreadsRef.current = threads;
     previousTerminalStateRef.current = terminalStateByThreadId;
 
@@ -231,11 +311,13 @@ export function TaskCompletionNotifications() {
       return;
     }
 
-    const shouldAttemptSystemNotification =
-      settings.enableSystemTaskCompletionNotifications &&
-      (window.desktopBridge ? true : !isWindowForeground());
+    const shouldAttemptSystemNotification = shouldAttemptSystemTaskNotification({
+      enabled: settings.enableSystemTaskCompletionNotifications,
+      isWindowForeground: isWindowForeground(),
+    });
 
     for (const completion of completions) {
+      notifiedCompletionKeysRef.current.add(completedThreadNotificationKey(completion));
       const copy = buildTaskCompletionCopy(completion);
       if (
         settings.enableTaskCompletionToasts &&
@@ -306,7 +388,9 @@ export function TaskCompletionNotifications() {
     navigate,
     settings.enableSystemTaskCompletionNotifications,
     settings.enableTaskCompletionToasts,
+    settings.notifyAfterSubagentsFinish,
     terminalStateByThreadId,
+    snoozedThreadIds,
     threads,
     threadsHydrated,
     visibleThreadIds,

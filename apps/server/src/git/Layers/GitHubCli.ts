@@ -1,7 +1,10 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  type GitHubInboxSort,
+  type GitHubIssueState,
+  type GitHubIssueStateReason,
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
   type GitPullRequestComment,
@@ -9,8 +12,10 @@ import {
   type PullRequestCheck,
   type PullRequestComment,
   type PullRequestCommit,
+  type PullRequestCommitAuthor,
   type PullRequestLabel,
   type PullRequestMergeCapabilities,
+  type PullRequestStack,
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import {
@@ -19,26 +24,51 @@ import {
 } from "@synara/shared/githubRepository";
 
 import { runProcess } from "../../processRunner";
+import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache";
 import { GitHubCliError } from "../Errors.ts";
+import { makeGitHubReadGate } from "../githubReadGate.ts";
 import {
   GitHubCli,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
   type GitHubPullRequestDetailData,
-  type GitHubPullRequestListBatch,
+  type GitHubGraphQlRateLimit,
+  type GitHubInboxIssue,
+  type GitHubInboxPullRequest,
+  type GitHubInboxRemoteItem,
+  type GitHubIssueDetailData,
   type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
+  type GitHubRepositoryChangeProbe,
+  type GitHubRepositoryInboxInvolvement,
+  type GitHubRepositoryInboxLists,
+  type GitHubRepositoryInboxLookup,
 } from "../Services/GitHubCli.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PULL_REQUEST_DIFF_MAX_BYTES = 8 * 1024 * 1024;
 const GITHUB_HOST = "github.com";
 
-export const PULL_REQUEST_LIST_JSON_FIELDS =
-  "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,labels,mergedAt,mergeable";
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
   "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
+
+/**
+ * GitHub's primary ("API rate limit exceeded"), secondary ("secondary rate limit"), and abuse
+ * (HTTP 429) limits. Matched on phrases rather than the bare word so a command line echoed into
+ * the message, such as a GraphQL document selecting `rateLimit`, cannot trigger it.
+ */
+export function isGitHubRateLimitMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("api rate limit") ||
+    lower.includes("secondary rate limit") ||
+    lower.includes("rate limit exceeded") ||
+    lower.includes("rate limit already exceeded") ||
+    lower.includes("http 429") ||
+    (lower.includes("http 403") && lower.includes("rate limit"))
+  );
+}
 
 function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHubCliError {
   if (error instanceof Error) {
@@ -65,6 +95,15 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
         operation,
         detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
         reason: "not-authenticated",
+        cause: error,
+      });
+    }
+
+    if (isGitHubRateLimitMessage(error.message)) {
+      return new GitHubCliError({
+        operation,
+        detail: "GitHub rate limit reached. Synara will retry after the limit resets.",
+        reason: "rate-limited",
         cause: error,
       });
     }
@@ -198,6 +237,17 @@ const RawActorSchema = Schema.Struct({
   url: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+// Commit authors are the one GitHub actor shape that may be anonymous. `gh`
+// emits empty or null logins for commits authored with a local git identity;
+// keep that exception local to commits so PR users, reviewers, and comments
+// continue to reject malformed actor payloads.
+const RawCommitAuthorSchema = Schema.Struct({
+  login: Schema.optional(Schema.NullOr(Schema.String)),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 const RawLabelSchema = Schema.Struct({
   name: TrimmedNonEmptyString,
   color: Schema.optional(Schema.NullOr(Schema.String)),
@@ -227,7 +277,7 @@ const RawCommitSchema = Schema.Struct({
   messageHeadline: Schema.optional(Schema.NullOr(Schema.String)),
   messageBody: Schema.optional(Schema.NullOr(Schema.String)),
   committedDate: TrimmedNonEmptyString,
-  authors: Schema.optional(Schema.NullOr(Schema.Array(RawActorSchema))),
+  authors: Schema.optional(Schema.NullOr(Schema.Array(RawCommitAuthorSchema))),
 });
 
 const RawRepositoryMergeCapabilitiesSchema = Schema.Struct({
@@ -258,10 +308,6 @@ const RawPullRequestListItemSchema = Schema.Struct({
   mergeable: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-const RawPullRequestNumberSchema = Schema.Struct({
-  number: PositiveInt,
-});
-
 const RawPullRequestDetailSchema = Schema.Struct({
   ...RawPullRequestListItemSchema.fields,
   body: Schema.optional(Schema.NullOr(Schema.String)),
@@ -278,11 +324,14 @@ const RawPullRequestDetailSchema = Schema.Struct({
 const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
   ...RawGitHubPullRequestSchema.fields,
   ...RawPullRequestChecksSchema.fields,
+  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
 const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
 const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
+const PULL_REQUEST_STACK_ENTRY_LIMIT = 100;
+const PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT = 300;
 
 // GraphQL review-threads query: resolved threads are filtered after fetch because GitHub's
 // reviewThreads connection does not expose an unresolved-only argument.
@@ -306,6 +355,41 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
         pageInfo {
           hasNextPage
           endCursor
+        }
+      }
+    }
+  }
+}`;
+
+const PULL_REQUEST_STACK_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $first: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      stackEntry { position }
+      stack {
+        number
+        size
+        baseRefName
+        entries(first: $first, after: $after) {
+          totalCount
+          nodes {
+            position
+            pullRequest {
+              number
+              title
+              url
+              headRefName
+              baseRefName
+              state
+              isDraft
+              mergedAt
+              mergeable
+              mergeStateStatus
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }
@@ -381,6 +465,87 @@ const RawReviewThreadsResponseSchema = Schema.Struct({
       }),
     ),
   ),
+});
+
+const RawPullRequestStackEntrySchema = Schema.Struct({
+  position: PositiveInt,
+  pullRequest: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        title: TrimmedNonEmptyString,
+        url: TrimmedNonEmptyString,
+        headRefName: TrimmedNonEmptyString,
+        baseRefName: TrimmedNonEmptyString,
+        state: Schema.optional(Schema.NullOr(Schema.String)),
+        isDraft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+        mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+        mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+        mergeStateStatus: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+});
+
+const RawPullRequestStackResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        repository: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              pullRequest: Schema.optional(
+                Schema.NullOr(
+                  Schema.Struct({
+                    stackEntry: Schema.optional(
+                      Schema.NullOr(Schema.Struct({ position: PositiveInt })),
+                    ),
+                    stack: Schema.optional(
+                      Schema.NullOr(
+                        Schema.Struct({
+                          number: PositiveInt,
+                          size: PositiveInt,
+                          baseRefName: TrimmedNonEmptyString,
+                          entries: Schema.Struct({
+                            totalCount: PositiveInt,
+                            nodes: Schema.optional(
+                              Schema.NullOr(
+                                Schema.Array(Schema.NullOr(RawPullRequestStackEntrySchema)),
+                              ),
+                            ),
+                            pageInfo: Schema.optional(
+                              Schema.NullOr(
+                                Schema.Struct({
+                                  hasNextPage: Schema.optional(Schema.NullOr(Schema.Boolean)),
+                                  endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+                                }),
+                              ),
+                            ),
+                          }),
+                        }),
+                      ),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+});
+
+type RawPullRequestStackEntry = Schema.Schema.Type<typeof RawPullRequestStackEntrySchema>;
+type RawPullRequestStackResponse = Schema.Schema.Type<typeof RawPullRequestStackResponseSchema>;
+
+const RawAsyncMergeResultSchema = Schema.Struct({
+  status: Schema.Literals(["pending", "merged", "enqueued", "failed"]),
+  details: Schema.Struct({
+    message: Schema.optional(Schema.NullOr(Schema.String)),
+    uuid: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
 });
 
 function normalizePullRequestSummary(
@@ -475,16 +640,34 @@ function normalizeActor(
   raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefined,
 ): PullRequestActor | null {
   if (!raw) return null;
-  const login = raw.login ?? raw.slug;
+  const login = raw.login?.trim() || raw.slug?.trim() || null;
   if (!login) return null;
+  const rawLogin = raw.login?.trim() || null;
   return {
     login,
     name: raw.name?.trim() || null,
     // gh's JSON never includes avatar URLs, so derive the canonical login-addressed one —
     // but only from a real user login. A team's slug is not a username, and deriving from it
     // could show an unrelated user who happens to share the name.
-    avatarUrl: raw.avatarUrl?.trim() || (raw.login ? githubAvatarUrlForLogin(raw.login) : null),
+    avatarUrl: raw.avatarUrl?.trim() || (rawLogin ? githubAvatarUrlForLogin(rawLogin) : null),
     url: raw.url?.trim() || null,
+  };
+}
+
+function normalizeCommitAuthor(
+  raw: Schema.Schema.Type<typeof RawCommitAuthorSchema>,
+): PullRequestCommitAuthor | null {
+  const login = raw.login?.trim() || null;
+  const name = raw.name?.trim() || null;
+  if (!login && !name) return null;
+  return {
+    login,
+    name,
+    avatarUrl: login ? raw.avatarUrl?.trim() || githubAvatarUrlForLogin(login) : null,
+    url: login
+      ? raw.url?.trim() ||
+        (login.startsWith("app/") ? null : `https://github.com/${encodeURIComponent(login)}`)
+      : null,
   };
 }
 
@@ -517,11 +700,14 @@ function normalizePullRequestListItem(
     reviewDecision: raw.reviewDecision?.trim() || null,
     // Only User review requests have a login. A Team slug is not a viewer identity and
     // comparing it with the current user's login would create false-positive badges.
-    reviewRequestLogins: (raw.reviewRequests ?? []).flatMap((actor) =>
-      actor.login ? [actor.login] : [],
-    ),
+    reviewRequestLogins: (raw.reviewRequests ?? []).flatMap((actor) => {
+      if (actor.__typename === "Team") return [];
+      const login = actor.login?.trim() || null;
+      return login ? [login] : [];
+    }),
     labels: normalizeLabels(raw.labels),
     mergeability: normalizePullRequestMergeability(raw.mergeable),
+    stack: null,
   };
 }
 
@@ -545,7 +731,7 @@ function normalizeDetailedChecks(
 }
 
 function normalizeDetailComments(
-  raw: Schema.Schema.Type<typeof RawPullRequestDetailSchema>,
+  raw: Pick<Schema.Schema.Type<typeof RawPullRequestDetailSchema>, "comments" | "reviews">,
 ): PullRequestComment[] {
   const issueComments: PullRequestComment[] = (raw.comments ?? []).flatMap((comment, index) => {
     if (!comment.createdAt) return [];
@@ -613,38 +799,12 @@ function normalizePullRequestDetail(
         messageBody: commit.messageBody ?? "",
         committedDate: commit.committedDate,
         authors: (commit.authors ?? []).flatMap((actor) => {
-          const normalized = normalizeActor(actor);
+          const normalized = normalizeCommitAuthor(actor);
           return normalized ? [normalized] : [];
         }),
       }),
     ),
   };
-}
-
-const decodeRawPullRequestListItem = Schema.decodeUnknownSync(RawPullRequestListItemSchema);
-
-export function decodeRepositoryPullRequestListJson(
-  raw: string,
-): Effect.Effect<GitHubPullRequestListBatch, GitHubCliError> {
-  const trimmed = raw.trim();
-  if (!trimmed) return Effect.succeed({ entries: [], rawCount: 0 });
-  return decodeGitHubJson(
-    trimmed,
-    Schema.Array(Schema.Unknown),
-    "listRepositoryPullRequests",
-    "GitHub CLI returned invalid repository PR list JSON.",
-  ).pipe(
-    Effect.map((rawEntries) => ({
-      rawCount: rawEntries.length,
-      entries: rawEntries.flatMap((entry) => {
-        try {
-          return [normalizePullRequestListItem(decodeRawPullRequestListItem(entry))];
-        } catch {
-          return [];
-        }
-      }),
-    })),
-  );
 }
 
 function normalizePullRequestReviewComments(
@@ -672,9 +832,12 @@ function normalizePullRequestReviewComments(
   return comments;
 }
 
-function getGraphQlErrorDetail(
-  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
-): string | null {
+function getGraphQlErrorDetail(raw: {
+  readonly errors?:
+    | ReadonlyArray<{ readonly message?: string | null | undefined } | null>
+    | null
+    | undefined;
+}): string | null {
   const messages =
     raw.errors
       ?.flatMap((error) => {
@@ -693,6 +856,792 @@ function getPullRequestReviewThreadsPageInfo(
     hasNextPage: pageInfo?.hasNextPage === true,
     endCursor: pageInfo?.endCursor?.trim() || null,
   };
+}
+
+function normalizePullRequestStack(
+  raw: RawPullRequestStackResponse,
+  selectedPullRequestNumber: number,
+  rawEntries = raw.data?.repository?.pullRequest?.stack?.entries.nodes ?? [],
+): Effect.Effect<PullRequestStack | null, GitHubCliError> {
+  const graphQlErrorDetail = getGraphQlErrorDetail(raw);
+  if (graphQlErrorDetail) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "getPullRequestStack",
+        detail: graphQlErrorDetail,
+        reason: "other",
+      }),
+    );
+  }
+
+  const pullRequest = raw.data?.repository?.pullRequest;
+  const stack = pullRequest?.stack;
+  const selectedEntry = pullRequest?.stackEntry;
+  if (!stack && !selectedEntry) return Effect.succeed(null);
+  if (!stack || !selectedEntry) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "getPullRequestStack",
+        detail: "GitHub returned incomplete pull request stack metadata.",
+        reason: "other",
+      }),
+    );
+  }
+
+  const entries = rawEntries
+    .flatMap((entry) => {
+      const member = entry?.pullRequest;
+      if (!entry || !member) return [];
+      return [
+        {
+          position: entry.position,
+          number: member.number,
+          title: member.title,
+          url: member.url,
+          headBranch: member.headRefName,
+          baseBranch: member.baseRefName,
+          state: normalizePullRequestState(member),
+          isDraft: member.isDraft === true,
+          mergeability: normalizePullRequestMergeability(member.mergeable),
+          mergeStateStatus: member.mergeStateStatus?.trim() || null,
+        },
+      ];
+    })
+    .toSorted((left, right) => left.position - right.position);
+
+  if (
+    stack.size !== stack.entries.totalCount ||
+    entries.length !== stack.size ||
+    selectedEntry.position > stack.size ||
+    entries.some((entry, index) => entry.position !== index + 1) ||
+    entries[selectedEntry.position - 1]?.number !== selectedPullRequestNumber
+  ) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "getPullRequestStack",
+        detail: "GitHub returned a partial or inconsistent pull request stack.",
+        reason: "other",
+      }),
+    );
+  }
+
+  return Effect.succeed({
+    number: stack.number,
+    size: stack.size,
+    position: selectedEntry.position,
+    baseBranch: stack.baseRefName,
+    entries,
+  });
+}
+
+function getPullRequestStackPageInfo(raw: RawPullRequestStackResponse): {
+  hasNextPage: boolean;
+  endCursor: string | null;
+} {
+  const pageInfo = raw.data?.repository?.pullRequest?.stack?.entries.pageInfo;
+  return {
+    hasNextPage: pageInfo?.hasNextPage === true,
+    endCursor: pageInfo?.endCursor?.trim() || null,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// GitHub inbox: two GraphQL documents per repository and state, sent at the same time: the
+// repository lists, and the viewer's `involves:@me` search. Pinned items beyond the list cap use
+// a separate by-number lookup.
+// ---------------------------------------------------------------------------------------------
+
+/** Per-repository page size for the pull request list, the issue list, and each search alias. */
+export const GITHUB_INBOX_PAGE_SIZE = 50;
+
+// Stack fields are a progressive enhancement. They are PR node fields, so they ride the same
+// request; if GitHub ever rejects them, the layer retries once without them (see below).
+function githubInboxFragments(options: { readonly includeStacks: boolean }): string {
+  return `fragment InboxActorFields on Actor { __typename login avatarUrl url ... on User { name } }
+fragment InboxPullRequestFields on PullRequest {
+  __typename number title url state isDraft additions deletions createdAt updatedAt closedAt mergedAt
+  headRefName baseRefName reviewDecision mergeable
+  author { ...InboxActorFields }
+  reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
+  labels(first: 20) { nodes { name color } }
+  assignees(first: 10) { nodes { login avatarUrl url name } }
+  comments { totalCount }${options.includeStacks ? "\n  stackEntry { position }\n  stack { number size baseRefName }" : ""}
+}
+fragment InboxIssueFields on Issue {
+  __typename number title url state stateReason createdAt updatedAt closedAt
+  author { ...InboxActorFields }
+  labels(first: 20) { nodes { name color } }
+  assignees(first: 10) { nodes { login avatarUrl url name } }
+  comments { totalCount }
+}`;
+}
+
+/**
+ * Lists document for one repository, state, and sort: the first 50 pull requests and
+ * issues with full row fields, the review-requested numbers and count, the viewer, and the
+ * GraphQL budget. Sent together with {@link buildGitHubInboxInvolvementQuery}.
+ */
+export function buildGitHubInboxQuery(options: {
+  readonly includeStacks: boolean;
+  readonly sort?: GitHubInboxSort;
+}): string {
+  const orderField = options.sort === "created" ? "CREATED_AT" : "UPDATED_AT";
+  return `query($owner: String!, $name: String!, $prStates: [PullRequestState!], $issueStates: [IssueState!], $reviewQuery: String!, $includeReview: Boolean!) {
+  viewer { login }
+  rateLimit { cost remaining resetAt }
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: $prStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: ${orderField}, direction: DESC}) {
+      totalCount nodes { ...InboxPullRequestFields }
+    }
+    issues(states: $issueStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: ${orderField}, direction: DESC}) {
+      totalCount nodes { ...InboxIssueFields }
+    }
+  }
+  reviewRequested: search(query: $reviewQuery, type: ISSUE, first: ${GITHUB_INBOX_PAGE_SIZE}) @include(if: $includeReview) {
+    issueCount nodes { ... on PullRequest { number } }
+  }
+}
+${githubInboxFragments(options)}`;
+}
+
+/**
+ * Involvement document for one repository and state: the `involves:@me` search with full row
+ * fields, so items older than the lists need no second request, and the GraphQL budget. A
+ * separate document so it runs in parallel with {@link buildGitHubInboxQuery}.
+ */
+export function buildGitHubInboxInvolvementQuery(options: {
+  readonly includeStacks: boolean;
+}): string {
+  return `query($mineQuery: String!) {
+  rateLimit { cost remaining resetAt }
+  mine: search(query: $mineQuery, type: ISSUE, first: ${GITHUB_INBOX_PAGE_SIZE}) {
+    issueCount nodes { __typename ...InboxPullRequestFields ...InboxIssueFields }
+  }
+}
+${githubInboxFragments(options)}`;
+}
+
+/** Read specific pull requests or issues by number with the same row fields as the lists. Used
+ * for pinned items beyond the list cap. */
+export function buildGitHubInboxItemsQuery(
+  numbers: ReadonlyArray<number>,
+  options: { readonly includeStacks: boolean },
+): string {
+  const selections = numbers
+    .map(
+      (number) =>
+        `    item_${number}: issueOrPullRequest(number: ${number}) { __typename ...InboxPullRequestFields ...InboxIssueFields }`,
+    )
+    .join("\n");
+  return `query($owner: String!, $name: String!) {
+  rateLimit { cost remaining resetAt }
+  repository(owner: $owner, name: $name) {
+${selections}
+  }
+}
+${githubInboxFragments(options)}`;
+}
+
+/** `gh api graphql` variables for {@link buildGitHubInboxInvolvementQuery}. The repository must
+ * already be validated, since it is interpolated into GitHub search syntax. */
+export function githubInboxInvolvementQueryVariables(
+  repository: string,
+  state: "open" | "closed",
+  sort: GitHubInboxSort = "updated",
+): string[] {
+  return ["-f", `mineQuery=repo:${repository} is:${state} involves:@me sort:${sort}-desc`];
+}
+
+/** `gh api graphql` variables for {@link buildGitHubInboxQuery}. The repository must already be
+ * validated, since it is interpolated into GitHub search syntax. */
+export function githubInboxQueryVariables(repository: string, state: "open" | "closed"): string[] {
+  const [owner = "", name = ""] = repository.split("/");
+  const statesArgs =
+    state === "open"
+      ? ["-f", "prStates[]=OPEN", "-f", "issueStates[]=OPEN"]
+      : ["-f", "prStates[]=CLOSED", "-f", "prStates[]=MERGED", "-f", "issueStates[]=CLOSED"];
+  return [
+    "-F",
+    `owner=${owner}`,
+    "-F",
+    `name=${name}`,
+    ...statesArgs,
+    "-f",
+    `reviewQuery=repo:${repository} is:pr is:open review-requested:@me`,
+    // Closed and merged pull requests cannot have a pending review request.
+    "-F",
+    `includeReview=${state === "open" ? "true" : "false"}`,
+  ];
+}
+
+const RawGraphQlCountSchema = Schema.Struct({
+  totalCount: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+
+const rawGraphQlNodes = <S extends Schema.Top>(node: S) =>
+  Schema.Struct({
+    nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(node)))),
+  });
+
+const RawInboxPullRequestSchema = Schema.Struct({
+  __typename: Schema.Literal("PullRequest"),
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  additions: Schema.optional(Schema.NullOr(Schema.Number)),
+  deletions: Schema.optional(Schema.NullOr(Schema.Number)),
+  createdAt: TrimmedNonEmptyString,
+  updatedAt: TrimmedNonEmptyString,
+  closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  headRefName: TrimmedNonEmptyString,
+  baseRefName: TrimmedNonEmptyString,
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
+  mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(Schema.NullOr(RawActorSchema)),
+  reviewRequests: Schema.optional(
+    Schema.NullOr(
+      rawGraphQlNodes(
+        Schema.Struct({ requestedReviewer: Schema.optional(Schema.NullOr(RawActorSchema)) }),
+      ),
+    ),
+  ),
+  labels: Schema.optional(Schema.NullOr(rawGraphQlNodes(RawLabelSchema))),
+  assignees: Schema.optional(Schema.NullOr(rawGraphQlNodes(RawActorSchema))),
+  comments: Schema.optional(Schema.NullOr(RawGraphQlCountSchema)),
+  stackEntry: Schema.optional(Schema.NullOr(Schema.Struct({ position: PositiveInt }))),
+  stack: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        size: PositiveInt,
+        baseRefName: TrimmedNonEmptyString,
+      }),
+    ),
+  ),
+});
+
+const RawInboxIssueSchema = Schema.Struct({
+  __typename: Schema.Literal("Issue"),
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  stateReason: Schema.optional(Schema.NullOr(Schema.String)),
+  createdAt: TrimmedNonEmptyString,
+  updatedAt: TrimmedNonEmptyString,
+  closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(Schema.NullOr(RawActorSchema)),
+  labels: Schema.optional(Schema.NullOr(rawGraphQlNodes(RawLabelSchema))),
+  assignees: Schema.optional(Schema.NullOr(rawGraphQlNodes(RawActorSchema))),
+  comments: Schema.optional(Schema.NullOr(RawGraphQlCountSchema)),
+});
+
+const RawGraphQlRateLimitSchema = Schema.Struct({
+  cost: Schema.optional(Schema.NullOr(Schema.Number)),
+  remaining: Schema.optional(Schema.NullOr(Schema.Number)),
+  resetAt: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawGraphQlPathErrorSchema = Schema.Struct({
+  type: Schema.optional(Schema.NullOr(Schema.String)),
+  message: Schema.optional(Schema.NullOr(Schema.String)),
+  path: Schema.optional(Schema.NullOr(Schema.Array(Schema.Union([Schema.String, Schema.Number])))),
+});
+
+const RawNodeList = Schema.optional(
+  Schema.NullOr(
+    Schema.Struct({
+      totalCount: Schema.optional(Schema.NullOr(Schema.Number)),
+      issueCount: Schema.optional(Schema.NullOr(Schema.Number)),
+      nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+    }),
+  ),
+);
+
+const RawRepositoryInboxResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlPathErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        viewer: Schema.optional(Schema.NullOr(Schema.Struct({ login: TrimmedNonEmptyString }))),
+        rateLimit: Schema.optional(Schema.NullOr(RawGraphQlRateLimitSchema)),
+        repository: Schema.optional(
+          Schema.NullOr(Schema.Struct({ pullRequests: RawNodeList, issues: RawNodeList })),
+        ),
+        reviewRequested: RawNodeList,
+      }),
+    ),
+  ),
+});
+
+const RawRepositoryInvolvementResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlPathErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        rateLimit: Schema.optional(Schema.NullOr(RawGraphQlRateLimitSchema)),
+        mine: RawNodeList,
+      }),
+    ),
+  ),
+});
+
+const RawRepositoryInboxItemsResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlPathErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        rateLimit: Schema.optional(Schema.NullOr(RawGraphQlRateLimitSchema)),
+        repository: Schema.optional(
+          Schema.NullOr(Schema.Record(Schema.String, Schema.NullOr(Schema.Unknown))),
+        ),
+      }),
+    ),
+  ),
+});
+
+const decodeRawInboxPullRequest = Schema.decodeUnknownSync(RawInboxPullRequestSchema);
+const decodeRawInboxIssue = Schema.decodeUnknownSync(RawInboxIssueSchema);
+
+function graphQlNodes<T>(
+  connection: { readonly nodes?: ReadonlyArray<T | null> | null | undefined } | null | undefined,
+): T[] {
+  return (connection?.nodes ?? []).filter((node): node is T => node !== null);
+}
+
+function normalizeInboxActors(
+  connection:
+    | {
+        readonly nodes?:
+          | ReadonlyArray<Schema.Schema.Type<typeof RawActorSchema> | null>
+          | null
+          | undefined;
+      }
+    | null
+    | undefined,
+): PullRequestActor[] {
+  return graphQlNodes(connection).flatMap((actor) => {
+    const normalized = normalizeActor(actor);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function normalizeIssueState(state: string | null | undefined): GitHubIssueState {
+  return state === "CLOSED" ? "closed" : "open";
+}
+
+function normalizeIssueStateReason(
+  state: GitHubIssueState,
+  reason: string | null | undefined,
+): GitHubIssueStateReason | null {
+  if (state !== "closed") return null;
+  switch (reason?.trim().toUpperCase()) {
+    case "COMPLETED":
+      return "completed";
+    case "NOT_PLANNED":
+      return "not-planned";
+    case "DUPLICATE":
+      return "duplicate";
+    default:
+      return null;
+  }
+}
+
+function normalizeInboxPullRequest(
+  raw: Schema.Schema.Type<typeof RawInboxPullRequestSchema>,
+): GitHubInboxPullRequest {
+  return {
+    number: raw.number,
+    title: raw.title,
+    url: raw.url,
+    author: normalizeActor(raw.author),
+    headBranch: raw.headRefName,
+    baseBranch: raw.baseRefName,
+    state: normalizePullRequestState(raw),
+    isDraft: raw.isDraft === true,
+    additions: nonNegativeCount(raw.additions),
+    deletions: nonNegativeCount(raw.deletions),
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    reviewDecision: raw.reviewDecision?.trim() || null,
+    // Only User review requests have a login. A Team slug is not a viewer identity; team
+    // requests reach the viewer through the review-requested search instead.
+    reviewRequestLogins: graphQlNodes(raw.reviewRequests).flatMap((request) => {
+      const reviewer = request.requestedReviewer;
+      if (!reviewer || reviewer.__typename === "Team") return [];
+      const login = reviewer.login?.trim() || null;
+      return login ? [login] : [];
+    }),
+    labels: normalizeLabels(graphQlNodes(raw.labels)),
+    mergeability: normalizePullRequestMergeability(raw.mergeable),
+    stack:
+      raw.stack && raw.stackEntry && raw.stackEntry.position <= raw.stack.size
+        ? {
+            number: raw.stack.number,
+            size: raw.stack.size,
+            position: raw.stackEntry.position,
+            baseBranch: raw.stack.baseRefName,
+          }
+        : null,
+    commentCount: nonNegativeCount(raw.comments?.totalCount),
+    assignees: normalizeInboxActors(raw.assignees),
+  };
+}
+
+function normalizeInboxIssue(
+  raw: Schema.Schema.Type<typeof RawInboxIssueSchema>,
+): GitHubInboxIssue {
+  const state = normalizeIssueState(raw.state);
+  return {
+    number: raw.number,
+    title: raw.title,
+    url: raw.url,
+    author: normalizeActor(raw.author),
+    state,
+    stateReason: normalizeIssueStateReason(state, raw.stateReason),
+    labels: normalizeLabels(graphQlNodes(raw.labels)),
+    assignees: normalizeInboxActors(raw.assignees),
+    commentCount: nonNegativeCount(raw.comments?.totalCount),
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    closedAt: raw.closedAt?.trim() || null,
+  };
+}
+
+/** Decode one search or connection node. Malformed nodes are dropped so one GitHub oddity cannot
+ * hide the healthy rows beside it; callers measure truncation from the raw counts. */
+function decodeInboxNode(node: unknown): GitHubInboxRemoteItem | null {
+  const typename =
+    typeof node === "object" && node !== null && "__typename" in node
+      ? (node as { __typename?: unknown }).__typename
+      : undefined;
+  try {
+    if (typename === "PullRequest") {
+      return {
+        kind: "pullRequest",
+        item: normalizeInboxPullRequest(decodeRawInboxPullRequest(node)),
+      };
+    }
+    if (typename === "Issue") {
+      return { kind: "issue", item: normalizeInboxIssue(decodeRawInboxIssue(node)) };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function normalizeGraphQlRateLimit(
+  raw: Schema.Schema.Type<typeof RawGraphQlRateLimitSchema> | null | undefined,
+): GitHubGraphQlRateLimit | null {
+  const remaining = raw?.remaining;
+  const resetAt = raw?.resetAt?.trim();
+  if (typeof remaining !== "number" || !Number.isFinite(remaining) || !resetAt) return null;
+  return {
+    cost: typeof raw?.cost === "number" && Number.isFinite(raw.cost) ? raw.cost : 0,
+    remaining: Math.max(0, Math.floor(remaining)),
+    resetAt,
+  };
+}
+
+function graphQlErrorFailure(
+  operation: string,
+  errors: ReadonlyArray<Schema.Schema.Type<typeof RawGraphQlPathErrorSchema> | null>,
+): GitHubCliError | null {
+  const present = errors.filter((error) => error !== null);
+  if (present.length === 0) return null;
+  const detail = getGraphQlErrorDetail({ errors: present }) ?? "GitHub GraphQL returned errors.";
+  const rateLimited = present.some(
+    (error) =>
+      error.type === "RATE_LIMITED" ||
+      error.type === "RATE_LIMIT" ||
+      isGitHubRateLimitMessage(error.message ?? ""),
+  );
+  return new GitHubCliError({
+    operation,
+    detail: rateLimited
+      ? "GitHub rate limit reached. Synara will retry after the limit resets."
+      : detail,
+    reason: rateLimited ? "rate-limited" : "other",
+  });
+}
+
+/** True when GitHub rejected the optional stack fields rather than the request itself. */
+export function isGitHubStackFieldUnsupported(error: GitHubCliError): boolean {
+  return /\b(stackEntry|stack)\b[^\n]*doesn't exist|doesn't exist on type[^\n]*\b(stackEntry|stack)\b/i.test(
+    error.detail,
+  );
+}
+
+function graphQlNodeNumber(node: unknown): number[] {
+  const number =
+    typeof node === "object" && node !== null && "number" in node
+      ? (node as { number?: unknown }).number
+      : undefined;
+  return typeof number === "number" && Number.isInteger(number) && number > 0 ? [number] : [];
+}
+
+function graphQlCount(value: number | null | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+/**
+ * Decode + normalize the inbox lists response. Exported so the test fake parses fixtures
+ * through the same schema and normalization as the live layer.
+ */
+export function decodeRepositoryInboxJson(
+  raw: string,
+): Effect.Effect<GitHubRepositoryInboxLists, GitHubCliError> {
+  return decodeGitHubJson(
+    raw.trim(),
+    RawRepositoryInboxResponseSchema,
+    "listRepositoryInbox",
+    "GitHub CLI returned invalid inbox JSON.",
+  ).pipe(
+    Effect.flatMap((response) => {
+      const failure = graphQlErrorFailure("listRepositoryInbox", response.errors ?? []);
+      if (failure) return Effect.fail(failure);
+      const data = response.data;
+      const repository = data?.repository;
+      const viewer = data?.viewer?.login;
+      if (!data || !repository || !viewer) {
+        return Effect.fail(
+          new GitHubCliError({
+            operation: "listRepositoryInbox",
+            detail: "GitHub returned an incomplete inbox response.",
+            reason: "other",
+          }),
+        );
+      }
+
+      const rawPullRequests = repository.pullRequests?.nodes ?? [];
+      const rawIssues = repository.issues?.nodes ?? [];
+      const pullRequests = new Map<number, GitHubInboxPullRequest>();
+      const issues = new Map<number, GitHubInboxIssue>();
+      const add = (item: GitHubInboxRemoteItem | null) => {
+        if (item?.kind === "pullRequest" && !pullRequests.has(item.item.number)) {
+          pullRequests.set(item.item.number, item.item);
+        } else if (item?.kind === "issue" && !issues.has(item.item.number)) {
+          issues.set(item.item.number, item.item);
+        }
+      };
+      for (const node of rawPullRequests) add(decodeInboxNode(node));
+      for (const node of rawIssues) add(decodeInboxNode(node));
+
+      const reviewRequestedNumbers = (data.reviewRequested?.nodes ?? []).flatMap(graphQlNodeNumber);
+
+      return Effect.succeed({
+        viewer,
+        pullRequests: [...pullRequests.values()],
+        issues: [...issues.values()],
+        // Measured against the raw node count, before tolerant decoding drops malformed rows.
+        truncatedPullRequests:
+          graphQlCount(repository.pullRequests?.totalCount, rawPullRequests.length) >
+          rawPullRequests.length,
+        truncatedIssues:
+          graphQlCount(repository.issues?.totalCount, rawIssues.length) > rawIssues.length,
+        totalPullRequests: graphQlCount(
+          repository.pullRequests?.totalCount,
+          rawPullRequests.length,
+        ),
+        totalIssues: graphQlCount(repository.issues?.totalCount, rawIssues.length),
+        reviewRequestedNumbers,
+        reviewRequestedCount: graphQlCount(
+          data.reviewRequested?.issueCount,
+          reviewRequestedNumbers.length,
+        ),
+        rateLimit: normalizeGraphQlRateLimit(data.rateLimit),
+      } satisfies GitHubRepositoryInboxLists);
+    }),
+  );
+}
+
+/** Decode {@link buildGitHubInboxInvolvementQuery}. Every matched number counts as involvement,
+ * even when its node is malformed and dropped from `items`. */
+export function decodeRepositoryInvolvementJson(
+  raw: string,
+): Effect.Effect<GitHubRepositoryInboxInvolvement, GitHubCliError> {
+  return decodeGitHubJson(
+    raw.trim(),
+    RawRepositoryInvolvementResponseSchema,
+    "listRepositoryInboxInvolvement",
+    "GitHub CLI returned invalid inbox involvement JSON.",
+  ).pipe(
+    Effect.flatMap((response) => {
+      const failure = graphQlErrorFailure("listRepositoryInboxInvolvement", response.errors ?? []);
+      if (failure) return Effect.fail(failure);
+      const data = response.data;
+      if (!data?.mine) {
+        return Effect.fail(
+          new GitHubCliError({
+            operation: "listRepositoryInboxInvolvement",
+            detail: "GitHub returned an incomplete inbox involvement response.",
+            reason: "other",
+          }),
+        );
+      }
+      const involvedNumbers = new Set<number>();
+      const items: GitHubInboxRemoteItem[] = [];
+      for (const node of data.mine.nodes ?? []) {
+        const typename =
+          typeof node === "object" && node !== null && "__typename" in node
+            ? (node as { __typename?: unknown }).__typename
+            : undefined;
+        if (typename !== "PullRequest" && typename !== "Issue") continue;
+        for (const number of graphQlNodeNumber(node)) involvedNumbers.add(number);
+        const item = decodeInboxNode(node);
+        if (item) items.push(item);
+      }
+      return Effect.succeed({
+        items,
+        involvedNumbers: [...involvedNumbers],
+        rateLimit: normalizeGraphQlRateLimit(data.rateLimit),
+      } satisfies GitHubRepositoryInboxInvolvement);
+    }),
+  );
+}
+
+/** Decode {@link buildGitHubInboxItemsQuery}. Only a NOT_FOUND error whose path names one alias
+ * marks that number missing; any other GraphQL error fails the lookup as a whole. */
+export function decodeRepositoryInboxItemsJson(
+  raw: string,
+  numbers: ReadonlyArray<number>,
+): Effect.Effect<ReadonlyMap<number, GitHubRepositoryInboxLookup>, GitHubCliError> {
+  return decodeGitHubJson(
+    raw.trim(),
+    RawRepositoryInboxItemsResponseSchema,
+    "getRepositoryInboxItems",
+    "GitHub CLI returned invalid inbox item JSON.",
+  ).pipe(
+    Effect.flatMap((response) => {
+      const notFound = new Set<number>();
+      const otherErrors = (response.errors ?? []).filter((error) => {
+        if (!error) return false;
+        const alias = error.path?.[1];
+        const match = typeof alias === "string" ? /^item_(\d+)$/.exec(alias) : null;
+        if (error.type === "NOT_FOUND" && error.path?.[0] === "repository" && match) {
+          notFound.add(Number(match[1]));
+          return false;
+        }
+        return true;
+      });
+      const failure = graphQlErrorFailure("getRepositoryInboxItems", otherErrors);
+      if (failure) return Effect.fail(failure);
+      const repository = response.data?.repository;
+      if (!repository) {
+        return Effect.fail(
+          new GitHubCliError({
+            operation: "getRepositoryInboxItems",
+            detail: "GitHub returned an incomplete inbox item response.",
+            reason: "other",
+          }),
+        );
+      }
+      const results = new Map<number, GitHubRepositoryInboxLookup>();
+      for (const number of numbers) {
+        const item = decodeInboxNode(repository[`item_${number}`]);
+        if (item && item.item.number === number) {
+          results.set(number, { _tag: "found", item });
+        } else if (notFound.has(number)) {
+          results.set(number, { _tag: "not-found" });
+        }
+        // Anything else (a malformed node) is left out: absence is not proof of deletion.
+      }
+      return Effect.succeed(results);
+    }),
+  );
+}
+
+const RawIssueDetailSchema = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  body: Schema.optional(Schema.NullOr(Schema.String)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  stateReason: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(Schema.NullOr(RawActorSchema)),
+  assignees: rawGraphQlNodes(RawActorSchema),
+  labels: rawGraphQlNodes(RawLabelSchema),
+  comments: Schema.Struct({
+    nodes: Schema.Array(Schema.NullOr(RawIssueCommentSchema)),
+    totalCount: Schema.Number,
+    pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+  }),
+  createdAt: TrimmedNonEmptyString,
+  updatedAt: TrimmedNonEmptyString,
+  closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const RawIssueDetailResponseSchema = Schema.Struct({
+  data: Schema.Struct({ repository: Schema.Struct({ issue: RawIssueDetailSchema }) }),
+});
+
+// Read the connection metadata alongside its first page. `gh issue view --json comments`
+// discards totalCount/pageInfo, so a full page cannot distinguish 100 comments from 101.
+const ISSUE_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number title url body state stateReason createdAt updatedAt closedAt
+      author { login avatarUrl url ... on User { name } }
+      assignees(first: 100) { nodes { login avatarUrl url name } }
+      labels(first: 100) { nodes { name color } }
+      comments(first: 100) {
+        totalCount pageInfo { hasNextPage }
+        nodes { id body url createdAt author { login avatarUrl url ... on User { name } } }
+      }
+    }
+  }
+}`;
+
+function normalizeIssueDetail(
+  raw: Schema.Schema.Type<typeof RawIssueDetailSchema>,
+): GitHubIssueDetailData {
+  const state = normalizeIssueState(raw.state);
+  const comments = normalizeDetailComments({
+    comments: raw.comments.nodes.filter((node) => node !== null),
+  });
+  return {
+    number: raw.number,
+    title: raw.title,
+    url: raw.url,
+    author: normalizeActor(raw.author),
+    state,
+    stateReason: normalizeIssueStateReason(state, raw.stateReason),
+    labels: normalizeLabels((raw.labels.nodes ?? []).filter((node) => node !== null)),
+    assignees: (raw.assignees.nodes ?? []).flatMap((actor) => {
+      const normalized = normalizeActor(actor);
+      return normalized ? [normalized] : [];
+    }),
+    commentCount: raw.comments.totalCount,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    closedAt: raw.closedAt?.trim() || null,
+    body: raw.body ?? "",
+    comments: comments.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    commentsTruncated:
+      raw.comments.pageInfo.hasNextPage || comments.length < raw.comments.totalCount,
+  };
+}
+
+/** HTTP status line and ETag from `gh api -i` output. */
+export function parseGitHubApiIncludeHeaders(stdout: string): {
+  readonly status: number | null;
+  readonly etag: string | null;
+} {
+  const headerBlock = stdout.split(/\r?\n\r?\n/, 1)[0] ?? "";
+  const lines = headerBlock.split(/\r?\n/);
+  const statusMatch = /^HTTP\/[\d.]+\s+(\d{3})\b/.exec(lines[0]?.trim() ?? "");
+  let etag: string | null = null;
+  for (const line of lines.slice(1)) {
+    const match = /^etag:\s*(.+)$/i.exec(line.trim());
+    if (match?.[1]) {
+      etag = match[1].trim();
+      break;
+    }
+  }
+  return { status: statusMatch?.[1] ? Number(statusMatch[1]) : null, etag };
 }
 
 function normalizeRepositoryCloneUrls(
@@ -715,11 +1664,14 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "getRepositoryCloneUrls"
     | "getPullRequestWithChecks"
     | "getPullRequestReviewComments"
-    | "listRepositoryPullRequests"
+    | "getPullRequestStack"
+    | "listRepositoryInbox"
+    | "listRepositoryInboxInvolvement"
+    | "getRepositoryInboxItems"
     | "getPullRequestDetail"
-    | "getPullRequestListItem"
-    | "listReviewRequestedPullRequestNumbers"
-    | "getRepositoryMergeCapabilities",
+    | "getIssueDetail"
+    | "getRepositoryMergeCapabilities"
+    | "runPullRequestAction",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -769,7 +1721,40 @@ export function decodePullRequestListJson(
   );
 }
 
-const makeGitHubCli = Effect.sync(() => {
+// Git status and thread PR badges are re-read on every file-change/turn invalidation, and each
+// read is a GraphQL-backed `gh` call. A short shared TTL keeps those event storms from draining
+// the account's hourly GitHub budget while staying fresher than any client poll interval.
+const PULL_REQUEST_LOOKUP_CACHE_TTL_MS = 20_000;
+const PULL_REQUEST_LOOKUP_CACHE_MAX_ENTRIES = 256;
+
+const makeGitHubCli = Effect.gen(function* () {
+  const pullRequestLookupCache = yield* makeKeyedSingleFlightCache<
+    GitHubPullRequestSummary,
+    GitHubCliError
+  >({
+    maxEntries: PULL_REQUEST_LOOKUP_CACHE_MAX_ENTRIES,
+    ttlMs: PULL_REQUEST_LOOKUP_CACHE_TTL_MS,
+  });
+  const pullRequestHeadListCache = yield* makeKeyedSingleFlightCache<
+    ReadonlyArray<GitHubPullRequestSummary>,
+    GitHubCliError
+  >({
+    maxEntries: PULL_REQUEST_LOOKUP_CACHE_MAX_ENTRIES,
+    ttlMs: PULL_REQUEST_LOOKUP_CACHE_TTL_MS,
+  });
+  // Mutations can change any cached summary (state, draft, base), so they drop everything rather
+  // than guess which references and head selectors alias the mutated pull request.
+  const invalidatePullRequestLookups = Effect.all(
+    [pullRequestLookupCache.invalidateAll, pullRequestHeadListCache.invalidateAll],
+    { discard: true },
+  );
+
+  const readGate = makeGitHubReadGate();
+
+  // Flipped once if GitHub ever rejects the optional stack fields, so later inbox reads skip them
+  // instead of failing and retrying on every poll.
+  let inboxStackFieldsSupported = true;
+
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
       try: (signal) =>
@@ -779,13 +1764,19 @@ const makeGitHubCli = Effect.sync(() => {
           signal,
           // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
           // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
-          env: { ...process.env, GH_HOST: GITHUB_HOST },
+          env: { ...process.env, ...input.env, GH_HOST: GITHUB_HOST },
           ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
           ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
+          ...(input.allowNonZeroExit !== undefined
+            ? { allowNonZeroExit: input.allowNonZeroExit }
+            : {}),
           ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+          ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
+          ...(input.onStderrChunk !== undefined ? { onStderrChunk: input.onStderrChunk } : {}),
         }),
       catch: (error) => normalizeGitHubCliError("execute", error),
-    });
+      // Every command reports here, mutations included, so a limit hit by any of them pauses reads.
+    }).pipe(Effect.tapError((error) => Effect.sync(() => readGate.noteFailure(error))));
 
   const PULL_REQUEST_DIFF_TOO_LARGE_PATTERN = /exceeded the maximum number of files|too_large/i;
   const PULL_REQUEST_DIFF_MISSING_OBJECT_PATTERN =
@@ -1005,7 +1996,133 @@ const makeGitHubCli = Effect.sync(() => {
       Effect.flatMap((result) => decodePullRequestListJson(result.stdout, options.operation)),
     );
 
-  const service = {
+  const decodeAsyncMergeResult = (result: Awaited<ReturnType<typeof runProcess>>) => {
+    if (result.timedOut) {
+      return Effect.fail(
+        new GitHubCliError({
+          operation: "runPullRequestAction",
+          detail: "GitHub's asynchronous merge request timed out.",
+          reason: "other",
+        }),
+      );
+    }
+    if (!result.stdout.trim()) {
+      return Effect.fail(
+        new GitHubCliError({
+          operation: "runPullRequestAction",
+          detail:
+            result.stderr.trim() ||
+            `GitHub returned an empty asynchronous merge response (command exit ${result.code ?? "unknown"}).`,
+          reason: "other",
+        }),
+      );
+    }
+    return decodeGitHubJson(
+      result.stdout.trim(),
+      RawAsyncMergeResultSchema,
+      "runPullRequestAction",
+      "GitHub returned an invalid asynchronous merge response.",
+    );
+  };
+
+  const runAsyncPullRequestMerge = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly mergeMethod: "merge" | "squash" | "rebase";
+  }): Effect.Effect<
+    { readonly mergeOutcome: "merged" | "enqueued" | "unavailable" },
+    GitHubCliError
+  > =>
+    Effect.gen(function* () {
+      const endpoint = `repos/${input.repository}/pulls/${input.number}/merge-async`;
+      const submission = yield* execute({
+        cwd: input.cwd,
+        args: ["api", "--hostname", GITHUB_HOST, "--method", "PUT", endpoint, "--input", "-"],
+        stdin: JSON.stringify({ merge_method: input.mergeMethod, merge_action: "default" }),
+        // A duplicate in-flight request is HTTP 409 but returns the existing UUID, while a
+        // closed/draft PR is HTTP 400 with a terminal `failed` result. Both bodies are useful.
+        allowNonZeroExit: true,
+      });
+      if (
+        submission.code !== 0 &&
+        /(?:HTTP\s+404|not found)/i.test(`${submission.stdout}\n${submission.stderr}`)
+      ) {
+        // Async merge is a stacked-PR preview API. A repository without the preview returns 404;
+        // its standalone PRs must retain the existing synchronous merge path.
+        return { mergeOutcome: "unavailable" };
+      }
+      let result = yield* decodeAsyncMergeResult(submission);
+
+      for (let pollCount = 0; pollCount <= PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT; pollCount += 1) {
+        switch (result.status) {
+          case "merged":
+            return { mergeOutcome: "merged" };
+          case "enqueued":
+            return { mergeOutcome: "enqueued" };
+          case "failed":
+            return yield* Effect.fail(
+              new GitHubCliError({
+                operation: "runPullRequestAction",
+                detail:
+                  result.details.message?.trim() || "GitHub could not merge the pull request.",
+                reason: "other",
+              }),
+            );
+          case "pending": {
+            const uuid = result.details.uuid?.trim();
+            if (!uuid) {
+              return yield* Effect.fail(
+                new GitHubCliError({
+                  operation: "runPullRequestAction",
+                  detail: "GitHub returned a pending merge request without an identifier.",
+                  reason: "other",
+                }),
+              );
+            }
+            if (pollCount === PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT) break;
+            yield* Effect.sleep("1 second");
+            result = yield* execute({
+              cwd: input.cwd,
+              args: ["api", "--hostname", GITHUB_HOST, `${endpoint}/${uuid}`],
+            }).pipe(Effect.flatMap(decodeAsyncMergeResult));
+            break;
+          }
+        }
+      }
+
+      return yield* Effect.fail(
+        new GitHubCliError({
+          operation: "runPullRequestAction",
+          detail: "GitHub's asynchronous merge did not finish within five minutes.",
+          reason: "other",
+        }),
+      );
+    });
+
+  // Both inbox documents carry the stack fields. The first rejection turns them off for every
+  // later inbox read, and the rejected request is retried once without them.
+  const runInboxGraphQl = <A>(
+    cwd: string,
+    fieldArgs: (includeStacks: boolean) => ReadonlyArray<string>,
+    decode: (stdout: string) => Effect.Effect<A, GitHubCliError>,
+  ): Effect.Effect<A, GitHubCliError> => {
+    const run = (includeStacks: boolean) =>
+      execute({
+        cwd,
+        args: ["api", "graphql", "--hostname", GITHUB_HOST, "-f", ...fieldArgs(includeStacks)],
+      }).pipe(Effect.flatMap((result) => decode(result.stdout)));
+    if (!inboxStackFieldsSupported) return run(false);
+    return run(true).pipe(
+      Effect.catch((error) => {
+        if (!isGitHubStackFieldUnsupported(error)) return Effect.fail(error);
+        inboxStackFieldsSupported = false;
+        return run(false);
+      }),
+    );
+  };
+
+  const service: Omit<GitHubCliShape, "withRead"> = {
     execute,
     getViewerLogin: (input) =>
       execute({
@@ -1025,103 +2142,153 @@ const makeGitHubCli = Effect.sync(() => {
               );
         }),
       ),
-    listRepositoryPullRequests: (input) => {
-      const searchTerms = [
-        ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
-        ...(input.state === "closed" ? ["is:unmerged"] : []),
-      ];
-      const involvementArgs = [
-        ...(input.involvement === "authored" ? ["--author", input.viewer] : []),
-        ...(searchTerms.length > 0 ? ["--search", searchTerms.join(" ")] : []),
-      ];
-      return validateRepository(input.repository, "listRepositoryPullRequests").pipe(
+    listRepositoryInbox: (input) =>
+      validateRepository(input.repository, "listRepositoryInbox").pipe(
+        Effect.flatMap((repository) =>
+          runInboxGraphQl(
+            input.cwd,
+            (includeStacks) => [
+              `query=${buildGitHubInboxQuery({ includeStacks, sort: input.sort ?? "updated" })}`,
+              ...githubInboxQueryVariables(repository, input.state),
+            ],
+            decodeRepositoryInboxJson,
+          ),
+        ),
+      ),
+    listRepositoryInboxInvolvement: (input) =>
+      validateRepository(input.repository, "listRepositoryInboxInvolvement").pipe(
+        Effect.flatMap((repository) =>
+          runInboxGraphQl(
+            input.cwd,
+            (includeStacks) => [
+              `query=${buildGitHubInboxInvolvementQuery({ includeStacks })}`,
+              ...githubInboxInvolvementQueryVariables(repository, input.state, input.sort),
+            ],
+            decodeRepositoryInvolvementJson,
+          ),
+        ),
+      ),
+    probeRepositoryInboxChanges: (input) =>
+      validateRepository(input.repository, "probeRepositoryInboxChanges").pipe(
         Effect.flatMap((repository) =>
           execute({
             cwd: input.cwd,
             args: [
-              "pr",
-              "list",
-              "--repo",
-              repositorySelector(repository),
-              ...involvementArgs,
-              "--state",
-              input.state,
-              "--limit",
-              String(input.limit ?? 50),
-              "--json",
-              PULL_REQUEST_LIST_JSON_FIELDS,
+              "api",
+              "--hostname",
+              GITHUB_HOST,
+              "-i",
+              ...(input.etag ? ["-H", `If-None-Match: ${input.etag}`] : []),
+              `repos/${repository}/issues?state=all&sort=updated&direction=desc&per_page=1`,
             ],
+            // gh exits 1 on a 304; the status line from -i is the authoritative answer.
+            allowNonZeroExit: true,
+            maxBufferBytes: 1024 * 1024,
           }),
         ),
-        Effect.flatMap((result) => decodeRepositoryPullRequestListJson(result.stdout)),
-      );
-    },
-    getPullRequestListItem: (input) =>
-      validateRepository(input.repository, "getPullRequestListItem").pipe(
+        Effect.flatMap((result): Effect.Effect<GitHubRepositoryChangeProbe, GitHubCliError> => {
+          const { status, etag } = parseGitHubApiIncludeHeaders(result.stdout);
+          if (status === 304 && input.etag) {
+            return Effect.succeed({ changed: false });
+          }
+          if (status !== null && status >= 200 && status < 300) {
+            return Effect.succeed({ changed: true, etag });
+          }
+          const statusLine = status === null ? "no HTTP status" : `HTTP ${status}`;
+          return Effect.fail(
+            normalizeGitHubCliError(
+              "execute",
+              new Error(`gh api change probe failed (${statusLine}). ${result.stderr.trim()}`),
+            ),
+          );
+        }),
+      ),
+    getRepositoryInboxItems: (input) =>
+      Effect.gen(function* () {
+        const repository = yield* validateRepository(input.repository, "getRepositoryInboxItems");
+        const numbers = [...new Set(input.numbers)].filter(
+          (number) => Number.isInteger(number) && number > 0,
+        );
+        if (numbers.length === 0) return new Map<number, GitHubRepositoryInboxLookup>();
+        const [owner = "", name = ""] = repository.split("/");
+        const result = yield* execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            "graphql",
+            "--hostname",
+            GITHUB_HOST,
+            "-f",
+            `query=${buildGitHubInboxItemsQuery(numbers, { includeStacks: inboxStackFieldsSupported })}`,
+            "-F",
+            `owner=${owner}`,
+            "-F",
+            `name=${name}`,
+          ],
+          // A missing number makes gh exit 1 while stdout still carries the per-alias answer.
+          allowNonZeroExit: true,
+        });
+        if (result.code !== 0 && !result.stdout.trim().startsWith("{")) {
+          return yield* Effect.fail(
+            normalizeGitHubCliError(
+              "execute",
+              new Error(result.stderr.trim() || `gh api graphql failed (code=${result.code}).`),
+            ),
+          );
+        }
+        return yield* decodeRepositoryInboxItemsJson(result.stdout, numbers);
+      }),
+    getIssueDetail: (input) =>
+      validateRepository(input.repository, "getIssueDetail").pipe(
+        Effect.flatMap((repository) => {
+          const [owner = "", name = ""] = repository.split("/");
+          return execute({
+            cwd: input.cwd,
+            args: [
+              "api",
+              "graphql",
+              "--hostname",
+              GITHUB_HOST,
+              "-f",
+              `query=${ISSUE_DETAIL_QUERY}`,
+              "-F",
+              `owner=${owner}`,
+              "-F",
+              `name=${name}`,
+              "-F",
+              `number=${input.number}`,
+            ],
+          });
+        }),
+        Effect.flatMap((result) =>
+          decodeGitHubJson(
+            result.stdout.trim(),
+            RawIssueDetailResponseSchema,
+            "getIssueDetail",
+            "GitHub CLI returned invalid issue JSON.",
+          ),
+        ),
+        Effect.map((response) => normalizeIssueDetail(response.data.repository.issue)),
+      ),
+    commentOnIssue: (input) =>
+      validateRepository(input.repository, "commentOnIssue").pipe(
         Effect.flatMap((repository) =>
+          // Body travels over stdin, never argv, exactly like pull request comments.
           execute({
             cwd: input.cwd,
             args: [
-              "pr",
-              "view",
+              "issue",
+              "comment",
               String(input.number),
               "--repo",
               repositorySelector(repository),
-              "--json",
-              PULL_REQUEST_LIST_JSON_FIELDS,
+              "--body-file",
+              "-",
             ],
+            stdin: input.body,
           }),
         ),
-        Effect.flatMap((result) =>
-          decodeGitHubJson(
-            result.stdout.trim(),
-            Schema.Unknown,
-            "getPullRequestListItem",
-            "GitHub CLI returned invalid pull request JSON.",
-          ),
-        ),
-        Effect.flatMap((entry) =>
-          Effect.try({
-            try: () => normalizePullRequestListItem(decodeRawPullRequestListItem(entry)),
-            catch: () =>
-              new GitHubCliError({
-                operation: "getPullRequestListItem",
-                detail: "GitHub CLI returned an unrecognized pull request shape.",
-                reason: "other",
-              }),
-          }),
-        ),
-      ),
-    listReviewRequestedPullRequestNumbers: (input) =>
-      validateRepository(input.repository, "listReviewRequestedPullRequestNumbers").pipe(
-        Effect.flatMap((repository) =>
-          execute({
-            cwd: input.cwd,
-            args: [
-              "search",
-              "prs",
-              "--repo",
-              repository,
-              "--review-requested",
-              input.viewer,
-              "--state",
-              "open",
-              "--limit",
-              String(input.limit ?? 1_000),
-              "--json",
-              "number",
-            ],
-          }),
-        ),
-        Effect.flatMap((result) =>
-          decodeGitHubJson(
-            result.stdout.trim(),
-            Schema.Array(RawPullRequestNumberSchema),
-            "listReviewRequestedPullRequestNumbers",
-            "GitHub CLI returned invalid review-requested pull request JSON.",
-          ),
-        ),
-        Effect.map((entries) => entries.map((entry) => entry.number)),
+        Effect.asVoid,
       ),
     getPullRequestDetail: (input) =>
       validateRepository(input.repository, "getPullRequestDetail").pipe(
@@ -1149,6 +2316,77 @@ const makeGitHubCli = Effect.sync(() => {
         ),
         Effect.map(normalizePullRequestDetail),
       ),
+    getPullRequestStack: (input) =>
+      Effect.gen(function* () {
+        const repository = yield* validateRepository(input.repository, "getPullRequestStack");
+        const [owner = "", repo = ""] = repository.split("/");
+        const loadPage = (after: string | null) =>
+          Effect.gen(function* () {
+            const result = yield* execute({
+              cwd: input.cwd,
+              args: [
+                "api",
+                "graphql",
+                "--hostname",
+                GITHUB_HOST,
+                "-f",
+                `query=${PULL_REQUEST_STACK_QUERY}`,
+                "-F",
+                `owner=${owner}`,
+                "-F",
+                `repo=${repo}`,
+                "-F",
+                `number=${input.number}`,
+                "-F",
+                `first=${PULL_REQUEST_STACK_ENTRY_LIMIT}`,
+                ...(after ? ["-F", `after=${after}`] : []),
+              ],
+            });
+            const page = yield* decodeGitHubJson(
+              result.stdout.trim(),
+              RawPullRequestStackResponseSchema,
+              "getPullRequestStack",
+              "GitHub CLI returned invalid pull request stack JSON.",
+            );
+            const graphQlErrorDetail = getGraphQlErrorDetail(page);
+            if (graphQlErrorDetail) {
+              return yield* Effect.fail(
+                new GitHubCliError({
+                  operation: "getPullRequestStack",
+                  detail: graphQlErrorDetail,
+                  reason: "other",
+                }),
+              );
+            }
+            return page;
+          });
+
+        const firstPage = yield* loadPage(null);
+        const entries: Array<RawPullRequestStackEntry | null> = [];
+        const seenCursors = new Set<string>();
+        let page = firstPage;
+
+        while (true) {
+          entries.push(...(page.data?.repository?.pullRequest?.stack?.entries.nodes ?? []));
+          const pageInfo = getPullRequestStackPageInfo(page);
+          if (!pageInfo.hasNextPage) {
+            break;
+          }
+          if (pageInfo.endCursor === null || seenCursors.has(pageInfo.endCursor)) {
+            return yield* Effect.fail(
+              new GitHubCliError({
+                operation: "getPullRequestStack",
+                detail: "GitHub returned invalid pull request stack pagination metadata.",
+                reason: "other",
+              }),
+            );
+          }
+          seenCursors.add(pageInfo.endCursor);
+          page = yield* loadPage(pageInfo.endCursor);
+        }
+
+        return yield* normalizePullRequestStack(firstPage, input.number, entries);
+      }),
     getRepositoryMergeCapabilities: (input) =>
       validateRepository(input.repository, "getRepositoryMergeCapabilities").pipe(
         Effect.flatMap((repository) =>
@@ -1216,25 +2454,58 @@ const makeGitHubCli = Effect.sync(() => {
       ),
     runPullRequestAction: (input) =>
       validateRepository(input.repository, "runPullRequestAction").pipe(
-        Effect.flatMap((repository) => {
-          const reference = String(input.number);
-          const repoArgs = ["--repo", repositorySelector(repository)];
-          const args = (() => {
-            switch (input.action) {
-              case "merge":
-                return ["pr", "merge", reference, ...repoArgs, `--${input.mergeMethod ?? "merge"}`];
-              case "ready":
-                return ["pr", "ready", reference, ...repoArgs];
-              case "draft":
-                return ["pr", "ready", reference, ...repoArgs, "--undo"];
-              case "close":
-                return ["pr", "close", reference, ...repoArgs];
-              case "reopen":
-                return ["pr", "reopen", reference, ...repoArgs];
+        Effect.flatMap(
+          (
+            repository,
+          ): Effect.Effect<
+            { readonly mergeOutcome: "merged" | "enqueued" | null },
+            GitHubCliError
+          > => {
+            const reference = String(input.number);
+            const repoArgs = ["--repo", repositorySelector(repository)];
+            if (input.action === "merge") {
+              return runAsyncPullRequestMerge({
+                cwd: input.cwd,
+                repository,
+                number: input.number,
+                mergeMethod: input.mergeMethod ?? "merge",
+              }).pipe(
+                Effect.flatMap((result) =>
+                  result.mergeOutcome !== "unavailable"
+                    ? Effect.succeed({ mergeOutcome: result.mergeOutcome })
+                    : execute({
+                        cwd: input.cwd,
+                        args: [
+                          "pr",
+                          "merge",
+                          reference,
+                          ...repoArgs,
+                          `--${input.mergeMethod ?? "merge"}`,
+                        ],
+                      }).pipe(Effect.as({ mergeOutcome: "merged" as const })),
+                ),
+              );
             }
-          })();
-          return execute({ cwd: input.cwd, args }).pipe(Effect.asVoid);
-        }),
+            let args: string[];
+            switch (input.action) {
+              case "ready":
+                args = ["pr", "ready", reference, ...repoArgs];
+                break;
+              case "draft":
+                args = ["pr", "ready", reference, ...repoArgs, "--undo"];
+                break;
+              case "close":
+                args = ["pr", "close", reference, ...repoArgs];
+                break;
+              case "reopen":
+                args = ["pr", "reopen", reference, ...repoArgs];
+                break;
+            }
+            return execute({ cwd: input.cwd, args }).pipe(
+              Effect.as({ mergeOutcome: null } as const),
+            );
+          },
+        ),
       ),
     commentOnPullRequest: (input) =>
       validateRepository(input.repository, "commentOnPullRequest").pipe(
@@ -1294,7 +2565,7 @@ const makeGitHubCli = Effect.sync(() => {
           "view",
           input.reference,
           "--json",
-          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -1309,6 +2580,7 @@ const makeGitHubCli = Effect.sync(() => {
         Effect.map((decoded) => ({
           summary: normalizePullRequestSummary(decoded),
           checks: normalizePullRequestChecks(decoded),
+          headSha: decoded.headRefOid?.trim() || null,
         })),
       ),
     getPullRequestReviewComments: (input) =>
@@ -1421,6 +2693,7 @@ const makeGitHubCli = Effect.sync(() => {
           input.title,
           "--body-file",
           input.bodyFile,
+          ...(input.draft === true ? ["--draft"] : []),
         ],
       }).pipe(Effect.asVoid),
     getDefaultBranch: (input) =>
@@ -1438,9 +2711,35 @@ const makeGitHubCli = Effect.sync(() => {
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
       }).pipe(Effect.asVoid),
-  } satisfies GitHubCliShape;
+  };
 
-  return service;
+  // `listOpenPullRequests` stays uncached and ungated: it backs the create-PR flow, which must
+  // observe the pull request it just created. `listPullRequests` only serves background lookups
+  // (git status, thread metadata), so a cache miss waits for a read slot and honours the pause.
+  return {
+    ...service,
+    withRead: readGate.withRead,
+    listPullRequests: (input) =>
+      pullRequestHeadListCache.get(
+        [input.cwd, input.headSelector, input.limit ?? ""].join("\u0000"),
+        readGate.withRead(service.listPullRequests(input)),
+      ),
+    getPullRequest: (input) =>
+      Effect.gen(function* () {
+        const key = [input.cwd, input.reference].join("\u0000");
+        const lookup = pullRequestLookupCache.get(key, service.getPullRequest(input));
+        if (!input.background) return yield* lookup;
+        const cached = yield* pullRequestLookupCache.getCached(key);
+        if (Option.isSome(cached)) return cached.value;
+        // Admission belongs to this polling caller, not the shared remote computation.
+        // A mutation may start or join the actual lookup without waiting for a read slot.
+        return yield* readGate.withRead(lookup);
+      }),
+    runPullRequestAction: (input) =>
+      service.runPullRequestAction(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
+    createPullRequest: (input) =>
+      service.createPullRequest(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
+  } satisfies GitHubCliShape;
 });
 
 export const GitHubCliLive = Layer.effect(GitHubCli, makeGitHubCli);

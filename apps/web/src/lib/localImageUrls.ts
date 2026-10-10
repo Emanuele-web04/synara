@@ -9,7 +9,7 @@ import {
   LOCAL_IMAGE_ROUTE_PATH,
   SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX,
 } from "@synara/shared/localPreviewFiles";
-import { isWindowsAbsolutePath } from "@synara/shared/path";
+import { isLocalAbsolutePath, isWindowsAbsolutePath } from "@synara/shared/path";
 
 import { resolveWsHttpUrl } from "./wsHttpUrl";
 
@@ -50,6 +50,12 @@ export function isLocalImageMarkdownSrc(src: string | undefined): src is string 
   );
 }
 
+// Grants must name the same decoded file as the preview HTTP request.
+export function localImageAbsolutePath(src: string): string | null {
+  const normalized = normalizeMarkdownImagePath(src);
+  return isLocalImageMarkdownSrc(src) && isLocalAbsolutePath(normalized) ? normalized : null;
+}
+
 export function buildLocalImageUrl(input: {
   readonly src: string;
   readonly cwd: string | undefined;
@@ -58,6 +64,8 @@ export function buildLocalImageUrl(input: {
   // optional `previewGrant: string | null | undefined` straight through under
   // exactOptionalPropertyTypes. Internally falsy grants are simply omitted below.
   readonly grant?: string | null | undefined;
+  /** Changes the preview URL so an explicit reload bypasses browser caching. */
+  readonly cacheKey?: string | number | undefined;
 }): string {
   const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
   if (input.cwd) {
@@ -65,6 +73,9 @@ export function buildLocalImageUrl(input: {
   }
   if (input.grant) {
     params.set("grant", input.grant);
+  }
+  if (input.cacheKey !== undefined) {
+    params.set("v", String(input.cacheKey));
   }
   if (input.download) {
     params.set("download", "1");

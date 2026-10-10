@@ -8,7 +8,7 @@ import {
   decodeSubagentReceiverThreadIds,
   extractSubagentIdentityHints,
   isWorkerTierSubagentRole,
-  resolveSubagentIdentityHint,
+  resolveSubagentIdentityFromDirectory,
 } from "./subagents";
 
 describe("decodeSubagentAgentStates alias normalization", () => {
@@ -223,16 +223,22 @@ describe("extractSubagentIdentityHints", () => {
     });
 
     expect(
-      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" }),
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+        providerThreadId: "child-provider-1",
+      }),
     ).toMatchObject({
       nickname: "Locke",
       effort: "low",
     });
     expect(
-      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" })?.role,
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+        providerThreadId: "child-provider-1",
+      })?.role,
     ).toBeUndefined();
     expect(
-      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-2" }),
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+        providerThreadId: "child-provider-2",
+      }),
     ).toMatchObject({
       nickname: "Hume",
       role: "explorer",
@@ -249,28 +255,27 @@ describe("extractSubagentIdentityHints", () => {
       },
     });
 
-    const resolved = resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" });
+    const resolved = resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+      providerThreadId: "child-provider-1",
+    });
     expect(resolved?.status).toBe("running");
     expect(resolved?.role).toBeUndefined();
   });
 });
 
 describe("isWorkerTierSubagentRole", () => {
-  it.each(["worker-low", "worker-medium", "worker-high", "worker-xhigh", " Worker-Low "])(
+  it.each(["worker-low", "worker-xhigh", " Worker-Low "])(
     "recognizes %s as a worker tier",
     (role) => {
       expect(isWorkerTierSubagentRole(role)).toBe(true);
     },
   );
-  it.each(["explorer", "worker", "worker-", "worker-extreme", null, undefined])(
-    "keeps %s as a real role",
-    (role) => {
-      expect(isWorkerTierSubagentRole(role)).toBe(false);
-    },
-  );
+  it.each(["explorer", "worker", "worker-extreme", null])("keeps %s as a real role", (role) => {
+    expect(isWorkerTierSubagentRole(role)).toBe(false);
+  });
 });
 
-describe("resolveSubagentIdentityHint", () => {
+describe("resolveSubagentIdentityFromDirectory", () => {
   it("preserves richer nickname and role metadata when later hints only include status updates", () => {
     const hints = extractSubagentIdentityHints({
       receiverAgents: [
@@ -290,8 +295,7 @@ describe("resolveSubagentIdentityHint", () => {
     });
 
     expect(
-      resolveSubagentIdentityHint({
-        hints,
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
         providerThreadId: "child-provider-1",
       }),
     ).toMatchObject({

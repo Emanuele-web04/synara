@@ -1,13 +1,9 @@
 import type { ProjectId } from "@synara/contracts";
-import { QueryClient, type QueryKey } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as nativeApi from "../nativeApi";
-import {
-  pullRequestQueryKeys,
-  pullRequestsExactInvolvementQueryOptions,
-  pullRequestSetPinnedMutationOptions,
-} from "./pullRequestReactQuery";
+import { githubInboxQueryKeys, pullRequestSetPinnedMutationOptions } from "./pullRequestReactQuery";
 import { deferred } from "./pullRequestReactQuery.testUtils";
 
 afterEach(() => {
@@ -62,24 +58,18 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     await secondPromise;
   });
 
-  it.each([
-    { label: "pin", previous: false, next: true },
-    { label: "unpin", previous: true, next: false },
-  ])(
-    "reconciles All and exact membership when an exact-only row is $label ned",
+  it.each([{ label: "pin", previous: false, next: true }])(
+    "reconciles membership of only the list that holds the row when it is $label ned",
     async ({ previous, next }) => {
       const queryClient = new QueryClient();
       const projectId = "project-a" as ProjectId;
-      const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-      const exactKey = pullRequestsExactInvolvementQueryOptions({
-        involvement: "authored",
-        state: "open",
-        projectId,
-      }).queryKey;
+      const listKey = githubInboxQueryKeys.list("open");
+      // The other inbox list stands in for a second cache holding the same row.
+      const exactKey = githubInboxQueryKeys.list("closed");
       const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
-      queryClient.setQueryData(listKey, { entries: [] });
-      queryClient.setQueryData(exactKey as QueryKey, {
-        entries: [{ ...identity, isPinned: previous }],
+      queryClient.setQueryData(listKey, { items: [] });
+      queryClient.setQueryData(exactKey, {
+        items: [{ ...identity, isPinned: previous }],
       });
       const input = { ...identity, isPinned: next };
       const options = pullRequestSetPinnedMutationOptions(queryClient);
@@ -92,9 +82,9 @@ describe("pullRequestSetPinnedMutationOptions", () => {
       await Reflect.apply(options.onSettled, undefined, [input, null, input, context, undefined]);
 
       expect(queryClient.getQueryData(exactKey)).toEqual({
-        entries: [{ ...identity, isPinned: next }],
+        items: [{ ...identity, isPinned: next }],
       });
-      expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
       expect(queryClient.getQueryState(exactKey)?.isInvalidated).toBe(true);
     },
   );
@@ -103,9 +93,9 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     const queryClient = new QueryClient();
     const projectA = "project-a" as ProjectId;
     const projectB = "project-b" as ProjectId;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId: null });
+    const listKey = githubInboxQueryKeys.list("open");
     queryClient.setQueryData(listKey, {
-      entries: [
+      items: [
         {
           projectId: projectB,
           projectTitle: "Project B",
@@ -133,7 +123,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
 
     const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [
+      items: [
         {
           projectId: projectB,
           projectTitle: "Project B",
@@ -151,7 +141,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
 
     await Reflect.apply(options.onSuccess, undefined, [input, input, context, undefined]);
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [
+      items: [
         {
           projectId: projectB,
           projectTitle: "Project B",
@@ -168,57 +158,13 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     });
   });
 
-  it("rolls each cache key back to its own divergent previous pin value", async () => {
-    const queryClient = new QueryClient();
-    const projectId = "project-a" as ProjectId;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    const exactKey = pullRequestsExactInvolvementQueryOptions({
-      involvement: "reviewing",
-      state: "open",
-      projectId,
-    }).queryKey;
-    const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
-    queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, isPinned: false }],
-    });
-    queryClient.setQueryData(exactKey as QueryKey, {
-      entries: [{ ...identity, isPinned: true }],
-    });
-    const input = { ...identity, isPinned: true } as const;
-    const options = pullRequestSetPinnedMutationOptions(queryClient);
-    if (!options.onMutate || !options.onError) {
-      throw new Error("Pin mutation hooks are missing.");
-    }
-
-    const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
-    expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
-    });
-    expect(queryClient.getQueryData(exactKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
-    });
-
-    Reflect.apply(options.onError, undefined, [
-      new Error("save failed"),
-      input,
-      context,
-      undefined,
-    ]);
-    expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: false }],
-    });
-    expect(queryClient.getQueryData(exactKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
-    });
-  });
-
   it("does not let older callbacks overwrite a newer toggle for the same PR", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
+    const listKey = githubInboxQueryKeys.list("open");
     const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
     queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
     const pin = { ...identity, isPinned: true } as const;
     const unpin = { ...identity, isPinned: false } as const;
@@ -238,25 +184,22 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     ]);
 
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
   });
 
   it("restores each first-writer baseline when two rapid toggles both fail", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    const exactKey = pullRequestsExactInvolvementQueryOptions({
-      involvement: "reviewing",
-      state: "open",
-      projectId,
-    }).queryKey;
+    const listKey = githubInboxQueryKeys.list("open");
+    // The other inbox list stands in for a second cache holding the same row.
+    const exactKey = githubInboxQueryKeys.list("closed");
     const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
     queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
-    queryClient.setQueryData(exactKey as QueryKey, {
-      entries: [{ ...identity, isPinned: true }],
+    queryClient.setQueryData(exactKey, {
+      items: [{ ...identity, isPinned: true }],
     });
     const pin = { ...identity, isPinned: true } as const;
     const unpin = { ...identity, isPinned: false } as const;
@@ -288,10 +231,10 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     ]);
 
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
     expect(queryClient.getQueryData(exactKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
+      items: [{ ...identity, isPinned: true }],
     });
     Reflect.apply(options.onSettled, undefined, [
       undefined,
@@ -305,18 +248,15 @@ describe("pullRequestSetPinnedMutationOptions", () => {
   it("restores the last acknowledged pin when only the newer rapid toggle fails", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    const exactKey = pullRequestsExactInvolvementQueryOptions({
-      involvement: "authored",
-      state: "open",
-      projectId,
-    }).queryKey;
+    const listKey = githubInboxQueryKeys.list("open");
+    // The other inbox list stands in for a second cache holding the same row.
+    const exactKey = githubInboxQueryKeys.list("closed");
     const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
     queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
-    queryClient.setQueryData(exactKey as QueryKey, {
-      entries: [{ ...identity, isPinned: true }],
+    queryClient.setQueryData(exactKey, {
+      items: [{ ...identity, isPinned: true }],
     });
     const pin = { ...identity, isPinned: true } as const;
     const unpin = { ...identity, isPinned: false } as const;
@@ -331,7 +271,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     // The earlier acknowledgement advances server truth without repainting over the newer
     // optimistic unpin.
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
     Reflect.apply(options.onSettled, undefined, [pin, null, pin, pinContext, undefined]);
     Reflect.apply(options.onError, undefined, [
@@ -342,10 +282,10 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     ]);
 
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
+      items: [{ ...identity, isPinned: true }],
     });
     expect(queryClient.getQueryData(exactKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
+      items: [{ ...identity, isPinned: true }],
     });
     Reflect.apply(options.onSettled, undefined, [
       undefined,
@@ -359,10 +299,10 @@ describe("pullRequestSetPinnedMutationOptions", () => {
   it("does not roll back a pin value replaced after its optimistic write", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
+    const listKey = githubInboxQueryKeys.list("open");
     const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
     const input = { ...identity, isPinned: true } as const;
-    queryClient.setQueryData(listKey, { entries: [input] });
+    queryClient.setQueryData(listKey, { items: [input] });
     const options = pullRequestSetPinnedMutationOptions(queryClient);
     if (!options.onMutate || !options.onError) {
       throw new Error("Pin mutation hooks are missing.");
@@ -372,7 +312,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     // Simulate a cache source replacing the owned field before this mutation fails. Because
     // the current value is no longer this mutation's optimistic value, it must be left alone.
     queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
     Reflect.apply(options.onError, undefined, [
       new Error("save failed"),
@@ -382,20 +322,20 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     ]);
 
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: false }],
+      items: [{ ...identity, isPinned: false }],
     });
   });
 
-  it("leaves unrelated project refetches running while a pin is reconciled", async () => {
+  it("leaves the other list's refetch running while a pin is reconciled", async () => {
     const queryClient = new QueryClient();
     const projectA = "project-pin-scope-a" as ProjectId;
     const projectB = "project-pin-scope-b" as ProjectId;
     const identity = { projectId: projectA, repository: "acme/widgets", number: 42 } as const;
-    const listA = pullRequestQueryKeys.list({ state: "open", projectId: projectA });
-    const listB = pullRequestQueryKeys.list({ state: "open", projectId: projectB });
-    queryClient.setQueryData(listA, { entries: [{ ...identity, isPinned: false }] });
+    const listA = githubInboxQueryKeys.list("open");
+    const listB = githubInboxQueryKeys.list("closed");
+    queryClient.setQueryData(listA, { items: [{ ...identity, isPinned: false }] });
     queryClient.setQueryData(listB, {
-      entries: [
+      items: [
         {
           projectId: projectB,
           repository: "other/repository",
@@ -404,15 +344,15 @@ describe("pullRequestSetPinnedMutationOptions", () => {
         },
       ],
     });
-    const gateA = deferred<{ entries: never[] }>();
-    const gateB = deferred<{ entries: never[] }>();
+    const gateA = deferred<{ items: never[] }>();
+    const gateB = deferred<{ items: never[] }>();
     let projectAAborted = false;
     let projectBAborted = false;
     const refetchA = queryClient
       .fetchQuery({
         queryKey: listA,
         queryFn: ({ signal }) =>
-          new Promise<{ entries: never[] }>((resolve, reject) => {
+          new Promise<{ items: never[] }>((resolve, reject) => {
             gateA.promise.then(resolve, reject);
             signal.addEventListener("abort", () => {
               projectAAborted = true;
@@ -425,7 +365,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
       .fetchQuery({
         queryKey: listB,
         queryFn: ({ signal }) =>
-          new Promise<{ entries: never[] }>((resolve, reject) => {
+          new Promise<{ items: never[] }>((resolve, reject) => {
             gateB.promise.then(resolve, reject);
             signal.addEventListener("abort", () => {
               projectBAborted = true;
@@ -449,7 +389,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     expect(queryClient.isFetching({ queryKey: listB })).toBe(1);
 
     await Reflect.apply(options.onSettled, undefined, [input, null, input, context, undefined]);
-    gateB.resolve({ entries: [] });
+    gateB.resolve({ items: [] });
     await Promise.all([refetchA, refetchB]);
   });
 });

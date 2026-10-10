@@ -5,7 +5,7 @@
 
 import { ThreadId } from "@synara/contracts";
 import type { ResolvedTerminalVisualIdentity } from "@synara/shared/terminalThreads";
-import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -32,7 +32,9 @@ import {
   resolveTerminalVisualIdentityMap,
   selectRepresentativeTerminalVisualIdentity,
 } from "../terminalVisualIdentity";
+import { useCommittedPathname } from "./useCommittedPathname";
 import type { useHandleNewThread } from "./useHandleNewThread";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 type NewThreadContext = ReturnType<typeof useHandleNewThread>;
 
@@ -52,7 +54,7 @@ interface UseRecentViewSwitcherInput {
 // Encapsulates recent-view persistence, pruning, prewarm, and activation.
 export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const navigate = useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const pathname = useCommittedPathname();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
@@ -170,8 +172,10 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     const activeDraftThread = activeDraftThreadRef.current;
 
     const availableThreadIds = new Set<ThreadId>();
-    for (const threadId of Object.keys(sidebarThreadSummaryById)) {
-      availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+    for (const [threadId, thread] of Object.entries(sidebarThreadSummaryById)) {
+      if (!thread || !isSidechatThread(thread)) {
+        availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+      }
     }
     for (const threadId of Object.keys(draftThreadsByThreadId)) {
       availableThreadIds.add(ThreadId.makeUnsafe(threadId));

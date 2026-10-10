@@ -1,16 +1,15 @@
-import { type AutomationDefinition, type MessageId, type ThreadId } from "@synara/contracts";
+import { type MessageId, type ThreadId } from "@synara/contracts";
 import {
   type MutableRefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 
 import {
-  buildAutomationFormWarnings,
-  formFromDefinition,
   scheduleFromForm,
   type AutomationFormState,
   useAutomations,
@@ -18,13 +17,12 @@ import {
 import {
   buildAutomationDraftWarnings,
   updateAutomationDraftWarningAcknowledgement,
-  warningIdsForAcknowledgedRisks,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
 } from "../../lib/automationDraft";
 import { createAllThreadsSelector } from "../../storeSelectors";
 import { useStore } from "../../store";
-import type { ChatMessage } from "../../types";
+import type { ChatMessage, Thread } from "../../types";
 
 export interface PendingAutomationConversation {
   readonly threadId: ThreadId;
@@ -40,7 +38,6 @@ export interface AutomationDraftWarningContext {
 
 interface UseChatAutomationSetupInput {
   readonly threadId: ThreadId;
-  readonly activeProjectId: string | null;
   readonly hasLiveTurn: boolean;
   readonly promptRef: MutableRefObject<string>;
   readonly setComposerDraftPrompt: (threadId: ThreadId, prompt: string) => void;
@@ -52,21 +49,26 @@ const EMPTY_WARNING_CONTEXT: AutomationDraftWarningContext = {
   generatedNeedsConfirmation: false,
 };
 
-const selectAllThreads = createAllThreadsSelector();
+const EMPTY_THREADS: Thread[] = [];
+const selectNoThreads = () => EMPTY_THREADS;
 
 export function useChatAutomationSetup({
   threadId,
-  activeProjectId,
   hasLiveTurn,
   promptRef,
   setComposerDraftPrompt,
 }: UseChatAutomationSetupInput) {
   const automationProjects = useStore((state) => state.projects);
-  const automationThreads = useStore(selectAllThreads);
+  const [automationDraftOpen, setAutomationDraftOpen] = useState(false);
+  // Only the open dialog needs other transcripts; hidden streams must not render ChatView.
+  // Release the selector's cached transcript maps when the dialog closes.
+  const selectAutomationThreads = useMemo(
+    () => (automationDraftOpen ? createAllThreadsSelector() : selectNoThreads),
+    [automationDraftOpen],
+  );
+  const automationThreads = useStore(selectAutomationThreads);
   const { data: automationData, updateMutation: automationUpdateMutation } = useAutomations();
   const [automationDraftForm, setAutomationDraftForm] = useState<AutomationFormState | null>(null);
-  const [automationEditingDefinition, setAutomationEditingDefinition] =
-    useState<AutomationDefinition | null>(null);
   const [automationDraftWarnings, setAutomationDraftWarnings] = useState<
     readonly AutomationDraftWarning[]
   >([]);
@@ -75,7 +77,6 @@ export function useChatAutomationSetup({
   const [acknowledgedAutomationWarnings, setAcknowledgedAutomationWarnings] = useState<
     ReadonlySet<AutomationDraftWarningId>
   >(() => new Set());
-  const [automationDraftOpen, setAutomationDraftOpen] = useState(false);
   const [isAutomationDraftSubmitting, setIsAutomationDraftSubmitting] = useState(false);
   const automationDraftSubmittingRef = useRef(false);
   const [pendingAutomationConversation, setPendingAutomationConversation] =
@@ -148,50 +149,29 @@ export function useChatAutomationSetup({
     (nextForm: AutomationFormState) => {
       setAutomationDraftForm(nextForm);
       setAutomationDraftWarnings(
-        automationEditingDefinition
-          ? buildAutomationFormWarnings(nextForm)
-          : buildAutomationDraftWarnings({
-              schedule: scheduleFromForm(nextForm),
-              mode: nextForm.mode,
-              runtimeMode: nextForm.runtimeMode,
-              worktreeMode: nextForm.worktreeMode,
-              hasEphemeralContext: automationDraftWarningContext.hasEphemeralContext,
-              generatedConfidence: automationDraftWarningContext.generatedConfidence,
-              generatedNeedsConfirmation: automationDraftWarningContext.generatedNeedsConfirmation,
-              prompt: nextForm.prompt,
-            }),
+        buildAutomationDraftWarnings({
+          schedule: scheduleFromForm(nextForm),
+          mode: nextForm.mode,
+          runtimeMode: nextForm.runtimeMode,
+          worktreeMode: nextForm.worktreeMode,
+          hasEphemeralContext: automationDraftWarningContext.hasEphemeralContext,
+          generatedConfidence: automationDraftWarningContext.generatedConfidence,
+          generatedNeedsConfirmation: automationDraftWarningContext.generatedNeedsConfirmation,
+          prompt: nextForm.prompt,
+        }),
       );
     },
-    [automationDraftWarningContext, automationEditingDefinition],
+    [automationDraftWarningContext],
   );
   const resetAutomationDraftState = useCallback(() => {
     setAutomationDraftOpen(false);
     setAutomationDraftForm(null);
-    setAutomationEditingDefinition(null);
     setAutomationDraftWarnings([]);
     setAutomationDraftWarningContext(EMPTY_WARNING_CONTEXT);
     setAcknowledgedAutomationWarnings(new Set());
   }, []);
-  const openAutomationEditDialog = useCallback(
-    (definition: AutomationDefinition) => {
-      const nextForm = formFromDefinition(
-        definition,
-        activeProjectId ?? definition.projectId ?? automationProjects[0]?.id ?? "",
-      );
-      setAutomationEditingDefinition(definition);
-      setAutomationDraftWarningContext(EMPTY_WARNING_CONTEXT);
-      setAutomationDraftForm(nextForm);
-      setAutomationDraftWarnings(buildAutomationFormWarnings(nextForm));
-      setAcknowledgedAutomationWarnings(
-        warningIdsForAcknowledgedRisks(definition.acknowledgedRisks),
-      );
-      setAutomationDraftOpen(true);
-    },
-    [activeProjectId, automationProjects],
-  );
   const setAutomationDraftDialogOpen = useCallback((open: boolean) => {
     setAutomationDraftOpen(open);
-    if (!open) setAutomationEditingDefinition(null);
   }, []);
 
   return {
@@ -201,8 +181,6 @@ export function useChatAutomationSetup({
     automationUpdateMutation,
     automationDraftForm,
     setAutomationDraftForm,
-    automationEditingDefinition,
-    setAutomationEditingDefinition,
     automationDraftWarnings,
     setAutomationDraftWarnings,
     automationDraftWarningContext,
@@ -225,6 +203,5 @@ export function useChatAutomationSetup({
     toggleAutomationWarning,
     updateAutomationDraftForm,
     resetAutomationDraftState,
-    openAutomationEditDialog,
   };
 }

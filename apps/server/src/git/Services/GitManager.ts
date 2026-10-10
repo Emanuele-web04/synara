@@ -8,6 +8,10 @@
  */
 import {
   GitActionProgressEvent,
+  GitBlameLineInput,
+  GitReadFileAtRevInput,
+  GitReadFileAtRevResult,
+  GitBlameLineResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
@@ -15,6 +19,7 @@ import {
   GitPullRequestRefInput,
   GitPullRequestSnapshotInput,
   GitPullRequestSnapshotResult,
+  GitResolvedPullRequest,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
   GitWorkingTreeDiffStatsResult,
@@ -51,11 +56,30 @@ export interface GitManagerShape {
   ) => Effect.Effect<GitStatusResult, GitManagerServiceError>;
 
   /**
+   * Resolve the most relevant pull request for an already-captured branch.
+   * Unlike status(), lookup failures remain typed failures so callers can distinguish
+   * “no PR exists” from “GitHub is temporarily unavailable”.
+   */
+  readonly pullRequestForBranch: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+    readonly upstreamRef: string | null;
+  }) => Effect.Effect<GitResolvedPullRequest | null, GitManagerServiceError>;
+
+  /**
    * Read a unified patch for the current repository working tree.
    */
   readonly readWorkingTreeDiff: (
     input: GitReadWorkingTreeDiffInput,
   ) => Effect.Effect<GitReadWorkingTreeDiffResult, GitManagerServiceError>;
+
+  readonly blameLine: (
+    input: GitBlameLineInput,
+  ) => Effect.Effect<GitBlameLineResult, GitManagerServiceError>;
+
+  readonly readFileAtRev: (
+    input: GitReadFileAtRevInput,
+  ) => Effect.Effect<GitReadFileAtRevResult, GitManagerServiceError>;
 
   /**
    * Count the lines a scope's patch changes without returning the patch text.
@@ -76,6 +100,8 @@ export interface GitManagerShape {
    */
   readonly resolvePullRequest: (
     input: GitPullRequestRefInput,
+    /** Only polling callers opt into the background read gate. */
+    options?: { readonly background?: boolean },
   ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
 
   /**

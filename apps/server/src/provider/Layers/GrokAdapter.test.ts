@@ -6,7 +6,6 @@
 import { TurnId } from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 import {
   extractGrokUserInputQuestions,
   extractGrokExitPlanMarkdown,
@@ -20,6 +19,7 @@ import {
 } from "../acp/GrokAcpExtension.ts";
 
 import {
+  buildGrokModelDiscoveryEnv,
   buildGrokPromptMeta,
   buildGrokTurnPromptText,
   extractGrokTerminalPlanMarkdown,
@@ -27,19 +27,83 @@ import {
   isRenderableGrokAssistantDelta,
   mergeGrokModelDescriptors,
   parseXaiLanguageModelDescriptors,
+  selectGrokDiscoveredModelGroups,
   resolveGrokPlanHookResponse,
+  resolveGrokRuntimeModelSettings,
+  resolveGrokStartInstanceId,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
-  takeGrokSynaraHarnessPolicyTextPart,
 } from "./GrokAdapter.ts";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-describe("Grok Synara harness policy", () => {
-  it("delivers private scoped host context once", () => {
-    const state: { harnessPolicyDelivered?: boolean } = {};
-    expect(takeGrokSynaraHarnessPolicyTextPart(state, true)?.text).toContain(
-      SYNARA_HARNESS_POLICY_MARKER,
+describe("GrokAdapter runtime event scoping", () => {
+  it("resolves modelSelection-only account identity before Grok launch", () => {
+    expect(
+      resolveGrokStartInstanceId({
+        modelSelection: {
+          provider: "grok",
+          instanceId: "grok_work",
+          model: "grok/model",
+        },
+      } as never),
+    ).toBe("grok_work");
+  });
+
+  it("isolates model discovery credentials from ambient xAI aliases", () => {
+    const env = buildGrokModelDiscoveryEnv(
+      {
+        instanceId: "grok_work",
+        environment: { GROK_CODE_XAI_API_KEY: "selected-account-b" },
+      },
+      {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://proxy.example",
+        XAI_API_KEY: "ambient-account-a",
+        XAI_API_BASE_URL: "https://account-a.example",
+      },
     );
-    expect(takeGrokSynaraHarnessPolicyTextPart(state, true)).toBeNull();
+
+    expect(env.XAI_API_KEY).toBeUndefined();
+    expect(env.XAI_API_BASE_URL).toBeUndefined();
+    expect(env.GROK_CODE_XAI_API_KEY).toBe("selected-account-b");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HTTPS_PROXY).toBe("http://proxy.example");
+  });
+
+  it("uses the configured Synara state root for nondefault discovery without env", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "synara-grok-discovery-"));
+    const env = buildGrokModelDiscoveryEnv({
+      instanceId: "grok_work",
+      homeDir: "/home/user",
+      isolationRootDir: stateDir,
+    });
+    expect(env.HOME).toContain(`${stateDir}/provider-homes/grok/`);
+    expect(env.GROK_AUTH_PATH).toContain(`${stateDir}/provider-homes/grok/`);
+  });
+});
+
+describe("Grok runtime model settings", () => {
+  it("keeps only reasoning efforts supported by the selected model family", () => {
+    expect(
+      resolveGrokRuntimeModelSettings({
+        model: "grok-build",
+        options: { reasoningEffort: "xhigh" },
+      }),
+    ).toEqual({ model: "grok-build" });
+    expect(
+      resolveGrokRuntimeModelSettings({
+        model: "grok-4.6",
+        options: { reasoningEffort: "xhigh" },
+      }),
+    ).toEqual({ model: "grok-4.6", reasoningEffort: "xhigh" });
+    expect(
+      resolveGrokRuntimeModelSettings({
+        model: "grok-build",
+        options: { reasoningEffort: "high" },
+      }),
+    ).toEqual({ model: "grok-build", reasoningEffort: "high" });
   });
 });
 
@@ -56,6 +120,7 @@ describe("Grok native plan approval", () => {
   it("sets Grok's native prompt mode idempotently on every turn", () => {
     expect(buildGrokPromptMeta("plan")).toEqual({ mode: "plan" });
     expect(buildGrokPromptMeta("default")).toEqual({ mode: "agent" });
+    expect(buildGrokPromptMeta("debug")).toEqual({ mode: "agent" });
   });
 
   it("backs native Plan mode with a fail-closed pre-tool hook", () => {
@@ -103,6 +168,15 @@ describe("Grok native plan approval", () => {
         interactionMode: "default",
       }),
     ).toBe("Implement the approved plan");
+  });
+
+  it("uses Grok agent mode for Debug prompts", () => {
+    expect(
+      buildGrokTurnPromptText({
+        text: "Investigate the failed tool call",
+        interactionMode: "debug",
+      }),
+    ).toBe("Investigate the failed tool call");
   });
 
   it("accepts current and legacy ACP method names", () => {
@@ -316,14 +390,66 @@ describe("GrokAdapter runtime event scoping", () => {
       { slug: "grok-build-0.1", name: "Grok Build 0.1" },
       { slug: "grok-4.5", name: "Grok 4.5" },
     ]);
-    for (const model of models) {
-      expect(model.defaultReasoningEffort).toBe("low");
-      expect(model.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
-        "none",
-        "low",
-        "medium",
-        "high",
-      ]);
-    }
+    expect(models[0]?.defaultReasoningEffort).toBe("low");
+    expect(models[0]?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(models[2]?.defaultReasoningEffort).toBe("high");
+    expect(models[2]?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("humanizes an unknown future Grok family through the shared formatter", () => {
+    const [model] = mergeGrokModelDescriptors([[{ slug: "grok-4-7", name: "" }]]);
+    expect(model?.name).toBe("Grok 4.7");
+  });
+
+  it("keeps the live Grok CLI catalog instead of retired xAI API slugs", () => {
+    const models = mergeGrokModelDescriptors(
+      selectGrokDiscoveredModelGroups({
+        cliModels: [{ slug: "grok-4.6", name: "Grok 4.6" }],
+        apiModels: [
+          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+          { slug: "grok-4.5", name: "Grok 4.5" },
+        ],
+      }),
+    );
+
+    expect(models.map(({ slug, name }) => ({ slug, name }))).toEqual([
+      { slug: "grok-4.6", name: "Grok 4.6" },
+    ]);
+  });
+
+  it("stamps Grok 4.6 with Extra High instead of the grok-build None ladder", () => {
+    const [model] = mergeGrokModelDescriptors([[{ slug: "grok-4.6", name: "Grok 4.6" }]]);
+    expect(model?.defaultReasoningEffort).toBe("high");
+    expect(model?.supportedReasoningEfforts).toEqual([
+      {
+        value: "low",
+        label: "Low",
+        description: "Quick, fast implementations",
+      },
+      {
+        value: "medium",
+        label: "Medium",
+        description: "Balanced effort with standard implementation and testing",
+      },
+      {
+        value: "high",
+        label: "High",
+        description: "Higher implementation quality with extensive reasoning",
+      },
+      {
+        value: "xhigh",
+        label: "Extra High",
+        description: "Highest effort and reasoning level",
+      },
+    ]);
   });
 });

@@ -9,6 +9,7 @@ const reactHarness = vi.hoisted(() => {
   interface HookSlot {
     value?: unknown;
     deps?: readonly unknown[];
+    cleanup?: () => void;
   }
 
   let slots: HookSlot[] = [];
@@ -29,8 +30,14 @@ const reactHarness = vi.hoisted(() => {
     if (depsEqual(slot.deps, deps)) {
       return;
     }
+    slot.cleanup?.();
     slot.deps = deps;
-    effect();
+    const cleanup = effect();
+    if (cleanup) {
+      slot.cleanup = cleanup;
+    } else {
+      delete slot.cleanup;
+    }
   };
 
   return {
@@ -40,6 +47,11 @@ const reactHarness = vi.hoisted(() => {
     reset() {
       slots = [];
       cursor = 0;
+    },
+    unmount() {
+      for (const slot of slots.toReversed()) {
+        slot.cleanup?.();
+      }
     },
     useEffect: runEffect,
     useLayoutEffect: runEffect,
@@ -70,11 +82,12 @@ const recorder = vi.hoisted(() => ({
 }));
 
 const nativeApi = vi.hoisted(() => ({
+  prewarmVoice: vi.fn(),
   transcribeVoice: vi.fn(),
   available: true,
 }));
 
-const toast = vi.hoisted(() => ({ add: vi.fn() }));
+const toast = vi.hoisted(() => ({ add: vi.fn(), reportIssue: vi.fn() }));
 const voiceAvailability = vi.hoisted(() => ({
   canStartVoiceNotes: true,
   showVoiceNotesControl: true,
@@ -89,8 +102,12 @@ vi.mock("react", () => ({
 
 vi.mock("../../lib/voiceRecorder", () => ({
   formatVoiceRecordingDuration: () => "0:00",
+  isVoiceRecordingCancelledError: (error: unknown) =>
+    error instanceof Error && error.name === "VoiceRecordingCancelledError",
   useVoiceRecorder: () => ({
     isRecording: recorder.isRecording,
+    isStarting: false,
+    hasAudioSignal: true,
     durationMs: 0,
     waveformLevels: [],
     startRecording: recorder.startRecording,
@@ -104,13 +121,14 @@ vi.mock("../../nativeApi", () => ({
     nativeApi.available
       ? {
           server: {
+            prewarmVoice: nativeApi.prewarmVoice,
             transcribeVoice: nativeApi.transcribeVoice,
           },
         }
       : null,
 }));
 
-vi.mock("../ui/toast", () => ({ toastManager: toast }));
+vi.mock("../ui/toast", () => ({ toastManager: toast, reportToastIssue: toast.reportIssue }));
 
 vi.mock("../ChatView.logic", () => ({
   deriveComposerVoiceState: () => ({ ...voiceAvailability }),
@@ -172,16 +190,20 @@ describe("useComposerVoiceController", () => {
     recorder.startRecording.mockReset().mockResolvedValue(undefined);
     recorder.stopRecording.mockReset().mockResolvedValue(AUDIO_PAYLOAD);
     recorder.cancelRecording.mockReset().mockResolvedValue(undefined);
+    nativeApi.prewarmVoice.mockReset().mockResolvedValue({ ready: true });
     nativeApi.transcribeVoice.mockReset().mockResolvedValue({ text: "transcribed once" });
     nativeApi.available = true;
     voiceAvailability.canStartVoiceNotes = true;
     voiceAvailability.showVoiceNotesControl = true;
     toast.add.mockReset();
+    toast.reportIssue.mockReset();
     options = {
       activeProject: PROJECT,
       activeThreadId: THREAD_A,
       threadId: THREAD_A,
       selectedProvider: "codex",
+      selectedProviderInstanceId: "codex",
+      voiceProviderInstanceId: "codex",
       activeProviderStatus: null,
       pendingUserInputCount: 0,
       onTranscriptReady: vi.fn(),
@@ -192,14 +214,30 @@ describe("useComposerVoiceController", () => {
     recorder.cancelRecording.mockClear();
   });
 
-  it("applies a successful transcription exactly once", async () => {
-    await result.submitComposerVoiceRecording();
+  it("discards the active recording without stopping or transcribing it", () => {
+    result.cancelComposerVoiceRecording();
 
-    expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
-    expect(options.onTranscriptReady).toHaveBeenCalledWith("transcribed once");
+    expect(recorder.cancelRecording).toHaveBeenCalledTimes(1);
+    expect(recorder.stopRecording).not.toHaveBeenCalled();
+    expect(nativeApi.transcribeVoice).not.toHaveBeenCalled();
+    expect(options.onTranscriptReady).not.toHaveBeenCalled();
   });
 
-  it.each(["thread", "provider", "cancel"] as const)(
+  it("prewarms persistent voice state after recording starts", async () => {
+    recorder.isRecording = false;
+    render();
+
+    await result.startComposerVoiceRecording();
+
+    expect(nativeApi.prewarmVoice).toHaveBeenCalledWith({
+      provider: "codex",
+      providerInstanceId: "codex",
+      cwd: PROJECT.cwd,
+      threadId: THREAD_A,
+    });
+  });
+
+  it.each(["thread", "provider", "instance", "cancel"] as const)(
     "ignores a stale transcription after %s changes",
     async (staleCause) => {
       const transcription = deferred<{ text: string }>();
@@ -211,17 +249,67 @@ describe("useComposerVoiceController", () => {
       if (staleCause === "thread") {
         render({ activeThreadId: THREAD_B, threadId: THREAD_B });
       } else if (staleCause === "provider") {
-        render({ selectedProvider: "claudeAgent" as ProviderKind });
+        render({
+          selectedProvider: "claudeAgent" as ProviderKind,
+          selectedProviderInstanceId: "claudeAgent",
+        });
+      } else if (staleCause === "instance") {
+        render({ selectedProviderInstanceId: "codex_work" });
       } else {
         result.cancelComposerVoiceRecording();
       }
 
       transcription.resolve({ text: "stale" });
-      await submission;
+      await expect(submission).resolves.toBe(false);
+      render();
 
       expect(options.onTranscriptReady).not.toHaveBeenCalled();
+      expect(result.isVoiceTranscribing).toBe(false);
     },
   );
+
+  it("does not surface recorder startup cancellation as an error", async () => {
+    recorder.isRecording = false;
+    recorder.startRecording.mockRejectedValueOnce(
+      Object.assign(new Error("Voice recording was cancelled."), {
+        name: "VoiceRecordingCancelledError",
+      }),
+    );
+    render();
+
+    await result.startComposerVoiceRecording();
+
+    expect(toast.add).not.toHaveBeenCalled();
+    expect(toast.reportIssue).not.toHaveBeenCalled();
+    expect(nativeApi.prewarmVoice).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a genuine browser AbortError from microphone startup", async () => {
+    recorder.isRecording = false;
+    recorder.startRecording.mockRejectedValueOnce(
+      new DOMException("The microphone could not start.", "AbortError"),
+    );
+    render();
+
+    await result.startComposerVoiceRecording();
+
+    expect(toast.add).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Could not start recording" }),
+    );
+  });
+
+  it("invalidates an in-flight transcript when the composer unmounts", async () => {
+    const transcription = deferred<{ text: string }>();
+    nativeApi.transcribeVoice.mockReturnValueOnce(transcription.promise);
+
+    const submission = result.submitComposerVoiceRecording();
+    await vi.waitFor(() => expect(nativeApi.transcribeVoice).toHaveBeenCalledTimes(1));
+    reactHarness.unmount();
+    transcription.resolve({ text: "stale after unmount" });
+    await submission;
+
+    expect(options.onTranscriptReady).not.toHaveBeenCalled();
+  });
 
   it("blocks submit and cancel until the configured action-arm delay elapses", async () => {
     let now = 1_000;
@@ -243,28 +331,18 @@ describe("useComposerVoiceController", () => {
     expect(options.onGuardWarning).toHaveBeenCalledTimes(2);
   });
 
-  it("supports ChatView-specific transcription failure copy without changing defaults", async () => {
-    nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("network failed"));
-    render({
-      failureCopy: {
-        transcriptionFailedTitle: "Couldn't transcribe voice note",
-      },
-    });
-
-    await result.submitComposerVoiceRecording();
-
-    expect(toast.add).toHaveBeenCalledWith({
-      type: "error",
-      title: "Couldn't transcribe voice note",
-      description: "network failed",
-    });
-  });
-
   it("refreshes status for expired auth and keeps the refresh action available", async () => {
     nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("session expired"));
 
-    await result.submitComposerVoiceRecording();
+    await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
 
+    expect(toast.reportIssue).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        code: "voice.transcribe.failed",
+        reason: "auth",
+      }),
+    );
     expect(options.refreshVoiceStatus).toHaveBeenCalledTimes(1);
     const failureToast = toast.add.mock.calls.at(-1)?.[0];
     expect(failureToast).toMatchObject({
@@ -289,6 +367,8 @@ describe("useComposerVoiceController", () => {
     render({
       activeProviderStatus: {
         provider: "codex",
+        driver: "codex",
+        instanceId: "codex",
         status: "error",
         available: false,
         authStatus: "unauthenticated",
@@ -335,7 +415,7 @@ describe("useComposerVoiceController", () => {
 
     firstTranscription.resolve({ text: "stale first transcript" });
     secondTranscription.resolve({ text: "current second transcript" });
-    await Promise.all([firstSubmission, secondSubmission]);
+    await expect(Promise.all([firstSubmission, secondSubmission])).resolves.toEqual([false, true]);
 
     expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
     expect(options.onTranscriptReady).toHaveBeenCalledWith("current second transcript");

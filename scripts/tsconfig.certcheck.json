@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node", "bun"],
+    "lib": ["ES2023", "esnext.disposable"],
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true
+  },
+  "include": ["computer-use-fixtures/multi-display-cert.ts", "computer-use-fixtures/live-cert.ts"]
+}

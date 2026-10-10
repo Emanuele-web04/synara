@@ -50,6 +50,10 @@ describe("searchWorkspaceEntries git-ignore chunking", () => {
         return processResult({ code: 0, stdout: "true\n" });
       }
 
+      if (args.includes("ls-files") && args.includes("--deleted")) {
+        return processResult({ code: 0, stdout: "" });
+      }
+
       if (args.includes("ls-files")) {
         return processResult({ code: 0, stdout: `${listedPaths.join("\0")}\0` });
       }

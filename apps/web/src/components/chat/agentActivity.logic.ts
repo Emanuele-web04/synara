@@ -34,7 +34,7 @@ export function isReasoningUpdateWorkEntry(
 }
 
 export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
-  if (isReasoningUpdateWorkEntry(entry)) {
+  if (isReasoningUpdateWorkEntry(entry) || entry.activityKind === "tool.summary") {
     return true;
   }
   const isStatusOnlyCommand =
@@ -44,8 +44,33 @@ export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
   );
 }
 
+// Generic runtime notices (unhandled SDK messages, retries) render as quiet italic
+// text without a leading glyph; the tone checkmark made them read as completed work.
+// Notices with their own semantic icon keep it.
+export function isPlainRuntimeNoticeWorkEntry(
+  entry: Pick<WorkLogEntry, "activityKind" | "nativeEventType" | "providerContextLifecycle">,
+): boolean {
+  return (
+    entry.activityKind === "auth.status" ||
+    (entry.activityKind === "runtime.warning" &&
+      entry.nativeEventType !== "background_tasks_changed" &&
+      !entry.providerContextLifecycle)
+  );
+}
+
 export function isAgentActivityWorkEntry(entry: WorkLogEntry): boolean {
-  return entry.itemType === "collab_agent_tool_call" || isReasoningUpdateWorkEntry(entry);
+  return (
+    entry.itemType === "collab_agent_tool_call" ||
+    entry.activityKind === "tool.summary" ||
+    isReasoningUpdateWorkEntry(entry)
+  );
+}
+
+// Unmapped provider events keep their native type as the title and a safe detail as preview.
+export function isUnmappedProviderEventWorkEntry(
+  entry: Pick<WorkLogEntry, "activityKind">,
+): boolean {
+  return entry.activityKind === "provider.event.unmapped";
 }
 
 export function formatAgentActivityEntryTitle(entry: WorkLogEntry): string {
@@ -53,10 +78,15 @@ export function formatAgentActivityEntryTitle(entry: WorkLogEntry): string {
     return "Reasoning";
   }
   const heading = normalizeCompactToolLabel(entry.toolTitle ?? entry.label).trim();
-  if (!heading) {
-    return entry.itemType === "collab_agent_tool_call" ? "Agent task" : "Activity";
+  if (heading) {
+    return capitalizePhrase(heading);
   }
-  return capitalizePhrase(heading);
+  if (isUnmappedProviderEventWorkEntry(entry) && entry.nativeEventType) {
+    // The raw native type/label is the only title the event carries; use it
+    // verbatim instead of degrading to the generic "Activity" label.
+    return capitalizePhrase(entry.nativeEventType);
+  }
+  return entry.itemType === "collab_agent_tool_call" ? "Agent task" : "Activity";
 }
 
 export function formatAgentActivityEntryPreview(entry: WorkLogEntry): string | null {
@@ -120,6 +150,7 @@ export function deriveAgentActivityTimelineState(
     const displayEntry: WorkLogEntry = {
       ...latest,
       id: groupId,
+      createdAt: first.createdAt,
       label: "Reasoning trace",
       toolTitle: "Reasoning trace",
       tone: "tool",

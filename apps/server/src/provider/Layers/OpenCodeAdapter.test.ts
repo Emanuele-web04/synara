@@ -1,4 +1,4 @@
-import { ThreadId, TurnId } from "@synara/contracts";
+import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type {
   Agent,
@@ -8,11 +8,15 @@ import type {
   Provider,
   QuestionRequest,
 } from "@opencode-ai/sdk/v2";
-import { Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { describe, it, expect, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
-import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
+import {
+  SYNARA_HARNESS_POLICY_MARKER,
+  SYNARA_HARNESS_POLICY_VERSION,
+} from "../../agentGateway/harnessPolicy.ts";
 import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
@@ -23,13 +27,100 @@ import {
   type OpenCodeInventory,
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
-import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
-import { KiloAdapter } from "../Services/KiloAdapter.ts";
+import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
+  appendOpenCodeAssistantTextDelta,
   makeOpenCodeAdapterLive,
-  makeKiloAdapterLive,
   normalizeOpenCodeTokenUsage,
+  resolveOpenCodePermissionPolicyReply,
 } from "./OpenCodeAdapter.ts";
+
+describe("OpenCode permission policy", () => {
+  const computerPermission = {
+    permission: "mcp__synara__computer_click",
+    metadata: {},
+  } as const;
+
+  it("lets active approval-required Computer calls reach the gateway once", () => {
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        activeTurn: true,
+        computerControlEnabled: true,
+        ...computerPermission,
+      }),
+    ).toBe("once");
+  });
+
+  it("preserves Plan, Auto, inactive-turn, disabled, and namespace boundaries", () => {
+    const base = {
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      activeTurn: true,
+      computerControlEnabled: true,
+      ...computerPermission,
+    };
+
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, interactionMode: "plan" })).toBe(
+      "reject",
+    );
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, runtimeMode: "auto" })).toBeUndefined();
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, activeTurn: false })).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({ ...base, computerControlEnabled: false }),
+    ).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "mcp__other__computer_click",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("approves Synara group tools once when the session opted in behind a live gateway lease", () => {
+    const base = {
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      activeTurn: true,
+      computerControlEnabled: false,
+      autoApproveSynaraTools: true,
+      gatewaySessionActive: true,
+      metadata: {} as const,
+    };
+
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBe("once");
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "synara_project_link_repository",
+      }),
+    ).toBe("once");
+    // File edits and shell still ask in approval-required mode.
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "edit" })).toBeUndefined();
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "bash" })).toBeUndefined();
+    // The flag is inert without a live gateway session and when not opted in.
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        gatewaySessionActive: false,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        autoApproveSynaraTools: false,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const OPEN_CODE_PLAN_PERMISSION_RULES = [
@@ -72,8 +163,12 @@ function createMockOpenCodeRuntime(options?: {
   readonly pendingQuestions?: ReadonlyArray<QuestionRequest>;
   readonly questionList?: () => Promise<unknown>;
   readonly permissionReply?: (input: Record<string, unknown>) => Promise<unknown>;
-  readonly mcpAdd?: (input: Record<string, unknown>) => Promise<unknown>;
+  readonly mcpAdd?: (
+    input: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ) => Promise<unknown>;
   readonly serverExit?: Effect.Effect<number>;
+  readonly serverPassword?: string;
   readonly sessionCreateError?: Error;
   readonly sessionUpdate?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly scopeCloseDefect?: boolean;
@@ -89,7 +184,10 @@ function createMockOpenCodeRuntime(options?: {
   const updateCalls: Array<Record<string, unknown>> = [];
   const forkCalls: Array<{ sessionID: string }> = [];
   const permissionReplyCalls: Array<Record<string, unknown>> = [];
+  const questionReplyCalls: Array<Record<string, unknown>> = [];
+  const questionRejectCalls: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
+  const promptCallKinds: Array<"async" | "sync"> = [];
   const mcpAddCalls: Array<Record<string, unknown>> = [];
   let eventSubscribeCallCount = 0;
   const emptySubscription = {
@@ -122,6 +220,7 @@ function createMockOpenCodeRuntime(options?: {
       },
       promptAsync: async (promptInput: Record<string, unknown>) => {
         promptCalls.push(promptInput);
+        promptCallKinds.push("async");
         if (options?.promptAsync) {
           return options.promptAsync(promptInput);
         }
@@ -129,6 +228,7 @@ function createMockOpenCodeRuntime(options?: {
       },
       prompt: async (promptInput: Record<string, unknown>) => {
         promptCalls.push(promptInput);
+        promptCallKinds.push("sync");
         if (options?.prompt) {
           return options.prompt(promptInput);
         }
@@ -164,16 +264,23 @@ function createMockOpenCodeRuntime(options?: {
     question: {
       list: async () =>
         options?.questionList ? options.questionList() : { data: options?.pendingQuestions ?? [] },
-      reply: async () => ({ data: null }),
+      reply: async (input: Record<string, unknown>) => {
+        questionReplyCalls.push(input);
+        return { data: true };
+      },
+      reject: async (input: Record<string, unknown>) => {
+        questionRejectCalls.push(input);
+        return { data: true };
+      },
     },
     command: {
       list: options?.commandList ?? (async () => ({ data: [] })),
     },
     mcp: {
-      add: async (input: Record<string, unknown>) => {
+      add: async (input: Record<string, unknown>, requestOptions?: { signal?: AbortSignal }) => {
         mcpAddCalls.push(input);
         return options?.mcpAdd
-          ? options.mcpAdd(input)
+          ? options.mcpAdd(input, requestOptions)
           : { data: { synara: { status: "connected" } } };
       },
     },
@@ -224,6 +331,7 @@ function createMockOpenCodeRuntime(options?: {
           url: input.serverUrl ?? "http://127.0.0.1:4099",
           exitCode: options?.serverExit ?? null,
           external: Boolean(input.serverUrl),
+          ...(options?.serverPassword ? { serverPassword: options.serverPassword } : {}),
         };
       }),
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
@@ -258,7 +366,10 @@ function createMockOpenCodeRuntime(options?: {
     updateCalls,
     forkCalls,
     permissionReplyCalls,
+    questionReplyCalls,
+    questionRejectCalls,
     promptCalls,
+    promptCallKinds,
     mcpAddCalls,
     get eventSubscribeCallCount() {
       return eventSubscribeCallCount;
@@ -267,11 +378,23 @@ function createMockOpenCodeRuntime(options?: {
   };
 }
 
+function makeOpenCodeAdapterTestLayer(runtime: OpenCodeRuntimeShape) {
+  return makeOpenCodeAdapterLive({ runtime }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" })),
+    Layer.provideMerge(NodeServices.layer),
+  );
+}
+
+function promptContainsHarnessPolicy(prompt: Record<string, unknown> | undefined): boolean {
+  return JSON.stringify(prompt).includes(SYNARA_HARNESS_POLICY_MARKER);
+}
+
 function makeGatewayCredentials(options?: {
   readonly cancelSessionTurnRequests?: (token: string, turnId: string) => Promise<void>;
 }) {
   let nextToken = 0;
   const revoked: string[] = [];
+  const leasedCapabilities: Array<readonly string[]> = [];
   const cancelledTurns: Array<{ readonly token: string; readonly turnId: string }> = [];
   const ownerByToken = new Map<string, string>();
   const credentials: AgentGatewayCredentialsShape = {
@@ -302,13 +425,14 @@ function makeGatewayCredentials(options?: {
       revoked.push(token);
       ownerByToken.delete(token);
     },
-    connectionForThread: (threadId) => {
+    connectionForThread: (threadId, _provider, leaseOptions) => {
+      leasedCapabilities.push(leaseOptions?.additionalCapabilities ?? []);
       const token = credentials.issueSessionToken(threadId, "opencode");
       return { url: credentials.mcpEndpointUrl, bearerToken: token };
     },
     stdioProxy: { command: process.execPath, args: [] },
   };
-  return { cancelledTurns, credentials, ownerByToken, revoked };
+  return { cancelledTurns, credentials, leasedCapabilities, ownerByToken, revoked };
 }
 
 function createSubscribedEventQueue() {
@@ -430,36 +554,6 @@ function assistantMessageUpdated(input?: {
 }
 
 describe("normalizeOpenCodeTokenUsage", () => {
-  it("converts OpenCode assistant tokens into a context usage snapshot", () => {
-    expect(
-      normalizeOpenCodeTokenUsage(
-        {
-          input: 100,
-          output: 50,
-          reasoning: 25,
-          cache: {
-            read: 10,
-            write: 5,
-          },
-        },
-        200_000,
-      ),
-    ).toEqual({
-      usedTokens: 190,
-      totalProcessedTokens: 190,
-      maxTokens: 200_000,
-      inputTokens: 100,
-      cachedInputTokens: 15,
-      outputTokens: 50,
-      reasoningOutputTokens: 25,
-      lastUsedTokens: 190,
-      lastInputTokens: 100,
-      lastCachedInputTokens: 15,
-      lastOutputTokens: 50,
-      lastReasoningOutputTokens: 25,
-    });
-  });
-
   it("returns undefined for missing, malformed, negative, infinite, or all-zero usage", () => {
     const validBase = {
       input: 1,
@@ -519,10 +613,637 @@ describe("normalizeOpenCodeTokenUsage", () => {
       maxTokens: 200,
       lastUsedTokens: 200,
     });
+    expect(
+      normalizeOpenCodeTokenUsage({
+        input: 150,
+        output: 75,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      }),
+    ).not.toHaveProperty("maxTokens");
+  });
+});
+
+describe("OpenCode host policy delivery", () => {
+  const modelSelection = { provider: "opencode", model: "openai/gpt-5" } as const;
+
+  it("passes the managed server password to the SDK client", async () => {
+    const runtime = createMockOpenCodeRuntime({ serverPassword: "managed-server-password" });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-managed-server-auth"),
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.createClientCalls[0]?.serverPassword).toBe("managed-server-password");
+  });
+
+  it("injects the host policy exactly once for a new native session", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-new-session");
+
+    const cursors = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const second = yield* adapter.sendTurn({
+          threadId,
+          input: "second turn",
+          attachments: [],
+          modelSelection,
+        });
+        return [first.resumeCursor, second.resumeCursor];
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
+    for (const cursor of cursors) {
+      expect(cursor).toMatchObject({
+        openCodeSessionId: "opencode-session-1",
+        harnessPolicyDelivery: {
+          sessionId: "opencode-session-1",
+          policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+          gatewayControlAvailable: false,
+        },
+      });
+    }
+  });
+
+  it("refreshes Computer context on activation profile changes while preserving unchanged resume delivery", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const gateway = makeGatewayCredentials();
+    const threadId = asThreadId("thread-computer-profile-resume");
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        let resumeCursor: unknown = undefined;
+        for (const enableComputerControl of [false, true, true, false]) {
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+            enableComputerControl,
+            ...(resumeCursor ? { resumeCursor } : {}),
+          });
+          const result = yield* adapter.sendTurn({
+            threadId,
+            input: "next",
+            attachments: [],
+            modelSelection,
+          });
+          resumeCursor = result.resumeCursor;
+        }
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-context-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true, false, true]);
+    expect(
+      runtime.promptCalls.map((prompt) =>
+        JSON.stringify(prompt).includes("## Synara computer use"),
+      ),
+    ).toEqual([false, true, false, false]);
+  });
+
+  it("does not re-inject the host policy when the same native session is restarted", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-same-session-restart");
+
+    const resumedSession = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const resumed = yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: first.resumeCursor,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "after restart",
+          attachments: [],
+          modelSelection,
+        });
+        return resumed;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
+    expect(resumedSession.resumeCursor).toMatchObject({
+      openCodeSessionId: "opencode-session-1",
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-1",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+        gatewayControlAvailable: false,
+      },
+    });
+  });
+
+  it("retries host policy delivery after the first prompt is rejected", async () => {
+    let promptAttempt = 0;
+    const runtime = createMockOpenCodeRuntime({
+      promptAsync: async () => {
+        promptAttempt += 1;
+        if (promptAttempt === 1) {
+          throw new Error("prompt rejected");
+        }
+        return { data: null };
+      },
+    });
+    const threadId = asThreadId("thread-host-policy-rejected-prompt");
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const firstExit = yield* Effect.exit(
+          adapter.sendTurn({
+            threadId,
+            input: "rejected turn",
+            attachments: [],
+            modelSelection,
+          }),
+        );
+        const [failedSession] = yield* adapter.listSessions();
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: failedSession?.resumeCursor,
+        });
+        const retry = yield* adapter.sendTurn({
+          threadId,
+          input: "retry turn",
+          attachments: [],
+          modelSelection,
+        });
+        return {
+          firstFailed: Exit.isFailure(firstExit),
+          failedCursor: failedSession?.resumeCursor,
+          retryCursor: retry.resumeCursor,
+        };
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(result.firstFailed).toBe(true);
+    expect(result.failedCursor).not.toHaveProperty("harnessPolicyDelivery");
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true]);
+    expect(result.retryCursor).toMatchObject({
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-1",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+      },
+    });
+  });
+
+  it("re-injects the host policy when an in-memory restart has a stale policy version", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-stale-version-restart");
+
+    const secondCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const firstCursor = first.resumeCursor as {
+          readonly openCodeSessionId: string;
+          readonly cwd: string;
+          readonly harnessPolicyDelivery: {
+            readonly sessionId: string;
+            readonly gatewayControlAvailable: boolean;
+          };
+        };
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: {
+            ...firstCursor,
+            harnessPolicyDelivery: {
+              ...firstCursor.harnessPolicyDelivery,
+              policyVersion: "2026-09-03.1",
+            },
+          },
+        });
+        const second = yield* adapter.sendTurn({
+          threadId,
+          input: "after policy update",
+          attachments: [],
+          modelSelection,
+        });
+        return second.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true]);
+    expect(secondCursor).toMatchObject({
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-1",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+      },
+    });
+  });
+
+  it("injects the host policy when the native session id changes", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-changed-session");
+
+    const secondCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const firstCursor = first.resumeCursor as Record<string, unknown>;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: {
+            ...firstCursor,
+            openCodeSessionId: "opencode-session-2",
+          },
+        });
+        const second = yield* adapter.sendTurn({
+          threadId,
+          input: "new native session",
+          attachments: [],
+          modelSelection,
+        });
+        return second.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true]);
+    expect(secondCursor).toMatchObject({
+      openCodeSessionId: "opencode-session-2",
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-2",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+        gatewayControlAvailable: false,
+      },
+    });
+  });
+
+  it("rehydrates host policy state after adapter teardown and recreation", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-adapter-recreation");
+
+    const resumeCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "before teardown",
+          attachments: [],
+          modelSelection,
+        });
+        return first.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "after recreation",
+          attachments: [],
+          modelSelection,
+        });
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
   });
 });
 
 describe("OpenCodeAdapter runtime lifecycle", () => {
+  it.each([false, true])(
+    "recovers missed V2 tool output before completing a reconnected turn (snapshot retry: %s)",
+    async (failFirstSnapshot) => {
+      const disconnected = createSubscribedEventQueue();
+      const reconnected = createSubscribedEventQueue();
+      let snapshots: Array<{ info: Record<string, unknown>; parts: Part[] }> = [];
+      const runtime = createMockOpenCodeRuntime({
+        eventSubscriptions: [disconnected.stream, reconnected.stream],
+        messages: async () => {
+          if (snapshots.length && failFirstSnapshot) {
+            failFirstSnapshot = false;
+            throw new Error("snapshot temporarily unavailable");
+          }
+          return { data: snapshots };
+        },
+      });
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const collected = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = asThreadId("v2-reconnect-output");
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "inspect",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "local/model" },
+          });
+          snapshots = [
+            {
+              info: { id: "msg-missed", role: "assistant", time: { completed: 3 }, finish: "stop" },
+              parts: [
+                {
+                  id: "part-missed",
+                  messageID: "msg-missed",
+                  sessionID: "opencode-session-1",
+                  type: "tool",
+                  tool: "bash",
+                  callID: "call-missed",
+                  state: {
+                    status: "completed",
+                    input: { command: "pwd" },
+                    title: "pwd",
+                    output: "/workspace",
+                    metadata: {},
+                    time: { start: 1, end: 3 },
+                  },
+                },
+              ],
+            },
+          ];
+          disconnected.close();
+          reconnected.push({
+            id: "evt-terminal",
+            type: "synara.opencode.execution",
+            properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+          });
+          reconnected.push({
+            id: "evt-terminal-retry",
+            type: "synara.opencode.execution",
+            properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+          });
+          const events = yield* Fiber.join(collected);
+          reconnected.close();
+          yield* adapter.stopSession(threadId);
+          return events;
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+      );
+      const toolIndex = result.findIndex(
+        (event) => event.type === "item.completed" && event.itemId === "call-missed",
+      );
+      const terminalIndex = result.findIndex((event) => event.type === "turn.completed");
+      expect(toolIndex).toBeGreaterThanOrEqual(0);
+      expect(toolIndex).toBeLessThan(terminalIndex);
+      expect(result[toolIndex]?.payload).toMatchObject({
+        data: { state: { output: "/workspace" } },
+      });
+    },
+  );
+
+  it("projects a native background continuation as a new turn without submitting another prompt", async () => {
+    const queue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    });
+    client.event.subscribe = (async () => ({
+      stream: queue.stream,
+    })) as typeof client.event.subscribe;
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        let ended = 0;
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed" && ++ended === 2),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const threadId = asThreadId("v2-continuation");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "hello",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "local/model" },
+        });
+        queue.push({
+          id: "first-end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        queue.push({
+          id: "native-wakeup",
+          type: "synara.opencode.execution.started",
+          properties: { sessionID: "opencode-session-1" },
+        });
+        queue.push({
+          id: "second-end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        const result = yield* Fiber.join(collected);
+        queue.close();
+        yield* adapter.stopSession(threadId);
+        return result;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+    const starts = events.filter((event) => event.type === "turn.started");
+    expect(starts).toHaveLength(2);
+    expect(starts[0]?.turnId).not.toBe(starts[1]?.turnId);
+    expect(runtime.promptCalls).toHaveLength(1);
+  });
+  it.each([
+    ["succeeded", "completed"],
+    ["failed", "failed"],
+    ["interrupted", "interrupted"],
+  ] as const)(
+    "settles V2 execution %s with its authoritative outcome",
+    async (outcome, expected) => {
+      const queue = createSubscribedEventQueue();
+      const runtime = createMockOpenCodeRuntime();
+      const client = runtime.runtime.createOpenCodeSdkClient({
+        baseUrl: "http://127.0.0.1:4099",
+        directory: process.cwd(),
+      });
+      client.event.subscribe = (async () => ({
+        stream: queue.stream,
+      })) as typeof client.event.subscribe;
+      const events = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const collected = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = asThreadId("v2-outcome");
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "hello",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "local/model" },
+          });
+          queue.push({
+            id: "evt_end",
+            type: "synara.opencode.execution",
+            properties: {
+              sessionID: "opencode-session-1",
+              outcome,
+              ...(outcome === "failed" ? { message: "Native failure" } : {}),
+            },
+          });
+          const result = yield* Fiber.join(collected);
+          queue.close();
+          yield* adapter.stopSession(threadId);
+          return result;
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+      );
+      expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+        state: expected,
+      });
+    },
+  );
+  it("rejects a cancelled question and routes normal answers to the owning directory", async () => {
+    const threadId = asThreadId("thread-question-cancel");
+    const question = {
+      sessionID: "opencode-session-1",
+      questions: [
+        {
+          question: "Proceed?",
+          header: "Confirm",
+          options: [{ label: "Yes", description: "Continue" }],
+          multiple: false,
+          custom: false,
+        },
+      ],
+    };
+    const runtime = createMockOpenCodeRuntime({
+      pendingQuestions: [
+        { ...question, id: "question-cancel" },
+        { ...question, id: "question-answer" },
+      ],
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const questionsFiber = yield* Stream.runCollect(
+          Stream.take(
+            Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.requested"),
+            2,
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: { openCodeSessionId: "opencode-session-1", cwd: process.cwd() },
+        });
+        yield* Fiber.join(questionsFiber);
+        yield* adapter.respondToUserInput(
+          threadId,
+          ApprovalRequestId.makeUnsafe("question-cancel"),
+          {},
+        );
+        yield* adapter.respondToUserInput(
+          threadId,
+          ApprovalRequestId.makeUnsafe("question-answer"),
+          {
+            "question-0-confirm": "Yes",
+          },
+        );
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.questionRejectCalls).toEqual([
+      { requestID: "question-cancel", directory: process.cwd() },
+    ]);
+    expect(runtime.questionReplyCalls).toEqual([
+      { requestID: "question-answer", directory: process.cwd(), answers: [["Yes"]] },
+    ]);
+  });
+
   it("lists OpenCode models from the CLI before falling back to server inventory", async () => {
     const runtime = createMockOpenCodeRuntime({
       cliModels: [
@@ -603,6 +1324,212 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
     expect(runtime.cliModelCalls).toHaveLength(1);
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
+  });
+
+  it.each([
+    {
+      name: "ambient session then explicit empty discovery",
+      sessionEnvironment: undefined,
+      discoveryEnvironment: {},
+    },
+    {
+      name: "explicit empty session then ambient discovery",
+      sessionEnvironment: {},
+      discoveryEnvironment: undefined,
+    },
+  ])(
+    "does not reuse $name envelopes",
+    async ({ name, sessionEnvironment, discoveryEnvironment }) => {
+      const serverUrl = "http://127.0.0.1:4666";
+      const runtime = createMockOpenCodeRuntime();
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const listModels = adapter.listModels;
+          if (!listModels) {
+            throw new Error("Expected OpenCode adapter to support runtime model listing.");
+          }
+
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId: asThreadId(`thread-${name.replaceAll(" ", "-")}`),
+            cwd: "/repo/discovery-environment-boundary",
+            runtimeMode: "full-access",
+            providerOptions: {
+              opencode: {
+                serverUrl,
+                ...(sessionEnvironment !== undefined ? { environment: sessionEnvironment } : {}),
+              },
+            },
+          });
+
+          return yield* listModels({
+            provider: "opencode",
+            cwd: "/repo/discovery-environment-boundary",
+            serverUrl,
+            ...(discoveryEnvironment !== undefined ? { environment: discoveryEnvironment } : {}),
+          });
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+
+      expect(runtime.connectCalls).toHaveLength(2);
+      expect(runtime.connectCalls.map((call) => call.environment)).toEqual([
+        sessionEnvironment,
+        discoveryEnvironment,
+      ]);
+    },
+  );
+
+  it("passes the resolved nondefault OpenCode instance through external thread reads", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const providerInstanceId = "opencode_work";
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        if (!adapter.readExternalThread) {
+          throw new Error("Expected OpenCode external thread reads.");
+        }
+        return yield* adapter.readExternalThread({
+          externalThreadId: "external-session",
+          cwd: "/repo/external-import",
+          providerInstanceId,
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/external-import",
+      instanceId: providerInstanceId,
+    });
+  });
+
+  it("keeps the stopped OpenCode account on a graceful exit after the thread switches accounts", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-opencode-account-switch");
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_a",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_b",
+          threadId,
+          runtimeMode: "full-access",
+        });
+
+        return Array.from(yield* Fiber.join(eventsFiber));
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    const exited = events.find((event) => event.type === "session.exited");
+    const rebound = events.filter((event) => event.type === "session.started").at(-1);
+    expect(exited?.providerInstanceId).toBe("opencode_account_a");
+    expect(rebound?.providerInstanceId).toBe("opencode_account_b");
+  });
+
+  it("retains custom CLI models like OmniRoute when connected providers are in server inventory", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      cliModels: [
+        {
+          slug: "opencode/minimax-m2.5-free",
+          providerID: "opencode",
+          modelID: "minimax-m2.5-free",
+          name: "MiniMax M2.5 Free",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "omniroute/antigravity/gemini-3.7-flash-high",
+          providerID: "omniroute",
+          modelID: "antigravity/gemini-3.7-flash-high",
+          name: "Gemini 3.7 Flash High",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+      ],
+      inventory: {
+        providerList: {
+          connected: ["opencode"],
+          default: {},
+          all: [
+            {
+              id: "opencode",
+              name: "OpenCode",
+              source: "api",
+              models: {
+                "minimax-m2.5-free": {
+                  id: "minimax-m2.5-free",
+                  name: "MiniMax M2.5 Free",
+                },
+              },
+            } as unknown as Provider,
+          ],
+        },
+        agents: [],
+        consoleState: null,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+        return yield* listModels({
+          provider: "opencode",
+          binaryPath: "opencode",
+          cwd: "/repo/model-discovery-config",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result?.models.map((model) => model.slug)).toEqual([
+      "omniroute/antigravity/gemini-3.7-flash-high",
+      "opencode/minimax-m2.5-free",
+    ]);
   });
 
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
@@ -760,34 +1687,58 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("passes the session cwd to managed OpenCode server connections", async () => {
-    const runtime = createMockOpenCodeRuntime();
-    const cwd = process.cwd();
+  it.each([true, false])(
+    "leases a managed session's computer control when enableComputerControl is %s",
+    async (enableComputerControl) => {
+      const runtime = createMockOpenCodeRuntime();
+      const gateway = makeGatewayCredentials();
+      const threadId = asThreadId("thread-opencode-computer-control");
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-managed-cwd"),
-          runtimeMode: "full-access",
-          cwd,
-        });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: "/computer/repo",
+            enableComputerControl,
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "inspect",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "continue",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
+          });
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
             ),
-            Layer.provideMerge(NodeServices.layer),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(runtime.connectCalls).toHaveLength(1);
-    expect(runtime.connectCalls[0]).toMatchObject({ cwd });
-  });
+      expect(JSON.stringify(runtime.promptCalls[0]).includes("## Synara computer use")).toBe(
+        enableComputerControl,
+      );
+      expect(JSON.stringify(runtime.promptCalls[1])).not.toContain("## Synara computer use");
+      expect(gateway.leasedCapabilities).toEqual([
+        enableComputerControl ? ["computer:control"] : [],
+      ]);
+    },
+  );
 
   it("isolates same-cwd managed sessions, injects distinct gateway tokens, and revokes them", async () => {
     const runtime = createMockOpenCodeRuntime();
@@ -1080,27 +2031,201 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(JSON.stringify(runtime.promptCalls[0])).toContain("Synara MCP control is unavailable");
   });
 
-  it("applies the same isolated gateway lifecycle to managed Kilo sessions", async () => {
-    const runtime = createMockOpenCodeRuntime();
-    const gateway = makeGatewayCredentials();
-    const threadId = asThreadId("thread-kilo-gateway");
+  it.each(["failed status", "transport error"] as const)(
+    "rejects enabled Computer startup on MCP %s and releases its private scope once",
+    async (failure) => {
+      const closeScope = vi.fn();
+      const runtime = createMockOpenCodeRuntime({
+        mcpAdd: async () => {
+          if (failure === "transport error") throw new Error("Gateway offline");
+          return { data: { synara: { status: "failed", error: "Gateway offline" } } };
+        },
+        onScopeClose: closeScope,
+      });
+      const gateway = makeGatewayCredentials();
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const threadId = asThreadId("thread-computer-gateway-failed");
+          const error = yield* Effect.flip(
+            adapter.startSession({
+              provider: "opencode",
+              threadId,
+              runtimeMode: "full-access",
+              enableComputerControl: true,
+            }),
+          );
+          expect(error).toMatchObject({
+            _tag: "ProviderAdapterProcessError",
+            detail: expect.stringContaining("Computer Use could not start"),
+          });
+          expect(yield* adapter.hasSession(threadId)).toBe(false);
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-setup-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+      expect(runtime.createCalls).toEqual([]);
+      expect(runtime.updateCalls).toEqual([]);
+      expect(runtime.promptCalls).toEqual([]);
+      expect(gateway.revoked).toEqual(["gateway-token-1"]);
+      expect(gateway.ownerByToken.size).toBe(0);
+      expect(closeScope).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["external server", "missing gateway"] as const)(
+    "rejects enabled Computer startup with %s before connecting or minting credentials",
+    async (unavailable) => {
+      const runtime = createMockOpenCodeRuntime();
+      const gateway = makeGatewayCredentials();
+      const layer = makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-unavailable-test-" }),
+        ),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const threadId = asThreadId("thread-computer-unavailable");
+          const error = yield* Effect.flip(
+            adapter.startSession({
+              provider: "opencode",
+              threadId,
+              runtimeMode: "full-access",
+              enableComputerControl: true,
+              ...(unavailable === "external server"
+                ? { providerOptions: { opencode: { serverUrl: "http://127.0.0.1:9998" } } }
+                : {}),
+            }),
+          );
+          expect(error.message).toContain("Computer Use");
+          expect(error.message).toContain(
+            unavailable === "external server" ? "external server URL" : "gateway is unavailable",
+          );
+          expect(yield* adapter.hasSession(threadId)).toBe(false);
+        }).pipe(
+          Effect.provide(
+            unavailable === "external server"
+              ? layer.pipe(
+                  Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+                )
+              : layer,
+          ),
+        ),
+      );
+      expect(runtime.connectCalls).toEqual([]);
+      expect(runtime.createCalls).toEqual([]);
+      expect(runtime.mcpAddCalls).toEqual([]);
+      expect(runtime.promptCalls).toEqual([]);
+      expect(gateway.leasedCapabilities).toEqual([]);
+      expect(gateway.revoked).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "cancels stalled MCP setup with Computer enabled=%s",
+    async (enableComputerControl) => {
+      const requested = Effect.runSync(Deferred.make<void>());
+      let requestSignal: AbortSignal | undefined;
+      const runtime = createMockOpenCodeRuntime({
+        mcpAdd: async (_input, options) => {
+          requestSignal = options?.signal;
+          Effect.runSync(Deferred.succeed(requested, undefined));
+          return await new Promise(() => {});
+        },
+      });
+      const gateway = makeGatewayCredentials();
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const threadId = asThreadId("thread-stalled-gateway");
+          const starting = yield* adapter
+            .startSession({
+              provider: "opencode",
+              threadId,
+              runtimeMode: "full-access",
+              enableComputerControl,
+            })
+            .pipe(Effect.exit, Effect.forkChild);
+          yield* Deferred.await(requested);
+          yield* TestClock.adjust("10 seconds");
+          const started = yield* Fiber.join(starting);
+          expect(requestSignal?.aborted).toBe(true);
+          if (enableComputerControl) {
+            expect(Exit.isFailure(started)).toBe(true);
+            expect(yield* adapter.hasSession(threadId)).toBe(false);
+            expect(runtime.createCalls).toEqual([]);
+            expect(runtime.promptCalls).toEqual([]);
+            expect(gateway.revoked).toEqual(["gateway-token-1"]);
+          } else {
+            expect(started).toMatchObject({ _tag: "Success", value: { status: "ready" } });
+            yield* adapter.sendTurn({
+              threadId,
+              input: "hello",
+              attachments: [],
+              modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+            });
+            yield* adapter.stopSession(threadId);
+            expect(JSON.stringify(runtime.promptCalls[0])).toContain(
+              "Synara MCP control is unavailable",
+            );
+          }
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-gateway-timeout-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+          Effect.provide(TestClock.layer()),
+          Effect.scoped,
+        ),
+      );
+      expect(gateway.ownerByToken.size).toBe(0);
+    },
+  );
+
+  it("submits OpenCode turns through the asynchronous prompt endpoint", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      prompt: async () => {
+        throw new Error("OpenCode's blocking prompt endpoint must not be used");
+      },
+    });
+    const threadId = asThreadId("thread-opencode-async-prompt");
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const adapter = yield* KiloAdapter;
+        const adapter = yield* OpenCodeAdapter;
         yield* adapter.startSession({
-          provider: "kilo",
+          provider: "opencode",
           threadId,
           runtimeMode: "full-access",
           cwd: "/repo",
         });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "perform a long-running task",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+        });
         yield* adapter.stopSession(threadId);
       }).pipe(
         Effect.provide(
-          makeKiloAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
             Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
             ),
             Layer.provideMerge(NodeServices.layer),
           ),
@@ -1108,97 +2233,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ),
     );
 
-    expect(runtime.connectCalls[0]?.poolIsolationKey).toBeTruthy();
-    expect(runtime.mcpAddCalls[0]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-1" },
+    expect(runtime.promptCallKinds).toEqual(["async"]);
+    expect(runtime.promptCalls[0]).toMatchObject({
+      sessionID: "opencode-session-1",
     });
-    expect(gateway.revoked).toEqual(["gateway-token-1"]);
-  });
-
-  it("keeps shared external Kilo servers identity-only and never installs a token", async () => {
-    const runtime = createMockOpenCodeRuntime();
-    const gateway = makeGatewayCredentials();
-    const firstThread = asThreadId("thread-kilo-external-a");
-    const secondThread = asThreadId("thread-kilo-external-b");
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* KiloAdapter;
-        for (const threadId of [firstThread, secondThread]) {
-          yield* adapter.startSession({
-            provider: "kilo",
-            threadId,
-            runtimeMode: "full-access",
-            cwd: "/same/external/kilo-repo",
-            providerOptions: {
-              kilo: { serverUrl: "http://127.0.0.1:7777" },
-            },
-          });
-        }
-        yield* adapter.sendTurn({
-          threadId: firstThread,
-          input: "coordinate first",
-          attachments: [],
-          modelSelection: { provider: "kilo", model: "openai/gpt-5" },
-        });
-        const secondTurn = yield* adapter
-          .sendTurn({
-            threadId: secondThread,
-            input: "coordinate second",
-            attachments: [],
-            modelSelection: { provider: "kilo", model: "openai/gpt-5" },
-          })
-          .pipe(Effect.forkChild);
-        yield* Effect.sleep(20);
-        expect(runtime.promptCalls).toHaveLength(2);
-        expect(
-          runtime.mcpAddCalls.filter(
-            (call) => (call.config as { enabled?: boolean } | undefined)?.enabled !== false,
-          ),
-        ).toHaveLength(0);
-
-        yield* adapter.stopSession(firstThread);
-        yield* Fiber.join(secondTurn);
-        expect(runtime.promptCalls).toHaveLength(2);
-        yield* adapter.stopSession(secondThread);
-      }).pipe(
-        Effect.provide(
-          makeKiloAdapterLive({
-            runtime: runtime.runtime,
-            promptSubmissionInlineWaitMs: 1,
-          }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.connectCalls).toHaveLength(2);
-    for (const connection of runtime.connectCalls) {
-      expect(connection).toMatchObject({
-        cwd: "/same/external/kilo-repo",
-        serverUrl: "http://127.0.0.1:7777",
-      });
-      expect(connection.poolIsolationKey).toBeUndefined();
-    }
-    expect(runtime.createClientCalls).toHaveLength(2);
-    expect(runtime.createClientCalls.map((call) => call.directory)).toEqual([
-      "/same/external/kilo-repo",
-      "/same/external/kilo-repo",
-    ]);
-    for (const clientInput of runtime.createClientCalls) {
-      expect(clientInput).not.toHaveProperty("workspaceId");
-    }
-    expect(runtime.mcpAddCalls).toEqual([]);
-    expect(gateway.ownerByToken.size).toBe(0);
-    expect(gateway.revoked).toEqual([]);
-    for (const prompt of runtime.promptCalls) {
-      expect(JSON.stringify(prompt)).toContain("Synara MCP control is unavailable");
-    }
   });
 
   it("revokes a managed gateway lease exactly once when the server exits unexpectedly", async () => {
@@ -1401,6 +2439,37 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
+  it("reports no native resume when a supplied cursor has no session id", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    const confirmed = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const input = {
+          provider: "opencode" as const,
+          threadId: asThreadId("thread-malformed-resume-cursor"),
+          runtimeMode: "full-access" as const,
+          resumeCursor: { cwd: "/repo/resume" },
+        };
+        const session = yield* adapter.startSession(input);
+        return adapter.didResumeSession?.(input, session) ?? false;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(confirmed).toBe(false);
+    expect(runtime.createCalls).toHaveLength(1);
+    expect(runtime.updateCalls).toEqual([]);
+  });
+
   it("applies fail-closed resume permissions and restores Full Access for a new turn", async () => {
     const runtime = createMockOpenCodeRuntime();
 
@@ -1474,7 +2543,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           ),
         ),
       ),
-    ).rejects.toThrow("session.update unavailable during resume");
+    ).rejects.toMatchObject({
+      _tag: "ProviderAdapterRequestError",
+      provider: "opencode",
+      method: "session.update",
+      detail: "session.update unavailable during resume",
+    });
 
     expect(runtime.updateCalls).toEqual([
       { sessionID: "existing-session-1", permission: OPEN_CODE_PLAN_PERMISSION_RULES },
@@ -1549,9 +2623,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     );
 
     expect(runtime.forkCalls).toEqual([{ sessionID: "source-session-1" }]);
-    expect(runtime.connectCalls).toHaveLength(2);
+    // Only the scoped fork client connects: the target session starts later
+    // under a ProviderService lifecycle lease, not inside forkThread.
+    expect(runtime.connectCalls).toHaveLength(1);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/source" });
-    expect(runtime.connectCalls[1]).toMatchObject({ cwd: "/repo/source" });
     expect(result.resumeCursor).toMatchObject({
       openCodeSessionId: "forked-session-1",
       cwd: "/repo/source",
@@ -1880,7 +2955,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               id: "part-1",
               messageID: "assistant-message-1",
               type: "text",
-              text: "",
+              // The cumulative snapshot may already contain the earlier buffered delta.
+              text: "Hello",
               time: {
                 start: 1,
               },
@@ -1964,7 +3040,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("filters Kilo synthetic and ignored text parts from assistant transcript", async () => {
+  it("keeps a delta buffered after a role-unknown snapshot even when its suffix matches", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
     const client = runtime.runtime.createOpenCodeSdkClient({
@@ -1986,12 +3062,133 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
         yield* adapter.startSession({
           provider: "opencode",
-          threadId: asThreadId("thread-synthetic-kilo-parts"),
+          threadId: asThreadId("thread-role-late-delta"),
           runtimeMode: "full-access",
         });
 
         yield* adapter.sendTurn({
-          threadId: asThreadId("thread-synthetic-kilo-parts"),
+          threadId: asThreadId("thread-role-late-delta"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-role-late",
+              messageID: "assistant-message-role-late",
+              type: "text",
+              text: "lo",
+              time: { start: 1 },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.delta",
+          properties: {
+            sessionID: "opencode-session-1",
+            partID: "part-role-late",
+            delta: "lo",
+          },
+        });
+        eventQueue.push({
+          type: "message.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            info: {
+              id: "assistant-message-role-late",
+              role: "assistant",
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-role-late",
+              messageID: "assistant-message-role-late",
+              type: "text",
+              text: "lolo",
+              time: { start: 1, end: 2 },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "session.status",
+          properties: {
+            sessionID: "opencode-session-1",
+            status: { type: "idle" },
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: { streamKind: "assistant_text", delta: "lolo" },
+    });
+    expect(result[4]).toMatchObject({
+      type: "item.completed",
+      payload: { itemType: "assistant_message", detail: "lolo" },
+    });
+  });
+
+  it("filters synthetic and ignored text parts from assistant transcript", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-synthetic-parts"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-synthetic-parts"),
           input: "hello",
           attachments: [],
           modelSelection: {
@@ -2181,6 +3378,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ),
     );
 
+    expect(runtime.promptCalls[0]).toMatchObject({ agent: "plan" });
     expect(runtime.promptCalls[0]?.parts).toEqual([
       {
         type: "text",
@@ -2200,46 +3398,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       payload: {
         planMarkdown: "# OpenCode plan\n\n- capture it",
       },
-    });
-  });
-
-  it("pins default-mode turns to the OpenCode build agent", async () => {
-    const runtime = createMockOpenCodeRuntime();
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-default-build-agent"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-default-build-agent"),
-          input: "implement this",
-          interactionMode: "default",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.promptCalls[0]).toMatchObject({
-      agent: "build",
     });
   });
 
@@ -2296,46 +3454,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ),
     );
     expect(parts?.[0]?.text).toEqual(expect.stringContaining(".docx"));
-  });
-
-  it("pins plan-mode turns to the OpenCode plan agent", async () => {
-    const runtime = createMockOpenCodeRuntime();
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-plan-agent"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-plan-agent"),
-          input: "plan this",
-          interactionMode: "plan",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.promptCalls[0]).toMatchObject({
-      agent: "plan",
-    });
   });
 
   it("ignores a stale plan agent option when Synara interaction mode is default", async () => {
@@ -2601,6 +3719,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   });
 
   it("does not emit duplicate usage for identical assistant message updates", async () => {
+    const sentinelText = "usage-dedup-observation-complete";
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime({
       inventory: makeInventoryWithContextLimit({ contextLimit: 200_000 }),
@@ -2618,7 +3737,11 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     const events = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "content.delta" && event.payload.delta === sentinelText,
+          ),
+          Stream.runCollect,
           Effect.forkChild,
         );
 
@@ -2638,65 +3761,24 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           },
         });
 
-        eventQueue.push(assistantMessageUpdated());
-        eventQueue.push(assistantMessageUpdated());
-
-        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return runtimeEvents;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(events.filter((event) => event.type === "thread.token-usage.updated")).toHaveLength(1);
-  });
-
-  it("emits usage without max tokens when the selected model limit is unknown", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
-
-    const events = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
-          Effect.forkChild,
-        );
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-usage-unknown-limit"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-usage-unknown-limit"),
-          input: "count tokens",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
+        const message = assistantMessageUpdated();
+        eventQueue.push(message);
+        eventQueue.push(message);
+        // This later text proves both usage updates passed through the serial event pump.
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "usage-dedup-sentinel-part",
+              messageID: message.properties.info.id,
+              type: "text",
+              text: sentinelText,
+              time: { start: 1 },
+            },
           },
         });
 
-        eventQueue.push(assistantMessageUpdated());
-
         const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return runtimeEvents;
@@ -2712,104 +3794,11 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ),
     );
 
-    const usageEvent = events.find((event) => event.type === "thread.token-usage.updated");
-    expect(usageEvent).toMatchObject({
-      type: "thread.token-usage.updated",
-      payload: {
-        usage: {
-          usedTokens: 245,
-          totalProcessedTokens: 245,
-        },
-      },
+    expect(events.at(-1)).toMatchObject({
+      type: "content.delta",
+      payload: { streamKind: "assistant_text", delta: sentinelText },
     });
-    expect(
-      usageEvent?.type === "thread.token-usage.updated" && usageEvent.payload.usage,
-    ).not.toHaveProperty("maxTokens");
-  });
-
-  it("ignores malformed and zero-token assistant usage updates", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
-
-    const events = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
-          Effect.forkChild,
-        );
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-usage-zero"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-usage-zero"),
-          input: "count tokens",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
-
-        eventQueue.push(
-          assistantMessageUpdated({
-            tokens: {
-              input: 0,
-              output: 0,
-              reasoning: 0,
-              cache: {
-                read: 0,
-                write: 0,
-              },
-            },
-          }),
-        );
-        eventQueue.push(
-          assistantMessageUpdated({
-            id: "assistant-message-malformed",
-            tokens: {
-              input: Number.NaN,
-              output: 1,
-              reasoning: 1,
-              cache: {
-                read: 1,
-                write: 1,
-              },
-            },
-          }),
-        );
-        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return runtimeEvents;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "session.started",
-      "thread.started",
-      "turn.started",
-    ]);
+    expect(events.filter((event) => event.type === "thread.token-usage.updated")).toHaveLength(1);
   });
 
   it("maps OpenCode todo updates into shared turn tasks", async () => {
@@ -2999,7 +3988,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("enforces Plan permissions under full access and restores them for the next turn", async () => {
+  it("enforces Plan permissions under full access and restores them for Debug", async () => {
     const runtime = createMockOpenCodeRuntime();
 
     await Effect.runPromise(
@@ -3019,7 +4008,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Implement the change",
           attachments: [],
-          interactionMode: "default",
+          interactionMode: "debug",
           modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
         });
       }).pipe(
@@ -3648,6 +4637,613 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.permissionReplyCalls).toEqual([]);
   });
 
+  // Permissions outside bash/read/edit used to be classified as "unknown", which
+  // maps to no approval kind: the card never rendered and the turn hung forever.
+  it("classifies non-file, non-command OpenCode permissions as tool approvals", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-tool-permission"),
+          runtimeMode: "approval-required",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-tool-permission"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-permission-asked-tool",
+          type: "permission.asked",
+          properties: {
+            id: "permission-tool-1",
+            sessionID: "opencode-session-1",
+            permission: "webfetch",
+            patterns: ["https://example.com"],
+            metadata: {},
+            always: [],
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result[3]).toMatchObject({
+      type: "request.opened",
+      payload: { requestType: "tool_approval" },
+    });
+  });
+
+  it("confirms a human permission reply from permission.list and continues the same turn", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    let replySubmitted = false;
+    const runtime = createMockOpenCodeRuntime({
+      permissionReply: async () => {
+        replySubmitted = true;
+        return { data: null };
+      },
+      permissionList: async () => ({ data: [] }),
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-human-permission-ack");
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Search the web",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+
+        const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        eventQueue.push({
+          type: "permission.asked",
+          properties: {
+            id: "permission-human-1",
+            sessionID: "opencode-session-1",
+            permission: "websearch",
+            patterns: ["Synara handoff"],
+            metadata: {},
+            always: [],
+          },
+        });
+        const opened = Array.from(yield* Fiber.join(openedFiber));
+
+        const continuedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.respondToRequest(
+          threadId,
+          ApprovalRequestId.makeUnsafe("permission-human-1"),
+          "accept",
+        );
+        // The runtime echo may arrive after permission.list already confirmed the reply.
+        eventQueue.push({
+          type: "permission.replied",
+          properties: {
+            sessionID: "opencode-session-1",
+            requestID: "permission-human-1",
+            reply: "once",
+          },
+        });
+        // Reconnect replay can repeat both the reply and the original ask. The settled request id
+        // remains guarded for the lifetime of the adapter session, so neither becomes a second UI
+        // interaction.
+        eventQueue.push({
+          type: "permission.asked",
+          properties: {
+            id: "permission-human-1",
+            sessionID: "opencode-session-1",
+            permission: "websearch",
+            patterns: ["Synara handoff"],
+            metadata: {},
+            always: [],
+          },
+        });
+        eventQueue.push({
+          type: "session.next.text.delta",
+          properties: {
+            timestamp: 1,
+            sessionID: "opencode-session-1",
+            delta: "Search complete",
+          },
+        });
+        eventQueue.push({
+          type: "session.next.text.ended",
+          properties: {
+            timestamp: 2,
+            sessionID: "opencode-session-1",
+            text: "Search complete",
+          },
+        });
+        eventQueue.push({
+          type: "session.next.step.ended",
+          properties: {
+            timestamp: 3,
+            sessionID: "opencode-session-1",
+            finish: "stop",
+            cost: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+          },
+        });
+        const continued = Array.from(yield* Fiber.join(continuedFiber));
+        eventQueue.close();
+        return [...opened, ...continued];
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            permissionReplyAckDelaysMs: [],
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(replySubmitted).toBe(true);
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "request.opened",
+      "request.resolved",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result.filter((event) => event.type === "request.resolved")).toHaveLength(1);
+    expect(result[4]).toMatchObject({
+      type: "request.resolved",
+      payload: { decision: "accept" },
+    });
+    expect(runtime.permissionReplyCalls).toEqual([
+      { requestID: "permission-human-1", reply: "once" },
+    ]);
+  });
+
+  it("settles a human permission exactly once when the SSE reply races acknowledgement", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    let replySubmitted = false;
+    let markListStarted: (() => void) | undefined;
+    let releaseList: (() => void) | undefined;
+    const listStarted = new Promise<void>((resolve) => {
+      markListStarted = resolve;
+    });
+    const listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    const permission = {
+      id: "permission-race-1",
+      sessionID: "opencode-session-1",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+    } satisfies PermissionRequest;
+    const runtime = createMockOpenCodeRuntime({
+      permissionReply: async () => {
+        replySubmitted = true;
+        return { data: null };
+      },
+      permissionList: async () => {
+        if (!replySubmitted) {
+          return { data: [] };
+        }
+        markListStarted?.();
+        await listGate;
+        return { data: [permission] };
+      },
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-human-permission-race");
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Inspect status",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        eventQueue.push({ type: "permission.asked", properties: permission });
+        yield* Fiber.join(openedFiber);
+
+        const resolvedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
+          Effect.forkChild,
+        );
+        const responseFiber = yield* adapter
+          .respondToRequest(
+            threadId,
+            ApprovalRequestId.makeUnsafe(permission.id),
+            "acceptForSession",
+          )
+          .pipe(Effect.forkChild);
+        yield* Effect.promise(() => listStarted);
+        const conflictingResponse = yield* adapter
+          .respondToRequest(threadId, ApprovalRequestId.makeUnsafe(permission.id), "decline")
+          .pipe(Effect.result);
+        eventQueue.push({
+          type: "permission.replied",
+          properties: {
+            sessionID: permission.sessionID,
+            requestID: permission.id,
+            reply: "always",
+          },
+        });
+        const resolved = Array.from(yield* Fiber.join(resolvedFiber));
+        releaseList?.();
+        yield* Fiber.join(responseFiber);
+        eventQueue.close();
+        return { conflictingResponse, resolved };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            permissionReplyAckDelaysMs: [],
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.conflictingResponse).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "ProviderAdapterRequestError",
+        method: "permission.reply",
+      },
+    });
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]).toMatchObject({
+      type: "request.resolved",
+      payload: { decision: "acceptForSession" },
+    });
+    expect(runtime.permissionReplyCalls).toEqual([{ requestID: permission.id, reply: "always" }]);
+  });
+
+  it("does not block session teardown when permission resolution backpressure is interrupted", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const permission = {
+      id: "permission-backpressure-1",
+      sessionID: "opencode-session-1",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+    } satisfies PermissionRequest;
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-human-permission-backpressure");
+        const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Inspect status",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        eventQueue.push({ type: "permission.asked", properties: permission });
+        yield* Fiber.join(openedFiber);
+
+        // Fill the one-slot runtime event queue, then let permission.replied block on the next
+        // offer. Layer teardown must still interrupt the session event pump.
+        eventQueue.push({
+          type: "session.next.text.delta",
+          properties: {
+            timestamp: 1,
+            sessionID: permission.sessionID,
+            delta: "queued",
+          },
+        });
+        eventQueue.push({
+          type: "permission.replied",
+          properties: {
+            sessionID: permission.sessionID,
+            requestID: permission.id,
+            reply: "once",
+          },
+        });
+        yield* Effect.sleep(25);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            runtimeEventBufferCapacity: 1,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+        Effect.timeout("1 second"),
+      ),
+    );
+
+    expect(exit).toMatchObject({ _tag: "Success" });
+  });
+
+  it("fails acknowledgement without consuming a permission that the runtime still lists", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    let replySubmitted = false;
+    let keepPending = true;
+    const permission = {
+      id: "permission-still-pending-1",
+      sessionID: "opencode-session-1",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+    } satisfies PermissionRequest;
+    const runtime = createMockOpenCodeRuntime({
+      permissionReply: async () => {
+        replySubmitted = true;
+        return { data: null };
+      },
+      permissionList: async () => ({
+        data: replySubmitted && keepPending ? [permission] : [],
+      }),
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-human-permission-still-pending");
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Inspect status",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        eventQueue.push({ type: "permission.asked", properties: permission });
+        yield* Fiber.join(openedFiber);
+
+        const firstResponse = yield* adapter
+          .respondToRequest(threadId, ApprovalRequestId.makeUnsafe(permission.id), "accept")
+          .pipe(Effect.result);
+        keepPending = false;
+        const resolvedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.respondToRequest(
+          threadId,
+          ApprovalRequestId.makeUnsafe(permission.id),
+          "accept",
+        );
+        const resolved = Array.from(yield* Fiber.join(resolvedFiber));
+        eventQueue.close();
+        return { firstResponse, resolved };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            permissionReplyAckDelaysMs: [],
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.firstResponse._tag).toBe("Failure");
+    if (result.firstResponse._tag === "Failure") {
+      expect(result.firstResponse.failure).toMatchObject({
+        _tag: "ProviderAdapterRequestError",
+        method: "permission.reply.acknowledge",
+      });
+    }
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]?.type).toBe("request.resolved");
+    expect(runtime.permissionReplyCalls).toEqual([
+      { requestID: permission.id, reply: "once" },
+      { requestID: permission.id, reply: "once" },
+    ]);
+  });
+
+  it("keeps a permission actionable when acknowledgement listing fails", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    let replySubmitted = false;
+    let listFails = true;
+    const permission = {
+      id: "permission-list-failure-1",
+      sessionID: "opencode-session-1",
+      permission: "websearch",
+      patterns: ["Synara"],
+      metadata: {},
+      always: [],
+    } satisfies PermissionRequest;
+    const runtime = createMockOpenCodeRuntime({
+      permissionReply: async () => {
+        replySubmitted = true;
+        return { data: null };
+      },
+      permissionList: async () => {
+        if (replySubmitted && listFails) {
+          throw new Error("permission.list unavailable");
+        }
+        return { data: [] };
+      },
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-human-permission-list-failure");
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Search docs",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        eventQueue.push({ type: "permission.asked", properties: permission });
+        yield* Fiber.join(openedFiber);
+
+        const firstResponse = yield* adapter
+          .respondToRequest(threadId, ApprovalRequestId.makeUnsafe(permission.id), "accept")
+          .pipe(Effect.result);
+        listFails = false;
+        const resolvedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.respondToRequest(
+          threadId,
+          ApprovalRequestId.makeUnsafe(permission.id),
+          "accept",
+        );
+        yield* Fiber.join(resolvedFiber);
+        eventQueue.close();
+        return firstResponse;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            permissionReplyAckDelaysMs: [],
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
+        _tag: "ProviderAdapterRequestError",
+        method: "permission.reply.acknowledge",
+      });
+    }
+  });
+
   it("keeps newer OpenCode tool-call steps attached to the active turn", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
@@ -3799,7 +5395,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               callID: "task-call-1",
               state: {
                 status: "running",
-                title: "Find changelog implementation",
+                title: "\nFind changelog implementation\n",
                 input: {
                   description: "Find changelog implementation",
                   prompt: "Explore changelog files.",
@@ -3982,6 +5578,56 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         },
       },
     });
+  });
+
+  it("starts and sends a turn while optional model inventory is stalled", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    let inventoryCancelled = false;
+    const stalledRuntime = {
+      ...runtime.runtime,
+      loadOpenCodeInventory: () =>
+        Effect.never.pipe(
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              inventoryCancelled = true;
+            }),
+          ),
+        ),
+    };
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        return yield* Effect.gen(function* () {
+          const session = yield* adapter.startSession({
+            provider: "opencode",
+            threadId: asThreadId("thread-stalled-inventory"),
+            runtimeMode: "full-access",
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId: session.threadId,
+            input: "hello",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          });
+          yield* adapter.stopSession(session.threadId);
+          return { session, turn };
+        }).pipe(Effect.timeoutOption("1 second"));
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: stalledRuntime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-inventory-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(Option.isSome(result)).toBe(true);
+    expect(runtime.promptCalls).toHaveLength(1);
+    expect(inventoryCancelled).toBe(true);
   });
 
   it("does not block sendTurn when the OpenCode prompt request stalls during startup", async () => {
@@ -4811,6 +6457,499 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(result.session).toMatchObject({
       status: "running",
       activeTurnId: result.secondTurn.turnId,
+    });
+  });
+});
+
+describe("OpenCode incremental text assembly", () => {
+  it("preserves coincidental suffix/prefix overlap in raw provider deltas", () => {
+    expect(appendOpenCodeAssistantTextDelta("reset", "ting")).toEqual({
+      nextText: "resetting",
+      deltaToEmit: "ting",
+    });
+    expect(appendOpenCodeAssistantTextDelta("plan", "ning")).toEqual({
+      nextText: "planning",
+      deltaToEmit: "ning",
+    });
+    expect(appendOpenCodeAssistantTextDelta("lo", "ose")).toEqual({
+      nextText: "loose",
+      deltaToEmit: "ose",
+    });
+  });
+});
+
+function pushOpenCodePart(
+  eventQueue: ReturnType<typeof createSubscribedEventQueue>,
+  part: Part,
+  sessionID = "opencode-session-1",
+) {
+  eventQueue.push({
+    type: "message.part.updated",
+    properties: { sessionID, part },
+  });
+}
+
+describe("OpenCode background subagent tasks", () => {
+  function backgroundTaskToolPart(taskId: string): Part {
+    return {
+      id: `part-task-${taskId}`,
+      messageID: "assistant-message-task",
+      sessionID: "opencode-session-1",
+      type: "tool",
+      tool: "task",
+      callID: `call-${taskId}`,
+      state: {
+        status: "completed",
+        title: "Explore the codebase",
+        input: {
+          description: "Explore the codebase",
+          prompt: "Find where sessions are stored",
+          subagent_type: "explore",
+        },
+        output: `<task id="${taskId}" state="running"><summary>Background task started</summary><task_result></task_result></task>`,
+        metadata: {
+          parentSessionId: "opencode-session-1",
+          sessionId: taskId,
+          model: "openai/gpt-5.4",
+          background: true,
+          jobId: taskId,
+        },
+        time: { start: 1, end: 2 },
+      },
+    } as unknown as Part;
+  }
+
+  async function runWithAdapter<A, E>(
+    runtime: ReturnType<typeof createMockOpenCodeRuntime>,
+    eventQueue: ReturnType<typeof createSubscribedEventQueue>,
+    program: (adapter: OpenCodeAdapterShape, threadId: ThreadId) => Effect.Effect<A, E>,
+  ): Promise<A> {
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    return await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        return yield* program(adapter, asThreadId("thread-background-tasks"));
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+  }
+
+  const taskEventTypes = new Set(["task.started", "task.updated", "task.completed"]);
+  const onlyTaskEvents = (event: { readonly type: string }) => taskEventTypes.has(event.type);
+
+  it("emits task.started and task.updated(isBackgrounded) once for a background task tool call", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 3),
+        ).pipe(Effect.forkChild);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+
+        const part = backgroundTaskToolPart("child-session-1");
+        pushOpenCodePart(eventQueue, part);
+        // OpenCode re-invokes the tool for a still-running child and returns a
+        // "Background task updated" result; it must not re-emit task.started.
+        pushOpenCodePart(eventQueue, {
+          ...part,
+          id: "part-task-duplicate",
+          callID: "call-duplicate",
+          state: {
+            ...((part as { state?: Record<string, unknown> }).state ?? {}),
+            output:
+              '<task id="child-session-1" state="running"><summary>Background task updated</summary></task>',
+          },
+        } as unknown as Part);
+
+        // Settle via the child session going idle.
+        eventQueue.push({
+          type: "session.idle",
+          properties: { sessionID: "child-session-1" },
+        });
+
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected;
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "task.started",
+      "task.updated",
+      "task.completed",
+    ]);
+    expect(events[0]).toMatchObject({
+      payload: {
+        taskId: "child-session-1",
+        description: "Explore the codebase",
+        taskType: "subagent",
+        subagentType: "explore",
+        toolUseId: "call-child-session-1",
+      },
+    });
+    expect(events[1]).toMatchObject({
+      payload: {
+        taskId: "child-session-1",
+        status: "running",
+        isBackgrounded: true,
+        toolUseId: "call-child-session-1",
+      },
+    });
+    expect(events[2]).toMatchObject({
+      payload: { taskId: "child-session-1", status: "completed" },
+    });
+  });
+
+  it("settles the background task on child session.idle without completing the parent turn", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.take(
+            Stream.filter(
+              adapter.streamEvents,
+              (event) => event.type === "task.completed" || event.type === "turn.completed",
+            ),
+            2,
+          ),
+        ).pipe(Effect.forkChild);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+
+        // Assistant text + completion so the parent turn is genuinely settled
+        // only by its own idle signal.
+        pushOpenCodePart(eventQueue, {
+          id: "part-text-1",
+          messageID: "assistant-message-1",
+          sessionID: "opencode-session-1",
+          type: "text",
+          text: "Spawned it.",
+          time: { start: 1 },
+        } as unknown as Part);
+        eventQueue.push({
+          type: "message.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            info: { id: "assistant-message-1", role: "assistant" },
+          },
+        });
+        pushOpenCodePart(eventQueue, {
+          id: "part-text-1",
+          messageID: "assistant-message-1",
+          sessionID: "opencode-session-1",
+          type: "text",
+          text: "Spawned it.",
+          time: { start: 1, end: 2 },
+        } as unknown as Part);
+
+        // The child's idle arrives before the parent's; it must not settle the turn.
+        eventQueue.push({
+          type: "session.idle",
+          properties: { sessionID: "child-session-1" },
+        });
+        eventQueue.push({
+          type: "session.status",
+          properties: { sessionID: "opencode-session-1", status: { type: "idle" } },
+        });
+
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected;
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["task.completed", "turn.completed"]);
+    expect(events[0]).toMatchObject({
+      payload: { taskId: "child-session-1", status: "completed" },
+    });
+    expect(events[1]).toMatchObject({ payload: { state: "completed" } });
+  });
+
+  it("tracks a resumed background child after its previous task settled", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const resumedToolCompleted = yield* Deferred.make<void>();
+        const eventsFiber = yield* Stream.runCollect(
+          adapter.streamEvents.pipe(
+            Stream.tap((event) =>
+              event.type === "item.completed" && event.itemId === "call-resumed"
+                ? Deferred.succeed(resumedToolCompleted, undefined)
+                : Effect.void,
+            ),
+            Stream.takeUntil((event) => event.type === "session.exited"),
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn and resume a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        const part = backgroundTaskToolPart("child-session-1");
+        pushOpenCodePart(eventQueue, part);
+        eventQueue.push({ type: "session.idle", properties: { sessionID: "child-session-1" } });
+        // task_id resumes the same OpenCode session and reuses its job ID,
+        // while this tool invocation has a new call ID.
+        pushOpenCodePart(eventQueue, {
+          ...part,
+          id: "part-resumed",
+          callID: "call-resumed",
+        } as Part);
+        yield* Deferred.await(resumedToolCompleted);
+        yield* adapter.stopSession(threadId);
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected.filter(onlyTaskEvents);
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "task.started",
+      "task.updated",
+      "task.completed",
+      "task.started",
+      "task.updated",
+      "task.completed",
+    ]);
+    expect(events[3]).toMatchObject({
+      payload: { taskId: "child-session-1", toolUseId: "call-resumed" },
+    });
+    expect(events[4]).toMatchObject({ payload: { status: "running", isBackgrounded: true } });
+    expect(events[5]).toMatchObject({ payload: { status: "stopped" } });
+  });
+
+  it("settles the background task as failed from a synthetic parent text part", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 3),
+        ).pipe(Effect.forkChild);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+        pushOpenCodePart(eventQueue, {
+          id: "part-synthetic-1",
+          messageID: "user-message-synthetic",
+          sessionID: "opencode-session-1",
+          type: "text",
+          synthetic: true,
+          text: '<task id="child-session-1" state="error"><summary>Background task failed: exploded</summary><task_error>boom</task_error></task>',
+          time: { start: 1 },
+        } as unknown as Part);
+
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected;
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "task.started",
+      "task.updated",
+      "task.completed",
+    ]);
+    expect(events[2]).toMatchObject({
+      payload: {
+        taskId: "child-session-1",
+        status: "failed",
+        summary: "Background task failed: exploded",
+      },
+    });
+  });
+
+  it("preserves a background failure reported after the child went idle", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.takeUntil(
+            adapter.streamEvents,
+            (event) => event.type === "item.completed" && event.itemId === "call-marker",
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        const part = backgroundTaskToolPart("child-session-1");
+        pushOpenCodePart(eventQueue, part);
+        // OpenCode marks the child idle before task.ts inspects its final
+        // assistant/tool result and injects the authoritative error result.
+        eventQueue.push({ type: "session.idle", properties: { sessionID: "child-session-1" } });
+        pushOpenCodePart(eventQueue, {
+          id: "part-late-error",
+          messageID: "user-late-error",
+          sessionID: "opencode-session-1",
+          type: "text",
+          synthetic: true,
+          text: '<task id="child-session-1" state="error"><summary>Background task failed: tool error</summary></task>',
+          time: { start: 1 },
+        } as Part);
+        pushOpenCodePart(eventQueue, {
+          ...part,
+          id: "part-marker",
+          callID: "call-marker",
+          tool: "read",
+        } as Part);
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected.filter((event) => event.type === "task.completed");
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({
+      payload: {
+        taskId: "child-session-1",
+        status: "failed",
+        summary: "Background task failed: tool error",
+      },
+    });
+  });
+
+  it("settles background tasks before replacing their provider session", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const startedFiber = yield* Stream.runCollect(
+          Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 2),
+        ).pipe(Effect.forkChild);
+        const input = {
+          provider: "opencode" as const,
+          threadId,
+          runtimeMode: "full-access" as const,
+        };
+        yield* adapter.startSession(input);
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+        yield* Fiber.join(startedFiber);
+
+        const replacedFiber = yield* Stream.runCollect(
+          Stream.takeUntil(adapter.streamEvents, (event) => event.type === "session.started"),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession(input);
+        const collected = Array.from(yield* Fiber.join(replacedFiber));
+        eventQueue.close();
+        return collected.filter(onlyTaskEvents);
+      }),
+    );
+
+    expect(events).toMatchObject([
+      { type: "task.completed", payload: { taskId: "child-session-1", status: "stopped" } },
+    ]);
+  });
+
+  it("settles unsettled background tasks as stopped on session teardown", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const startedFiber = yield* Stream.runCollect(
+          Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 2),
+        ).pipe(Effect.forkChild);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+
+        const started = Array.from(yield* Fiber.join(startedFiber));
+        expect(started.map((event) => event.type)).toEqual(["task.started", "task.updated"]);
+
+        const settledFiber = yield* Stream.runCollect(
+          Stream.take(
+            Stream.filter(adapter.streamEvents, (event) => event.type === "task.completed"),
+            1,
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.stopSession(threadId);
+
+        const settled = Array.from(yield* Fiber.join(settledFiber));
+        eventQueue.close();
+        return settled;
+      }),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      payload: { taskId: "child-session-1", status: "stopped" },
     });
   });
 });

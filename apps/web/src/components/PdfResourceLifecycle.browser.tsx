@@ -12,6 +12,7 @@ import { render } from "vitest-browser-react";
 import type { PDFDocumentProxy } from "~/lib/pdf/pdfEngine";
 import { usePdfDocument } from "~/lib/pdf/usePdfDocument";
 import { LocalImagePreview } from "./LocalImagePreview";
+import { PdfFilePreview } from "./PdfFilePreview";
 import { PdfViewerToolbar } from "./pdf/PdfViewerToolbar";
 
 const { loadPdfDocumentMock } = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const { loadPdfDocumentMock } = vi.hoisted(() => ({
 
 vi.mock("~/lib/pdf/pdfEngine", () => ({
   loadPdfDocument: loadPdfDocumentMock,
+  renderPageTextLayer: vi.fn(),
 }));
 
 vi.mock("./chat/OpenInPicker", () => ({
@@ -135,6 +137,33 @@ describe("local preview resource generations", () => {
     expect(firstA.destroy).toHaveBeenCalledOnce();
   });
 
+  it("offers a PDF reload after a read failure and requests a fresh resource", async () => {
+    function PdfReloadHarness() {
+      const [revision, setRevision] = useState(0);
+      return (
+        <PdfFilePreview
+          filePath="document.pdf"
+          cwd="/repo"
+          openInTarget={null}
+          cacheKey={revision}
+          onReload={() => setRevision((value) => value + 1)}
+        />
+      );
+    }
+    await render(<PdfReloadHarness />);
+    await vi.waitFor(() => expect(fetchRequests.size).toBe(1));
+    const initialUrl = [...fetchRequests.keys()][0]!;
+    fetchRequests.get(initialUrl)?.[0]?.resolve(new Response(null, { status: 404 }));
+    await browserPage.getByRole("button", { name: "Reload file from disk" }).click();
+    await vi.waitFor(() => expect(fetchRequests.size).toBe(2));
+    const urls = [...fetchRequests.keys()].map((url) => new URL(url, window.location.href));
+    expect(urls.map((url) => url.searchParams.get("v"))).toEqual(["0", "1"]);
+    expect(urls.map((url) => url.searchParams.get("path"))).toEqual([
+      "document.pdf",
+      "document.pdf",
+    ]);
+  });
+
   it("renders a fresh image after an errored A -> B -> A transition", async () => {
     function ImageHarness() {
       const [src, setSrc] = useState("a.png");
@@ -171,6 +200,23 @@ describe("local preview resource generations", () => {
       ),
     );
     expect(document.body.textContent).not.toContain("Couldn’t open this image");
+  });
+
+  it("reports PDF document load failures to its preview owner", async () => {
+    const onPreviewError = vi.fn();
+
+    await render(
+      <PdfFilePreview
+        filePath="missing.pdf"
+        cwd="/workspace"
+        openInTarget={null}
+        onPreviewError={onPreviewError}
+      />,
+    );
+    await vi.waitFor(() => expect([...fetchRequests.values()].flat()).toHaveLength(1));
+    [...fetchRequests.values()][0]?.[0]?.resolve(new Response(null, { status: 404 }));
+
+    await vi.waitFor(() => expect(onPreviewError).toHaveBeenCalledOnce());
   });
 });
 

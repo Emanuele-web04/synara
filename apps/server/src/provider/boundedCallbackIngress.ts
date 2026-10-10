@@ -30,48 +30,132 @@ export interface BoundedCallbackIngress<A> {
   readonly offer: (item: A) => BoundedCallbackIngressOfferResult;
   /** Stop admission and wait until every accepted item has been processed. */
   readonly stop: Effect.Effect<void>;
+  /** Release queued work when the owning scope and downstream consumer are closing. */
+  readonly abort: Effect.Effect<void>;
   readonly status: () => BoundedCallbackIngressStatus;
 }
 
-export interface BoundedCallbackIngressOptions<A> {
+export interface BoundedCallbackIngressOptions<A, P = never> {
   readonly capacity: number;
   readonly maxBufferedBytes: number;
   readonly terminalReserve: number;
   readonly isTerminal: (item: A) => boolean;
   readonly sizeOf: (item: A) => number;
+  /** Prepare small metadata only. Do not retain payloads after eviction; publication stays serial. */
+  readonly prepare?: (item: A) => Promise<P>;
+  readonly prepareConcurrency?: number;
+  /** Coalesce pending metadata checks by origin. A running check never validates later arrivals. */
+  readonly prepareKey?: (item: A) => object | undefined;
 }
 
-type BufferedItem<A> = {
-  readonly item: A;
+type BufferedItem<A, P> = {
+  item: A | undefined;
   readonly bytes: number;
   readonly terminal: boolean;
+  prepared?: Promise<{ readonly metadata: P } | { readonly cause: unknown }> | undefined;
+  preparation?: Preparation<A, P> | undefined;
+  discarded?: boolean;
 };
 
-type ResumeTake<A> = (effect: Effect.Effect<Option.Option<BufferedItem<A>>>) => void;
+type Preparation<A, P> = {
+  readonly key: object | undefined;
+  readonly items: Set<BufferedItem<A, P>>;
+  readonly prepared: Promise<{ readonly metadata: P } | { readonly cause: unknown }>;
+  readonly resolve: (result: { readonly metadata: P } | { readonly cause: unknown }) => void;
+};
+
+type ResumeTake<A, P> = (effect: Effect.Effect<Option.Option<BufferedItem<A, P>>>) => void;
 
 function normalizedPositiveInt(value: number, fallback: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
 }
 
-export const makeBoundedCallbackIngress = <A, E, R>(
-  process: (item: A) => Effect.Effect<void, E, R>,
-  options: BoundedCallbackIngressOptions<A>,
+export const makeBoundedCallbackIngress = <A, E, R, P = never>(
+  process: (item: A, prepared?: P) => Effect.Effect<void, E, R>,
+  options: BoundedCallbackIngressOptions<A, P>,
 ): Effect.Effect<BoundedCallbackIngress<A>, never, Scope.Scope | R> =>
   Effect.gen(function* () {
     const capacity = normalizedPositiveInt(options.capacity, 1);
     const maxBufferedBytes = normalizedPositiveInt(options.maxBufferedBytes, 1);
     const terminalReserve = Math.min(capacity, Math.max(1, Math.floor(options.terminalReserve)));
     const normalCapacity = Math.max(0, capacity - terminalReserve);
-    const buffer: Array<BufferedItem<A>> = [];
+    const buffer: Array<BufferedItem<A, P>> = [];
     let queuedBytes = 0;
     let accepting = true;
-    let waiter: ResumeTake<A> | undefined;
+    let waiter: ResumeTake<A, P> | undefined;
     let accepted = 0;
     let dropped = 0;
     let evictedForTerminal = 0;
     let terminalOverflow = 0;
+    let aborted = false;
+    const preparing = new Set<Preparation<A, P>>();
+    const waitingPreparation = new Set<Preparation<A, P>>();
+    const pendingByKey = new Map<object, Preparation<A, P>>();
+    const activeKeys = new Set<object>();
+    const prepareConcurrency = normalizedPositiveInt(options.prepareConcurrency ?? 1, 1);
+    const pumpPreparation = () => {
+      if (!options.prepare || aborted) return;
+      for (const group of waitingPreparation) {
+        if (preparing.size >= prepareConcurrency) break;
+        if (group.key && activeKeys.has(group.key)) continue;
+        waitingPreparation.delete(group);
+        preparing.add(group);
+        if (group.key) activeKeys.add(group.key);
+        void Promise.resolve()
+          .then(async () => {
+            // Keep this group joinable until the check actually starts. All its
+            // events were admitted before this point; later arrivals need a new check.
+            if (group.key && pendingByKey.get(group.key) === group) pendingByKey.delete(group.key);
+            const buffered = group.items.values().next().value;
+            if (aborted || !buffered || buffered.discarded) return;
+            try {
+              const metadata = await options.prepare!(buffered.item as A);
+              group.resolve({ metadata });
+            } catch (cause) {
+              group.resolve({ cause });
+            }
+          })
+          .finally(() => {
+            group.items.clear();
+            preparing.delete(group);
+            if (group.key) activeKeys.delete(group.key);
+            pumpPreparation();
+          });
+      }
+    };
+    const prepare = (buffered: BufferedItem<A, P>) => {
+      if (!options.prepare) return;
+      const key = options.prepareKey?.(buffered.item!);
+      let group = key ? pendingByKey.get(key) : undefined;
+      if (!group) {
+        let resolve!: Preparation<A, P>["resolve"];
+        const prepared = new Promise<Awaited<Preparation<A, P>["prepared"]>>((resume) => {
+          resolve = resume;
+        });
+        group = { key, prepared, resolve, items: new Set() };
+        if (key) pendingByKey.set(key, group);
+        waitingPreparation.add(group);
+      }
+      group.items.add(buffered);
+      buffered.preparation = group;
+      buffered.prepared = group.prepared;
+      pumpPreparation();
+    };
 
-    const take = Effect.callback<Option.Option<BufferedItem<A>>>((resume) => {
+    const discard = (buffered: BufferedItem<A, P>) => {
+      buffered.discarded = true;
+      buffered.item = undefined;
+      buffered.prepared = undefined;
+      const group = buffered.preparation;
+      buffered.preparation = undefined;
+      group?.items.delete(buffered);
+      if (group && group.items.size === 0) {
+        waitingPreparation.delete(group);
+        if (group.key && pendingByKey.get(group.key) === group) pendingByKey.delete(group.key);
+      }
+    };
+
+    const take = Effect.callback<Option.Option<BufferedItem<A, P>>>((resume) => {
       const buffered = buffer.shift();
       if (buffered !== undefined) {
         queuedBytes = Math.max(0, queuedBytes - buffered.bytes);
@@ -96,7 +180,16 @@ export const makeBoundedCallbackIngress = <A, E, R>(
           Option.match({
             onNone: () => Effect.void,
             onSome: (buffered) =>
-              process(buffered.item).pipe(
+              (buffered.prepared
+                ? Effect.promise(() => buffered.prepared!).pipe(
+                    Effect.flatMap((result) =>
+                      "cause" in result
+                        ? Effect.die(result.cause)
+                        : process(buffered.item!, result.metadata),
+                    ),
+                  )
+                : process(buffered.item!)
+              ).pipe(
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
                     ? // An interrupts-only cause carries no E failures, so it is safe to
@@ -129,11 +222,12 @@ export const makeBoundedCallbackIngress = <A, E, R>(
         dropped += 1;
         return "dropped";
       }
-      const buffered = { item, bytes, terminal } satisfies BufferedItem<A>;
+      const buffered: BufferedItem<A, P> = { item, bytes, terminal };
       if (waiter !== undefined) {
         const resume = waiter;
         waiter = undefined;
         accepted += 1;
+        prepare(buffered);
         resume(Effect.succeed(Option.some(buffered)));
         return "accepted";
       }
@@ -147,6 +241,7 @@ export const makeBoundedCallbackIngress = <A, E, R>(
         buffer.push(buffered);
         queuedBytes += bytes;
         accepted += 1;
+        prepare(buffered);
         return "accepted";
       }
 
@@ -159,6 +254,7 @@ export const makeBoundedCallbackIngress = <A, E, R>(
         }
         const [removed] = buffer.splice(evictIndex, 1);
         if (removed) {
+          discard(removed);
           queuedBytes = Math.max(0, queuedBytes - removed.bytes);
           dropped += 1;
           evictedForTerminal += 1;
@@ -169,6 +265,7 @@ export const makeBoundedCallbackIngress = <A, E, R>(
       buffer.push(buffered);
       queuedBytes += bytes;
       accepted += 1;
+      prepare(buffered);
       return evicted ? "evicted-for-terminal" : "accepted";
     };
 
@@ -186,11 +283,25 @@ export const makeBoundedCallbackIngress = <A, E, R>(
       return Fiber.join(worker).pipe(Effect.asVoid);
     });
 
-    yield* Effect.addFinalizer(() => stop);
+    const abort = Effect.suspend(() => {
+      accepting = false;
+      aborted = true;
+      stopRequested = true;
+      for (const buffered of buffer) discard(buffered);
+      for (const group of preparing) for (const buffered of group.items) discard(buffered);
+      waitingPreparation.clear();
+      pendingByKey.clear();
+      buffer.length = 0;
+      queuedBytes = 0;
+      return Fiber.interrupt(worker).pipe(Effect.asVoid);
+    });
+
+    yield* Effect.addFinalizer(() => abort);
 
     return {
       offer,
       stop,
+      abort,
       status: () => ({
         accepting,
         queued: buffer.length,

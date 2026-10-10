@@ -9,6 +9,8 @@ const srcPath = fileURLToPath(new URL("./src", import.meta.url));
 export default mergeConfig(
   viteConfig,
   defineConfig({
+    // Prebundle direct hook dependencies so restored caches cannot reload tests mid-run.
+    optimizeDeps: { include: ["react-dom/client", "zustand/vanilla/shallow"] },
     resolve: {
       alias: {
         "~": srcPath,
@@ -17,9 +19,15 @@ export default mergeConfig(
     test: {
       include: [
         "src/components/**/*.browser.tsx",
+        "src/hooks/**/*.browser.ts",
+        "src/hooks/**/*.browser.tsx",
         "src/lib/**/*.browser.ts",
         "src/lib/**/*.browser.tsx",
       ],
+      // Browser component tests share page-level mock infrastructure; run files serially
+      // so one spec cannot steal another spec's WebSocket/native-API events.
+      fileParallelism: false,
+      maxWorkers: 1,
       browser: {
         enabled: true,
         provider: playwright(),

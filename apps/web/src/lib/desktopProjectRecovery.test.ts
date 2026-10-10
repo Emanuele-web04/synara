@@ -9,7 +9,10 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { hasLiveThreadsWithMissingProjects } from "./desktopProjectRecovery";
+import {
+  hasLiveThreadsWithMissingProjects,
+  shouldRepairDesktopProjectSnapshot,
+} from "./desktopProjectRecovery";
 
 function makeProject(
   overrides: Partial<OrchestrationReadModel["projects"][number]> = {},
@@ -56,6 +59,8 @@ function makeThread(
     subagentRole: null,
     forkSourceThreadId: null,
     sidechatSourceThreadId: null,
+    sidechatLastActivityAt: null,
+    sidechatExpiredAt: null,
     lastKnownPr: null,
     latestTurn: null,
     handoff: null,
@@ -129,6 +134,8 @@ function makeShellSnapshot(
         subagentRole: thread.subagentRole,
         forkSourceThreadId: thread.forkSourceThreadId,
         sidechatSourceThreadId: thread.sidechatSourceThreadId,
+        sidechatLastActivityAt: thread.sidechatLastActivityAt,
+        sidechatExpiredAt: thread.sidechatExpiredAt,
         lastKnownPr: thread.lastKnownPr,
         latestTurn: thread.latestTurn,
         latestUserMessageAt: thread.latestUserMessageAt,
@@ -147,6 +154,34 @@ function makeShellSnapshot(
 }
 
 describe("desktopProjectRecovery", () => {
+  it("does not repair a valid empty first-run snapshot", () => {
+    expect(
+      shouldRepairDesktopProjectSnapshot(
+        makeShellSnapshot({
+          projects: [],
+          threads: [],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("repairs an empty shell only when the server found an active durable project", () => {
+    expect(
+      shouldRepairDesktopProjectSnapshot(
+        makeShellSnapshot({
+          requiresEmptyProjectShellRepair: true,
+          projects: [],
+          threads: [],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRepairDesktopProjectSnapshot(
+        makeShellSnapshot({ requiresEmptyProjectShellRepair: true }),
+      ),
+    ).toBe(false);
+  });
+
   it("returns false when live threads still have live project rows", () => {
     const snapshot = makeSnapshot();
 

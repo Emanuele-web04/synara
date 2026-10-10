@@ -7,6 +7,7 @@ import {
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
+  type ProviderKind,
   type SpaceId,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
@@ -24,6 +25,8 @@ const DEFAULT_PROJECT_CREATE_RECOVERY_MAX_ATTEMPTS = 6;
 const DEFAULT_PROJECT_CREATE_RECOVERY_DELAY_MS = 50;
 export const PROJECT_CREATE_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
+export const PROJECT_CREATE_MULTI_FOLDER_DUPLICATE_ERROR =
+  "The primary folder already belongs to a project. Make another folder primary, or remove that project first.";
 export const PROJECT_CREATE_SYNC_ERROR =
   "The project was created, but it has not synced into Synara yet. Try again in a moment.";
 
@@ -36,9 +39,15 @@ function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
 export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
+  /** Extra source folders of a multi-folder project; `workspaceRoot` is the primary one. */
+  additionalFolders?: ReadonlyArray<string>;
   createIfMissing?: boolean;
   /** Overrides the active-space default; `null` files the project in Void. */
   spaceId?: SpaceId | null;
+  /** Persisted default provider (settings.defaultProvider) that seeds the new
+   * project's default model selection. Defaults to codex when omitted, and pi
+   * falls back to codex because it has no default model slug. */
+  defaultProvider?: ProviderKind;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
   maxAttempts?: number;
   delayMs?: number;
@@ -58,6 +67,13 @@ export async function createOrRecoverProjectFromPath(input: {
   const projectId = newProjectId();
   const createdAt = new Date().toISOString();
   const title = buildProjectTitleFromWorkspaceRoot(workspaceRoot);
+  const additionalFolders = (input.additionalFolders ?? [])
+    .map((folder) => folder.trim())
+    .filter((folder) => folder.length > 0);
+  const seedProvider =
+    input.defaultProvider === "pi" || input.defaultProvider === "omp"
+      ? "codex"
+      : (input.defaultProvider ?? "codex");
 
   try {
     await input.api.orchestration.dispatchCommand({
@@ -67,10 +83,11 @@ export async function createOrRecoverProjectFromPath(input: {
       kind: "project",
       title,
       workspaceRoot,
+      ...(additionalFolders.length > 0 ? { additionalFolders } : {}),
       createWorkspaceRootIfMissing: input.createIfMissing === true,
       defaultModelSelection: {
-        provider: "codex",
-        model: getDefaultModel("codex"),
+        provider: seedProvider,
+        model: getDefaultModel(seedProvider),
       },
       // A project created while a space is active belongs to that space — filing it
       // afterwards would bounce the sidebar back to Void to follow the new project.
@@ -96,6 +113,10 @@ export async function createOrRecoverProjectFromPath(input: {
       error instanceof Error ? error.message : "An error occurred while adding the project.";
     if (!isDuplicateProjectCreateError(description)) {
       throw error instanceof Error ? error : new Error(description);
+    }
+    // Opening the existing project would silently drop the extra folders.
+    if (additionalFolders.length > 0) {
+      throw new Error(PROJECT_CREATE_MULTI_FOLDER_DUPLICATE_ERROR, { cause: error });
     }
 
     const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({

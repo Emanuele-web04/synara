@@ -1,6 +1,24 @@
+import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
-import { isBrokenPipeError } from "./desktopProcessErrors";
+import { handleDesktopStdioError, isBrokenPipeError } from "./desktopProcessErrors";
+
+describe("desktop stdio errors", () => {
+  it("consumes a closed launcher pipe while preserving other failures", async () => {
+    const error = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    const output = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(error);
+      },
+    });
+    output.on("error", handleDesktopStdioError);
+    const closed = new Promise<void>((resolve) => output.once("close", resolve));
+    output.write("desktop log line");
+    await closed;
+    const unexpected = Object.assign(new Error("write EIO"), { code: "EIO" });
+    expect(() => handleDesktopStdioError(unexpected)).toThrow(unexpected);
+  });
+});
 
 describe("isBrokenPipeError", () => {
   it("recognizes stderr broken pipe errors", () => {

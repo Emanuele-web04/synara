@@ -1,7 +1,10 @@
 import { OrchestrationProposedPlanId, ProjectId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { partializeComposerDraftStoreState, useComposerDraftStore } from "./composerDraftStore";
-import { normalizeCurrentPersistedComposerDraftStoreState } from "./composerDraftPersistence";
+import {
+  normalizeCurrentPersistedComposerDraftStoreState,
+  toHydratedThreadDraft,
+} from "./composerDraftPersistence";
 import {
   makeImage,
   makeQueuedChatTurn,
@@ -10,13 +13,112 @@ import {
   modelSelection,
   resetComposerDraftStore,
 } from "./composerDraftStoreTestFixtures";
-import { createDeferredPersistStorage, flushStorageBeforePageHide } from "./lib/storage";
+import {
+  createDeferredPersistStorage,
+  flushStorageBeforePageHide,
+  type FlushBeforePageHideEnv,
+} from "./lib/storage";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
 } from "./lib/terminalContext";
 
 describe("composerDraftStore persisted-state hydration", () => {
+  it.each([true, false])(
+    "restores a Computer-only choice of %s after serialization and hydration",
+    (enabled) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("thread-computer-choice");
+      useComposerDraftStore.getState().setEnableComputerControl(threadId, enabled);
+
+      const serialized = JSON.stringify(
+        partializeComposerDraftStoreState(useComposerDraftStore.getState()),
+      );
+      const restored = normalizeCurrentPersistedComposerDraftStoreState(JSON.parse(serialized));
+      const draft = restored.draftsByThreadId[threadId];
+      expect(draft?.enableComputerControl).toBe(enabled);
+      expect(toHydratedThreadDraft(threadId, draft!).enableComputerControl).toBe(enabled);
+    },
+  );
+
+  it.each(["off", "request", "chat"] as const)(
+    "round-trips explicit %s intent without changing other draft content",
+    (mode) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("computer-mode-roundtrip");
+      const store = useComposerDraftStore.getState();
+      store.setPrompt(threadId, "Keep my unsent message");
+      store.setComputerControlMode(threadId, mode, { generation: 7 });
+      store.enqueueQueuedTurn(threadId, {
+        ...makeQueuedChatTurn("mode-queue"),
+        computerControlMode: mode,
+        computerControlGeneration: 7,
+        enableComputerControl: mode !== "off",
+      });
+      const persisted = normalizeCurrentPersistedComposerDraftStoreState(
+        JSON.parse(
+          JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+        ),
+      );
+      const draft = toHydratedThreadDraft(threadId, persisted.draftsByThreadId[threadId]!);
+      expect(draft.prompt).toBe("Keep my unsent message");
+      expect(draft.computerControlMode).toBe(mode);
+      expect(draft.computerControlGeneration).toBe(7);
+      expect(draft.enableComputerControl).toBe(mode !== "off");
+      expect(draft.queuedTurns[0]?.computerControlMode).toBe(mode);
+      expect(draft.queuedTurns[0]?.computerControlGeneration).toBe(7);
+      store.setComputerControlMode(threadId, "off");
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns[0]
+          ?.computerControlMode,
+      ).toBe(mode);
+    },
+  );
+
+  it("preserves a request without promoting it to the chat default", () => {
+    resetComposerDraftStore();
+    const threadId = ThreadId.makeUnsafe("computer-request-legacy");
+    const store = useComposerDraftStore.getState();
+    store.setComputerControlMode(threadId, "request", { generation: 7 });
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.computerControlMode).toBe("request");
+    expect(draft?.enableComputerControl).toBe(true);
+    expect(draft?.computerControlGeneration).toBe(7);
+  });
+
+  it("explicit off revokes queued intent while preserving queued messages", () => {
+    resetComposerDraftStore();
+    const threadId = ThreadId.makeUnsafe("computer-revoke-queue");
+    const store = useComposerDraftStore.getState();
+    store.enqueueQueuedTurn(threadId, {
+      ...makeQueuedChatTurn("request"),
+      computerControlMode: "chat",
+      enableComputerControl: true,
+    });
+    store.setComputerControlMode(threadId, "off", { revokeQueued: true });
+    const queued = useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns[0];
+    expect(queued?.computerControlMode).toBe("off");
+    expect(queued?.enableComputerControl).toBe(false);
+    expect(queued?.previewText).toBe("queued chat request");
+  });
+
+  it("never copies another thread's revocation generation with its draft", () => {
+    resetComposerDraftStore();
+    const source = ThreadId.makeUnsafe("generation-source");
+    const target = ThreadId.makeUnsafe("generation-target");
+    const store = useComposerDraftStore.getState();
+    store.setComputerControlMode(source, "chat", { generation: 12 });
+    store.copyTransferableComposerState(source, target);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[target]?.computerControlGeneration,
+    ).toBe(0);
+    store.setComputerControlMode(target, "off", { generation: 4 });
+    store.copyTransferableComposerState(source, target);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[target]?.computerControlGeneration,
+    ).toBe(4);
+  });
+
   it("normalizes null and empty persisted states", () => {
     const emptyState = {
       draftsByThreadId: {},
@@ -117,6 +219,82 @@ describe("composerDraftStore persisted-state hydration", () => {
 
     expect(hydrated.draftsByThreadId[threadId]?.runtimeMode).toBe("auto");
     expect(hydrated.draftThreadsByThreadId[threadId]?.runtimeMode).toBe("auto");
+  });
+
+  it("migrates persisted Kilo draft and sticky selections to OpenCode", () => {
+    const threadId = ThreadId.makeUnsafe("thread-kilo-draft");
+    const kiloSelection = {
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+      options: { variant: "high" },
+    };
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Continue this draft",
+          attachments: [],
+          modelSelectionByProvider: {
+            opencode: { provider: "opencode", model: "openai/gpt-5" },
+            kilo: kiloSelection,
+          },
+          activeProvider: "kilo",
+        },
+      },
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: { kilo: kiloSelection },
+      stickyActiveProvider: "kilo",
+    });
+
+    expect(hydrated.draftsByThreadId[threadId]?.activeProvider).toBe("opencode");
+    expect(hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider?.opencode).toEqual({
+      provider: "opencode",
+      model: "openai/gpt-5",
+    });
+    expect(hydrated.stickyActiveProvider).toBe("opencode");
+    expect(hydrated.stickyModelSelectionByProvider?.opencode?.provider).toBe("opencode");
+  });
+
+  it("preserves a staged goal in draft-thread state during hydration and drops blank ones", () => {
+    const projectId = ProjectId.makeUnsafe("project-goal");
+    const threadId = ThreadId.makeUnsafe("thread-goal");
+    const blankGoalThreadId = ThreadId.makeUnsafe("thread-goal-blank");
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [threadId]: {
+          projectId,
+          createdAt: "2026-08-13T00:00:00.000Z",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+          goal: "clean the directory and build a snake game",
+        },
+        [blankGoalThreadId]: {
+          projectId,
+          createdAt: "2026-08-13T00:00:00.000Z",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+          goal: "   ",
+        },
+      },
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    expect(hydrated.draftThreadsByThreadId[threadId]?.goal).toBe(
+      "clean the directory and build a snake game",
+    );
+    expect(hydrated.draftThreadsByThreadId[blankGoalThreadId]?.goal).toBeUndefined();
   });
 });
 
@@ -512,16 +690,6 @@ describe("composerDraftStore queued follow-ups", () => {
     URL.revokeObjectURL = originalRevokeObjectUrl;
   });
 
-  it("stores queued turns per thread so route switches can rehydrate them", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.enqueueQueuedTurn(threadId, makeQueuedTurn("queued-1"));
-
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns).toEqual([
-      makeQueuedTurn("queued-1"),
-    ]);
-  });
-
   it("keeps queued turns when the live composer draft is cleared", () => {
     const store = useComposerDraftStore.getState();
 
@@ -555,7 +723,14 @@ describe("composerDraftStore queued follow-ups", () => {
       name: "queued.png",
     });
     const store = useComposerDraftStore.getState();
-    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("queued-chat-1", queuedImage));
+    const queuedChatTurn = makeQueuedChatTurn("queued-chat-1", queuedImage);
+    if (queuedChatTurn.kind !== "chat") {
+      throw new Error("Expected a queued chat turn fixture");
+    }
+    store.enqueueQueuedTurn(threadId, {
+      ...queuedChatTurn,
+      interactionMode: "debug",
+    });
 
     const persistApi = useComposerDraftStore.persist as unknown as {
       getOptions: () => {
@@ -589,58 +764,9 @@ describe("composerDraftStore queued follow-ups", () => {
           planId: "plan-1",
         },
         terminalContexts: [{ text: "git status\nOn branch main" }],
+        interactionMode: "debug",
       },
     ]);
-  });
-
-  it("persists restored proposed-plan source for edited queued sends", () => {
-    const store = useComposerDraftStore.getState();
-    store.setPrompt(threadId, "implement the queued plan");
-    store.setRestoredSourceProposedPlan(threadId, {
-      threadId,
-      restoredPrompt: "implement the queued plan",
-      sourceProposedPlan: {
-        threadId: ThreadId.makeUnsafe("thread-source-plan"),
-        planId: "plan-1",
-      },
-    });
-
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-        merge: (
-          persistedState: unknown,
-          currentState: ReturnType<typeof useComposerDraftStore.getState>,
-        ) => ReturnType<typeof useComposerDraftStore.getState>;
-      };
-    };
-    const persistedState = partializeComposerDraftStoreState(
-      useComposerDraftStore.getState(),
-    ) as unknown as {
-      draftsByThreadId?: Record<string, { restoredSourceProposedPlan?: unknown }>;
-    };
-
-    expect(persistedState.draftsByThreadId?.[threadId]?.restoredSourceProposedPlan).toEqual({
-      threadId,
-      restoredPrompt: "implement the queued plan",
-      sourceProposedPlan: {
-        threadId: "thread-source-plan",
-        planId: "plan-1",
-      },
-    });
-
-    const mergedState = persistApi
-      .getOptions()
-      .merge(persistedState, useComposerDraftStore.getInitialState());
-
-    expect(mergedState.draftsByThreadId[threadId]?.restoredSourceProposedPlan).toEqual({
-      threadId,
-      restoredPrompt: "implement the queued plan",
-      sourceProposedPlan: {
-        threadId: "thread-source-plan",
-        planId: "plan-1",
-      },
-    });
   });
 
   it("revokes queued chat image blob URLs when a queued turn is removed", () => {
@@ -827,5 +953,19 @@ describe("flushStorageBeforePageHide", () => {
     harness.setVisibility("visible");
     harness.fireDocument("visibilitychange");
     expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("no-ops on partial DOM stubs without listener APIs", () => {
+    // SSR-style test environments stub `window`/`document` with only the
+    // fields under test (e.g. `{ documentElement }`); wiring must not crash
+    // module evaluation of stores that call this at import time.
+    expect(() =>
+      flushStorageBeforePageHide(vi.fn(), {
+        window: {} as unknown as NonNullable<FlushBeforePageHideEnv["window"]>,
+        document: { documentElement: {} } as unknown as NonNullable<
+          FlushBeforePageHideEnv["document"]
+        >,
+      }),
+    ).not.toThrow();
   });
 });

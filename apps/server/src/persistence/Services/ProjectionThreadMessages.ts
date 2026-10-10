@@ -7,6 +7,7 @@
  * @module ProjectionThreadMessageRepository
  */
 import {
+  AsyncUserInput,
   ChatAttachment,
   MessageDispatchOrigin,
   OrchestrationMessageRole,
@@ -25,17 +26,28 @@ import type { Effect, Option } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
+export const ProjectionThreadMessageTextSegment = Schema.Struct({
+  sequence: NonNegativeInt,
+  startedAt: IsoDateTime,
+  endedAt: IsoDateTime,
+  text: Schema.String,
+});
+export type ProjectionThreadMessageTextSegment = typeof ProjectionThreadMessageTextSegment.Type;
+
 export const ProjectionThreadMessage = Schema.Struct({
+  asyncUserInput: Schema.optional(AsyncUserInput),
   messageId: MessageId,
   threadId: ThreadId,
   turnId: Schema.NullOr(TurnId),
   role: OrchestrationMessageRole,
   text: Schema.String,
+  textSegments: Schema.optional(Schema.Array(ProjectionThreadMessageTextSegment)),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   dispatchMode: Schema.optional(TurnDispatchMode),
   dispatchOrigin: Schema.optional(MessageDispatchOrigin),
+  startsNewTurn: Schema.optional(Schema.Boolean),
   isStreaming: Schema.Boolean,
   source: OrchestrationMessageSource,
   /** Server-owned orchestration event sequence for causal ordering. */
@@ -44,6 +56,18 @@ export const ProjectionThreadMessage = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type ProjectionThreadMessage = typeof ProjectionThreadMessage.Type;
+
+export const ProjectionThreadMessageSegmentDbRow = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  sequence: NonNegativeInt,
+  startedAt: IsoDateTime,
+  endedAt: IsoDateTime,
+  text: Schema.String,
+  textChunks: Schema.optional(Schema.fromJsonString(Schema.Array(Schema.String))),
+  encodedText: Schema.optional(Schema.NullOr(Schema.fromJsonString(Schema.String))),
+});
+export type ProjectionThreadMessageSegmentDbRow = typeof ProjectionThreadMessageSegmentDbRow.Type;
 
 export const ListProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
@@ -90,6 +114,11 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly listByThreadId: (
     input: ListProjectionThreadMessagesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadMessage>, ProjectionRepositoryError>;
+
+  /** Last human send, excluding agent and automation dispatches. */
+  readonly getLatestHumanMessageAt: (
+    input: ListProjectionThreadMessagesInput,
+  ) => Effect.Effect<string | null, ProjectionRepositoryError>;
 
   /** Read the newest user-message timestamp used by sidebar summary state. */
   readonly getLatestUserMessageAt: (

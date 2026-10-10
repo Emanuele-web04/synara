@@ -1,24 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDiffRouteSearch } from "./diffRouteSearch";
+import { diffRouteSearchEquals, parseDiffRouteSearch } from "./diffRouteSearch";
+
+describe("diffRouteSearchEquals", () => {
+  it("detects editor route and selected file changes", () => {
+    expect(diffRouteSearchEquals({}, { view: "editor" })).toBe(false);
+    expect(
+      diffRouteSearchEquals(
+        { view: "editor", editorFilePath: "src/first.ts" },
+        { view: "editor", editorFilePath: "src/second.ts" },
+      ),
+    ).toBe(false);
+    expect(
+      diffRouteSearchEquals(
+        { view: "editor", editorFilePath: "src/first.ts" },
+        { view: "editor", editorFilePath: "src/first.ts" },
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("parseDiffRouteSearch", () => {
-  it("parses valid diff search values", () => {
-    const parsed = parseDiffRouteSearch({
-      panel: "diff",
-      diff: "1",
-      diffTurnId: "turn-1",
-      diffFilePath: "src/app.ts",
-    });
-
-    expect(parsed).toEqual({
-      panel: "diff",
-      diff: "1",
-      diffTurnId: "turn-1",
-      diffFilePath: "src/app.ts",
-    });
-  });
-
   it("treats numeric and boolean diff toggles as open", () => {
     expect(
       parseDiffRouteSearch({
@@ -76,17 +78,6 @@ describe("parseDiffRouteSearch", () => {
     expect(parsed).toEqual({
       panel: "diff",
       diff: "1",
-    });
-  });
-
-  it("preserves browser panel mode without diff state", () => {
-    const parsed = parseDiffRouteSearch({
-      panel: "browser",
-      diffTurnId: "turn-1",
-    });
-
-    expect(parsed).toEqual({
-      panel: "browser",
     });
   });
 

@@ -8,7 +8,6 @@ import {
   buildPowerShellExecArgs,
   buildPowerShellExecutablePath,
   hardenElectronUpdater,
-  parseDistinguishedName,
   resolveWindowsUpdatePublisherNames,
   verifyWindowsUpdateCodeSignature,
 } from "./electronUpdaterSecurity";
@@ -30,14 +29,6 @@ describe("electronUpdaterSecurity", () => {
     expect(args.join(" ")).not.toContain("cmd.exe");
   });
 
-  it("parses distinguished names the same way as builder-util-runtime", () => {
-    const parsed = parseDistinguishedName('CN=Synara, O="Acme, Inc.", OU=Tools\\2C Desktop');
-
-    expect(parsed.get("CN")).toBe("Synara");
-    expect(parsed.get("O")).toBe("Acme, Inc.");
-    expect(parsed.get("OU")).toBe("Tools, Desktop");
-  });
-
   it("uses only embedded full publisher DNs and never feed-controlled names", () => {
     expect(
       resolveWindowsUpdatePublisherNames(
@@ -50,7 +41,7 @@ describe("electronUpdaterSecurity", () => {
     ]);
   });
 
-  it("validates a matching full distinguished name with shell-free execFile options", async () => {
+  it("validates a matching full distinguished name through the injected execFile seam", async () => {
     const execFile = vi.fn((file, args, options, callback) => {
       callback(
         null,
@@ -81,8 +72,7 @@ describe("electronUpdaterSecurity", () => {
       expect.arrayContaining(["-NoProfile", "-NonInteractive", "-Command"]),
       expect.objectContaining({
         encoding: "utf8",
-        shell: false,
-        windowsHide: true,
+        timeout: 20_000,
         env: expect.objectContaining({ PSModulePath: "" }),
       }),
       expect.any(Function),

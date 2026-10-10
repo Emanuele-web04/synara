@@ -11,13 +11,28 @@ import { useLayoutEffect } from "react";
 
 import { isElectron } from "~/env";
 import { useSidebar } from "~/components/ui/sidebar";
-import { isMacPlatform, isWindowsPlatform } from "~/lib/utils";
+import { useDesktopCustomTitleBarActive } from "~/hooks/useDesktopCustomTitleBar";
+import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
+import { isMacNavigatorPlatform } from "~/lib/utils";
 
 /**
  * Class name backed by `index.css` (not Tailwind) so the gutter survives zoom
  * retuning via {@link DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR}.
  */
 export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "desktop-top-bar-traffic-light-gutter";
+
+/**
+ * Marks a route's top bar: route headers sit on the shell band
+ * above the inset content block (`index.css` paints them in the shell tone). Every top bar
+ * already takes one of the gutter class names below, so the gutter hooks carry the marker.
+ */
+export const RAIL_LAYOUT_TOP_BAR_CLASS = "app-top-bar";
+
+function withTopBarClass(gutterClassName: string | null): string {
+  return gutterClassName
+    ? `${RAIL_LAYOUT_TOP_BAR_CLASS} ${gutterClassName}`
+    : RAIL_LAYOUT_TOP_BAR_CLASS;
+}
 
 /**
  * Pure helper: should a top bar at the left edge of the desktop window reserve
@@ -45,12 +60,6 @@ export function shouldReserveDesktopTopBarTrafficLightGutter(input: {
   return !input.sidebarOpen;
 }
 
-function readDesktopZoomFactor(): number {
-  const bridge = window.desktopBridge;
-  if (!bridge?.getZoomFactor) return 1;
-  return bridge.getZoomFactor();
-}
-
 function applyTrafficLightGutterCssVar(zoomFactor: number): void {
   document.documentElement.style.setProperty(
     DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR,
@@ -63,7 +72,7 @@ function applyTrafficLightGutterCssVar(zoomFactor: number): void {
  * Mount once near the app root (see `__root.tsx`).
  */
 export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
-  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const isMacDesktop = isMacNavigatorPlatform();
 
   useLayoutEffect(() => {
     if (!isElectron || !isMacDesktop) {
@@ -72,10 +81,7 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
 
     applyTrafficLightGutterCssVar(readDesktopZoomFactor());
 
-    const bridge = window.desktopBridge;
-    const unsubscribe = bridge?.onZoomFactorChange?.((zoomFactor) => {
-      applyTrafficLightGutterCssVar(zoomFactor);
-    });
+    const unsubscribe = subscribeDesktopZoomFactor(applyTrafficLightGutterCssVar);
 
     // Preload can attach after the first layout pass; re-apply on the next frame.
     const frame = requestAnimationFrame(() => {
@@ -84,7 +90,7 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
 
     return () => {
       cancelAnimationFrame(frame);
-      unsubscribe?.();
+      unsubscribe();
       document.documentElement.style.removeProperty(DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR);
     };
   }, [isMacDesktop]);
@@ -97,10 +103,10 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
  * Use this for any chrome surface whose top bar can sit flush against the
  * window's left edge: chat header, settings header, workspace header, etc.
  */
-export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
+export function useDesktopTopBarTrafficLightGutterClassName(): string {
   const { isMobile, open } = useSidebar();
-  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
-  return shouldReserveDesktopTopBarTrafficLightGutter({
+  const isMacDesktop = isMacNavigatorPlatform();
+  const gutterClassName = shouldReserveDesktopTopBarTrafficLightGutter({
     isElectron,
     isMacDesktop,
     sidebarOpen: open,
@@ -108,19 +114,21 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
   })
     ? DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS
     : null;
+  return withTopBarClass(gutterClassName);
 }
 
 /**
- * Tailwind padding that clears the Windows caption-button cluster.
+ * Tailwind padding that clears the frameless caption-button cluster.
  *
- * On Windows the Electron shell is frameless (`frame: false`, see apps/desktop
- * main) and the renderer owns the minimize/maximize/close buttons. They are
- * rendered ONCE as a viewport-fixed cluster pinned to the window's top-right
- * corner (see {@link DesktopWindowControls} mounted in the root route), mirroring
- * how macOS insets its traffic lights at the top-left.
+ * On Windows/Linux the Electron shell can be frameless (`frame: false`, see
+ * apps/desktop main) and the renderer owns the minimize/maximize/close buttons.
+ * They are rendered ONCE as a viewport-fixed cluster pinned to the window's
+ * top-right corner (see {@link DesktopWindowControls} mounted in the root route),
+ * mirroring how macOS insets its traffic lights at the top-left.
  *
- * Each caption button is 46px wide (matching {@link CHAT_SURFACE_HEADER_HEIGHT_PX}),
- * so the three-button cluster spans 138px. Any top bar that can sit flush against
+ * Each caption button is 46px wide (the native Windows caption-button width) and as
+ * tall as the top bar ({@link CHAT_SURFACE_HEADER_HEIGHT_PX}), so the three-button
+ * cluster spans 138px. Any top bar that can sit flush against
  * the window's right edge reserves that width here so its trailing controls never
  * slide underneath the floating buttons.
  *
@@ -133,15 +141,16 @@ export const DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS = "pr-[138px]! sm:pr-[
 
 /**
  * Pure helper: should a top bar at the right edge of the desktop window reserve
- * space for the Windows caption buttons? Unlike the macOS traffic lights (whose
+ * space for the custom caption buttons? Unlike the macOS traffic lights (whose
  * column is usually owned by the sidebar), the caption cluster always floats at
- * the window's top-right, so every right-flush chrome surface reserves the gutter.
+ * the window's top-right, so every right-flush chrome surface reserves the gutter
+ * whenever the live window is frameless.
  */
 export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
   isElectron: boolean;
-  isWindowsDesktop: boolean;
+  customTitleBarActive: boolean;
 }): boolean {
-  return input.isElectron && input.isWindowsDesktop;
+  return input.isElectron && input.customTitleBarActive;
 }
 
 /**
@@ -151,13 +160,13 @@ export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
  * Use this for any chrome surface whose top bar can sit flush against the window's
  * right edge: chat header, workspace header, plugin nav, the right dock header, etc.
  */
-export function useDesktopTopBarWindowControlsGutterClassName(): string | null {
-  const isWindowsDesktop =
-    typeof navigator !== "undefined" ? isWindowsPlatform(navigator.platform) : false;
-  return shouldReserveDesktopTopBarWindowControlsGutter({
+export function useDesktopTopBarWindowControlsGutterClassName(): string {
+  const customTitleBarActive = useDesktopCustomTitleBarActive();
+  const gutterClassName = shouldReserveDesktopTopBarWindowControlsGutter({
     isElectron,
-    isWindowsDesktop,
+    customTitleBarActive,
   })
     ? DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS
     : null;
+  return withTopBarClass(gutterClassName);
 }

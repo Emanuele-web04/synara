@@ -31,8 +31,7 @@ import {
   XcodeIcon,
   Zed,
 } from "./components/Icons";
-import { FolderClosed } from "./components/FolderClosed";
-import { AppsIcon } from "./lib/icons";
+import { AppsIcon, FolderIcon } from "./lib/icons";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
@@ -55,6 +54,7 @@ const EDITOR_ICONS: Partial<Record<EditorId, Icon>> = {
   ghostty: GhosttyIcon,
   muxy: TerminalAppIcon,
   terminal: TerminalAppIcon,
+  iterm: TerminalAppIcon,
   warp: WarpIcon,
   xcode: XcodeIcon,
   idea: IntelliJIdeaIcon,
@@ -69,7 +69,7 @@ const EDITOR_ICONS: Partial<Record<EditorId, Icon>> = {
   rustrover: JetBrainsIcon,
   "android-studio": AndroidStudioIcon,
   // Reuse the sidebar's closed-project folder glyph so "Open in folder" matches.
-  "file-manager": FolderClosed,
+  "file-manager": FolderIcon,
   "system-default": AppsIcon,
 };
 
@@ -132,7 +132,7 @@ export function resolveEditorLabel(editorId: EditorId, platform: string): string
 }
 
 // Keep the header/picker resilient even when a brand-specific icon does not exist yet.
-export function resolveEditorIcon(editorId: EditorId): Icon {
+function resolveEditorIcon(editorId: EditorId): Icon {
   return EDITOR_ICONS[editorId] ?? OpenCodeIcon;
 }
 

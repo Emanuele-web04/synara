@@ -3,8 +3,11 @@
 // Layer: Chat and composer UI component
 // Exports: ExpandedImageOverlay
 
+import { useLayoutEffect } from "react";
+
 import { Button } from "~/components/ui/button";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "~/lib/icons";
+import { notifyNativeSurfaceOcclusionChange } from "~/lib/nativeSurfaceOcclusion";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
 interface ExpandedImageOverlayProps {
@@ -19,6 +22,17 @@ export function ExpandedImageOverlay({
   onNavigate,
 }: ExpandedImageOverlayProps) {
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
+  const open = expandedImageItem !== null;
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    notifyNativeSurfaceOcclusionChange();
+    return notifyNativeSurfaceOcclusionChange;
+  }, [open]);
+
   if (!expandedImage || !expandedImageItem) {
     return null;
   }
@@ -65,7 +79,7 @@ export function ExpandedImageOverlay({
           className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] object-contain shadow-2xl"
           draggable={false}
         />
-        <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">
+        <p className="mt-2 max-w-[92vw] truncate text-center text-ui leading-snug text-muted-foreground/80">
           {expandedImageItem.name}
           {expandedImage.images.length > 1
             ? ` (${expandedImage.index + 1}/${expandedImage.images.length})`

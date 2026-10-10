@@ -80,10 +80,10 @@ export interface ServerDerivedPaths {
   readonly logsDir: string;
   readonly serverLogPath: string;
   readonly serverRuntimeStatePath: string;
+  readonly quitResumeStatePath: string;
   readonly providerLogsDir: string;
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
-  readonly anonymousIdPath: string;
   readonly environmentIdPath: string;
 }
 
@@ -98,6 +98,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly homeDir: string;
   readonly chatWorkspaceRoot: string;
   readonly studioWorkspaceRoot: string;
+  readonly groupsWorkspaceRoot: string;
   readonly baseDir: string;
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
@@ -106,6 +107,11 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
   readonly desktopShutdownToken?: string | undefined;
+  // Overrides the platform trash directory group deletes move libraries into.
+  // Left unset in production; tests point it at a temp dir so nothing touches
+  // the real ~/.Trash.
+  readonly trashDir?: string | undefined;
+  readonly migrationDivergenceConsent?: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logProviderEvents: boolean;
   readonly logWebSocketEvents: boolean;
@@ -159,10 +165,10 @@ export const deriveServerPaths = Effect.fn(function* (
     logsDir,
     serverLogPath: join(logsDir, "server.log"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
+    quitResumeStatePath: join(stateDir, "quit-resume.json"),
     providerLogsDir,
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
-    anonymousIdPath: join(stateDir, "anonymous-id"),
     environmentIdPath: join(stateDir, "environment-id"),
   };
 });
@@ -185,15 +191,24 @@ export function resolveDefaultStudioWorkspaceRoot(input: {
   return pathApi.join(resolveDefaultChatWorkspaceRoot(input), "Studio");
 }
 
+export function resolveDefaultGroupsWorkspaceRoot(input: {
+  readonly homeDir: string;
+  readonly platform?: NodeJS.Platform;
+}): string {
+  const pathApi = (input.platform ?? process.platform) === "win32" ? pathWin32 : pathPosix;
+  return pathApi.join(resolveDefaultChatWorkspaceRoot(input), "Groups");
+}
+
 export interface ResolvedWorkspaceRoots {
   readonly homeDir: string;
   readonly chatWorkspaceRoot: string;
   readonly studioWorkspaceRoot: string;
+  readonly groupsWorkspaceRoot: string;
 }
 
 /**
- * resolveCanonicalWorkspaceRoots - Derives homeDir/chatWorkspaceRoot/studioWorkspaceRoot
- * and canonicalizes each via {@link realpathNearestExisting}.
+ * resolveCanonicalWorkspaceRoots - Derives homeDir/chatWorkspaceRoot/studioWorkspaceRoot/
+ * groupsWorkspaceRoot and canonicalizes each via {@link realpathNearestExisting}.
  *
  * Project rows store REALPATH-canonicalized workspace roots (see
  * `canonicalizeProjectWorkspaceRoot` in wsRpc.ts), so the roots the server
@@ -216,7 +231,10 @@ export const resolveCanonicalWorkspaceRoots = Effect.fn(function* (input: {
   const studioWorkspaceRoot = yield* realpathNearestExisting(
     resolveDefaultStudioWorkspaceRoot({ homeDir, platform }),
   );
-  return { homeDir, chatWorkspaceRoot, studioWorkspaceRoot };
+  const groupsWorkspaceRoot = yield* realpathNearestExisting(
+    resolveDefaultGroupsWorkspaceRoot({ homeDir, platform }),
+  );
+  return { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot };
 });
 
 /**
@@ -225,7 +243,11 @@ export const resolveCanonicalWorkspaceRoots = Effect.fn(function* (input: {
 export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigShape>()(
   "synara/config/ServerConfig",
 ) {
-  static readonly layerTest = (cwd: string, baseDirOrPrefix: string | { prefix: string }) =>
+  static readonly layerTest = (
+    cwd: string,
+    baseDirOrPrefix: string | { prefix: string },
+    overrides?: Partial<ServerConfigShape>,
+  ) =>
     Layer.effect(
       ServerConfig,
       Effect.gen(function* () {
@@ -245,7 +267,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
 
         yield* Effect.sync(() => preparePrivateServerPaths(derivedPaths));
 
-        const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot } =
+        const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot } =
           yield* resolveCanonicalWorkspaceRoots({ homeDir: OS.homedir() });
 
         return {
@@ -253,6 +275,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           homeDir,
           chatWorkspaceRoot,
           studioWorkspaceRoot,
+          groupsWorkspaceRoot,
           baseDir,
           ...derivedPaths,
           mode: "web",
@@ -263,11 +286,16 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           host: undefined,
           authToken: undefined,
           desktopShutdownToken: undefined,
+          migrationDivergenceConsent: undefined,
           staticDir: undefined,
           devUrl,
           publicUrl: undefined,
           allowInsecureRemote: false,
           noBrowser: false,
+          // Tests must never write to the real ~/.Trash — default the trash
+          // target inside the scoped base dir unless overridden.
+          trashDir: path.join(baseDir, "trash"),
+          ...overrides,
         } satisfies ServerConfigShape;
       }),
     );

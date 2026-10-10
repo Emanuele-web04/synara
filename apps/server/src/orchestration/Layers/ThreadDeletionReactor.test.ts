@@ -1,35 +1,50 @@
-import { EventId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
+import { ThreadId } from "@synara/contracts";
 import { Cause, Effect, Exit } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   cleanupSucceededUnlessInterrupted,
+  closeThreadTerminalScopes,
   isThreadCurrentlyArchived,
-  isThreadLifecycleCleanupEvent,
-  logCleanupCauseUnlessInterrupted,
 } from "./ThreadDeletionReactor";
+import { TerminalError } from "../../terminal/Services/Manager";
 
-function lifecycleEvent(type: "thread.archived" | "thread.deleted"): OrchestrationEvent {
-  const threadId = ThreadId.makeUnsafe(`thread-${type}`);
-  const now = "2026-07-23T20:00:00.000Z";
-  return {
-    sequence: 1,
-    eventId: EventId.makeUnsafe(`event-${type}`),
-    aggregateKind: "thread",
-    aggregateId: threadId,
-    type,
-    occurredAt: now,
-    payload:
-      type === "thread.deleted"
-        ? { threadId, deletedAt: now }
-        : { threadId, archivedAt: now, updatedAt: now },
-  } as OrchestrationEvent;
-}
+describe("terminal scope cleanup", () => {
+  it("closes dock terminals even when the host terminal close fails", async () => {
+    const close = vi.fn(() => Effect.void as Effect.Effect<void, TerminalError>);
+    close.mockReturnValueOnce(Effect.fail(new TerminalError({ message: "host close failed" })));
+    const result = await Effect.runPromise(
+      closeThreadTerminalScopes(
+        { close, closeSessionsOpenedAtOrBefore: () => Effect.void },
+        ThreadId.makeUnsafe("host"),
+        true,
+      ),
+    );
+    expect(result).toBe(false);
+    expect(close.mock.calls).toEqual([
+      [{ threadId: "host", deleteHistory: true }],
+      [{ threadId: "dock-terminal:host", deleteHistory: true }],
+    ]);
+  });
 
-describe("isThreadLifecycleCleanupEvent", () => {
-  it("routes both archive and delete through server-owned cleanup", () => {
-    expect(isThreadLifecycleCleanupEvent(lifecycleEvent("thread.archived"))).toBe(true);
-    expect(isThreadLifecycleCleanupEvent(lifecycleEvent("thread.deleted"))).toBe(true);
+  it("preserves the archive generation fence for both terminal scopes", async () => {
+    const close = vi.fn(() => Effect.void);
+    const closeSessionsOpenedAtOrBefore = vi.fn(() => Effect.void);
+    const archivedAt = "2026-09-09T12:00:00.000Z";
+    const result = await Effect.runPromise(
+      closeThreadTerminalScopes(
+        { close, closeSessionsOpenedAtOrBefore },
+        ThreadId.makeUnsafe("host"),
+        false,
+        archivedAt,
+      ),
+    );
+    expect(result).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    expect(closeSessionsOpenedAtOrBefore.mock.calls).toEqual([
+      [{ threadId: "host", openedAtOrBefore: archivedAt }],
+      [{ threadId: "dock-terminal:host", openedAtOrBefore: archivedAt }],
+    ]);
   });
 });
 
@@ -41,63 +56,8 @@ describe("isThreadCurrentlyArchived", () => {
   });
 });
 
-describe("logCleanupCauseUnlessInterrupted", () => {
-  const threadId = ThreadId.makeUnsafe("thread-deletion-reactor-test");
-
-  it("swallows ordinary cleanup failures", async () => {
-    const exit = await Effect.runPromiseExit(
-      logCleanupCauseUnlessInterrupted({
-        effect: Effect.fail("cleanup failed"),
-        message: "thread deletion cleanup skipped provider session stop",
-        threadId,
-      }),
-    );
-
-    expect(Exit.isSuccess(exit)).toBe(true);
-  });
-
-  it("preserves interrupt causes", async () => {
-    const exit = await Effect.runPromiseExit(
-      logCleanupCauseUnlessInterrupted({
-        effect: Effect.interrupt,
-        message: "thread deletion cleanup skipped provider session stop",
-        threadId,
-      }),
-    );
-
-    expect(Exit.isFailure(exit)).toBe(true);
-    if (Exit.isFailure(exit)) {
-      expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-    }
-  });
-});
-
 describe("cleanupSucceededUnlessInterrupted", () => {
   const threadId = ThreadId.makeUnsafe("thread-deletion-reactor-test");
-
-  it("returns true for successful cleanup", async () => {
-    const result = await Effect.runPromise(
-      cleanupSucceededUnlessInterrupted({
-        effect: Effect.void,
-        message: "thread deletion cleanup skipped provider session stop",
-        threadId,
-      }),
-    );
-
-    expect(result).toBe(true);
-  });
-
-  it("returns false for ordinary cleanup failures", async () => {
-    const result = await Effect.runPromise(
-      cleanupSucceededUnlessInterrupted({
-        effect: Effect.fail("cleanup failed"),
-        message: "thread deletion cleanup skipped provider session stop",
-        threadId,
-      }),
-    );
-
-    expect(result).toBe(false);
-  });
 
   it("preserves interrupt causes", async () => {
     const exit = await Effect.runPromiseExit(

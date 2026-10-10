@@ -23,6 +23,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
 import {
+  aggregateThreadTurnSnapshotRows,
   aggregateThreadTokenRows,
   ProfileStatsArchive,
   ProfileStatsArchiveLive,
@@ -104,7 +105,7 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
         'thread-keep',
         'project-archive',
         'Kept Thread',
-        '{"provider":"claudeAgent","model":"claude-sonnet-4-6","options":{"effort":"max"}}',
+        '{"provider":"opencode","instanceId":"work","model":"anthropic/claude-sonnet-4-6","options":{"effort":"max"}}',
         'full-access', 'default', 'local',
         '2026-06-13T08:00:00.000Z', '2026-06-13T08:00:00.000Z', NULL
       ),
@@ -151,7 +152,7 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
       (
         'event-keep-1', 'thread', 'thread-keep', 1, 'thread.turn-start-requested',
         '2026-06-13T08:05:00.000Z', 'cmd-keep-turn', 'client',
-        '{"threadId":"thread-keep","modelSelection":{"provider":"claudeAgent","model":"claude-sonnet-4-6","options":{"effort":"max"}}}',
+        '{"threadId":"thread-keep","modelSelection":{"provider":"opencode","instanceId":"work","model":"anthropic/claude-sonnet-4-6","options":{"effort":"max"}}}',
         '{}'
       ),
       (
@@ -264,10 +265,60 @@ const acknowledgeProviderCommandJournal = (sql: SqlClient.SqlClient) =>
   `;
 
 describe("ProfileStatsArchive", () => {
+  it("snapshots reasoning from canonical model option rows", () => {
+    expect(
+      aggregateThreadTurnSnapshotRows(
+        [
+          {
+            payloadJson:
+              '{"modelSelection":{"provider":"codex","instanceId":"codex_work","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}}',
+          },
+        ],
+        null,
+      ),
+    ).toEqual([
+      {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5-codex",
+        reasoning: "high",
+        turnCount: 1,
+      },
+    ]);
+  });
+
   beforeEach(() => {
     deletedCheckpointRefCalls.length = 0;
     isGitRepositoryImpl = () => Effect.succeed(true);
     deleteCheckpointRefsImpl = (input) => Effect.sync(() => recordDeletedCheckpointRefs(input));
+  });
+
+  it("takes cumulative deltas per counter provider when a thread switches providers and back", () => {
+    const rows = aggregateThreadTokenRows([
+      {
+        totalProcessedTokens: 100_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5-codex",
+        createdAt: "2026-06-13T12:00:00.000Z",
+      },
+      {
+        totalProcessedTokens: 5_000,
+        usedTokens: null,
+        provider: "opencode",
+        model: "sonnet",
+        createdAt: "2026-06-13T12:10:00.000Z",
+      },
+      {
+        totalProcessedTokens: 110_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5-codex",
+        createdAt: "2026-06-13T12:20:00.000Z",
+      },
+    ]);
+
+    expect(rows.map((row) => row.tokens)).toEqual([100_000, 5_000, 10_000]);
   });
 
   it("archives usedTokens-only model groups even when another group has cumulative telemetry", () => {
@@ -296,14 +347,14 @@ describe("ProfileStatsArchive", () => {
       {
         totalProcessedTokens: null,
         usedTokens: 700,
-        provider: "claudeAgent",
+        provider: "pi",
         model: "claude-haiku-4-5",
         createdAt: "2026-06-13T12:11:00.000Z",
       },
       {
         totalProcessedTokens: null,
         usedTokens: 1700,
-        provider: "claudeAgent",
+        provider: "pi",
         model: "claude-haiku-4-5",
         createdAt: "2026-06-13T12:12:00.000Z",
       },
@@ -313,24 +364,28 @@ describe("ProfileStatsArchive", () => {
       {
         createdAt: "2026-06-13T12:02:00.000Z",
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5-codex",
         tokens: 2000,
       },
       {
         createdAt: "2026-06-13T12:04:00.000Z",
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5-codex",
         tokens: 500,
       },
       {
         createdAt: "2026-06-13T12:11:00.000Z",
-        provider: "claudeAgent",
+        provider: "pi",
+        instanceId: "pi",
         model: "claude-haiku-4-5",
         tokens: 700,
       },
       {
         createdAt: "2026-06-13T12:12:00.000Z",
-        provider: "claudeAgent",
+        provider: "pi",
+        instanceId: "pi",
         model: "claude-haiku-4-5",
         tokens: 1000,
       },
@@ -371,13 +426,69 @@ describe("ProfileStatsArchive", () => {
     ]);
   });
 
+  it("removes legacy Claude rows before computing other providers' archive deltas", () => {
+    const rows = aggregateThreadTokenRows([
+      {
+        totalProcessedTokens: 1_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        createdAt: "2026-06-13T12:00:00.000Z",
+      },
+      {
+        totalProcessedTokens: 99_000,
+        usedTokens: null,
+        provider: "claudeAgent",
+        model: "claude-fable-5",
+        createdAt: "2026-06-13T12:01:00.000Z",
+      },
+      {
+        totalProcessedTokens: 1_500,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        createdAt: "2026-06-13T12:02:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 100,
+        provider: "pi",
+        model: "pi",
+        createdAt: "2026-06-13T12:03:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 9_000,
+        provider: "claudeAgent",
+        model: "claude-opus-4-8",
+        createdAt: "2026-06-13T12:04:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 150,
+        provider: "pi",
+        model: "pi",
+        createdAt: "2026-06-13T12:05:00.000Z",
+      },
+    ]);
+
+    expect(
+      rows.map(({ provider, createdAt, tokens }) => ({ provider, createdAt, tokens })),
+    ).toEqual([
+      { provider: "codex", createdAt: "2026-06-13T12:00:00.000Z", tokens: 1_000 },
+      { provider: "codex", createdAt: "2026-06-13T12:02:00.000Z", tokens: 500 },
+      { provider: "pi", createdAt: "2026-06-13T12:03:00.000Z", tokens: 100 },
+      { provider: "pi", createdAt: "2026-06-13T12:05:00.000Z", tokens: 50 },
+    ]);
+  });
+
   it("keeps a stamped activity provider instead of a mismatched thread fallback", () => {
     const rows = aggregateThreadTokenRows(
       [
         {
           totalProcessedTokens: 1_500,
           usedTokens: null,
-          provider: "claudeAgent",
+          provider: "pi",
           model: null,
           createdAt: "2026-06-13T12:00:00.000Z",
         },
@@ -388,11 +499,126 @@ describe("ProfileStatsArchive", () => {
     expect(rows).toEqual([
       {
         createdAt: "2026-06-13T12:00:00.000Z",
-        provider: "claudeAgent",
+        provider: "pi",
+        instanceId: "pi",
         model: null,
         tokens: 1_500,
       },
     ]);
+  });
+
+  it("archives verified Claude results and legacy evidence without reintroducing block totals", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const stats = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+        // Independent child threads are real work. Only provider-native mirrors
+        // are excluded from Claude result accounting.
+        yield* sql`
+          UPDATE projection_threads
+          SET parent_thread_id = 'thread-keep', creation_source = 'synara_mcp'
+          WHERE thread_id = 'thread-purge'
+        `;
+        yield* sql`
+        UPDATE projection_thread_activities SET payload_json = '{"provider":"claudeAgent","totalProcessedTokens":999999}'
+        WHERE thread_id = 'thread-purge'
+      `;
+        for (const [turnId, payload] of [
+          [
+            "verified",
+            {
+              provider: "claudeAgent",
+              tokenAccountingVersion: 1,
+              modelUsage: {
+                "claude-fable-5": {
+                  inputTokens: 100,
+                  outputTokens: 40,
+                  cacheReadInputTokens: 800,
+                  cacheCreationInputTokens: 60,
+                  costUSD: 0.01,
+                  contextWindow: 200_000,
+                  maxOutputTokens: 32_000,
+                },
+              },
+            },
+          ],
+          ["legacy", { provider: "claudeAgent" }],
+        ] as const) {
+          yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (${turnId}, 'thread-purge', ${turnId}, 'info', 'turn.completed', 'done',
+            ${JSON.stringify(payload)}, 100, '2026-06-13T18:45:00Z')
+        `;
+        }
+        yield* sql`
+        INSERT INTO profile_stats_claude_legacy_usage VALUES ('thread-purge', 'legacy', 500)
+      `;
+        const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 });
+        yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: ThreadId.makeUnsafe("thread-purge"),
+        });
+        expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 })).toEqual(before);
+        expect(
+          yield* sql`
+        SELECT tokens, token_accounting_version AS version FROM profile_stats_deleted_tokens
+        WHERE provider = 'claudeAgent' ORDER BY tokens
+      `,
+        ).toEqual([
+          { tokens: 500, version: 1 },
+          { tokens: 1000, version: 1 },
+        ]);
+        expect(yield* sql`SELECT * FROM profile_stats_claude_legacy_usage`).toEqual([]);
+      }),
+    );
+  });
+
+  it("leaves Claude results of automation dispatches out of the archive", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const stats = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming, source, dispatch_origin,
+            created_at, updated_at
+          )
+          VALUES ('m-auto', 'thread-purge', 'turn-auto', 'user', 'run', 0, 'native', 'automation',
+            '2026-06-13T18:40:00.000Z', '2026-06-13T18:40:00.000Z')
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, started_at, completed_at,
+            checkpoint_files_json
+          )
+          VALUES ('thread-purge', 'turn-auto', 'm-auto', 'completed', '2026-06-13T18:40:00.000Z',
+            '2026-06-13T18:40:00.000Z', '2026-06-13T18:45:00.000Z', '[]')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES ('auto-result', 'thread-purge', 'turn-auto', 'info', 'turn.completed', 'done',
+            '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":7000}',
+            100, '2026-06-13T18:45:00Z')
+        `;
+
+        const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 });
+        yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: ThreadId.makeUnsafe("thread-purge"),
+        });
+
+        expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 })).toEqual(before);
+        expect(
+          yield* sql`SELECT tokens FROM profile_stats_deleted_tokens WHERE tokens = 7000`,
+        ).toEqual([]);
+      }),
+    );
   });
 
   it("purges a thread's rows while keeping every profile stat unchanged", async () => {
@@ -403,6 +629,10 @@ describe("ProfileStatsArchive", () => {
         const archive = yield* ProfileStatsArchive;
 
         yield* seedTwoThreadsWithActivity;
+        yield* sql`
+          INSERT INTO project_import_history (thread_id, revision, state_json)
+          VALUES ('thread-purge', 1, '{"messages":["cached imported text"]}')
+        `;
         yield* acknowledgeProviderCommandJournal(sql);
         yield* sql`
           INSERT INTO external_mcp_integrations (
@@ -438,6 +668,20 @@ describe("ProfileStatsArchive", () => {
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         const tokenStatsBefore = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(statsBefore.providerModels).toContainEqual(
+          expect.objectContaining({
+            provider: "opencode",
+            instanceId: "work",
+            model: "anthropic/claude-sonnet-4-6",
+          }),
+        );
+        expect(tokenStatsBefore.models).toContainEqual(
+          expect.objectContaining({
+            provider: "opencode",
+            instanceId: "work",
+            model: "anthropic/claude-sonnet-4-6",
+          }),
+        );
         // Half-hour offset: the 18:45Z token activity lands on the NEXT local
         // day for +05:30, so this catches any archive-side day re-bucketing drift.
         const statsBeforeIst = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 330 });
@@ -453,6 +697,7 @@ describe("ProfileStatsArchive", () => {
           readonly threads: number;
           readonly messages: number;
           readonly turns: number;
+          readonly importedHistory: number;
         }>`
           SELECT
             (SELECT COUNT(*) FROM projection_threads WHERE thread_id = 'thread-purge') AS threads,
@@ -461,9 +706,15 @@ describe("ProfileStatsArchive", () => {
               FROM projection_thread_messages
               WHERE thread_id = 'thread-purge'
             ) AS messages,
-            (SELECT COUNT(*) FROM projection_turns WHERE thread_id = 'thread-purge') AS turns
+            (SELECT COUNT(*) FROM projection_turns WHERE thread_id = 'thread-purge') AS turns,
+            (SELECT COUNT(*) FROM project_import_history WHERE thread_id = 'thread-purge') AS "importedHistory"
         `;
-        expect(remaining[0]).toMatchObject({ threads: 0, messages: 0, turns: 0 });
+        expect(remaining[0]).toMatchObject({
+          threads: 0,
+          messages: 0,
+          turns: 0,
+          importedHistory: 0,
+        });
         expect(
           yield* sql<{ readonly status: string; readonly activeClaims: number }>`
             SELECT

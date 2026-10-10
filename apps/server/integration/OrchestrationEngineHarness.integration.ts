@@ -38,20 +38,26 @@ import { ProjectionCheckpointRepository } from "../src/persistence/Services/Proj
 import { ProjectionPendingInteractionRepository } from "../src/persistence/Services/ProjectionPendingInteractions.ts";
 import { ProviderUnsupportedError } from "../src/provider/Errors.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
+import {
+  ProviderHealth,
+  type ProviderHealthShape,
+} from "../src/provider/Services/ProviderHealth.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
-import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import { ServerSecretStore } from "../src/auth/Services/ServerSecretStore.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
-import { StudioOutputReactorLive } from "../src/orchestration/Layers/StudioOutputReactor.ts";
+import { HubOutputReactorLive } from "../src/orchestration/Layers/HubOutputReactor.ts";
+import { SidechatExpiryReactorLive } from "../src/orchestration/Layers/SidechatExpiryReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBusLive } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
+import { AgentGatewayOperationRepositoryLive } from "../src/agentGateway/Layers/AgentGatewayOperationRepository.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { TurnCheckpointCoordinatorLive } from "../src/orchestration/Layers/TurnCheckpointCoordinator.ts";
@@ -61,6 +67,7 @@ import {
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadGitMetadataReactor } from "../src/orchestration/Services/ThreadGitMetadataReactor.ts";
 import {
   RuntimeReceiptBus,
   type OrchestrationRuntimeReceipt,
@@ -258,6 +265,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provide(ServerSettingsService.layerTest()),
     );
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
@@ -284,12 +292,28 @@ export const makeOrchestrationIntegrationHarness = (
       ? makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(realCodexRegistry),
-          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(
+            Layer.succeed(ServerSecretStore, {
+              get: () => Effect.succeed(null),
+              set: () => Effect.void,
+              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+              remove: () => Effect.void,
+            }),
+          ),
         )
       : makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(fakeRegistry!),
-          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(
+            Layer.succeed(ServerSecretStore, {
+              get: () => Effect.succeed(null),
+              set: () => Effect.void,
+              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+              remove: () => Effect.void,
+            }),
+          ),
         );
 
     const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
@@ -314,32 +338,52 @@ export const makeOrchestrationIntegrationHarness = (
     const textGenerationLayer = Layer.succeed(TextGeneration, {
       generateBranchName: () => Effect.succeed({ branch: null }),
     } as unknown as TextGenerationShape);
-    const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
+    const hubOutputReactorLayer = HubOutputReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );
+    const providerHealthLayer = Layer.succeed(ProviderHealth, {
+      getStatuses: Effect.succeed([]),
+      refresh: Effect.succeed([]),
+      updateProvider: () => Effect.die("updateProvider unsupported in harness"),
+      streamChanges: Stream.empty,
+    } as unknown as ProviderHealthShape);
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
-      Layer.provideMerge(studioOutputReactorLayer),
+      Layer.provideMerge(providerHealthLayer),
+      Layer.provideMerge(hubOutputReactorLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );
+    const sidechatExpiryReactorLayer = SidechatExpiryReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
+    const threadGitMetadataReactorLayer = Layer.succeed(ThreadGitMetadataReactor, {
+      start: Effect.void,
+      drain: Effect.void,
+    });
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
-      Layer.provideMerge(studioOutputReactorLayer),
+      Layer.provideMerge(hubOutputReactorLayer),
+      Layer.provideMerge(threadGitMetadataReactorLayer),
+      Layer.provideMerge(sidechatExpiryReactorLayer),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
 
-    const runtime = ManagedRuntime.make(layer);
+    const runtime = ManagedRuntime.make(
+      layer.pipe(Layer.orDie) as Layer.Layer<Layer.Success<typeof layer>>,
+    );
     const engine = yield* tryRuntimePromise("load OrchestrationEngine service", () =>
       runtime.runPromise(Effect.service(OrchestrationEngineService)),
     ).pipe(Effect.orDie);
@@ -387,7 +431,9 @@ export const makeOrchestrationIntegrationHarness = (
           .getSnapshot()
           .pipe(
             Effect.map(
-              (snapshot) => snapshot.threads.find((thread) => thread.id === threadId) ?? null,
+              (snapshot) =>
+                snapshot.threads.find((thread: OrchestrationThread) => thread.id === threadId) ??
+                null,
             ),
           ),
         (thread): thread is OrchestrationThread => thread !== null && predicate(thread),

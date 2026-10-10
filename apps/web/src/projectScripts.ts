@@ -3,6 +3,7 @@ import {
   SCRIPT_RUN_COMMAND_PATTERN,
   type KeybindingCommand,
   type ProjectScript,
+  type ThreadId,
 } from "@synara/contracts";
 import { Schema } from "effect";
 
@@ -73,16 +74,8 @@ export interface ProjectScriptRunOptions {
 }
 
 export interface ProjectScriptRunResult {
+  threadId: ThreadId;
   terminalId: string;
-}
-
-export function projectScriptCwd(input: {
-  project: {
-    cwd: string;
-  };
-  worktreePath?: string | null;
-}): string {
-  return input.worktreePath ?? input.project.cwd;
 }
 
 export function projectScriptRuntimeEnv(

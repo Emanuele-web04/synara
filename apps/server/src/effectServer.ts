@@ -1,3 +1,4 @@
+import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
 import http from "node:http";
 
 import type { ServerSettingsError } from "@synara/contracts";
@@ -10,6 +11,7 @@ import { AgentGatewayCredentials } from "./agentGateway/Services/AgentGatewayCre
 import { AutomationRunReactor } from "./automation/Services/AutomationRunReactor";
 import { AutomationScheduler } from "./automation/Services/AutomationScheduler";
 import { AutomationService } from "./automation/Services/AutomationService";
+import { TodoService } from "./todo/Services/TodoService";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -28,15 +30,25 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "./orchestration/Services/OrchestrationEngine";
-import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
+import {
+  OrchestrationReactor,
+  type OrchestrationReactorShape,
+} from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
+import {
+  claimQuitResumeRecordAtStartup,
+  resumeQuitInterruptedChats,
+} from "./orchestration/quitResume";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
 import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeReconciler";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
 import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
@@ -59,13 +71,16 @@ export interface ServerShape {
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | KeepAwakeService
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
     | AutomationService
+    | TodoService
     | ServerLifecycleEvents
     | OrchestrationEngineService
     | OrchestrationReactor
+    | ProjectionPendingInteractionRepository
     | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
@@ -73,6 +88,7 @@ export interface ServerShape {
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
+    | ThreadSnoozeReactor
     | SqlClient.SqlClient
   >;
   readonly stopSignal: Effect.Effect<void, never>;
@@ -108,6 +124,44 @@ export function closeServerRuntimePipeline(input: {
   );
 }
 
+/**
+ * Starts the subscriber pipeline in the order restart recovery depends on.
+ *
+ * The orchestration reactor starts first: runtime ingestion replays the
+ * provider events the previous process journaled but never ingested, so a turn
+ * whose terminal event reached the journal completes normally instead of being
+ * reported as interrupted. Restart reconciliation then settles the turns whose
+ * runtimes died with that process. The remaining reactors start last, because
+ * their first pass reads thread state (a heartbeat automation skips a target
+ * thread with an active turn, the runtime reconciler settles stale running
+ * turns) and a restart-orphaned turn still reads as running until
+ * reconciliation settles it.
+ */
+export function startServerRuntimePipeline<R>(input: {
+  readonly orchestrationReactor: Pick<
+    OrchestrationReactorShape,
+    "start" | "reconcileSettledOpenTurns"
+  >;
+  readonly reconcileRestartStuckTurns: Effect.Effect<void, never, R>;
+  readonly reactors: ReadonlyArray<{
+    readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  }>;
+  readonly subscriptionsScope: Scope.Scope;
+}): Effect.Effect<void, never, R> {
+  return Effect.gen(function* () {
+    yield* Scope.provide(input.orchestrationReactor.start, input.subscriptionsScope);
+    yield* input.reconcileRestartStuckTurns;
+    // The reconciliation above terminalizes durable turn projections without a
+    // provider terminal event. Remove their replay-ledger rows now so the next
+    // process start cannot replay state-dependent commands against the terminal
+    // projection.
+    yield* input.orchestrationReactor.reconcileSettledOpenTurns;
+    for (const reactor of input.reactors) {
+      yield* Scope.provide(reactor.start(), input.subscriptionsScope);
+    }
+  });
+}
+
 export const createEffectServer = Effect.fn(function* (
   shutdownController: ServerShutdownController,
 ) {
@@ -132,12 +186,17 @@ export const createEffectServer = Effect.fn(function* (
   const providerRuntimeReconciler = yield* ProviderRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
+  const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const threadSnoozeReactor = yield* ThreadSnoozeReactor;
   const readiness = yield* makeServerReadiness;
 
-  yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
+  // Start the runtime before serving config snapshots. This both performs the
+  // startup sync and attaches the file watcher; calling only the sync helper
+  // leaves live edits invisible until the next server restart.
+  yield* keybindings.start.pipe(
     Effect.catch((error) =>
-      Effect.logWarning("failed to sync keybindings defaults on startup", {
+      Effect.logWarning("failed to start keybindings runtime on startup", {
         path: error.configPath,
         detail: error.detail,
         cause: error.cause,
@@ -201,29 +260,39 @@ export const createEffectServer = Effect.fn(function* (
       subscriptionsScope,
     }),
   );
-  yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
-  yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
-  yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
-  yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
-  yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
-  yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
+  yield* startServerRuntimePipeline({
+    orchestrationReactor,
+    // Heal turns orphaned by the previous process exit (their in-memory runtimes
+    // died, so they can never complete on their own) before clients can observe
+    // the stale "Working" state.
+    reconcileRestartStuckTurns: reconcileRestartStuckTurns.pipe(
+      Effect.provide(ProjectionPendingInteractionRepositoryLive),
+    ),
+    reactors: [
+      automationScheduler,
+      automationRunReactor,
+      threadDeletionReactor,
+      threadSnoozeReactor,
+      providerSessionReaper,
+      providerRuntimeReconciler,
+      { start: () => keepAwake.start },
+    ],
+    subscriptionsScope,
+  });
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
-  // Heal turns orphaned by the previous process exit (their in-memory runtimes
-  // died, so they can never complete on their own) before clients can observe
-  // the stale "Working" state.
-  yield* reconcileRestartStuckTurns;
-  // The reconciliation above terminalizes durable turn projections without a
-  // provider terminal event. Remove their replay-ledger rows now so the next
-  // process start cannot replay state-dependent commands against the terminal
-  // projection.
-  yield* orchestrationReactor.reconcileSettledOpenTurns;
   yield* recoverGitHandoffOperations((command) => orchestrationEngine.dispatch(command)).pipe(
     Effect.mapError(
       (cause) => new ServerLifecycleError({ operation: "recoverGitHandoffOperations", cause }),
     ),
   );
+  // Claim the previous quit's "Resume chats automatically" record while no
+  // command (and so no new quit) can run yet; a missing record costs one stat.
+  const quitResumeRecord = yield* claimQuitResumeRecordAtStartup;
   yield* runtimeStartup.markCommandReady;
+  // The recorded chats get their continuation turn now that the orphaned turns
+  // above are settled. Forked so the (rare) dispatch work never delays readiness.
+  yield* resumeQuitInterruptedChats(quitResumeRecord).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* lifecycleEvents.publish({
     type: "welcome",
@@ -232,6 +301,7 @@ export const createEffectServer = Effect.fn(function* (
       homeDir: config.homeDir,
       chatWorkspaceRoot: config.chatWorkspaceRoot,
       studioWorkspaceRoot: config.studioWorkspaceRoot,
+      groupsWorkspaceRoot: config.groupsWorkspaceRoot,
       projectName: config.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? config.cwd,
     },
   });

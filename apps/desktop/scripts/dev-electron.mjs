@@ -1,10 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
-import { watch } from "node:fs";
+import { statSync, watch } from "node:fs";
 import { join } from "node:path";
 import waitOn from "wait-on";
 
 import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
-import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import { buildWindowMaterialAddon } from "./build-window-material-addon.mjs";
+import { configureMacLauncher, desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
 const port = Number(process.env.ELECTRON_RENDERER_PORT ?? 5733);
 const devServerUrl = `http://localhost:${port}`;
@@ -28,14 +30,14 @@ const staleComputerUseGracePeriodMs = 300;
 
 if (process.platform === "darwin") {
   buildAppSnapHelper({ arch: process.arch });
+  buildWindowMaterialAddon({ arch: process.arch });
 }
 
 await waitOn({
   resources: [`tcp:${port}`, ...requiredFiles.map((filePath) => `file:${filePath}`)],
 });
 
-const childEnv = { ...process.env };
-delete childEnv.ELECTRON_RUN_AS_NODE;
+const childEnv = createSourceDesktopEnvironment();
 
 let shuttingDown = false;
 let restartTimer = null;
@@ -157,18 +159,29 @@ function startApp() {
     return;
   }
 
-  const app = spawn(
-    resolveElectronPath(),
-    [`--synara-dev-root=${desktopDir}`, "dist-electron/main.js"],
-    {
-      cwd: desktopDir,
-      env: {
-        ...childEnv,
-        VITE_DEV_SERVER_URL: devServerUrl,
-      },
-      stdio: "inherit",
-    },
-  );
+  // Rebuilds can remove dist before replacing it. Never launch Electron into
+  // that gap (it shows a modal "Cannot find module" error instead of waiting).
+  const bundlesReady = requiredFiles.every((file) => {
+    try {
+      const stat = statSync(join(desktopDir, file));
+      return stat.isFile() && stat.size > 0;
+    } catch {
+      return false;
+    }
+  });
+  if (!bundlesReady) {
+    scheduleRestart(1_000);
+    return;
+  }
+
+  const electronPath = resolveElectronPath();
+  const environment = { ...childEnv, VITE_DEV_SERVER_URL: devServerUrl };
+  if (process.platform === "darwin") configureMacLauncher(electronPath, environment);
+  const app = spawn(electronPath, [`--synara-dev-root=${desktopDir}`, "dist-electron/main.js"], {
+    cwd: desktopDir,
+    env: environment,
+    stdio: "inherit",
+  });
 
   currentApp = app;
 
@@ -231,7 +244,7 @@ async function stopApp() {
   });
 }
 
-function scheduleRestart() {
+function scheduleRestart(delayMs = restartDebounceMs) {
   if (shuttingDown) {
     return;
   }
@@ -250,7 +263,7 @@ function scheduleRestart() {
           startApp();
         }
       });
-  }, restartDebounceMs);
+  }, delayMs);
 }
 
 function startWatchers() {

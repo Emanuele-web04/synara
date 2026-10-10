@@ -4,7 +4,7 @@
 // Layer: Server provider tests
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { access } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,6 +19,7 @@ import {
   mergeSkillsIntoCatalog,
   parseSkillFrontmatter,
 } from "./skillsCatalog.ts";
+import { pathIsWithin } from "./claudePluginSkills.ts";
 
 let root: string;
 let homeDir: string;
@@ -36,6 +37,18 @@ description: ${description}
 # ${name}
 `,
   );
+}
+
+function claudePluginInstallPath(marketplace: string, plugin: string, version: string): string {
+  return path.join(homeDir, ".claude", "plugins", "cache", marketplace, plugin, version);
+}
+
+async function writeClaudePluginManifest(
+  plugins: Record<string, ReadonlyArray<Record<string, unknown>> | unknown>,
+): Promise<void> {
+  const manifestPath = path.join(homeDir, ".claude", "plugins", "installed_plugins.json");
+  await mkdir(path.dirname(manifestPath), { recursive: true });
+  await writeFile(manifestPath, JSON.stringify({ version: 2, plugins }, null, 2));
 }
 
 beforeEach(() => {
@@ -66,6 +79,75 @@ disable-model-invocation: true
       "disable-model-invocation": true,
     });
   });
+
+  it("reads block scalars and keeps nested keys from overriding top-level ones", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: check-code
+description: >-
+  Review recent code changes
+  before they are merged.
+
+  Use it after every edit.
+summary: |
+  First line
+    indented line
+metadata:
+  env:
+    - name: API_KEY
+      description: Service key
+license: MIT
+---
+`),
+    ).toEqual({
+      name: "check-code",
+      description: "Review recent code changes before they are merged.\nUse it after every edit.",
+      summary: "First line\n  indented line",
+      license: "MIT",
+    });
+  });
+
+  it("reads a short description kept under metadata", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: codex-style
+description: Long description
+metadata:
+  short-description: Short text
+---
+`),
+    ).toEqual({
+      name: "codex-style",
+      description: "Long description",
+      "short-description": "Short text",
+    });
+  });
+
+  it("parses frontmatter with many keys without a quadratic slowdown", () => {
+    const keys = Array.from({ length: 40_000 }, (_, index) => `key${index}: value`).join("\n");
+    const startedAt = performance.now();
+    expect(parseSkillFrontmatter(`---\nname: wide\n${keys}\n---\n`).name).toBe("wide");
+    expect(performance.now() - startedAt).toBeLessThan(3_000);
+  });
+
+  it("falls back to the line reader for frontmatter that is not valid YAML", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: loose
+description: Use when: the user asks for it
+---
+`),
+    ).toEqual({ name: "loose", description: "Use when: the user asks for it" });
+  });
+});
+
+describe("pathIsWithin", () => {
+  it("rejects Windows paths on another drive while preserving same-drive containment", () => {
+    expect(pathIsWithin("C:\\plugins", "C:\\plugins", path.win32)).toBe(true);
+    expect(pathIsWithin("C:\\plugins", "C:\\plugins\\workflow-kit", path.win32)).toBe(true);
+    expect(pathIsWithin("C:\\plugins", "C:\\other", path.win32)).toBe(false);
+    expect(pathIsWithin("C:\\plugins", "D:\\plugins\\workflow-kit", path.win32)).toBe(false);
+  });
 });
 
 describe("discoverSkillsCatalog", () => {
@@ -88,7 +170,21 @@ describe("discoverSkillsCatalog", () => {
       "Cursor",
     );
     await writeSkill(path.join(homeDir, ".grok", "skills", "grok-only"), "grok-only", "Grok");
-    await writeSkill(path.join(homeDir, ".kilo", "skills", "kilo-only"), "kilo-only", "Kilo");
+    await writeSkill(
+      path.join(homeDir, ".config", "devin", "skills", "devin-only"),
+      "devin-only",
+      "Devin",
+    );
+    await writeSkill(
+      path.join(homeDir, ".config", "cognition", "skills", "cognition-only"),
+      "cognition-only",
+      "Cognition",
+    );
+    await writeSkill(
+      path.join(homeDir, ".codeium", "windsurf", "skills", "windsurf-only"),
+      "windsurf-only",
+      "Windsurf",
+    );
     await writeSkill(
       path.join(homeDir, ".config", "opencode", "skills", "opencode-only"),
       "opencode-only",
@@ -104,9 +200,252 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("claude-only")?.scope).toBe("claude");
     expect(byName.get("cursor-only")?.scope).toBe("cursor");
     expect(byName.get("grok-only")?.scope).toBe("grok");
-    expect(byName.get("kilo-only")?.scope).toBe("kilo");
+    expect(byName.get("devin-only")?.scope).toBe("devin");
+    expect(byName.get("cognition-only")?.scope).toBe("devin");
+    expect(byName.get("windsurf-only")?.scope).toBe("devin");
     expect(byName.get("opencode-only")?.scope).toBe("opencode");
     expect(byName.get("pi-only")?.scope).toBe("pi");
+  });
+
+  it("honors a custom agentDir for omp and pi skill roots", async () => {
+    const ompAgentDir = path.join(root, "custom-omp-agent");
+    const piAgentDir = path.join(root, "custom-pi-agent");
+    await writeSkill(
+      path.join(ompAgentDir, "skills", "omp-custom"),
+      "omp-custom",
+      "OMP profile skill",
+    );
+    await writeSkill(path.join(piAgentDir, "skills", "pi-custom"), "pi-custom", "Pi profile skill");
+    await writeSkill(
+      path.join(homeDir, ".omp", "agent", "skills", "omp-default"),
+      "omp-default",
+      "Default root skill",
+    );
+
+    const ompSkills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "omp",
+      agentDir: ompAgentDir,
+    });
+    expect(ompSkills.find((s) => s.name === "omp-custom")?.scope).toBe("omp");
+    expect(ompSkills.find((s) => s.name === "omp-default")).toBeUndefined();
+
+    const piSkills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "pi",
+      agentDir: piAgentDir,
+    });
+    expect(piSkills.find((s) => s.name === "pi-custom")?.scope).toBe("pi");
+  });
+
+  it("discovers Devin's project-local native skill roots", async () => {
+    const cwd = path.join(root, "repo", "packages", "web");
+    await mkdir(cwd, { recursive: true });
+    await writeSkill(
+      path.join(root, "repo", ".devin", "skills", "devin-project"),
+      "devin-project",
+      "Project Devin skill",
+    );
+    await writeSkill(
+      path.join(root, "repo", ".cognition", "skills", "cognition-project"),
+      "cognition-project",
+      "Project Cognition skill",
+    );
+    await writeSkill(
+      path.join(root, "repo", ".windsurf", "skills", "windsurf-project"),
+      "windsurf-project",
+      "Project Windsurf skill",
+    );
+
+    const skills = await discoverSkillsCatalog({
+      cwd,
+      homeDir,
+      synaraBaseDir,
+      provider: "devin",
+    });
+
+    for (const name of ["devin-project", "cognition-project", "windsurf-project"]) {
+      expect(skills.find((skill) => skill.name === name)).toMatchObject({ scope: "project" });
+    }
+  });
+
+  it("discovers only the registered Claude plugin version for Grok with its native namespace", async () => {
+    const currentInstallPath = claudePluginInstallPath("skill-forge", "workflow-kit", "1.21.0");
+    const staleInstallPath = claudePluginInstallPath("skill-forge", "workflow-kit", "1.20.0");
+    await writeSkill(
+      path.join(currentInstallPath, "skills", "feature-delivery"),
+      "feature-delivery",
+      "Deliver a feature",
+    );
+    await writeSkill(
+      path.join(staleInstallPath, "skills", "stale-only"),
+      "stale-only",
+      "Old cache entry",
+    );
+    await writeClaudePluginManifest({
+      "workflow-kit@skill-forge": [
+        {
+          scope: "user",
+          installPath: currentInstallPath,
+          version: "1.21.0",
+        },
+      ],
+    });
+
+    const skills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "grok",
+    });
+
+    expect(skills.find((skill) => skill.name === "workflow-kit:feature-delivery")).toMatchObject({
+      scope: "claude",
+      path: await realpath(path.join(currentInstallPath, "skills", "feature-delivery", "SKILL.md")),
+    });
+    expect(skills.some((skill) => skill.name.includes("stale-only"))).toBe(false);
+  });
+
+  it("dedupes duplicate Claude plugin registrations deterministically", async () => {
+    const installPath = claudePluginInstallPath("skill-forge", "workflow-kit", "1.21.0");
+    await writeSkill(
+      path.join(installPath, "skills", "feature-delivery"),
+      "feature-delivery",
+      "Deliver a feature",
+    );
+    const install = { scope: "user", installPath, version: "1.21.0" };
+    await writeClaudePluginManifest({
+      "workflow-kit@skill-forge": [install, install],
+    });
+
+    const skills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      includeDuplicateOrigins: true,
+    });
+
+    expect(skills.filter((skill) => skill.name === "workflow-kit:feature-delivery")).toHaveLength(
+      1,
+    );
+  });
+
+  it("uses deterministic plugin-id precedence when namespaces and skill names collide", async () => {
+    const alphaInstallPath = claudePluginInstallPath("alpha", "workflow-kit", "1.0.0");
+    const zetaInstallPath = claudePluginInstallPath("zeta", "workflow-kit", "1.0.0");
+    await Promise.all([
+      writeSkill(
+        path.join(alphaInstallPath, "skills", "feature-delivery"),
+        "feature-delivery",
+        "Alpha copy",
+      ),
+      writeSkill(
+        path.join(zetaInstallPath, "skills", "feature-delivery"),
+        "feature-delivery",
+        "Zeta copy",
+      ),
+    ]);
+    await writeClaudePluginManifest({
+      "workflow-kit@zeta": [{ scope: "user", installPath: zetaInstallPath }],
+      "workflow-kit@alpha": [{ scope: "user", installPath: alphaInstallPath }],
+    });
+
+    const skills = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
+    const featureDelivery = skills.find((skill) => skill.name === "workflow-kit:feature-delivery");
+
+    expect(featureDelivery?.description).toBe("Alpha copy");
+    expect(featureDelivery?.path).toContain(path.join("cache", "alpha", "workflow-kit"));
+  });
+
+  it("includes user and matching project Claude plugins but excludes other projects", async () => {
+    const cwd = path.join(root, "repo", "packages", "web");
+    const otherProject = path.join(root, "other-repo");
+    await Promise.all([mkdir(cwd, { recursive: true }), mkdir(otherProject, { recursive: true })]);
+    const userInstallPath = claudePluginInstallPath("plugins", "user-tools", "1.0.0");
+    const projectInstallPath = claudePluginInstallPath("plugins", "project-tools", "1.0.0");
+    const otherInstallPath = claudePluginInstallPath("plugins", "other-tools", "1.0.0");
+    await Promise.all([
+      writeSkill(path.join(userInstallPath, "skills", "user-skill"), "user-skill", "User"),
+      writeSkill(
+        path.join(projectInstallPath, "skills", "project-skill"),
+        "project-skill",
+        "Project",
+      ),
+      writeSkill(path.join(otherInstallPath, "skills", "other-skill"), "other-skill", "Other"),
+    ]);
+    await writeClaudePluginManifest({
+      "user-tools@plugins": [{ scope: "user", installPath: userInstallPath }],
+      "project-tools@plugins": [
+        { scope: "project", projectPath: path.join(root, "repo"), installPath: projectInstallPath },
+      ],
+      "other-tools@plugins": [
+        { scope: "project", projectPath: otherProject, installPath: otherInstallPath },
+      ],
+    });
+
+    const skills = await discoverSkillsCatalog({ cwd, homeDir, synaraBaseDir });
+    expect(skills.map((skill) => skill.name)).toEqual(
+      expect.arrayContaining(["user-tools:user-skill", "project-tools:project-skill"]),
+    );
+    expect(skills.some((skill) => skill.name === "other-tools:other-skill")).toBe(false);
+  });
+
+  it("uses one highest-precedence applicable install per Claude plugin ID", async () => {
+    const cwd = path.join(root, "repo", "packages", "web");
+    await mkdir(cwd, { recursive: true });
+    const userInstallPath = claudePluginInstallPath("plugins", "workflow-kit", "1.0.0");
+    const projectInstallPath = claudePluginInstallPath("plugins", "workflow-kit", "2.0.0");
+    await Promise.all([
+      writeSkill(path.join(userInstallPath, "skills", "user-only"), "user-only", "User copy only"),
+      writeSkill(
+        path.join(projectInstallPath, "skills", "project-only"),
+        "project-only",
+        "Project copy only",
+      ),
+    ]);
+    await writeClaudePluginManifest({
+      "workflow-kit@plugins": [
+        { scope: "user", installPath: userInstallPath },
+        {
+          scope: "project",
+          projectPath: path.join(root, "repo"),
+          installPath: projectInstallPath,
+        },
+      ],
+    });
+
+    const skills = await discoverSkillsCatalog({ cwd, homeDir, synaraBaseDir });
+    expect(skills.map((skill) => skill.name)).toContain("workflow-kit:project-only");
+    expect(skills.map((skill) => skill.name)).not.toContain("workflow-kit:user-only");
+  });
+
+  it("ignores malformed registrations and install paths outside Claude's plugin cache", async () => {
+    const validInstallPath = claudePluginInstallPath("plugins", "valid", "1.0.0");
+    const outsideInstallPath = path.join(root, "outside-plugin");
+    await writeSkill(path.join(validInstallPath, "skills", "valid-skill"), "valid-skill", "Valid");
+    await writeSkill(
+      path.join(outsideInstallPath, "skills", "outside-skill"),
+      "outside-skill",
+      "Outside",
+    );
+    await symlink(
+      path.join(outsideInstallPath, "skills", "outside-skill"),
+      path.join(validInstallPath, "skills", "linked-outside"),
+      "dir",
+    );
+    await writeClaudePluginManifest({
+      "valid@plugins": [{ scope: "user", installPath: validInstallPath }],
+      "outside@plugins": [{ scope: "user", installPath: outsideInstallPath }],
+      "relative@plugins": [{ scope: "user", installPath: "relative/plugin" }],
+      "missing@plugins": [{ scope: "user", installPath: path.join(validInstallPath, "missing") }],
+      malformed: [{ scope: "user", installPath: validInstallPath }],
+      "wrong-shape@plugins": { scope: "user", installPath: validInstallPath },
+    });
+
+    const skills = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
+    expect(skills.map((skill) => skill.name)).toContain("valid:valid-skill");
+    expect(skills.some((skill) => skill.name.includes("outside-skill"))).toBe(false);
+    expect(skills.filter((skill) => skill.name === "valid:valid-skill")).toHaveLength(1);
   });
 
   it("follows symlinked skill directories from provider homes", async () => {

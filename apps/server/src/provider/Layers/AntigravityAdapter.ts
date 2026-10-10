@@ -1,5 +1,6 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import crypto from "node:crypto";
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,9 +13,14 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   RuntimeItemId,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import {
+  spawnProcess as spawnPlatformProcess,
+  type RuntimeSpawnOptions,
+} from "@synara/shared/processRuntime";
 import { Effect, Layer, Option, Queue, Stream } from "effect";
 
 import {
@@ -33,7 +39,10 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
+  agentGatewayCapabilitiesFor,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
+  type AgentGatewayCapabilityInput,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
@@ -52,23 +61,26 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
+import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-  providerRuntimeEventBytes,
+  type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
+import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
 const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
-const MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
-const PLUGIN_INSTALL_TIMEOUT_MS = 30_000;
+const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
+const PLUGIN_INSTALL_TIMEOUT_MS = 45_000;
 const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
 const WINDOWS_PROMPT_MAX_CHARS = 24_000;
 
@@ -86,10 +98,13 @@ type TranscriptStep = {
 };
 
 type PendingTool = {
+  readonly stepIndex: number;
   readonly itemId: RuntimeItemId;
   readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
   readonly name: string;
-  readonly args: unknown;
+  readonly args?: Record<string, unknown>;
+  /** Set when the transcript already reported this call as a background task. */
+  backgroundedByTranscript?: boolean;
 };
 
 type StoredTurn = {
@@ -97,12 +112,47 @@ type StoredTurn = {
   readonly items: unknown[];
 };
 
-type AntigravitySessionContext = {
+export type AntigravityTrackedBackgroundTask = {
+  readonly taskId: string;
+  readonly taskType: string;
+  readonly description?: string;
+  readonly startedAt: string;
+};
+
+type BackgroundTaskTerminal = { readonly taskId: string } & (
+  | { readonly kind: "completed"; readonly message: AntigravitySystemMessageInfo }
+  | { readonly kind: "killed" }
+);
+
+type ToolSurfaceCounters = {
+  /** Highest occurrence already rendered for each `${stepIndex}:${toolName}` pair. */
+  surfacedToolCallCounts: Map<string, number>;
+  /** Occurrence order observed specifically from pre-tool hook events. */
+  hookToolCallCounts: Map<string, number>;
+};
+
+type ForeignConversationState = ToolSurfaceCounters & {
+  pendingTools: PendingTool[];
+  nextToolSequence: number;
+  terminalEmitted: boolean;
+};
+
+type AntigravitySessionContext = ToolSurfaceCounters & {
   session: ProviderSession;
+  /**
+   * Antigravity leases per prepared turn, not at session start, so the start
+   * input is long gone by then. Keep the shared capability projection so the
+   * turn lease derives from the same facts as a session-start lease. Refreshed
+   * from the session fact on every dispatched turn, so a computer-control
+   * change between turns reaches the next mint instead of the start snapshot.
+   */
+  gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   harnessPolicyDelivered?: boolean;
+  readonly enableComputerControl?: boolean;
   readonly lifecycleGeneration?: string;
   readonly binaryPath: string;
+  readonly environment: NodeJS.ProcessEnv;
   readonly turns: StoredTurn[];
   activeTurnId?: TurnId | undefined;
   activeProcess?: ChildProcess | undefined;
@@ -113,13 +163,44 @@ type AntigravitySessionContext = {
   modelName?: string | undefined;
   modelOptions?: AntigravityModelOptions | undefined;
   processedHookBytes: number;
+  hookPollPromise?: Promise<void>;
   processedTranscriptBytes: number;
   processedTranscriptPath?: string | undefined;
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
+  nextToolSequence: number;
+  pendingBackgroundTasks: Map<string, AntigravityTrackedBackgroundTask>;
+  pendingAnonymousBackgroundTasks: AntigravityBackgroundCallKey[];
+  pendingBackgroundTaskTerminals: BackgroundTaskTerminal[];
+  /** Recently settled or killed task ids, so a late post-tool hook cannot re-register them. */
+  settledBackgroundTaskIds: string[];
+  /** Calls the transcript backgrounded before their pre-tool hook was seen. */
+  transcriptBackgroundedCalls: AntigravityBackgroundCallKey[];
+  backgroundCompletionSequence: number;
+  latestBackgroundCompletionStepIndex?: number;
+  /**
+   * Conversations owned by spawned subagents, keyed by conversation id.
+   * The capture hook is installed globally, so a subagent CLI spawned by the
+   * session's own CLI inherits `SYNARA_ANTIGRAVITY_EVENTS` and writes its
+   * pre-invocation/tool/stop events into this session's hook stream. Those
+   * events describe a different process and conversation and must never
+   * rebind the session; they are forwarded as child-thread events carrying
+   * `providerParentThreadId` so the ingestion layer materializes a visible
+   * subagent thread.
+   */
+  foreignConversations: Map<string, ForeignConversationState>;
+  /**
+   * Both the capture-hook stream (pre-tool events) and the transcript body
+   * (PLANNER_RESPONSE.tool_calls) feed occurrence counters so the same call is
+   * rendered exactly once regardless of which source arrives first, while two
+   * calls with the same name in one planner step still render independently.
+   */
   sawAssistant: boolean;
   interrupted: boolean;
   stopped: boolean;
+  /** Guards against double turn.completed (process close + interrupt/stop). */
+  turnTerminalEmitted: boolean;
+  stopTeardownRequested?: boolean;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -129,6 +210,22 @@ function messageFromCause(cause: unknown, fallback: string): string {
 function trim(value: string | null | undefined): string | undefined {
   const result = value?.trim();
   return result ? result : undefined;
+}
+
+function nextToolOccurrence(counts: Map<string, number>, key: string): number {
+  const occurrence = (counts.get(key) ?? 0) + 1;
+  counts.set(key, occurrence);
+  return occurrence;
+}
+
+function claimToolOccurrence(
+  surfacedCounts: Map<string, number>,
+  key: string,
+  occurrence: number,
+): boolean {
+  if ((surfacedCounts.get(key) ?? 0) >= occurrence) return false;
+  surfacedCounts.set(key, occurrence);
+  return true;
 }
 
 function resumeConversationId(value: unknown): string | undefined {
@@ -141,9 +238,12 @@ function resumeConversationId(value: unknown): string | undefined {
   return undefined;
 }
 
-function transcriptPathForConversation(conversationId: string): string {
+function transcriptPathForConversation(
+  conversationId: string,
+  homeDir: string = os.homedir(),
+): string {
   return path.join(
-    os.homedir(),
+    homeDir,
     ".gemini",
     "antigravity-cli",
     "brain",
@@ -165,11 +265,42 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
  * object is treated as a denial with an empty reason, which blocks every tool
  * call because the hook is installed globally with `matcher: "*"` (#490).
  * "ask" preserves the permission flow the user would have without the hook.
+ *
+ * PreInvocation fires immediately before an LLM invocation and is a veto
+ * point with the same decision semantics: an empty object is treated as a
+ * denial that aborts the invocation. The CLI raises a PreInvocation for the
+ * subagent's first model call when the parent agent invokes a subagent, so
+ * `{}` there denies the subagent launch and the parent CLI exits with code 1
+ * ("Antigravity CLI exited with code 1."). Synara-managed sessions spawn
+ * subagents deliberately, so pre-invocation must answer "allow".
+ *
  * `{}` stays correct for the other hook points, including Stop, where an
  * inactive hook must not force a decision over Antigravity's default.
+ *
+ * Active Stop hooks must also stay neutral (`{}`). Returning
+ * `{"decision":"stop"}` is not a valid Antigravity/Claude stop decision
+ * (only `"block"` is recognized to prevent exit) and can leave the print
+ * process hung after the assistant has already finished, so the UI stays
+ * "Working" and Cancel has nothing left to kill (#465).
  */
 function inactiveHookOutput(event: string): string {
-  return event === "pre-tool" ? '{"decision":"ask"}' : "{}";
+  if (event === "pre-tool") return '{"decision":"ask"}';
+  if (event === "pre-invocation") return '{"decision":"allow"}';
+  return "{}";
+}
+
+/**
+ * Inactive-fallback payload with no `"` characters. agy forwards win32 hook
+ * commands to cmd.exe without decoding JSON escapes, so `echo {"decision":..}`
+ * would arrive as `echo {\"decision\":..}` and echo the backslashes verbatim
+ * (protojson `syntax error (line 1:2)`), blocking every tool call. PowerShell
+ * single-quoted segments joined with `[char]34` rebuild the exact decision
+ * JSON at runtime; `^(...)` stops cmd parsing the parens (caret needs no JSON
+ * escape). Fallback payloads must stay `'`-free (true for all current values).
+ */
+function win32FallbackHookJson(event: string): string {
+  const body = inactiveHookOutput(event).split('"').join(`'+[char]34+'`);
+  return `Write-Output ^('${body}'^)`;
 }
 
 export function buildAntigravityCaptureCommand(
@@ -178,11 +309,19 @@ export function buildAntigravityCaptureCommand(
   event: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   const fallback = inactiveHookOutput(event);
   if (platform === "win32") {
-    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo ${fallback}) else (set "ELECTRON_RUN_AS_NODE=1" && ${invocation})`;
+    // The Antigravity CLI passes hook command strings to cmd.exe without
+    // decoding JSON escapes, so any `"` in the command arrives as `\"` and
+    // breaks cmd's quote handling: a quoted program path is executed literally
+    // ("...exe" is not recognized as an internal or external command) and the
+    // hook never runs. Keep the invocation free of double quotes; the helper
+    // paths are space-free in every supported install layout (dev bun/electron
+    // binaries and packaged apps under %LOCALAPPDATA%\Programs).
+    const invocation = `${executablePath} ${scriptPath} ${event}`;
+    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command ${win32FallbackHookJson(event)}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
   }
+  const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '${fallback}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
 }
 
@@ -196,17 +335,72 @@ process.stdin.on("end", () => {
   const target = process.env.SYNARA_ANTIGRAVITY_EVENTS;
   if (!target) {
     // Mirrors the shell wrapper's inactive fallback: PreToolUse must carry a
-    // decision or Antigravity denies the tool call with an empty reason.
-    process.stdout.write((event === "pre-tool" ? '{"decision":"ask"}' : "{}") + "\\n");
+    // decision or Antigravity denies the tool call with an empty reason, and
+    // PreInvocation must carry "allow" or the subagent launch it gates is
+    // denied and the parent CLI exits with code 1.
+    process.stdout.write(
+      (event === "pre-tool"
+        ? '{"decision":"ask"}'
+        : event === "pre-invocation"
+          ? '{"decision":"allow"}'
+          : "{}") + "\\n",
+    );
     return;
   }
-  fs.appendFileSync(target, event + "\\t" + payload.trim() + "\\n");
+  let capturedPayload = payload.trim();
+  try {
+    const input = JSON.parse(capturedPayload);
+    const sanitized = {};
+    for (const key of ["conversationId", "transcriptPath", "modelName"]) {
+      if (typeof input[key] === "string" && input[key].trim()) sanitized[key] = input[key];
+    }
+    if (Number.isInteger(input.stepIdx) && input.stepIdx >= 0) sanitized.stepIdx = input.stepIdx;
+    if (event === "pre-tool") {
+      const name = input.toolCall && typeof input.toolCall.name === "string"
+        ? input.toolCall.name.trim()
+        : "";
+      if (name) {
+        sanitized.toolCall = {
+          name,
+          ...(input.toolCall.args && typeof input.toolCall.args === "object"
+            ? { args: input.toolCall.args }
+            : {}),
+        };
+      }
+    } else if (event === "post-tool") {
+      const name = input.toolCall && typeof input.toolCall.name === "string"
+        ? input.toolCall.name.trim()
+        : "";
+      if (name) {
+        sanitized.toolCall = {
+          name,
+          ...(input.toolCall.args && typeof input.toolCall.args === "object"
+            ? { args: input.toolCall.args }
+            : {}),
+        };
+      }
+      sanitized.failed = typeof input.error === "string" && input.error.trim().length > 0;
+      if (typeof input.error === "string" && input.error.trim()) sanitized.error = input.error;
+      if (input.toolOutput !== undefined) sanitized.toolOutput = input.toolOutput;
+      if (input.result !== undefined) sanitized.result = input.result;
+    }
+    capturedPayload = JSON.stringify(sanitized);
+  } catch {
+    capturedPayload = "{}";
+  }
+  fs.appendFileSync(target, event + "\\t" + capturedPayload + "\\n");
   if (event === "pre-tool") {
     const decision = process.env.SYNARA_ANTIGRAVITY_HOOK_DECISION === "allow" ? "allow" : "ask";
     process.stdout.write(JSON.stringify({ decision }) + "\\n");
-  } else if (event === "stop") {
-    process.stdout.write('{"decision":"stop"}\\n');
+  } else if (event === "pre-invocation") {
+    // PreInvocation vetoes the upcoming LLM invocation; Synara-managed
+    // sessions run subagents deliberately, so never block them here. An
+    // empty object would deny the launch and the parent CLI exits 1.
+    process.stdout.write('{"decision":"allow"}\\n');
   } else {
+    // Stop and other non-tool hooks: empty object allows the agent to exit.
+    // Do not emit decision:"stop" — it is not a recognized stop decision and
+    // can hang the print process after the reply is already visible (#465).
     process.stdout.write("{}\\n");
   }
 });
@@ -236,18 +430,26 @@ function appendBoundedOutput(current: string, chunk: unknown): string {
 export async function runAntigravityHelperProcess(
   command: string,
   args: string[],
-  options: { cwd?: string; timeoutMs?: number } = {},
+  options: {
+    cwd?: string;
+    timeoutMs?: number;
+    environment?: Readonly<Record<string, string>>;
+  } = {},
 ): Promise<{
   stdout: string;
   stderr: string;
   code: number;
 }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnPlatformProcess(command, args, {
       cwd: options.cwd,
-      env: buildProviderChildEnvironment({ provider: PROVIDER }),
+      env: buildProviderChildEnvironment({
+        provider: PROVIDER,
+        ...(options.environment ? { baseEnv: { ...process.env, ...options.environment } } : {}),
+      }),
       stdio: ["ignore", "pipe", "pipe"],
-    });
+      requireExecutable: true,
+    }) as AntigravityChildProcess;
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -259,7 +461,9 @@ export async function runAntigravityHelperProcess(
       callback();
     };
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      // A bounded helper probe fails fast: force the (Windows: tree) kill and
+      // reject with the timeout, exactly as before the runtime migration.
+      signalOwnedChildProcess(child, "SIGKILL");
       finish(() =>
         reject(
           new Error(
@@ -312,6 +516,7 @@ export async function ensureCapturePlugin(
   stdioProxy?: AcpStdioProxySpawn,
   options: {
     readonly homeDir?: string;
+    readonly environment?: Readonly<Record<string, string>>;
     readonly runHelper?: AntigravityHelperRunner;
   } = {},
 ): Promise<void> {
@@ -355,7 +560,10 @@ export async function ensureCapturePlugin(
   const installed = await (options.runHelper ?? runAntigravityHelperProcess)(
     binaryPath,
     ["plugin", "install", pluginDir],
-    { timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS },
+    {
+      timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS,
+      ...(options.environment ? { environment: options.environment } : {}),
+    },
   );
   if (installed.code !== 0) {
     throw new Error(installed.stderr.trim() || installed.stdout.trim() || "Plugin install failed.");
@@ -410,10 +618,14 @@ export function buildAntigravityTurnPrompt(
 }
 
 const DEFAULT_EFFORT_BY_MODEL: Readonly<Record<string, string>> = {
+  "Gemini 3.7 Flash": "high",
+  "Gemini 3.6 Flash": "medium",
   "Gemini 3.5 Flash": "medium",
   "Gemini 3.1 Pro": "low",
   "Claude Sonnet 4.6": "thinking",
   "Claude Opus 4.6": "thinking",
+  "Claude 3.7 Sonnet": "thinking",
+  "DeepSeek V4 Flash Max": "high",
   "GPT-OSS 120B": "medium",
 };
 
@@ -430,11 +642,18 @@ function effortLabel(value: string): string {
 export function parseAntigravityCliModelLabel(
   value: string,
 ): { model: string; effort?: string } | null {
-  const trimmed = value
-    .replace(/\x1b\[[0-9;]*m/g, "")
-    .trim()
-    .replace(/^(?:[*•-]\s+)+/u, "");
+  const stripped = value.replace(/\x1b\[[0-9;]*m/g, "").trim();
+  if (!stripped) return null;
+
+  // Newer `agy models` rows are `slug<TAB>Display Name (Effort)`. Older builds
+  // printed only the display label. Prefer the display column when present so
+  // Synara never treats `slug\tName` as a single model id at dispatch.
+  const tabIndex = stripped.indexOf("\t");
+  const labelColumn =
+    tabIndex >= 0 ? stripped.slice(tabIndex + 1).trim() : stripped.replace(/^(?:[*•-]\s+)+/u, "");
+  const trimmed = labelColumn.replace(/^(?:[*•-]\s+)+/u, "").trim();
   if (!trimmed) return null;
+
   const match = trimmed.match(/^(.*?)\s+\(([^()]+)\)$/u);
   if (!match?.[1] || !match[2]) return { model: trimmed };
   return {
@@ -495,11 +714,13 @@ export function resolveAntigravityCliModelLabel(
 ): string {
   const parsed = parseAntigravityCliModelLabel(model);
   if (!parsed) return model;
-  if (parsed.effort) return model.trim();
   const effort =
+    parsed.effort ??
     options?.reasoningEffort?.trim().toLowerCase() ??
     discoveredDefaultEffort?.trim().toLowerCase() ??
     DEFAULT_EFFORT_BY_MODEL[parsed.model];
+  // Always rebuild the CLI display label. Returning the raw input would preserve
+  // corrupted `slug\tName (Effort)` rows from older discovery parsing.
   return effort ? `${parsed.model} (${effortLabel(effort)})` : parsed.model;
 }
 
@@ -520,19 +741,256 @@ function toolItemType(name: string): PendingTool["itemType"] {
   return "dynamic_tool_call";
 }
 
-function resultStreamKind(itemType: PendingTool["itemType"]) {
-  if (itemType === "command_execution") return "command_output" as const;
-  if (itemType === "file_change") return "file_change_output" as const;
-  return "unknown" as const;
+function buildAntigravityToolItemData(
+  name: string,
+  _itemType: PendingTool["itemType"],
+  itemId: RuntimeItemId,
+  args?: Record<string, unknown>,
+  postPayload?: Record<string, unknown>,
+): Record<string, unknown> {
+  const command =
+    typeof args?.CommandLine === "string"
+      ? args.CommandLine
+      : typeof args?.command === "string"
+        ? args.command
+        : typeof args?.cmd === "string"
+          ? args.cmd
+          : undefined;
+  const cwd =
+    typeof args?.Cwd === "string" ? args.Cwd : typeof args?.cwd === "string" ? args.cwd : undefined;
+  const pathValue =
+    typeof args?.TargetFile === "string"
+      ? args.TargetFile
+      : typeof args?.AbsolutePath === "string"
+        ? args.AbsolutePath
+        : typeof args?.DirectoryPath === "string"
+          ? args.DirectoryPath
+          : typeof args?.SearchPath === "string"
+            ? args.SearchPath
+            : typeof args?.path === "string"
+              ? args.path
+              : typeof args?.file === "string"
+                ? args.file
+                : undefined;
+  const query =
+    typeof args?.Query === "string"
+      ? args.Query
+      : typeof args?.query === "string"
+        ? args.query
+        : undefined;
+
+  const rawOutput =
+    postPayload?.toolOutput ?? postPayload?.result ?? postPayload?.error ?? undefined;
+
+  return {
+    toolCallId: itemId,
+    toolName: name,
+    ...(command ? { command } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(pathValue ? { path: pathValue, file: pathValue } : {}),
+    ...(query ? { query } : {}),
+    ...(args ? { arguments: args, input: args, rawInput: args } : {}),
+    ...(rawOutput !== undefined ? { rawOutput } : {}),
+  };
 }
 
-function isToolResultStep(step: TranscriptStep): boolean {
-  return (
-    step.source === "MODEL" &&
-    step.type !== "PLANNER_RESPONSE" &&
-    step.type !== "CONVERSATION_HISTORY" &&
-    step.type !== "CHECKPOINT"
+export interface AntigravitySystemMessageInfo {
+  readonly isSystemMessage: boolean;
+  readonly fullContent: string;
+  readonly taskId?: string;
+  readonly sender?: string;
+  readonly exitCode?: number;
+  readonly isFailure: boolean;
+}
+
+export function parseAntigravitySystemMessage(
+  content: string | undefined,
+): AntigravitySystemMessageInfo | null {
+  if (!content || typeof content !== "string") return null;
+  const trimmed = content.trim();
+  if (!trimmed.includes("<SYSTEM_MESSAGE>")) return null;
+
+  const senderMatch = trimmed.match(/sender=([^\s]+)/u);
+  const sender = senderMatch?.[1];
+
+  const taskIdMatch =
+    trimmed.match(/Task id ["']([^"']+)["']/iu) ??
+    trimmed.match(/Task ID:?\s*["']?([^\s\n,"']+)["']?/iu);
+  const rawTaskId = taskIdMatch?.[1] ?? (sender?.includes("task-") ? sender : undefined);
+  const taskId = rawTaskId?.trim();
+
+  const exitCodeMatch = trimmed.match(/exited with code (\d+)/iu);
+  const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1] ?? "0", 10) : undefined;
+  const failureText = trimmed
+    .replace(/\b(?:0|no)(?:\s+[\p{L}\p{N}_-]+){0,3}\s+failed\b/giu, "")
+    .replace(/\b(?:no|without)\s+errors?\b/giu, "");
+  const isFailure =
+    exitCode !== undefined ? exitCode !== 0 : /\bfailed\b|\berror\b/iu.test(failureText);
+
+  return {
+    isSystemMessage: true,
+    fullContent: trimmed,
+    ...(taskId ? { taskId } : {}),
+    ...(sender ? { sender } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    isFailure,
+  };
+}
+
+export function detectAntigravityBackgroundTaskStart(
+  name: string,
+  args?: Record<string, unknown>,
+  postPayload?: Record<string, unknown>,
+): { taskId?: string; description?: string; isBackground: boolean } | null {
+  const failed =
+    postPayload?.failed === true ||
+    (typeof postPayload?.error === "string" && postPayload.error.trim().length > 0);
+  if (failed) return null;
+
+  if (name === "run_command") {
+    const rawOutput =
+      typeof postPayload?.toolOutput === "string"
+        ? postPayload.toolOutput
+        : typeof postPayload?.result === "string"
+          ? postPayload.result
+          : undefined;
+    const command =
+      typeof args?.CommandLine === "string"
+        ? args.CommandLine
+        : typeof args?.command === "string"
+          ? args.command
+          : typeof args?.cmd === "string"
+            ? args.cmd
+            : undefined;
+
+    if (rawOutput) {
+      const match =
+        rawOutput.match(/Task id\b:?\s*["']?([\w./:-]+)["']?/iu) ??
+        rawOutput.match(/\b(task-[\w.-]+)\b/iu);
+      if (/background task|sent to the background|running in the background/iu.test(rawOutput)) {
+        const taskId = match?.[1] ?? match?.[0];
+        return {
+          ...(taskId ? { taskId } : {}),
+          ...(command ? { description: command } : {}),
+          isBackground: true,
+        };
+      }
+    }
+    if (
+      postPayload !== undefined &&
+      typeof args?.WaitMsBeforeAsync === "number" &&
+      (!rawOutput || !/exited with code/iu.test(rawOutput))
+    ) {
+      const match = rawOutput?.match(/\b(task-[\w.-]+)\b/iu);
+      return {
+        ...(match?.[0] ? { taskId: match[0] } : {}),
+        ...(command ? { description: command } : {}),
+        isBackground: true,
+      };
+    }
+  }
+
+  if (name === "schedule") {
+    const prompt = typeof args?.Prompt === "string" ? args.Prompt : undefined;
+    const rawOutput =
+      typeof postPayload?.toolOutput === "string"
+        ? postPayload.toolOutput
+        : typeof postPayload?.result === "string"
+          ? postPayload.result
+          : undefined;
+    const match = rawOutput
+      ? (rawOutput.match(/\b(task-[\w.-]+)\b/iu) ?? rawOutput.match(/\b(timer-[\w.-]+)\b/iu))
+      : undefined;
+    return {
+      ...(match?.[0] ? { taskId: match[0] } : {}),
+      description: prompt ?? "Scheduled timer",
+      isBackground: true,
+    };
+  }
+
+  return null;
+}
+
+/** agy's GENERIC RUNNING step lands before the stop hook; post-tool only once the task ends. */
+export function parseAntigravityBackgroundTaskStep(
+  content: string | undefined,
+): { taskId: string; description?: string } | null {
+  if (typeof content !== "string" || !/background task/iu.test(content)) return null;
+  const match =
+    content.match(/background task with task id:?\s*["']?([^\s"',]+)/iu) ??
+    content.match(/Task id ["']([^"']+)["']/iu) ??
+    content.match(/(?:[\w.-]+\/)?task-[\w.-]+/iu);
+  const taskId = (match?.[1] ?? match?.[0])?.trim();
+  if (!taskId) return null;
+  const description = content.match(/^Task Description:[ \t]*(.+)$/mu)?.[1]?.trim();
+  return { taskId, ...(description ? { description } : {}) };
+}
+
+/**
+ * Identifies one tool call across the transcript and the hook file: the
+ * planner step it belongs to, plus its command line when several calls share
+ * that step. Unspecified commands match only when the caller permits it.
+ */
+export type AntigravityBackgroundCallKey = {
+  readonly stepIndex: number | undefined;
+  readonly command?: string;
+  readonly taskId?: string;
+};
+
+export function takeAntigravityBackgroundCallKey(
+  keys: AntigravityBackgroundCallKey[],
+  stepIndex: number | undefined,
+  command: string | undefined,
+  options: {
+    readonly allowUnspecifiedCommand?: boolean;
+    readonly taskId?: string | undefined;
+  } = {},
+): boolean {
+  if (stepIndex === undefined) return false;
+  const index = keys.findIndex(
+    (key) =>
+      key.stepIndex === stepIndex &&
+      (key.taskId === undefined ||
+        options.taskId === undefined ||
+        matchAntigravityTrackedTaskId(options.taskId, [key.taskId]) !== undefined) &&
+      (key.command === undefined || command === undefined
+        ? options.allowUnspecifiedCommand !== false
+        : key.command === command),
   );
+  if (index < 0) return false;
+  keys.splice(index, 1);
+  return true;
+}
+
+/** agy quotes CommandLine in hook args and transcript tool calls; task descriptions are bare. */
+export function normalizeAntigravityCommandLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/^"(.*)"$/su, "$1");
+  return trimmed.replace(/\s+/gu, " ").trim() || undefined;
+}
+
+export function matchAntigravityTrackedTaskId(
+  candidateId: string | undefined,
+  trackedTaskIds: Iterable<string>,
+): string | undefined {
+  const ids = Array.from(trackedTaskIds);
+  if (ids.length === 0) return undefined;
+  if (!candidateId) {
+    return ids.length === 1 ? ids[0] : undefined;
+  }
+  const cleanCandidate = candidateId.trim();
+  if (ids.includes(cleanCandidate)) return cleanCandidate;
+  for (const id of ids) {
+    if (cleanCandidate.endsWith(`/${id}`) || cleanCandidate.endsWith(`:${id}`)) {
+      return id;
+    }
+  }
+  for (const id of ids) {
+    if (id.endsWith(`/${cleanCandidate}`) || id.endsWith(`:${cleanCandidate}`)) {
+      return id;
+    }
+  }
+  return undefined;
 }
 
 export function makeAntigravityRuntimeEventBase(input: {
@@ -559,16 +1017,20 @@ type AntigravityChildProcess = ChildProcess & {
 
 export interface AntigravityAdapterDependencies {
   readonly ensurePlugin?: typeof ensureCapturePlugin;
+  readonly readCompleteLines?: typeof readCompleteAntigravityLines;
+  readonly teardownProcessTree?: typeof teardownChildProcessTree;
   readonly spawnProcess?: (
     command: string,
     args: readonly string[],
-    options: SpawnOptions,
+    options: RuntimeSpawnOptions,
   ) => AntigravityChildProcess;
 }
 
 const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {}) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig;
+    const readCompleteLines = dependencies.readCompleteLines ?? readCompleteAntigravityLines;
+    const teardownProcessTree = dependencies.teardownProcessTree ?? teardownChildProcessTree;
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
@@ -578,14 +1040,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const sessions = new Map<ThreadId, AntigravitySessionContext>();
     const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
 
-    const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
-      (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
+    const eventIngress = yield* makeBoundedCallbackIngress<SizedProviderRuntimeEvent, never, never>(
+      (item) => Queue.offer(eventQueue, item.event).pipe(Effect.asVoid),
       {
         capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
         maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
         terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-        isTerminal: isTerminalProviderRuntimeEvent,
-        sizeOf: providerRuntimeEventBytes,
+        isTerminal: (item) => isTerminalProviderRuntimeEvent(item.event),
+        sizeOf: (item) => item.bytes,
       },
     );
 
@@ -618,6 +1080,101 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       payload,
     });
 
+    const withForeignProviderRefs = (
+      event: ProviderRuntimeEvent,
+      conversationId: string,
+      parentConversationId: string,
+    ): ProviderRuntimeEvent => ({
+      ...event,
+      providerRefs: {
+        providerThreadId: conversationId,
+        providerParentThreadId: parentConversationId,
+      },
+    });
+
+    const settleForeignConversation = (
+      context: AntigravitySessionContext,
+      conversationId: string,
+      parentConversationId: string,
+      child: ForeignConversationState,
+      input: {
+        readonly state: "completed" | "interrupted" | "failed";
+        readonly errorMessage?: string;
+        readonly raw: ReturnType<typeof raw>;
+      },
+    ): boolean => {
+      if (child.terminalEmitted || context.activeTurnId === undefined) return false;
+
+      const itemStatus = input.state === "completed" ? "completed" : "failed";
+      for (const pending of child.pendingTools.splice(0)) {
+        offer(
+          withForeignProviderRefs(
+            {
+              ...base(context, { itemId: pending.itemId }),
+              type: "item.completed",
+              payload: {
+                itemType: pending.itemType,
+                status: itemStatus,
+                title: pending.name,
+                data: buildAntigravityToolItemData(
+                  pending.name,
+                  pending.itemType,
+                  pending.itemId,
+                  pending.args,
+                ),
+              },
+              raw: raw("tool-lifecycle-parent-terminal", {
+                conversationId,
+                name: pending.name,
+                state: input.state,
+              }),
+            } satisfies ProviderRuntimeEvent,
+            conversationId,
+            parentConversationId,
+          ),
+        );
+      }
+
+      child.terminalEmitted = true;
+      offer(
+        withForeignProviderRefs(
+          {
+            ...base(context),
+            type: "turn.completed",
+            payload:
+              input.state === "interrupted"
+                ? { state: "interrupted", stopReason: "interrupted" }
+                : input.state === "failed"
+                  ? {
+                      state: "failed",
+                      stopReason: "error",
+                      errorMessage: input.errorMessage ?? "Antigravity child turn failed.",
+                    }
+                  : { state: "completed", stopReason: "model_stop" },
+            raw: input.raw,
+          } satisfies ProviderRuntimeEvent,
+          conversationId,
+          parentConversationId,
+        ),
+      );
+      return true;
+    };
+
+    const settleForeignConversations = (
+      context: AntigravitySessionContext,
+      input: {
+        readonly state: "completed" | "interrupted" | "failed";
+        readonly errorMessage?: string;
+        readonly raw: ReturnType<typeof raw>;
+      },
+    ): void => {
+      const parentConversationId = context.conversationId;
+      if (!parentConversationId) return;
+      for (const [conversationId, child] of context.foreignConversations) {
+        settleForeignConversation(context, conversationId, parentConversationId, child, input);
+      }
+    };
+
     const requireSession = (
       threadId: ThreadId,
     ): Effect.Effect<AntigravitySessionContext, ProviderAdapterSessionNotFoundError> => {
@@ -642,7 +1199,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       const child = context.activeProcess;
       if (!child) return Effect.void;
       return Effect.tryPromise({
-        try: () => teardownChildProcessTree(child),
+        try: () => teardownProcessTree(child),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -651,6 +1208,283 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             cause,
           }),
       }).pipe(Effect.asVoid);
+    };
+
+    /**
+     * Ids of tasks that already reached a terminal state. A post-tool hook can
+     * arrive after the transcript settled, killed, or force-completed a task;
+     * it must not re-register it, or nothing would ever settle it again.
+     */
+    const rememberSettledBackgroundTask = (
+      context: AntigravitySessionContext,
+      taskId: string,
+    ): void => {
+      context.settledBackgroundTaskIds.push(taskId);
+      if (context.settledBackgroundTaskIds.length > 32) context.settledBackgroundTaskIds.shift();
+    };
+
+    const completePendingBackgroundTasks = (
+      context: AntigravitySessionContext,
+      status: "completed" | "failed" | "stopped",
+      source: string,
+    ): void => {
+      for (const [taskId, tracked] of context.pendingBackgroundTasks) {
+        offer({
+          ...base(context),
+          type: "task.completed",
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe(taskId),
+            status,
+          },
+          raw: raw(source, { taskId, tracked, status }),
+        } satisfies ProviderRuntimeEvent);
+      }
+      for (const taskId of context.pendingBackgroundTasks.keys()) {
+        rememberSettledBackgroundTask(context, taskId);
+      }
+      context.pendingBackgroundTasks.clear();
+      context.pendingAnonymousBackgroundTasks.length = 0;
+      context.pendingBackgroundTaskTerminals.length = 0;
+    };
+
+    const killPendingBackgroundTasks = (
+      context: AntigravitySessionContext,
+      source: string,
+    ): void => {
+      for (const [taskId, tracked] of context.pendingBackgroundTasks) {
+        offer({
+          ...base(context),
+          type: "task.updated",
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe(taskId),
+            status: "killed",
+          },
+          raw: raw(source, { taskId, tracked }),
+        } satisfies ProviderRuntimeEvent);
+      }
+      for (const taskId of context.pendingBackgroundTasks.keys()) {
+        rememberSettledBackgroundTask(context, taskId);
+      }
+      context.pendingBackgroundTasks.clear();
+      context.pendingAnonymousBackgroundTasks.length = 0;
+      context.pendingBackgroundTaskTerminals.length = 0;
+    };
+
+    const backgroundCompletionCandidate = (
+      message: AntigravitySystemMessageInfo,
+    ): string | undefined => message.taskId ?? message.sender;
+
+    const settleTrackedBackgroundTask = (
+      context: AntigravitySessionContext,
+      taskId: string,
+      systemMessage: AntigravitySystemMessageInfo,
+    ): boolean => {
+      const tracked = context.pendingBackgroundTasks.get(taskId);
+      if (!tracked) return false;
+      context.pendingBackgroundTasks.delete(taskId);
+      rememberSettledBackgroundTask(context, taskId);
+      offer({
+        ...base(context),
+        type: "task.completed",
+        payload: {
+          taskId: RuntimeTaskId.makeUnsafe(taskId),
+          status: systemMessage.isFailure ? "failed" : "completed",
+        },
+        raw: raw("background-task-completed", {
+          taskId,
+          systemMessage,
+          tracked,
+        }),
+      } satisfies ProviderRuntimeEvent);
+      return true;
+    };
+
+    const queueBackgroundTaskTerminal = (
+      context: AntigravitySessionContext,
+      terminal: BackgroundTaskTerminal,
+    ): boolean => {
+      if (
+        matchAntigravityTrackedTaskId(terminal.taskId, context.settledBackgroundTaskIds) ||
+        context.pendingBackgroundTaskTerminals.some(
+          (pending) =>
+            matchAntigravityTrackedTaskId(pending.taskId, [terminal.taskId]) !== undefined,
+        )
+      )
+        return false;
+      // Retain every unmatched terminal until its start arrives or the turn ends,
+      // even if no capture hooks were read. A history cap can lose the only finish.
+      // An unmatched terminal may belong to a different task, so it cannot settle
+      // an anonymous call or allow Stop to tear down the process before that match.
+      context.pendingBackgroundTaskTerminals.push(terminal);
+      return true;
+    };
+
+    const takeAnonymousBackgroundTask = (
+      context: AntigravitySessionContext,
+      stepIndex: number | undefined,
+      command: string | undefined,
+    ): boolean => {
+      const tasks = context.pendingAnonymousBackgroundTasks;
+      if (takeAntigravityBackgroundCallKey(tasks, stepIndex, command)) return true;
+      // A malformed/lost hook index can still be reconciled when its command
+      // uniquely identifies one anonymous call. Do not guess between duplicates.
+      const unindexed = tasks.filter(
+        (task) => task.stepIndex === undefined && command !== undefined && task.command === command,
+      );
+      if (unindexed.length !== 1) return false;
+      tasks.splice(tasks.indexOf(unindexed[0]!), 1);
+      return true;
+    };
+
+    const registerBackgroundTask = (
+      context: AntigravitySessionContext,
+      start: { readonly taskId?: string; readonly description?: string },
+      taskType: string,
+      source: {
+        readonly name: string;
+        readonly args?: Record<string, unknown>;
+        readonly stepIndex?: number;
+      },
+    ): void => {
+      // A hook poll or transcript read still in flight when the turn was
+      // interrupted or settled must not register a task nobody will settle.
+      if (context.stopped || context.interrupted || context.turnTerminalEmitted) return;
+      if (!start.taskId) {
+        const command = normalizeAntigravityCommandLine(source.args?.CommandLine);
+        context.pendingAnonymousBackgroundTasks.push({
+          stepIndex: source.stepIndex,
+          ...(command !== undefined ? { command } : {}),
+        });
+        return;
+      }
+      const taskId = start.taskId;
+      if (matchAntigravityTrackedTaskId(taskId, context.pendingBackgroundTasks.keys())) return;
+      const terminalIndex = context.pendingBackgroundTaskTerminals.findIndex(
+        (pending) => matchAntigravityTrackedTaskId(pending.taskId, [taskId]) !== undefined,
+      );
+      const terminal =
+        terminalIndex < 0
+          ? undefined
+          : context.pendingBackgroundTaskTerminals.splice(terminalIndex, 1)[0];
+      // Naming a killed anonymous call removes only its own occurrence and
+      // terminal; it must not reopen it or settle another running command.
+      if (
+        terminal?.kind === "killed" ||
+        matchAntigravityTrackedTaskId(taskId, context.settledBackgroundTaskIds)
+      )
+        return;
+      context.pendingBackgroundTasks.set(taskId, {
+        taskId,
+        taskType,
+        ...(start.description ? { description: start.description } : {}),
+        startedAt: new Date().toISOString(),
+      });
+      offer({
+        ...base(context),
+        type: "task.started",
+        payload: {
+          taskId: RuntimeTaskId.makeUnsafe(taskId),
+          taskType,
+          ...(start.description ? { description: start.description } : {}),
+        },
+        raw: raw("background-task-started", { taskId, ...source }),
+      } satisfies ProviderRuntimeEvent);
+
+      if (terminal?.kind === "completed") {
+        settleTrackedBackgroundTask(context, taskId, terminal.message);
+      }
+    };
+
+    const teardownStoppedTurnIfIdle = (context: AntigravitySessionContext): void => {
+      if (
+        !context.activeProcess ||
+        context.turnTerminalEmitted ||
+        context.pendingBackgroundTasks.size > 0 ||
+        context.pendingAnonymousBackgroundTasks.length > 0
+      ) {
+        return;
+      }
+      const child = context.activeProcess;
+      context.stopTeardownRequested = true;
+      void teardownProcessTree(child).catch(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Process may already be gone.
+        }
+      });
+    };
+
+    /**
+     * Emit a single terminal turn.completed for the active turn and mark the
+     * session idle. Idempotent so process-close, interrupt, and stop-hook
+     * paths can all call it without double-settling (#465).
+     */
+    const settleActiveTurn = (
+      context: AntigravitySessionContext,
+      input: {
+        readonly state: "completed" | "interrupted" | "failed";
+        readonly stopReason: "model_stop" | "interrupted" | "error";
+        readonly errorMessage?: string;
+        readonly raw?: ReturnType<typeof raw>;
+      },
+    ): boolean => {
+      if (context.turnTerminalEmitted || context.activeTurnId === undefined) {
+        return false;
+      }
+      const completionBase = base(context);
+      completePendingBackgroundTasks(
+        context,
+        input.state === "interrupted"
+          ? "stopped"
+          : input.state === "failed"
+            ? "failed"
+            : "completed",
+        "parent-turn-background-task-terminal",
+      );
+      settleForeignConversations(context, {
+        state: input.state,
+        ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
+        raw: raw("parent-turn-terminal", {
+          state: input.state,
+          stopReason: input.stopReason,
+        }),
+      });
+      context.turnTerminalEmitted = true;
+      delete context.activeProcess;
+      delete context.activeTurnId;
+      const {
+        activeTurnId: _activeTurnId,
+        lastError: _lastError,
+        ...inactiveSession
+      } = context.session;
+      const failed = input.state === "failed";
+      context.session = {
+        ...inactiveSession,
+        status: failed ? "error" : "ready",
+        ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+        updatedAt: new Date().toISOString(),
+        ...(failed && input.errorMessage ? { lastError: input.errorMessage } : {}),
+      };
+      offer({
+        ...completionBase,
+        type: "turn.completed",
+        payload:
+          input.state === "interrupted"
+            ? { state: "interrupted", stopReason: "interrupted" }
+            : input.state === "failed"
+              ? {
+                  state: "failed",
+                  stopReason: "error",
+                  errorMessage: input.errorMessage ?? "Antigravity turn failed.",
+                }
+              : {
+                  state: "completed",
+                  stopReason: "model_stop",
+                },
+        ...(input.raw ? { raw: input.raw } : {}),
+      } satisfies ProviderRuntimeEvent);
+      return true;
     };
 
     const currentTurn = (context: AntigravitySessionContext): StoredTurn | undefined =>
@@ -663,8 +1497,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       step: TranscriptStep,
       itemType: "assistant_message" | "reasoning",
       streamKind: "assistant_text" | "reasoning_text",
+      explicitContent?: string,
     ) => {
-      const content = trim(step.content);
+      const content = trim(explicitContent ?? step.content);
       if (!content) return;
       const itemId = RuntimeItemId.makeUnsafe(
         `antigravity-${context.activeTurnId ?? "turn"}-${step.step_index ?? crypto.randomUUID()}-${itemType}`,
@@ -700,81 +1535,203 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (itemType === "assistant_message") context.sawAssistant = true;
     };
 
+    /**
+     * Surface tool calls recorded in the transcript body as tool lifecycle
+     * items. This is the fallback for calls the capture hook never reported
+     * (plugin not installed this session, hook payload missing stepIdx, ...).
+     * Occurrence counters dedupe against the hook stream so a call the hook
+     * already rendered — or will render — is not emitted twice.
+     */
+    const emitTranscriptToolCalls = (
+      context: AntigravitySessionContext,
+      stepIndex: number,
+      calls: ReadonlyArray<NonNullable<TranscriptStep["tool_calls"]>[number]>,
+    ) => {
+      const transcriptCounts = new Map<string, number>();
+      for (const call of calls) {
+        const name = typeof call?.name === "string" ? trim(call.name) : undefined;
+        if (!name) continue;
+        const args =
+          call.args && typeof call.args === "object"
+            ? (call.args as Record<string, unknown>)
+            : undefined;
+        const surfaceKey = `${stepIndex}:${name}`;
+        const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
+        if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
+        const itemId = RuntimeItemId.makeUnsafe(
+          `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
+        );
+        const itemType = toolItemType(name);
+        const data = buildAntigravityToolItemData(name, itemType, itemId, args);
+        offer({
+          ...base(context, { itemId }),
+          type: "item.started",
+          payload: {
+            itemType,
+            status: "inProgress",
+            title: name,
+            data,
+          },
+          raw: raw("transcript-tool-call", { stepIdx: stepIndex, name, args }),
+        } satisfies ProviderRuntimeEvent);
+        offer({
+          ...base(context, { itemId }),
+          type: "item.completed",
+          payload: {
+            itemType,
+            status: "completed",
+            title: name,
+            data,
+          },
+          raw: raw("transcript-tool-call", { stepIdx: stepIndex, name, args }),
+        } satisfies ProviderRuntimeEvent);
+      }
+    };
+
     const processTranscriptStep = (context: AntigravitySessionContext, step: TranscriptStep) => {
+      if (context.stopped) return;
       const stepIndex = step.step_index;
-      if (typeof stepIndex !== "number" || context.processedSteps.has(stepIndex)) return;
-      context.processedSteps.add(stepIndex);
+      if (typeof stepIndex === "number") {
+        if (context.processedSteps.has(stepIndex)) return;
+        context.processedSteps.add(stepIndex);
+      }
       currentTurn(context)?.items.push(step);
 
-      if (step.type === "PLANNER_RESPONSE") {
-        const calls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
-        if (calls.length > 0) {
-          emitTextItem(context, step, "reasoning", "reasoning_text");
-          for (const [index, call] of calls.entries()) {
-            const name = trim(call.name) ?? "tool";
-            const itemId = RuntimeItemId.makeUnsafe(
-              `antigravity-${context.activeTurnId ?? "turn"}-${stepIndex}-tool-${index}`,
+      const systemMessage = parseAntigravitySystemMessage(
+        typeof step.content === "string" ? step.content : undefined,
+      );
+      if (systemMessage?.isSystemMessage) {
+        const candidateId = backgroundCompletionCandidate(systemMessage);
+        if (candidateId) {
+          context.backgroundCompletionSequence += 1;
+          if (typeof stepIndex === "number") {
+            context.latestBackgroundCompletionStepIndex = Math.max(
+              context.latestBackgroundCompletionStepIndex ?? -1,
+              stepIndex,
             );
-            const itemType = toolItemType(name);
-            const pending = { itemId, itemType, name, args: call.args ?? {} } satisfies PendingTool;
-            context.pendingTools.push(pending);
-            offer({
-              ...base(context, { itemId }),
-              type: "item.started",
-              payload: {
-                itemType,
-                status: "inProgress",
-                title: name,
-                data: { name, args: pending.args },
-              },
-              raw: raw("tool-call", call),
-            } satisfies ProviderRuntimeEvent);
+          } else {
+            delete context.latestBackgroundCompletionStepIndex;
           }
-        } else {
-          emitTextItem(context, step, "assistant_message", "assistant_text");
+        }
+        const matchedTaskId = matchAntigravityTrackedTaskId(
+          candidateId,
+          context.pendingBackgroundTasks.keys(),
+        );
+        if (matchedTaskId) {
+          settleTrackedBackgroundTask(context, matchedTaskId, systemMessage);
+        } else if (candidateId) {
+          queueBackgroundTaskTerminal(context, {
+            kind: "completed",
+            taskId: candidateId,
+            message: systemMessage,
+          });
         }
         return;
       }
 
-      if (isToolResultStep(step)) {
-        const pending = context.pendingTools.shift();
-        if (!pending) return;
-        const content = typeof step.content === "string" ? step.content : "";
-        if (content) {
-          offer({
-            ...base(context, { itemId: pending.itemId }),
-            type: "content.delta",
-            payload: { streamKind: resultStreamKind(pending.itemType), delta: content },
-            raw: raw(step.type ?? "tool-result", step),
-          } satisfies ProviderRuntimeEvent);
+      const backgroundStart =
+        step.type === "GENERIC" && step.status === "RUNNING"
+          ? parseAntigravityBackgroundTaskStep(step.content)
+          : null;
+      if (backgroundStart) {
+        // The background step always directly follows its tool call's planner
+        // step. When that step issued several calls, the task description names
+        // the command that was backgrounded.
+        const toolStep = stepIndex === undefined ? undefined : stepIndex - 1;
+        const candidates = context.pendingTools.filter((tool) => tool.stepIndex === toolStep);
+        const wantedCommand = normalizeAntigravityCommandLine(backgroundStart.description);
+        // A lone pending call may just be the first hook read from a multi-call
+        // planner step. Without a command match, defer ownership to the post-hook.
+        const pending = candidates.find(
+          (tool) =>
+            wantedCommand !== undefined &&
+            normalizeAntigravityCommandLine(tool.args?.CommandLine) === wantedCommand,
+        );
+        const replacesAnonymousTask =
+          pending === undefined && takeAnonymousBackgroundTask(context, toolStep, wantedCommand);
+        if (pending) {
+          pending.backgroundedByTranscript = true;
+        } else if (!replacesAnonymousTask && toolStep !== undefined) {
+          context.transcriptBackgroundedCalls.push({
+            stepIndex: toolStep,
+            taskId: backgroundStart.taskId,
+            ...(wantedCommand !== undefined ? { command: wantedCommand } : {}),
+          });
         }
-        offer({
-          ...base(context, { itemId: pending.itemId }),
-          type: "item.completed",
-          payload: {
-            itemType: pending.itemType,
-            status: step.status === "ERROR" ? "failed" : "completed",
-            title: pending.name,
-            data: { name: pending.name, args: pending.args, result: step },
+        const command = pending?.args?.CommandLine;
+        const description =
+          backgroundStart.description ?? (typeof command === "string" ? command : undefined);
+        const plannerStep = currentTurn(context)?.items.find(
+          (item): item is TranscriptStep =>
+            typeof item === "object" &&
+            item !== null &&
+            (item as TranscriptStep).step_index === toolStep,
+        );
+        const plannerCalls =
+          plannerStep?.tool_calls?.filter(
+            (call) => typeof call?.name === "string" && call.name.trim().length > 0,
+          ) ?? [];
+        const plannerCall =
+          plannerCalls.find(
+            (call) =>
+              wantedCommand !== undefined &&
+              normalizeAntigravityCommandLine(call.args?.CommandLine) === wantedCommand,
+          ) ?? (plannerCalls.length === 1 ? plannerCalls[0] : undefined);
+        const name = pending?.name ?? plannerCall?.name ?? "run_command";
+        registerBackgroundTask(
+          context,
+          {
+            taskId: backgroundStart.taskId,
+            ...(description ? { description } : {}),
           },
-          raw: raw(step.type ?? "tool-result", step),
-        } satisfies ProviderRuntimeEvent);
+          toolItemType(name),
+          { name, ...(pending?.args ? { args: pending.args } : {}) },
+        );
+        return;
+      }
+
+      if (step.type === "PLANNER_RESPONSE") {
+        const calls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
+        if (calls.length > 0) {
+          const reasoning = trim(
+            typeof step.thinking === "string"
+              ? step.thinking
+              : typeof step.thought === "string"
+                ? step.thought
+                : step.content,
+          );
+          if (reasoning) {
+            emitTextItem(context, step, "reasoning", "reasoning_text", reasoning);
+          }
+          emitTranscriptToolCalls(context, stepIndex ?? 0, calls);
+        } else {
+          const assistantText = trim(
+            typeof step.content === "string"
+              ? step.content
+              : typeof step.thinking === "string"
+                ? step.thinking
+                : undefined,
+          );
+          if (assistantText) {
+            emitTextItem(context, step, "assistant_message", "assistant_text", assistantText);
+          }
+        }
+        return;
       }
     };
 
     const readTranscript = async (context: AntigravitySessionContext) => {
       if (!context.transcriptPath) return;
+      const turnAtStart = context.activeTurnId;
       const isInitialRead = context.processedTranscriptPath !== context.transcriptPath;
       if (isInitialRead) context.processedTranscriptBytes = 0;
       let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
       try {
-        batch = await readCompleteAntigravityLines(
-          context.transcriptPath,
-          context.processedTranscriptBytes,
-        );
+        batch = await readCompleteLines(context.transcriptPath, context.processedTranscriptBytes);
       } catch {
         return;
       }
+      if (context.stopped || context.activeTurnId !== turnAtStart) return;
       context.processedTranscriptBytes = batch.nextOffset;
       context.processedTranscriptPath = context.transcriptPath;
       const steps = batch.lines.flatMap((line) => {
@@ -794,7 +1751,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           )
         : -1;
       for (const step of steps) {
-        if (typeof step.step_index === "number" && step.step_index > latestUserIndex) {
+        const idx = typeof step.step_index === "number" ? step.step_index : Number.MAX_SAFE_INTEGER;
+        if (idx > latestUserIndex) {
           processTranscriptStep(context, step);
         }
       }
@@ -803,7 +1761,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const markExistingTranscriptStepsProcessed = async (context: AntigravitySessionContext) => {
       if (!context.transcriptPath) return;
       try {
-        const batch = await readCompleteAntigravityLines(context.transcriptPath, 0);
+        const batch = await readCompleteLines(context.transcriptPath, 0);
         context.processedTranscriptBytes = batch.nextOffset;
         context.processedTranscriptPath = context.transcriptPath;
       } catch {
@@ -811,17 +1769,190 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
     };
 
-    const pollHookFile = async (context: AntigravitySessionContext) => {
+    /**
+     * Forward a hook event that belongs to a subagent conversation spawned by
+     * the session's own CLI. The capture hook is installed globally, so the
+     * subagent CLI inherits `SYNARA_ANTIGRAVITY_EVENTS` and writes its
+     * events into this session's hook stream. Those events describe a
+     * different process and conversation: they must never rebind the session
+     * (cursor, transcript, thread) — instead they are surfaced as child-thread
+     * events carrying `providerParentThreadId` so the ingestion layer
+     * materializes a visible subagent thread.
+     */
+    const handleForeignHookEvent = async (
+      context: AntigravitySessionContext,
+      input: {
+        readonly eventName: string;
+        readonly payload: Record<string, unknown>;
+        readonly conversationId: string;
+        readonly ownConversationId: string;
+        readonly modelName?: string;
+      },
+    ): Promise<void> => {
+      const { eventName, payload, conversationId, ownConversationId, modelName } = input;
+      let child = context.foreignConversations.get(conversationId);
+      if (!child) {
+        child = {
+          pendingTools: [],
+          surfacedToolCallCounts: new Map(),
+          hookToolCallCounts: new Map(),
+          nextToolSequence: 0,
+          terminalEmitted: false,
+        };
+        context.foreignConversations.set(conversationId, child);
+        offer(
+          withForeignProviderRefs(
+            {
+              ...base(context, { includeTurn: false }),
+              type: "thread.started",
+              payload: { providerThreadId: conversationId },
+              raw: raw(eventName, payload),
+            } satisfies ProviderRuntimeEvent,
+            conversationId,
+            ownConversationId,
+          ),
+        );
+        offer(
+          withForeignProviderRefs(
+            {
+              ...base(context),
+              type: "turn.started",
+              payload: { model: modelName ?? context.modelName ?? DEFAULT_MODEL },
+              raw: raw(eventName, payload),
+            } satisfies ProviderRuntimeEvent,
+            conversationId,
+            ownConversationId,
+          ),
+        );
+      }
+      if (child.terminalEmitted) return;
+      const stepIndex =
+        typeof payload.stepIdx === "number" &&
+        Number.isInteger(payload.stepIdx) &&
+        payload.stepIdx >= 0
+          ? payload.stepIdx
+          : undefined;
+      if (eventName === "pre-tool" && stepIndex !== undefined) {
+        const toolCall =
+          payload.toolCall && typeof payload.toolCall === "object"
+            ? (payload.toolCall as Record<string, unknown>)
+            : undefined;
+        const name = typeof toolCall?.name === "string" ? trim(toolCall.name) : undefined;
+        const toolArgs =
+          toolCall?.args && typeof toolCall.args === "object"
+            ? (toolCall.args as Record<string, unknown>)
+            : undefined;
+        if (name) {
+          const surfaceKey = `${stepIndex}:${name}`;
+          const occurrence = nextToolOccurrence(child.hookToolCallCounts, surfaceKey);
+          if (!claimToolOccurrence(child.surfacedToolCallCounts, surfaceKey, occurrence)) return;
+          const itemId = RuntimeItemId.makeUnsafe(
+            `antigravity-${context.activeTurnId ?? "turn"}-tool-${child.nextToolSequence++}`,
+          );
+          const itemType = toolItemType(name);
+          child.pendingTools.push({
+            stepIndex,
+            itemId,
+            itemType,
+            name,
+            ...(toolArgs ? { args: toolArgs } : {}),
+          } satisfies PendingTool);
+          offer(
+            withForeignProviderRefs(
+              {
+                ...base(context, { itemId }),
+                type: "item.started",
+                payload: {
+                  itemType,
+                  status: "inProgress",
+                  title: name,
+                  data: buildAntigravityToolItemData(name, itemType, itemId, toolArgs),
+                },
+                raw: raw("tool-lifecycle", {
+                  eventName,
+                  stepIdx: stepIndex,
+                  name,
+                  args: toolArgs,
+                }),
+              } satisfies ProviderRuntimeEvent,
+              conversationId,
+              ownConversationId,
+            ),
+          );
+        }
+      } else if (eventName === "post-tool" && stepIndex !== undefined) {
+        const toolCall =
+          payload.toolCall && typeof payload.toolCall === "object"
+            ? (payload.toolCall as Record<string, unknown>)
+            : undefined;
+        const name = typeof toolCall?.name === "string" ? trim(toolCall.name) : undefined;
+        const pendingIndex = child.pendingTools.findIndex(
+          (pending) => pending.stepIndex === stepIndex && (!name || pending.name === name),
+        );
+        const pending =
+          pendingIndex >= 0 ? child.pendingTools.splice(pendingIndex, 1)[0] : undefined;
+        if (pending) {
+          const failed =
+            payload.failed === true ||
+            (typeof payload.error === "string" && payload.error.trim().length > 0);
+          offer(
+            withForeignProviderRefs(
+              {
+                ...base(context, { itemId: pending.itemId }),
+                type: "item.completed",
+                payload: {
+                  itemType: pending.itemType,
+                  status: failed ? "failed" : "completed",
+                  title: pending.name,
+                  data: buildAntigravityToolItemData(
+                    pending.name,
+                    pending.itemType,
+                    pending.itemId,
+                    pending.args,
+                    payload,
+                  ),
+                },
+                raw: raw("tool-lifecycle", {
+                  eventName,
+                  stepIdx: stepIndex,
+                  name: pending.name,
+                  failed,
+                }),
+              } satisfies ProviderRuntimeEvent,
+              conversationId,
+              ownConversationId,
+            ),
+          );
+        }
+      } else if (eventName === "stop") {
+        // The subagent finished; settle its child turn. Never tear down the
+        // session's own CLI process for a foreign stop.
+        settleForeignConversation(context, conversationId, ownConversationId, child, {
+          state: "completed",
+          raw: raw(eventName, payload),
+        });
+      }
+    };
+
+    const pollHookFileOnce = async (context: AntigravitySessionContext) => {
       if (context.stopped) return;
       if (!context.eventFile) return;
+      // A read that outlives its turn (interrupt, next sendTurn) must not feed
+      // stale hooks into whatever turn is active once it resumes.
+      const turnAtStart = context.activeTurnId;
+      const completionSequenceBeforePoll = context.backgroundCompletionSequence;
+      let latestStopStepIndex: number | undefined;
+      let sawStopWithoutStepIndex = false;
       let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
       try {
-        batch = await readCompleteAntigravityLines(context.eventFile, context.processedHookBytes);
+        batch = await readCompleteLines(context.eventFile, context.processedHookBytes);
       } catch {
         return;
       }
+      if (context.stopped || context.activeTurnId !== turnAtStart) return;
       context.processedHookBytes = batch.nextOffset;
       for (const line of batch.lines) {
+        if (context.stopped || context.activeTurnId !== turnAtStart) return;
         const tab = line.indexOf("\t");
         if (tab < 0) continue;
         const eventName = line.slice(0, tab);
@@ -836,6 +1967,24 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const transcriptPath =
           typeof payload.transcriptPath === "string" ? payload.transcriptPath : undefined;
         const modelName = typeof payload.modelName === "string" ? payload.modelName : undefined;
+        const ownConversationId = context.conversationId;
+        if (
+          conversationId !== undefined &&
+          ownConversationId !== undefined &&
+          conversationId !== ownConversationId
+        ) {
+          // The session's CLI spawned a subagent that writes into the same
+          // hook stream. Forward the event to the subagent's child thread and
+          // never rebind this session.
+          await handleForeignHookEvent(context, {
+            eventName,
+            payload,
+            conversationId,
+            ownConversationId,
+            ...(modelName ? { modelName } : {}),
+          });
+          continue;
+        }
         const learnedConversation = conversationId && conversationId !== context.conversationId;
         if (conversationId) context.conversationId = conversationId;
         if (transcriptPath && transcriptPath !== context.transcriptPath) {
@@ -857,8 +2006,235 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             raw: raw(eventName, payload),
           } satisfies ProviderRuntimeEvent);
         }
+        const stepIndex =
+          typeof payload.stepIdx === "number" &&
+          Number.isInteger(payload.stepIdx) &&
+          payload.stepIdx >= 0
+            ? payload.stepIdx
+            : undefined;
+        if (eventName === "pre-tool" && stepIndex !== undefined) {
+          const toolCall =
+            payload.toolCall && typeof payload.toolCall === "object"
+              ? (payload.toolCall as Record<string, unknown>)
+              : undefined;
+          const name = typeof toolCall?.name === "string" ? trim(toolCall.name) : undefined;
+          const toolArgs =
+            toolCall?.args && typeof toolCall.args === "object"
+              ? (toolCall.args as Record<string, unknown>)
+              : undefined;
+          if (name) {
+            const surfaceKey = `${stepIndex}:${name}`;
+            const occurrence = nextToolOccurrence(context.hookToolCallCounts, surfaceKey);
+            if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) {
+              // The transcript already surfaced this call as a completed item;
+              // there is no pending lifecycle to open or close for it.
+              continue;
+            }
+            const itemId = RuntimeItemId.makeUnsafe(
+              `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
+            );
+            const itemType = toolItemType(name);
+            const pending: PendingTool = {
+              stepIndex,
+              itemId,
+              itemType,
+              name,
+              ...(toolArgs ? { args: toolArgs } : {}),
+            };
+            // Only a command match can identify a late pre-hook. A step-only
+            // marker must wait until a post-hook confirms background execution.
+            if (
+              takeAntigravityBackgroundCallKey(
+                context.transcriptBackgroundedCalls,
+                stepIndex,
+                normalizeAntigravityCommandLine(toolArgs?.CommandLine),
+                { allowUnspecifiedCommand: false },
+              )
+            ) {
+              pending.backgroundedByTranscript = true;
+            }
+            context.pendingTools.push(pending);
+            offer({
+              ...base(context, { itemId }),
+              type: "item.started",
+              payload: {
+                itemType: pending.itemType,
+                status: "inProgress",
+                title: pending.name,
+                data: buildAntigravityToolItemData(name, itemType, itemId, toolArgs),
+              },
+              raw: raw("tool-lifecycle", { eventName, stepIdx: stepIndex, name, args: toolArgs }),
+            } satisfies ProviderRuntimeEvent);
+          }
+        } else if (eventName === "post-tool") {
+          const toolCall =
+            payload.toolCall && typeof payload.toolCall === "object"
+              ? (payload.toolCall as Record<string, unknown>)
+              : undefined;
+          const name = typeof toolCall?.name === "string" ? trim(toolCall.name) : undefined;
+          const hookArgs =
+            toolCall?.args && typeof toolCall.args === "object"
+              ? (toolCall.args as Record<string, unknown>)
+              : undefined;
+          // Several same-name calls can share a step and finish out of order:
+          // prefer the pending call with the same command line, then FIFO.
+          const matchesHook = (candidate: PendingTool) =>
+            candidate.stepIndex === stepIndex && (!name || candidate.name === name);
+          const hookCommand = normalizeAntigravityCommandLine(hookArgs?.CommandLine);
+          const exactIndex =
+            stepIndex === undefined || hookCommand === undefined
+              ? -1
+              : context.pendingTools.findIndex(
+                  (candidate) =>
+                    matchesHook(candidate) &&
+                    normalizeAntigravityCommandLine(candidate.args?.CommandLine) === hookCommand,
+                );
+          const pendingIndex =
+            stepIndex === undefined
+              ? -1
+              : exactIndex >= 0
+                ? exactIndex
+                : context.pendingTools.findIndex(matchesHook);
+          const pending =
+            pendingIndex >= 0 ? context.pendingTools.splice(pendingIndex, 1)[0] : undefined;
+          const toolName = pending?.name ?? name;
+          const toolArgs = pending?.args ?? hookArgs;
+          const failed =
+            payload.failed === true ||
+            (typeof payload.error === "string" && payload.error.trim().length > 0);
+          if (pending) {
+            offer({
+              ...base(context, { itemId: pending.itemId }),
+              type: "item.completed",
+              payload: {
+                itemType: pending.itemType,
+                status: failed ? "failed" : "completed",
+                title: pending.name,
+                data: buildAntigravityToolItemData(
+                  pending.name,
+                  pending.itemType,
+                  pending.itemId,
+                  pending.args,
+                  payload,
+                ),
+              },
+              raw: raw("tool-lifecycle", {
+                eventName,
+                stepIdx: stepIndex,
+                name: pending.name,
+                failed,
+              }),
+            } satisfies ProviderRuntimeEvent);
+          }
+
+          const bgStart =
+            !failed && toolName
+              ? detectAntigravityBackgroundTaskStart(toolName, toolArgs, payload)
+              : null;
+          // An unmarked pending call can still own a transcript marker. Consume
+          // an unspecified command only for background output, so a foreground
+          // call sharing the step cannot take another call's marker.
+          const transcriptOwned =
+            pending?.backgroundedByTranscript === true ||
+            takeAntigravityBackgroundCallKey(
+              context.transcriptBackgroundedCalls,
+              stepIndex,
+              normalizeAntigravityCommandLine(toolArgs?.CommandLine),
+              {
+                allowUnspecifiedCommand: bgStart?.isBackground === true,
+                taskId: bgStart?.taskId,
+              },
+            );
+          if (!failed && toolName && !transcriptOwned) {
+            if (bgStart?.isBackground) {
+              // Without a pre-tool entry the marker above cannot help: a hook that
+              // arrives after the transcript already settled the task must not
+              // re-register it, or nothing would ever settle it again.
+              // Only a named start can be matched against settled ids: with no
+              // candidate the matcher returns a lone tracked id, which would
+              // silently drop a genuine anonymous background start.
+              const settled =
+                bgStart.taskId !== undefined &&
+                matchAntigravityTrackedTaskId(bgStart.taskId, context.settledBackgroundTaskIds) !==
+                  undefined;
+              if (!settled) {
+                registerBackgroundTask(context, bgStart, toolItemType(toolName), {
+                  name: toolName,
+                  ...(toolArgs ? { args: toolArgs } : {}),
+                  ...(stepIndex !== undefined ? { stepIndex } : {}),
+                });
+              }
+            } else if (toolName === "manage_task") {
+              const action = typeof toolArgs?.Action === "string" ? toolArgs.Action : undefined;
+              const targetTaskId =
+                typeof toolArgs?.TaskId === "string" ? toolArgs.TaskId : undefined;
+              const matchedId =
+                action === "kill" && targetTaskId
+                  ? matchAntigravityTrackedTaskId(
+                      targetTaskId,
+                      context.pendingBackgroundTasks.keys(),
+                    )
+                  : undefined;
+              if (matchedId) {
+                context.pendingBackgroundTasks.delete(matchedId);
+                rememberSettledBackgroundTask(context, matchedId);
+                offer({
+                  ...base(context),
+                  type: "task.updated",
+                  payload: {
+                    taskId: RuntimeTaskId.makeUnsafe(matchedId),
+                    status: "killed",
+                  },
+                  raw: raw("background-task-killed", { taskId: matchedId }),
+                } satisfies ProviderRuntimeEvent);
+              } else if (
+                action === "kill" &&
+                targetTaskId &&
+                queueBackgroundTaskTerminal(context, { kind: "killed", taskId: targetTaskId })
+              ) {
+                rememberSettledBackgroundTask(context, targetTaskId);
+              }
+            }
+          }
+        }
+        // Agent finished: if the print process lingers, tear it down so the
+        // close handler (or interrupt fallback) can settle the turn (#465).
+        // Skip the teardown while background tasks are pending: the CLI stays
+        // alive by design to wait for the background completion and stream the
+        // follow-up response; killing it aborts the task and fails the turn
+        // with "Error: timeout waiting for response" (#752).
+        if (eventName === "stop") {
+          if (stepIndex === undefined) {
+            sawStopWithoutStepIndex = true;
+          } else {
+            latestStopStepIndex = Math.max(latestStopStepIndex ?? -1, stepIndex);
+          }
+        }
       }
       await readTranscript(context);
+      if (context.stopped || context.activeTurnId !== turnAtStart) return;
+      const completionStepIndex = context.latestBackgroundCompletionStepIndex;
+      const completionObservedDuringPoll =
+        context.backgroundCompletionSequence > completionSequenceBeforePoll;
+      const indexedStopFollowsLatestCompletion =
+        latestStopStepIndex !== undefined &&
+        (completionStepIndex !== undefined
+          ? latestStopStepIndex > completionStepIndex
+          : !completionObservedDuringPoll);
+      const unindexedStopFollowsLatestCompletion =
+        sawStopWithoutStepIndex && !completionObservedDuringPoll;
+      const stopFollowsLatestCompletion =
+        indexedStopFollowsLatestCompletion || unindexedStopFollowsLatestCompletion;
+      if (stopFollowsLatestCompletion) teardownStoppedTurnIfIdle(context);
+    };
+
+    const pollHookFile = (context: AntigravitySessionContext): Promise<void> => {
+      if (context.hookPollPromise) return context.hookPollPromise;
+      const poll = pollHookFileOnce(context).finally(() => {
+        if (context.hookPollPromise === poll) delete context.hookPollPromise;
+      });
+      context.hookPollPromise = poll;
+      return poll;
     };
 
     const startSession: AntigravityAdapterShape["startSession"] = (input) =>
@@ -871,12 +2247,24 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               "Antigravity CLI print mode cannot pause for interactive approvals. Select Full access to use this provider.",
           });
         }
-        const binaryPath = trim(input.providerOptions?.antigravity?.binaryPath) ?? "agy";
+        const providerOptions = input.providerOptions?.antigravity;
+        const binaryPath = trim(providerOptions?.binaryPath) ?? "agy";
+        const environment = providerOptions?.environment
+          ? { ...process.env, ...providerOptions.environment }
+          : process.env;
+        const providerHomeDir =
+          trim(environment.HOME) ?? trim(environment.USERPROFILE) ?? os.homedir();
         yield* Effect.tryPromise({
           try: () =>
             (dependencies.ensurePlugin ?? ensureCapturePlugin)(
               binaryPath,
               agentGatewayCredentials?.stdioProxy,
+              {
+                homeDir: providerHomeDir,
+                ...(providerOptions?.environment
+                  ? { environment: providerOptions.environment }
+                  : {}),
+              },
             ),
           catch: (cause) =>
             new ProviderAdapterRequestError({
@@ -890,6 +2278,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (existing) {
           existing.stopped = true;
           existing.interrupted = true;
+          killPendingBackgroundTasks(existing, "session-restart-background-task-killed");
+          settleForeignConversations(existing, {
+            state: "interrupted",
+            raw: raw("session-restart", { threadId: input.threadId }),
+          });
           yield* cancelAgentGatewayTurn(existing.gatewaySessionLease, existing.activeTurnId);
           yield* teardownActiveProcess(existing, "session/restart");
           releaseTurnGatewayLease(existing);
@@ -901,6 +2294,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const model = modelSelection?.model ?? DEFAULT_MODEL;
         const session: ProviderSession = {
           provider: PROVIDER,
+          ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
           status: "ready",
           runtimeMode: input.runtimeMode,
           cwd: trim(input.cwd) ?? serverConfig.cwd,
@@ -911,24 +2305,38 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           updatedAt: now,
         };
         const context: AntigravitySessionContext = {
+          enableComputerControl: input.enableComputerControl === true,
           session,
+          gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
           binaryPath,
+          environment,
           turns: [],
           ...(conversationId ? { conversationId } : {}),
           ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
           ...(conversationId
-            ? { transcriptPath: transcriptPathForConversation(conversationId) }
+            ? { transcriptPath: transcriptPathForConversation(conversationId, providerHomeDir) }
             : {}),
           processedHookBytes: 0,
           processedTranscriptBytes: 0,
           processedSteps: new Set(),
           pendingTools: [],
+          nextToolSequence: 0,
+          pendingBackgroundTasks: new Map(),
+          pendingAnonymousBackgroundTasks: [],
+          pendingBackgroundTaskTerminals: [],
+          settledBackgroundTaskIds: [],
+          transcriptBackgroundedCalls: [],
+          backgroundCompletionSequence: 0,
+          foreignConversations: new Map(),
+          surfacedToolCallCounts: new Map(),
+          hookToolCallCounts: new Map(),
           sawAssistant: false,
           interrupted: false,
           stopped: false,
+          turnTerminalEmitted: false,
         };
         sessions.set(input.threadId, context);
         offer({
@@ -950,6 +2358,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
+        // Refresh the stored capability projection at dispatch: a
+        // computer-control change between turns must reach this turn's mint,
+        // not the start snapshot. Turns carry no per-turn override; the
+        // session fact is the only source.
+        context.gatewayCapabilityInput = captureAgentGatewayCapabilityInput({
+          enableComputerControl: context.enableComputerControl === true,
+        });
         if (context.activeProcess) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -972,7 +2387,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           });
         }
         const canBootstrapGateway = agentGatewayCredentials !== undefined;
-        const providerPrompt = buildAntigravityTurnPrompt(context, {
+        // Preparing the prompt must not consume delivery if bootstrap or spawn
+        // fails. Commit the marker only when the CLI process actually starts.
+        const policyDeliveryState: SynaraHarnessPolicyDeliveryState = {
+          harnessPolicyDelivered: context.harnessPolicyDelivered,
+          enableComputerControl: context.enableComputerControl,
+        };
+        const providerPrompt = buildAntigravityTurnPrompt(policyDeliveryState, {
           prompt: normalizedPrompt,
           hasGatewaySessionLease: canBootstrapGateway,
         });
@@ -1020,15 +2441,20 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           agentGatewayCredentials,
           input.threadId,
           PROVIDER,
+          context.gatewayCapabilityInput,
         );
         const gatewayBootstrapToken = gatewaySessionLease?.issueStdioBootstrapToken?.();
         if (gatewaySessionLease && !gatewayBootstrapToken) {
           gatewaySessionLease.release();
           yield* Effect.promise(() => fs.rm(runDir, { recursive: true, force: true }));
+          const expectedCapabilities = agentGatewayCapabilitiesFor({
+            enableComputerControl: context.enableComputerControl === true,
+          });
+          const mintedCapabilities = agentGatewayCapabilitiesFor(context.gatewayCapabilityInput);
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "turn/prepare",
-            detail: "The Synara gateway credential is no longer active for this provider turn.",
+            detail: `The Synara gateway credential is no longer active for this provider turn (expected gateway capabilities: ${expectedCapabilities.join(", ") || "none"}; lease minted with: ${mintedCapabilities.join(", ") || "none"}).`,
           });
         }
         if (gatewaySessionLease) context.gatewaySessionLease = gatewaySessionLease;
@@ -1044,8 +2470,19 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.processedSteps.clear();
         yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
         context.pendingTools = [];
+        context.transcriptBackgroundedCalls.length = 0;
+        context.pendingAnonymousBackgroundTasks.length = 0;
+        context.pendingBackgroundTaskTerminals.length = 0;
+        context.backgroundCompletionSequence = 0;
+        delete context.latestBackgroundCompletionStepIndex;
+        context.nextToolSequence = 0;
+        context.foreignConversations.clear();
+        context.surfacedToolCallCounts.clear();
+        context.hookToolCallCounts.clear();
         context.sawAssistant = false;
         context.interrupted = false;
+        context.turnTerminalEmitted = false;
+        delete context.stopTeardownRequested;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -1066,6 +2503,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           "--dangerously-skip-permissions",
           "--model",
           cliModel,
+          "--output-format",
+          "stream-json",
           "--log-file",
           logFile,
           "--print-timeout",
@@ -1077,12 +2516,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         try {
           const spawnProcess =
             dependencies.spawnProcess ??
-            ((command: string, spawnArgs: readonly string[], options: SpawnOptions) =>
-              spawn(command, spawnArgs, options) as AntigravityChildProcess);
+            ((command: string, spawnArgs: readonly string[], options: RuntimeSpawnOptions) =>
+              spawnPlatformProcess(command, spawnArgs, {
+                ...options,
+                requireExecutable: true,
+              }) as AntigravityChildProcess);
           child = spawnProcess(context.binaryPath, args, {
+            lowerPriority: yield* providerProcessPriorityEnabled,
             cwd: context.session.cwd ?? serverConfig.cwd,
             env: buildAntigravityTurnProcessEnvironment({
               eventFile,
+              baseEnv: context.environment,
               ...(gatewaySessionLease && gatewayBootstrapToken
                 ? {
                     gatewayConnection: gatewaySessionLease.connection,
@@ -1103,16 +2547,31 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           });
         }
         context.activeProcess = child;
+        const ownsTurn = () =>
+          sessions.get(input.threadId) === context &&
+          context.activeProcess === child &&
+          context.activeTurnId === turnId;
+        child.once("spawn", () => {
+          if (ownsTurn() && policyDeliveryState.harnessPolicyDelivered === true) {
+            context.harnessPolicyDelivered = true;
+          }
+        });
         let stdout = "";
         let stderr = "";
+        const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.stdout.on("data", (chunk) => {
+          outputParser.write(String(chunk));
+          stdout += chunk;
+        });
         child.stderr.on("data", (chunk) => (stderr += chunk));
-        const timer = setInterval(() => void pollHookFile(context), POLL_INTERVAL_MS);
+        const timer = setInterval(() => {
+          if (ownsTurn()) void pollHookFile(context);
+        }, POLL_INTERVAL_MS);
         child.once("error", (cause) => {
           clearInterval(timer);
-          if (sessions.get(input.threadId) !== context || context.activeProcess !== child) return;
+          if (!ownsTurn()) return;
           offer({
             ...base(context, { includeTurn: false }),
             type: "runtime.error",
@@ -1126,34 +2585,76 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         child.once("close", (code, signal) => {
           clearInterval(timer);
           void (async () => {
-            if (sessions.get(input.threadId) !== context || context.activeProcess !== child) {
+            if (!ownsTurn()) {
               releaseTurnGatewayLease(context, gatewaySessionLease);
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            const completionBase = base(context);
-            const completedTurnId = context.activeTurnId;
+            // Another path may already have settled (interrupt / stop-hook kill).
+            // Still drain hooks/stdout before deciding, but never double-complete.
+            const completedTurnId = turnId;
             await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, completedTurnId));
+            if (!ownsTurn()) {
+              releaseTurnGatewayLease(context, gatewaySessionLease);
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              return;
+            }
             // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
             // soon as that process exits, before post-processing or a later turn
             // can begin, so an unconsumed bootstrap from this turn cannot cross
             // into the next turn's authority.
             releaseTurnGatewayLease(context, gatewaySessionLease);
+            const pollInFlightAtClose = context.hookPollPromise;
+            if (pollInFlightAtClose) {
+              await pollInFlightAtClose.catch(() => undefined);
+              if (!ownsTurn()) {
+                await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                return;
+              }
+            }
             await pollHookFile(context).catch(() => undefined);
-            if (!context.sawAssistant && stdout.trim()) {
+            if (!ownsTurn()) {
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              return;
+            }
+            const printResult = outputParser.finish();
+            const responseText = printResult?.response ?? stdout.trim();
+            if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
                 {
                   step_index: Number.MAX_SAFE_INTEGER,
                   type: "PRINT_OUTPUT",
-                  content: stdout.trim(),
+                  content: responseText,
                 },
                 "assistant_message",
                 "assistant_text",
               );
             }
-            const interrupted = context.interrupted || signal !== null;
-            const failed = !interrupted && (code ?? 1) !== 0;
+            if (context.turnTerminalEmitted) {
+              if (context.activeProcess === child) delete context.activeProcess;
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              return;
+            }
+            // Only our stop-hook teardown may replace a missing clean process exit.
+            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            const completedAfterStopTeardown =
+              context.stopTeardownRequested === true &&
+              printResult?.completedResponse === true &&
+              context.sawAssistant &&
+              !stderr.trim() &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks.length === 0;
+            const interrupted =
+              context.interrupted ||
+              printResult?.state === "interrupted" ||
+              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
+            const failed =
+              !interrupted &&
+              !completedAfterStopTeardown &&
+              ((code ?? 1) !== 0 ||
+                (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {
               offer({
                 ...base(context, { includeTurn: false }),
@@ -1162,37 +2663,22 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 raw: raw("stderr", { code, stderr }),
               } satisfies ProviderRuntimeEvent);
             }
-            delete context.activeProcess;
-            delete context.activeTurnId;
-            const {
-              activeTurnId: _activeTurnId,
-              lastError: _lastError,
-              ...inactiveSession
-            } = context.session;
-            context.session = {
-              ...inactiveSession,
-              status: failed ? "error" : "ready",
-              ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
-              updatedAt: new Date().toISOString(),
+            settleActiveTurn(context, {
+              state: interrupted ? "interrupted" : failed ? "failed" : "completed",
+              stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
-                ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
+                ? {
+                    errorMessage:
+                      printResult?.error ||
+                      stderr.trim() ||
+                      (printResult?.state === undefined && printResult !== undefined
+                        ? "Antigravity CLI exited without a complete result."
+                        : undefined) ||
+                      `Antigravity CLI exited with code ${code ?? 1}.`,
+                  }
                 : {}),
-            };
-            offer({
-              ...completionBase,
-              type: "turn.completed",
-              payload: interrupted
-                ? { state: "interrupted", stopReason: "interrupted" }
-                : failed
-                  ? {
-                      state: "failed",
-                      stopReason: "error",
-                      errorMessage:
-                        stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
-                    }
-                  : { state: "completed", stopReason: "model_stop" },
               raw: raw("process-exit", { code, signal, stdout, stderr }),
-            } satisfies ProviderRuntimeEvent);
+            });
             await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
           })();
         });
@@ -1214,13 +2700,48 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           });
           return;
         }
+        killPendingBackgroundTasks(context, "interrupt-background-task-killed");
         const activeTurnId = turnId ?? context.activeTurnId;
         yield* withAgentGatewayTurnCancellation(
           context.gatewaySessionLease,
           activeTurnId,
           Effect.gen(function* () {
             context.interrupted = true;
-            yield* teardownActiveProcess(context, "turn/interrupt");
+            const hadProcess = context.activeProcess !== undefined;
+            if (hadProcess) {
+              // Prefer process close for settlement so stdout/hooks still drain.
+              // If teardown cannot prove exit, force-settle so Cancel never no-ops (#465).
+              yield* teardownActiveProcess(context, "turn/interrupt").pipe(
+                Effect.catch((error) =>
+                  Effect.gen(function* () {
+                    const detail =
+                      error instanceof ProviderAdapterRequestError
+                        ? error.detail
+                        : messageFromCause(error, "interrupt teardown failed");
+                    yield* Effect.logWarning("antigravity.interrupt_teardown_failed", {
+                      threadId,
+                      detail,
+                    });
+                    settleActiveTurn(context, {
+                      state: "interrupted",
+                      stopReason: "interrupted",
+                      raw: raw("interrupt-teardown-failed", { detail }),
+                    });
+                  }),
+                ),
+              );
+            }
+            // Process already gone (or never attached) but turn still open — Cancel
+            // must still unlock the composer.
+            if (!context.turnTerminalEmitted && context.activeTurnId !== undefined) {
+              settleActiveTurn(context, {
+                state: "interrupted",
+                stopReason: "interrupted",
+                raw: raw("interrupt-without-process", {
+                  hadProcess,
+                }),
+              });
+            }
           }),
         );
       });
@@ -1240,6 +2761,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (!context) return;
         context.stopped = true;
         context.interrupted = true;
+        killPendingBackgroundTasks(context, "session-stop-background-task-killed");
+        settleForeignConversations(context, {
+          state: "interrupted",
+          raw: raw("session-stop", { threadId }),
+        });
         yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
         yield* teardownActiveProcess(context, "session/stop");
         releaseTurnGatewayLease(context);
@@ -1282,6 +2808,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             {
               ...(input.cwd ? { cwd: input.cwd } : {}),
               timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+              ...(input.environment ? { environment: input.environment } : {}),
             },
           );
           if (result.code !== 0) throw new Error(result.stderr || "agy models failed");
@@ -1306,11 +2833,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           }),
       });
 
-    const stopAll = () =>
-      Effect.forEach([...sessions.keys()], (threadId) => stopSession(threadId), {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(Effect.asVoid);
+    const stopAll = () => settleConcurrentTeardowns(sessions.keys(), stopSession);
 
     yield* Effect.addFinalizer(() =>
       stopAll().pipe(
@@ -1358,8 +2881,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       },
     } satisfies AntigravityAdapterShape;
   });
-
-export const AntigravityAdapterLive = Layer.effect(AntigravityAdapter, makeAntigravityAdapter());
 
 export function makeAntigravityAdapterLive(dependencies: AntigravityAdapterDependencies = {}) {
   return Layer.effect(AntigravityAdapter, makeAntigravityAdapter(dependencies));

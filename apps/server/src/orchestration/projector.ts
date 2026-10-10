@@ -4,20 +4,21 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  ThreadAsyncUserInputAnsweredPayload,
+  ThreadClaudeCacheSetPayload,
+  type OrchestrationMessageTextSegment,
 } from "@synara/contracts";
+import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
-import {
-  addThreadMarker,
-  removeThreadMarker,
-  setThreadMarkerDone,
-  setThreadMarkerLabel,
-} from "@synara/shared/threadMarkers";
 import { Effect, Schema } from "effect";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
@@ -39,22 +40,24 @@ import {
   ThreadPinnedMessageDoneSetPayload,
   ThreadPinnedMessageLabelSetPayload,
   ThreadPinnedMessageRemovedPayload,
-  ThreadMarkerAddedPayload,
-  ThreadMarkerDoneSetPayload,
-  ThreadMarkerLabelSetPayload,
-  ThreadMarkerRemovedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadConversationRolledBackPayload,
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
+  ThreadSidechatActivityRecordedPayload,
+  ThreadSidechatExpiredPayload,
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
-import { settleTurnStateFromSession } from "./turnLifecycle.ts";
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
+import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
+import {
+  canAdoptFirstTurnProvider,
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -65,10 +68,6 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   if (status === "error") return "error" as const;
   if (status === "missing") return "interrupted" as const;
   return "completed" as const;
-}
-
-function isProviderDiffPlaceholderRef(checkpointRef: string | null | undefined): boolean {
-  return checkpointRef?.startsWith("provider-diff:") === true;
 }
 
 function isTerminalLatestTurn(
@@ -121,6 +120,36 @@ function updateThread(
   }
   nextThreads[index] = { ...nextThreads[index]!, ...patch };
   return nextThreads;
+}
+
+interface ProjectedProviderSessionBinding {
+  readonly status: OrchestrationSession["status"];
+  readonly providerName: string | null;
+  readonly providerInstanceId?: string | null | undefined;
+}
+
+export function canProjectTurnModelSelectionForSession(
+  session: ProjectedProviderSessionBinding | null | undefined,
+  requestedInstanceId: string,
+): boolean {
+  if (!session || session.status === "stopped" || session.status === "error") {
+    return true;
+  }
+  const boundInstanceId = session.providerInstanceId ?? session.providerName;
+  return !boundInstanceId || requestedInstanceId === boundInstanceId;
+}
+
+function canProjectTurnModelSelection(
+  thread: OrchestrationThread,
+  modelSelection: OrchestrationThread["modelSelection"] | undefined,
+): boolean {
+  if (modelSelection === undefined) {
+    return false;
+  }
+  return canProjectTurnModelSelectionForSession(
+    thread.session,
+    resolveModelSelectionInstanceId(modelSelection),
+  );
 }
 
 // Message ids are unique within a thread and streamed deltas land on the newest
@@ -306,6 +335,65 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   };
 }
 
+/**
+ * Mirrors the SQLite message_text_segments projection in the in-memory read
+ * model: streamed assistant deltas accumulate into the current segment, a
+ * row-making provider event between deltas starts a new segment at its own
+ * time (segmentStartedAt), and completion keeps the boundaries when the
+ * collated segment text matches the final text. Single-segment messages and
+ * edits/rewrites/imports need no side table metadata and drop the segments.
+ */
+function deriveNextMessageTextSegments(
+  previous: ReadonlyArray<OrchestrationMessageTextSegment> | undefined,
+  input: {
+    readonly text: string;
+    readonly streaming: boolean;
+    readonly segmentStartedAt: string | undefined;
+    readonly sequence: number;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  },
+): ReadonlyArray<OrchestrationMessageTextSegment> | undefined {
+  if (input.streaming) {
+    if (input.segmentStartedAt) {
+      return [
+        ...(previous ?? []),
+        {
+          sequence: input.sequence,
+          startedAt: input.segmentStartedAt,
+          endedAt: input.updatedAt,
+          text: input.text,
+        },
+      ];
+    }
+    if (previous && previous.length > 0) {
+      const tail = previous[previous.length - 1]!;
+      return [
+        ...previous.slice(0, -1),
+        { ...tail, text: `${tail.text}${input.text}`, endedAt: input.updatedAt },
+      ];
+    }
+    return [
+      {
+        sequence: input.sequence,
+        startedAt: input.createdAt,
+        endedAt: input.updatedAt,
+        text: input.text,
+      },
+    ];
+  }
+
+  // Completion / edit / rewrite / import.
+  if (previous && previous.length > 1) {
+    const collatedSegmentText = previous.map((segment) => segment.text).join("");
+    if (collatedSegmentText === input.text || input.text.length === 0) {
+      const tail = previous[previous.length - 1]!;
+      return [...previous.slice(0, -1), { ...tail, endedAt: input.updatedAt }];
+    }
+  }
+  return undefined;
+}
+
 export function projectEvent(
   model: OrchestrationReadModel,
   event: OrchestrationEvent,
@@ -411,6 +499,7 @@ export function projectEvent(
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
             spaceId: payload.spaceId ?? null,
+            additionalFolders: payload.additionalFolders ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -477,8 +566,9 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const isStudio =
-          nextBase.projects.find((project) => project.id === payload.projectId)?.kind === "studio";
+        const isStudio = isGroupContainerKind(
+          nextBase.projects.find((project) => project.id === payload.projectId)?.kind,
+        );
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
@@ -510,12 +600,17 @@ export function projectEvent(
             subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
             sidechatSourceThreadId: payload.sidechatSourceThreadId,
+            sidechatContext: payload.sidechatContext,
+            sidechatLastActivityAt: payload.sidechatLastActivityAt,
+            sidechatExpiredAt: payload.sidechatExpiredAt,
             lastKnownPr: payload.lastKnownPr ?? null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
             settledAt: null,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             deletedAt: null,
             handoff: payload.handoff,
             messages: [],
@@ -535,12 +630,46 @@ export function projectEvent(
         };
       });
 
+    case "thread.sidechat-activity-recorded":
+      return decodeForEvent(
+        ThreadSidechatActivityRecordedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            sidechatLastActivityAt: payload.lastActivityAt,
+            updatedAt: payload.lastActivityAt,
+          }),
+        })),
+      );
+
+    case "thread.sidechat-expired":
+      return decodeForEvent(
+        ThreadSidechatExpiredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            sidechatExpiredAt: payload.expiredAt,
+            updatedAt: payload.expiredAt,
+          }),
+        })),
+      );
+
     case "thread.deleted":
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: payload.deletedAt,
           }),
         })),
@@ -554,6 +683,8 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt,
+              snoozedUntil: null,
+              snoozeReminderAt: null,
               updatedAt: payload.updatedAt ?? archivedAt,
             }),
           };
@@ -579,9 +710,9 @@ export function projectEvent(
         Effect.map((payload) => {
           const existingThread =
             nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          const isStudio =
-            nextBase.projects.find((project) => project.id === existingThread?.projectId)?.kind ===
-            "studio";
+          const isStudio = isGroupContainerKind(
+            nextBase.projects.find((project) => project.id === existingThread?.projectId)?.kind,
+          );
           const nextCreateBranchFlowCompleted =
             payload.createBranchFlowCompleted !== undefined
               ? payload.createBranchFlowCompleted
@@ -643,6 +774,10 @@ export function projectEvent(
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
               ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
+              ...(payload.snoozedUntil !== undefined ? { snoozedUntil: payload.snoozedUntil } : {}),
+              ...(payload.snoozeReminderAt !== undefined
+                ? { snoozeReminderAt: payload.snoozeReminderAt }
+                : {}),
               ...(payload.parentThreadId !== undefined
                 ? { parentThreadId: payload.parentThreadId }
                 : {}),
@@ -658,10 +793,16 @@ export function projectEvent(
               ...(payload.pinnedMessages !== undefined
                 ? { pinnedMessages: payload.pinnedMessages }
                 : {}),
-              ...(payload.threadMarkers !== undefined
-                ? { threadMarkers: payload.threadMarkers }
-                : {}),
+
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+              ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
+              ...(payload.goalStartedAt !== undefined
+                ? { goalStartedAt: payload.goalStartedAt }
+                : {}),
+              ...(payload.goalPausedAt !== undefined ? { goalPausedAt: payload.goalPausedAt } : {}),
+              ...(payload.goalAchievements !== undefined
+                ? { goalAchievements: payload.goalAchievements }
+                : {}),
               updatedAt: payload.updatedAt,
             }),
           };
@@ -759,76 +900,6 @@ export function projectEvent(
         }),
       );
 
-    case "thread.marker-added":
-      return decodeForEvent(ThreadMarkerAddedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: addThreadMarker(existingThread?.threadMarkers, payload.marker),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-removed":
-      return decodeForEvent(ThreadMarkerRemovedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: removeThreadMarker(existingThread?.threadMarkers, payload.markerId),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-done-set":
-      return decodeForEvent(ThreadMarkerDoneSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerDone(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.done,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-label-set":
-      return decodeForEvent(ThreadMarkerLabelSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerLabel(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.label,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
     case "thread.runtime-mode-set":
       return decodeForEvent(ThreadRuntimeModeSetPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
@@ -856,6 +927,17 @@ export function projectEvent(
         })),
       );
 
+    case "thread.claude-cache-set":
+      return decodeForEvent(ThreadClaudeCacheSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            claudeCacheReview: payload.review,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
     case "thread.turn-start-requested":
       return decodeForEvent(
         ThreadTurnStartRequestedPayload,
@@ -868,12 +950,16 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
-          const canAdoptFirstTurnProvider =
-            thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: thread.modelSelection,
-            requestedModelSelection: payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider,
+            requestedModelSelection: canProjectTurnModelSelection(thread, payload.modelSelection)
+              ? payload.modelSelection
+              : undefined,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
+              hasLatestTurn: thread.latestTurn !== null,
+              hasSession: thread.session !== null,
+              messages: thread.messages,
+            }),
           });
           const modelSelectionPatch =
             projectedModelSelection !== thread.modelSelection
@@ -883,6 +969,10 @@ export function projectEvent(
             threadId: thread.id,
             currentSession: thread.session,
             providerName: projectedModelSelection.provider,
+            providerInstanceId:
+              projectedModelSelection.instanceId ??
+              thread.session?.providerInstanceId ??
+              projectedModelSelection.provider,
             requestedRuntimeMode: payload.runtimeMode,
             requestedAt: payload.createdAt,
           });
@@ -893,7 +983,38 @@ export function projectEvent(
               ...(turnStartSession !== null ? { session: turnStartSession } : {}),
               runtimeMode: payload.runtimeMode,
               interactionMode: payload.interactionMode,
+              ...(isSidechatThread(thread) ? { sidechatLastActivityAt: payload.createdAt } : {}),
               updatedAt: payload.createdAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.async-user-input-answered":
+      return decodeForEvent(
+        ThreadAsyncUserInputAnsweredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              messages: thread.messages.map((message) =>
+                message.id === payload.messageId && message.asyncUserInput
+                  ? {
+                      ...message,
+                      asyncUserInput: {
+                        ...message.asyncUserInput,
+                        response: payload.response,
+                        responseSequence: event.sequence,
+                      },
+                    }
+                  : message,
+              ),
             }),
           };
         }),
@@ -918,9 +1039,17 @@ export function projectEvent(
             id: payload.messageId,
             role: payload.role,
             text: payload.text,
+            ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
             ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
+            ...(payload.dispatchMode !== undefined ? { dispatchMode: payload.dispatchMode } : {}),
+            ...(payload.dispatchOrigin !== undefined
+              ? { dispatchOrigin: payload.dispatchOrigin }
+              : {}),
+            ...(payload.startsNewTurn !== undefined
+              ? { startsNewTurn: payload.startsNewTurn }
+              : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             source: payload.source,
@@ -938,14 +1067,32 @@ export function projectEvent(
         let cappedMessages: ReadonlyArray<OrchestrationMessage>;
         if (existingIndex >= 0) {
           const entry = thread.messages[existingIndex]!;
+          const resolvedText = message.streaming
+            ? `${entry.text}${message.text}`
+            : message.text.length > 0
+              ? message.text
+              : entry.text;
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(entry.textSegments, {
+                  // For streaming deltas the segment owns only this delta's
+                  // text (resolvedText is the whole accumulated message).
+                  text: message.streaming ? message.text : resolvedText,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
           const nextMessages = thread.messages.slice();
+          const entryWithoutTextSegments = { ...entry };
+          delete entryWithoutTextSegments.textSegments;
           nextMessages[existingIndex] = {
-            ...entry,
-            text: message.streaming
-              ? `${entry.text}${message.text}`
-              : message.text.length > 0
-                ? message.text
-                : entry.text,
+            ...entryWithoutTextSegments,
+            ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),
+            text: resolvedText,
+            ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
             streaming: message.streaming,
             source: message.source,
             updatedAt: message.updatedAt,
@@ -956,16 +1103,51 @@ export function projectEvent(
             ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
             ...(message.skills !== undefined ? { skills: message.skills } : {}),
             ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+            ...(message.dispatchMode !== undefined
+              ? { dispatchMode: message.dispatchMode }
+              : entry.dispatchMode !== undefined
+                ? { dispatchMode: entry.dispatchMode }
+                : {}),
+            ...(message.dispatchOrigin !== undefined
+              ? { dispatchOrigin: message.dispatchOrigin }
+              : entry.dispatchOrigin !== undefined
+                ? { dispatchOrigin: entry.dispatchOrigin }
+                : {}),
+            ...(message.startsNewTurn !== undefined
+              ? { startsNewTurn: message.startsNewTurn }
+              : entry.startsNewTurn !== undefined
+                ? { startsNewTurn: entry.startsNewTurn }
+                : {}),
           };
           cappedMessages = nextMessages;
         } else {
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(undefined, {
+                  text: message.text,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
           cappedMessages =
             thread.messages.length >= MAX_THREAD_MESSAGES
               ? [
                   ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
-                  message,
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
                 ]
-              : [...thread.messages, message];
+              : [
+                  ...thread.messages,
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
+                ];
         }
 
         return {
@@ -1001,6 +1183,9 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            ...(isSidechatThread(thread) && !thread.sidechatExpiredAt
+              ? { sidechatLastActivityAt: session.updatedAt }
+              : {}),
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? thread.latestTurn?.turnId === session.activeTurnId &&
@@ -1024,7 +1209,7 @@ export function projectEvent(
                           : null,
                     }
                 : settleLatestTurnForSessionStatus(thread.latestTurn, session),
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -1122,27 +1307,28 @@ export function projectEvent(
           payload.preserveLatestTurn === true ||
           (previousLatestCheckpointTurnCount !== undefined &&
             previousLatestCheckpointTurnCount > payload.checkpointTurnCount);
+        const matchingLatestTurn =
+          thread.latestTurn?.turnId === payload.turnId ? thread.latestTurn : null;
         const latestTurn = preservesNewerLatestTurn
           ? thread.latestTurn
-          : // A provider-diff placeholder only carries live diff totals; it must never
-            // change the turn lifecycle — neither close a running turn nor flip an
-            // already-settled one to "interrupted" when it loses the race against
-            // session settlement.
-            isProviderDiffPlaceholderRef(payload.checkpointRef) &&
-              payload.status === "missing" &&
-              thread.latestTurn?.turnId === payload.turnId
-            ? thread.latestTurn
+          : matchingLatestTurn !== null
+            ? {
+                // Checkpoints describe filesystem state; the provider session is
+                // the lifecycle authority. In particular, a successful empty git
+                // capture must not turn an interrupted, answer-less turn into a
+                // completed one merely because both checkpoint commands and
+                // runtime ingestion subscribe to the same terminal event.
+                ...matchingLatestTurn,
+                assistantMessageId: preservedAssistantMessageId,
+              }
             : {
+                // Historical/sessionless checkpoint projections have no matching
+                // lifecycle row to enrich, so retain the legacy reconstruction
+                // behavior for those imports and rollback paths.
                 turnId: payload.turnId,
                 state: checkpointStatusToLatestTurnState(payload.status),
-                requestedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? thread.latestTurn.requestedAt
-                    : payload.completedAt,
-                startedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                    : payload.completedAt,
+                requestedAt: payload.completedAt,
+                startedAt: payload.completedAt,
                 completedAt: payload.completedAt,
                 assistantMessageId: preservedAssistantMessageId,
               };
@@ -1152,7 +1338,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
             latestTurn,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -1170,10 +1356,15 @@ export function projectEvent(
             .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
             .slice(-MAX_THREAD_CHECKPOINTS);
           const retainedTurnIds = new Set(checkpoints.map((checkpoint) => checkpoint.turnId));
-          const messages = retainThreadMessagesAfterRevert(
+          const retainedMessages = retainThreadMessagesAfterRevert(
             thread.messages,
             retainedTurnIds,
             payload.turnCount,
+          );
+          const messages = clearRemovedAsyncUserInputResponses(
+            retainedMessages,
+            new Set(retainedMessages.map((message) => message.id)),
+            event.sequence,
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
@@ -1245,7 +1436,11 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               checkpoints,
-              messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
+              messages: clearRemovedAsyncUserInputResponses(
+                rollback.messages,
+                new Set(rollback.messages.map((message) => message.id)),
+                event.sequence,
+              ).slice(-MAX_THREAD_MESSAGES),
               proposedPlans,
               activities,
               latestTurn:
@@ -1280,7 +1475,7 @@ export function projectEvent(
 
           const activities = upsertThreadActivity(thread.activities, {
             ...payload.activity,
-            sequence: event.sequence,
+            sequence: payload.activity.sequence ?? event.sequence,
           });
 
           return {

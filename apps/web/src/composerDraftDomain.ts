@@ -1,3 +1,5 @@
+import type { PendingUserInputRecoveryDraft } from "./pendingUserInputRecovery";
+import type { ComposerComputerControlMode } from "./computerControlMode";
 // FILE: composerDraftDomain.ts
 // Purpose: Defines composer draft state, stable defaults, and content/project normalization.
 // Exports: Internal domain primitives plus public facade types.
@@ -8,6 +10,7 @@ import {
   type OrchestrationThreadPullRequest,
   type ProjectId,
   type ProviderInteractionMode,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderMentionReference,
   type ProviderModelOptions,
@@ -18,6 +21,7 @@ import {
 } from "@synara/contracts";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
+import { shallow } from "zustand/vanilla/shallow";
 
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { type BrowserAnnotationDraft, normalizeBrowserAnnotations } from "./lib/browserAnnotations";
@@ -33,7 +37,15 @@ import {
   type FileCommentSelection,
   normalizeFileCommentSelection,
 } from "./lib/fileComments";
-import { type TerminalContextDraft, normalizeTerminalContextText } from "./lib/terminalContext";
+import {
+  type PullRequestContextDraft,
+  normalizePullRequestContexts,
+} from "./lib/pullRequestContext";
+import {
+  INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
+  type TerminalContextDraft,
+  normalizeTerminalContextText,
+} from "./lib/terminalContext";
 import {
   type ChatAssistantSelectionAttachment,
   type ChatFileAttachment,
@@ -105,11 +117,14 @@ export interface ComposerPromptHistorySavedDraft {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
 }
 
 export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachment;
+
+export type ModelSelectionByProviderInstance = Partial<Record<ProviderInstanceId, ModelSelection>>;
 
 export interface QueuedComposerChatTurn {
   id: string;
@@ -124,6 +139,7 @@ export interface QueuedComposerChatTurn {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   selectedProvider: ProviderKind;
@@ -131,6 +147,9 @@ export interface QueuedComposerChatTurn {
   selectedPromptEffort: string | null;
   modelSelection: ModelSelection;
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
+  enableComputerControl?: boolean | undefined;
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  computerControlGeneration?: number | undefined;
   sourceProposedPlan?: NonNullable<OrchestrationLatestTurn["sourceProposedPlan"]> | undefined;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
@@ -155,12 +174,16 @@ export interface QueuedComposerPlanFollowUp {
   selectedPromptEffort: string | null;
   modelSelection: ModelSelection;
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
+  enableComputerControl?: boolean | undefined;
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  computerControlGeneration?: number | undefined;
   runtimeMode: RuntimeMode;
 }
 
 export type QueuedComposerTurn = QueuedComposerChatTurn | QueuedComposerPlanFollowUp;
 
 export interface ComposerThreadDraftState {
+  pendingUserInputDrafts?: Record<string, PendingUserInputRecoveryDraft>;
   prompt: string;
   // Non-null only while composer prompt-history browsing is active: the user's
   // real draft, kept safe while `prompt` temporarily holds a recalled history
@@ -176,14 +199,21 @@ export interface ComposerThreadDraftState {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
-  modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  activeProvider: ProviderKind | null;
+  modelSelectionByProvider: ModelSelectionByProviderInstance;
+  activeProvider: ProviderInstanceId | null;
+  // Per-thread provider start options staged for dispatch (e.g. a group's worker
+  // routing defaults). Unset means the global settings-derived options apply.
+  providerOptionsForDispatch?: ProviderStartOptions | undefined;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  enableComputerControl?: boolean | undefined;
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  computerControlGeneration?: number | undefined;
 }
 
 export interface DraftThreadState {
@@ -197,11 +227,14 @@ export interface DraftThreadState {
   workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
+  // Goal staged before the thread exists server-side; persisted via
+  // `thread.meta.update` when the first send promotes the draft.
+  goal?: string;
   isTemporary?: boolean;
   promotedTo?: ThreadId;
 }
 
-interface DraftThreadMutationOptions {
+export interface DraftThreadMutationOptions {
   branch?: string | null;
   worktreePath?: string | null;
   workingDirectory?: string | null;
@@ -215,20 +248,26 @@ interface DraftThreadMutationOptions {
   interactionMode?: ProviderInteractionMode;
   entryPoint?: ThreadPrimarySurface;
   isTemporary?: boolean;
+  // Empty string clears the staged goal; undefined leaves it unchanged.
+  goal?: string;
 }
 
 type DraftThreadCreatedAtMode = "accept-empty" | "preserve-existing-on-empty";
 
-interface ProjectDraftThread extends DraftThreadState {
+export interface ProjectDraftThread extends DraftThreadState {
   threadId: ThreadId;
 }
 
 export interface ComposerDraftStoreState {
+  setPendingUserInputDrafts: (
+    threadId: ThreadId,
+    drafts: Record<string, PendingUserInputRecoveryDraft>,
+  ) => void;
   draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
-  stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  stickyActiveProvider: ProviderKind | null;
+  stickyModelSelectionByProvider: ModelSelectionByProviderInstance;
+  stickyActiveProvider: ProviderInstanceId | null;
   getDraftThreadByProjectId: (
     projectId: ProjectId,
     entryPoint?: ThreadPrimarySurface,
@@ -299,7 +338,20 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     modelSelection: ModelSelection | null | undefined,
   ) => void;
+  /**
+   * Records a per-provider default model without switching the draft's active
+   * provider — used for seeds (group worker routing) that must not steal the
+   * composer's provider pick.
+   */
+  seedModelSelection: (
+    threadId: ThreadId,
+    modelSelection: ModelSelection | null | undefined,
+  ) => void;
   setModelSelectionAndSticky: (threadId: ThreadId, modelSelection: ModelSelection) => void;
+  setProviderOptionsForDispatch: (
+    threadId: ThreadId,
+    providerOptions: ProviderStartOptions | null | undefined,
+  ) => void;
   setModelOptions: (
     threadId: ThreadId,
     modelOptions: ProviderModelOptions | null | undefined,
@@ -310,6 +362,7 @@ export interface ComposerDraftStoreState {
     provider: ProviderKind,
     nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
     options?: {
+      instanceId?: ProviderInstanceId | null;
       model?: string | null;
       persistSticky?: boolean;
     },
@@ -319,6 +372,12 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
+  setComputerControlMode: (
+    threadId: ThreadId,
+    mode: ComposerComputerControlMode,
+    options?: { revokeQueued?: boolean; generation?: number },
+  ) => void;
+  setEnableComputerControl: (threadId: ThreadId, enabled: boolean) => void;
   enqueueQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn) => void;
   insertQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn, index: number) => void;
   removeQueuedTurn: (threadId: ThreadId, queuedTurnId: string) => void;
@@ -350,6 +409,9 @@ export interface ComposerDraftStoreState {
   addPastedTexts: (threadId: ThreadId, pastedTexts: PastedTextDraft[]) => void;
   removePastedText: (threadId: ThreadId, pastedTextId: string) => void;
   clearPastedTexts: (threadId: ThreadId) => void;
+  addPullRequestContext: (threadId: ThreadId, context: PullRequestContextDraft) => boolean;
+  removePullRequestContext: (threadId: ThreadId, contextId: string) => void;
+  clearPullRequestContexts: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -433,6 +495,8 @@ export function buildDraftThreadState(input: {
         ? false
         : existingThread?.isTemporary === true;
   const nextPromotedTo = existingThread?.promotedTo;
+  const nextGoal =
+    options?.goal === undefined ? existingThread?.goal : options.goal.trim() || undefined;
 
   return {
     projectId: input.projectId,
@@ -458,6 +522,7 @@ export function buildDraftThreadState(input: {
         : (options.lastKnownPr ?? null),
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
+    ...(nextGoal ? { goal: nextGoal } : {}),
     ...(nextIsTemporary ? { isTemporary: true } : {}),
     ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
   };
@@ -482,6 +547,7 @@ export function draftThreadStatesEqual(
     (left.workingDirectory ?? null) === (right.workingDirectory ?? null) &&
     Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     left.envMode === right.envMode &&
+    (left.goal ?? "") === (right.goal ?? "") &&
     (left.isTemporary === true) === (right.isTemporary === true) &&
     left.promotedTo === right.promotedTo
   );
@@ -517,6 +583,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -525,6 +592,12 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
+    // Tri-state: undefined means "no explicit choice". A chat that has not
+    // started yet then follows the machine-wide computerControlEnabled
+    // setting (off by default), including while permission setup is needed; its
+    // first send records the resolved value here so later setting changes leave
+    // the chat alone. A chat with turns and no recorded choice is off.
+    enableComputerControl: undefined,
   };
 }
 
@@ -724,6 +797,7 @@ export function captureComposerPromptHistorySavedDraft(input: {
     terminalContexts: normalizeTerminalContextsForThread(threadId, draft.terminalContexts),
     fileComments: normalizeFileComments(draft.fileComments),
     pastedTexts: normalizePastedTexts(draft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(draft.pullRequestContexts),
     skills: [...draft.skills],
     mentions: [...draft.mentions],
   };
@@ -755,8 +829,13 @@ export function buildTransferredComposerDraft(input: {
     ),
     fileComments: normalizeFileComments(sourceDraft.fileComments),
     pastedTexts: normalizePastedTexts(sourceDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(sourceDraft.pullRequestContexts),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
+    enableComputerControl: sourceDraft.enableComputerControl,
+    computerControlMode: sourceDraft.computerControlMode,
+    // Revocation generations belong to the target thread, never the copied prompt.
+    computerControlGeneration: base.computerControlGeneration ?? 0,
     restoredSourceProposedPlan: null,
   };
 }
@@ -798,6 +877,7 @@ function clonePromptHistorySavedDraft(
     ),
     fileComments: normalizeFileComments(savedDraft.fileComments),
     pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(savedDraft.pullRequestContexts),
     skills: [...savedDraft.skills],
     mentions: [...savedDraft.mentions],
   };
@@ -805,6 +885,7 @@ function clonePromptHistorySavedDraft(
 
 export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
+    Object.keys(draft.pendingUserInputDrafts ?? {}).length === 0 &&
     draft.prompt.length === 0 &&
     draft.promptHistorySavedDraft === null &&
     draft.images.length === 0 &&
@@ -815,15 +896,132 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.terminalContexts.length === 0 &&
     draft.fileComments.length === 0 &&
     draft.pastedTexts.length === 0 &&
+    draft.pullRequestContexts.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&
     draft.restoredSourceProposedPlan == null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
+    draft.providerOptionsForDispatch == null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.interactionMode === null &&
+    // An explicit false is still content: it records the user's choice to keep
+    // computer control off in this chat when the new-chat default is on.
+    draft.enableComputerControl === undefined &&
+    draft.computerControlMode === undefined
   );
+}
+
+/** Compare cleanup ownership without treating image persistence bookkeeping as an edit. */
+export function composerDraftsMatchForCleanup(
+  current: ComposerThreadDraftState | null | undefined,
+  captured: ComposerThreadDraftState | null | undefined,
+): boolean {
+  if (current === captured) return true;
+  if (!current || !captured) return false;
+  const {
+    persistedAttachments: currentPersisted,
+    nonPersistedImageIds: _currentIds,
+    ...currentState
+  } = current;
+  const {
+    persistedAttachments: capturedPersisted,
+    nonPersistedImageIds: _capturedIds,
+    ...capturedState
+  } = captured;
+  // Keep identities for every actual content field, including File objects, and for
+  // model/runtime/queue changes: failed-create rollback removes the whole draft.
+  if (!shallow(currentState, capturedState)) return false;
+  // Persisted-only images are still recoverable content before hydration. Ignore
+  // metadata churn only for images already represented by the identical live array.
+  const liveImageIds = new Set(captured.images.map((image) => image.id));
+  return shallow(
+    currentPersisted.filter((attachment) => !liveImageIds.has(attachment.id)),
+    capturedPersisted.filter((attachment) => !liveImageIds.has(attachment.id)),
+  );
+}
+
+/** Whether a draft carries anything besides its prompt text that a turn would send. */
+export function composerDraftHasAttachments(
+  draft: Pick<
+    ComposerThreadDraftState,
+    | "files"
+    | "images"
+    | "persistedAttachments"
+    | "terminalContexts"
+    | "assistantSelections"
+    | "fileComments"
+  > &
+    Partial<Pick<ComposerThreadDraftState, "browserAnnotations">>,
+): boolean {
+  return (
+    draft.images.length > 0 ||
+    draft.files.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
+    draft.assistantSelections.length > 0 ||
+    (draft.browserAnnotations?.length ?? 0) > 0 ||
+    draft.fileComments.length > 0
+  );
+}
+
+/**
+ * Whether a draft holds anything the user has not sent: text, attachments, collapsed
+ * pasted text, or pull-request context cards. The draft dispatch path does not carry the
+ * last two, so a surface that sends into an existing chat must refuse while they exist.
+ */
+export function composerDraftHasUnsentContent(
+  draft: Parameters<typeof composerDraftHasAttachments>[0] &
+    Pick<ComposerThreadDraftState, "prompt" | "pastedTexts" | "pullRequestContexts">,
+): boolean {
+  return (
+    draft.prompt.trim().length > 0 ||
+    composerDraftHasAttachments(draft) ||
+    draft.pastedTexts.length > 0 ||
+    draft.pullRequestContexts.length > 0
+  );
+}
+
+/**
+ * Whether a chat's composer holds a message the user started and left unsent. While
+ * prompt history is being browsed, `prompt` holds a recalled entry, so the saved real
+ * draft decides instead.
+ */
+export function composerThreadDraftIsPending(draft: ComposerThreadDraftState): boolean {
+  return composerDraftHasUnsentContent(draft.promptHistorySavedDraft ?? draft);
+}
+
+/** Longest draft excerpt a hover preview shows; the card also clamps it to a few lines. */
+export const COMPOSER_DRAFT_PREVIEW_MAX_CHARS = 280;
+
+/**
+ * Single-line excerpt of a chat's unsent prompt for compact previews, or null when the
+ * draft holds no text. Inline context placeholders are dropped and whitespace collapsed.
+ */
+export function composerThreadDraftPreviewText(
+  draft: ComposerThreadDraftState | undefined,
+): string | null {
+  if (!draft) return null;
+  const text = (draft.promptHistorySavedDraft ?? draft).prompt
+    .replaceAll(INLINE_TERMINAL_CONTEXT_PLACEHOLDER, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length === 0) return null;
+  return text.length > COMPOSER_DRAFT_PREVIEW_MAX_CHARS
+    ? `${text.slice(0, COMPOSER_DRAFT_PREVIEW_MAX_CHARS).trimEnd()}…`
+    : text;
+}
+
+/** Thread ids with a pending draft, sorted so shallow selectors stay stable while typing. */
+export function selectThreadIdsWithPendingDraft(
+  state: Pick<ComposerDraftStoreState, "draftsByThreadId">,
+): ThreadId[] {
+  const threadIds: ThreadId[] = [];
+  for (const [threadId, draft] of Object.entries(state.draftsByThreadId)) {
+    if (composerThreadDraftIsPending(draft)) threadIds.push(threadId as ThreadId);
+  }
+  return threadIds.toSorted();
 }
 
 export function normalizeDraftThreadEntryPoint(
@@ -840,6 +1038,7 @@ const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
 const EMPTY_BROWSER_ANNOTATIONS: BrowserAnnotationDraft[] = [];
 const EMPTY_PASTED_TEXTS: PastedTextDraft[] = [];
+const EMPTY_PULL_REQUEST_CONTEXTS: PullRequestContextDraft[] = [];
 const EMPTY_SKILLS: ProviderSkillReference[] = [];
 const EMPTY_MENTIONS: ProviderMentionReference[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
@@ -850,11 +1049,11 @@ Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
 Object.freeze(EMPTY_TERMINAL_CONTEXTS);
 Object.freeze(EMPTY_BROWSER_ANNOTATIONS);
 Object.freeze(EMPTY_PASTED_TEXTS);
+Object.freeze(EMPTY_PULL_REQUEST_CONTEXTS);
 Object.freeze(EMPTY_SKILLS);
 Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
-const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelection>> =
-  Object.freeze({});
+const EMPTY_MODEL_SELECTION_BY_PROVIDER: ModelSelectionByProviderInstance = Object.freeze({});
 
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
@@ -868,6 +1067,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   fileComments: [],
   pastedTexts: EMPTY_PASTED_TEXTS,
+  pullRequestContexts: EMPTY_PULL_REQUEST_CONTEXTS,
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,
@@ -876,6 +1076,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   activeProvider: null,
   runtimeMode: null,
   interactionMode: null,
+  enableComputerControl: undefined,
 });
 
 export function selectComposerThreadDraft(

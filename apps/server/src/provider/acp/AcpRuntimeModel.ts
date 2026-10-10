@@ -6,8 +6,9 @@ import type {
 } from "@synara/contracts";
 import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 
+import { canonicalSynaraComputerToolName } from "../../agentGateway/computerToolPermission.ts";
 import { computeUsagePercent, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
-import { canonicalItemTypeFromAcpToolKind } from "./AcpAdapterSupport.ts";
+import { ACP_SUBAGENT_TOOL_KIND, canonicalItemTypeFromAcpToolKind } from "./AcpAdapterSupport.ts";
 
 type AcpTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 
@@ -316,7 +317,10 @@ function summarizeToolCallContent(
   return extractTextContentFromToolCallContent(content);
 }
 
-function isProviderGenericToolTitle(title: string | undefined, kind: string | undefined): boolean {
+export function isProviderGenericToolTitle(
+  title: string | undefined,
+  kind: string | undefined,
+): boolean {
   const normalized = title?.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) {
     return false;
@@ -350,6 +354,36 @@ function inferToolKindFromProviderTitle(title: string | undefined): string | und
     default:
       return undefined;
   }
+}
+
+interface AcpSubagentToolInput {
+  readonly description?: string;
+  readonly prompt?: string;
+}
+
+const ACP_SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(["task", "agent", "subagent"]);
+
+// Cursor's ACP bridge surfaces its `Task` subagent tool as a generic `other` tool call
+// whose rawInput carries the native tool name plus the task description/prompt. The
+// subagent streams nothing back over ACP until it finishes (only `cursor/task`, a
+// completion-only notification), so this detection is what lets the client render it
+// as a subagent run instead of an idle-looking generic tool.
+function parseSubagentToolInput(rawInput: unknown): AcpSubagentToolInput | undefined {
+  if (!isRecord(rawInput)) {
+    return undefined;
+  }
+  const toolName =
+    typeof rawInput._toolName === "string" ? rawInput._toolName.trim().toLowerCase() : undefined;
+  if (!toolName || !ACP_SUBAGENT_TOOL_NAMES.has(toolName)) {
+    return undefined;
+  }
+  const description =
+    typeof rawInput.description === "string" ? trimNonEmpty(rawInput.description) : undefined;
+  const prompt = typeof rawInput.prompt === "string" ? trimNonEmpty(rawInput.prompt) : undefined;
+  return {
+    ...(description !== undefined ? { description } : {}),
+    ...(prompt !== undefined ? { prompt } : {}),
+  };
 }
 
 function deriveGenericToolActionTitle(
@@ -408,14 +442,19 @@ function makeToolCallState(
   if (!toolCallId) {
     return undefined;
   }
-  const title = input.title?.trim() || undefined;
-  const command = extractToolCallCommand(input.rawInput, title);
+  const subagent = parseSubagentToolInput(input.rawInput);
+  // A subagent's own description ("Explore composer UI") is the row heading; the
+  // provider title ("Task: Explore composer UI") is only the fallback.
+  const title = subagent?.description ?? (input.title?.trim() || undefined);
+  const command = subagent ? undefined : extractToolCallCommand(input.rawInput, title);
   const textContent = extractTextContentFromToolCallContent(input.content);
   const structuredContent = summarizeToolCallContent(input.content);
   const locationDetail = summarizeToolCallLocations(input.locations);
   const outputDetail = summarizeToolRawOutput(input.rawOutput);
   const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
-  const kind = normalizeToolKind(input.kind) ?? inferToolKindFromProviderTitle(title);
+  const kind = subagent
+    ? ACP_SUBAGENT_TOOL_KIND
+    : (normalizeToolKind(input.kind) ?? inferToolKindFromProviderTitle(title));
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
@@ -424,8 +463,25 @@ function makeToolCallState(
   if (kind) {
     data.kind = kind;
   }
+  if (subagent) {
+    // Shape read by the web collab-action extractor (`item.tool` / `item.prompt`).
+    data.tool = "task";
+    if (subagent.prompt) {
+      data.prompt = subagent.prompt;
+    }
+  }
   if (command) {
     data.command = command;
+  }
+  // Native name fields identify the tool; provider titles are presentation only.
+  // Keep arguments intact in rawInput, never promote their values into a title.
+  const computerToolName = isRecord(input.rawInput)
+    ? canonicalSynaraComputerToolName(
+        input.rawInput._toolName ?? input.rawInput.toolName ?? input.rawInput.tool_name,
+      )
+    : undefined;
+  if (computerToolName) {
+    data.toolName = computerToolName;
   }
   if (input.rawInput !== undefined) {
     data.rawInput = input.rawInput;
@@ -440,13 +496,24 @@ function makeToolCallState(
     data.locations = input.locations;
   }
   const kindSpecificTitleIsGeneric = isProviderGenericToolTitle(title, kind);
+  // A healthy subagent row previews its prompt (from data), not a restated title or
+  // the bookkeeping rawOutput ({ durationMs, isBackground }); failures keep the detail.
   const fallbackDetail =
-    command ??
-    locationDetail ??
-    structuredContent ??
-    outputDetail ??
-    (kindSpecificTitleIsGeneric ? undefined : normalizedTitle) ??
-    textContent;
+    subagent && status !== "failed"
+      ? undefined
+      : status === "failed"
+        ? (textContent ??
+          outputDetail ??
+          command ??
+          locationDetail ??
+          structuredContent ??
+          (kindSpecificTitleIsGeneric ? undefined : normalizedTitle))
+        : (command ??
+          locationDetail ??
+          structuredContent ??
+          outputDetail ??
+          (kindSpecificTitleIsGeneric ? undefined : normalizedTitle) ??
+          textContent);
   const actionTitle = deriveGenericToolActionTitle(kind, status);
   const hasPresentationSeed =
     title !== undefined ||
@@ -462,7 +529,13 @@ function makeToolCallState(
     ? deriveToolActivityPresentation({
         itemType,
         data,
-        fallbackSummary: actionTitle ?? (itemType === "command_execution" ? "Ran command" : "Tool"),
+        fallbackSummary:
+          actionTitle ??
+          (itemType === "command_execution"
+            ? "Ran command"
+            : itemType === "collab_agent_tool_call"
+              ? "Subagent task"
+              : "Tool"),
         ...(normalizedTitle !== undefined && !kindSpecificTitleIsGeneric
           ? { title: normalizedTitle }
           : actionTitle !== undefined

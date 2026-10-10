@@ -32,6 +32,7 @@ export type ProjectionPendingInteraction = typeof ProjectionPendingInteraction.T
 
 export const ListProjectionPendingInteractionsInput = Schema.Struct({
   threadId: ThreadId,
+  unsettledOnly: Schema.optional(Schema.Boolean),
 });
 
 export const ProjectionPendingInteractionCounts = Schema.Struct({
@@ -65,13 +66,22 @@ export interface ProjectionPendingInteractionRepositoryShape {
   readonly listByThreadId: (
     input: typeof ListProjectionPendingInteractionsInput.Type,
   ) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;
+  /** Nonterminal rows, including legacy invalidations awaiting settlement; omitting threadId is for boot recovery. */
+  readonly listUnsettled: (input: {
+    readonly threadId?: ThreadId;
+  }) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;
   readonly getPendingCountsByThreadId: (
     input: typeof ListProjectionPendingInteractionsInput.Type,
   ) => Effect.Effect<ProjectionPendingInteractionCounts, ProjectionRepositoryError>;
   readonly getByIdentity: (
     input: typeof GetProjectionPendingInteractionInput.Type,
   ) => Effect.Effect<Option.Option<ProjectionPendingInteraction>, ProjectionRepositoryError>;
-  /** Atomically assigns a pending/retryable interaction to exactly one response command. */
+  /**
+   * Atomically assigns an unsettled interaction to exactly one response
+   * command. Claims `pending`/`retryable`/`uncertain` rows, plus `responding`
+   * rows whose claim is old enough to be considered orphaned — a permanently
+   * unclaimable row would strand its prompt with no way to answer or dismiss.
+   */
   readonly claimResponse: (
     input: typeof ClaimProjectionPendingInteractionResponseInput.Type,
   ) => Effect.Effect<boolean, ProjectionRepositoryError>;

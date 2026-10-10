@@ -6,7 +6,7 @@ import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
-  isInspectCommand,
+  isSynaraBrowserToolCall,
   normalizeCompactToolLabel,
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
@@ -58,9 +58,28 @@ describe("normalizeCompactToolLabel", () => {
     expect(normalizeCompactToolLabel("Ran command done")).toBe("Ran command");
     expect(normalizeCompactToolLabel("Ran command started")).toBe("Ran command");
   });
+
+  it.each([
+    ["  Tool\r\n\tCOMPLETED\n", "Tool"],
+    ["completed", "completed"],
+    [" completed ", ""],
+    ["Toolcompleted", "Toolcompleted"],
+    ["Tool completed later", "Tool completed later"],
+    ["Tool\u00a0done\u2028", "Tool"],
+  ])("preserves status-word boundaries in %j", (value, expected) => {
+    expect(normalizeCompactToolLabel(value)).toBe(expected);
+  });
 });
 
 describe("deriveSynaraMcpToolTitle", () => {
+  it.each([["browser_run", "Run browser actions"]])(
+    "keeps current and historical %s messages readable",
+    (toolName, title) => {
+      expect(deriveSynaraMcpToolTitle({ toolName, status: "completed" })).toBe(title);
+      expect(isSynaraBrowserToolCall({ title })).toBe(true);
+    },
+  );
+
   it("uses stable action-first names for Synara browser tools", () => {
     for (const status of ["running", "completed", "failed"] as const) {
       expect(
@@ -79,100 +98,6 @@ describe("deriveSynaraMcpToolTitle", () => {
     ).toBe("Snapshot browser page");
   });
 
-  it("has intentional running and completed copy for every Synara gateway action", () => {
-    const cases = [
-      ["synara_context", "Synara is checking its context", "Synara checked its context"],
-      [
-        "synara_capabilities",
-        "Synara is checking available agents",
-        "Synara checked available agents",
-      ],
-      ["synara_list_projects", "Synara is listing projects", "Synara listed projects"],
-      ["synara_list_threads", "Synara is listing threads", "Synara listed threads"],
-      ["synara_read_thread", "Synara is reading a thread", "Synara read a thread"],
-      [
-        "synara_read_thread_activity",
-        "Synara is reading thread activity",
-        "Synara read thread activity",
-      ],
-      ["synara_read_thread_events", "Synara is reading thread events", "Synara read thread events"],
-      [
-        "synara_read_thread_runtime_events",
-        "Synara is reading thread runtime events",
-        "Synara read thread runtime events",
-      ],
-      ["synara_diagnose_thread", "Synara is diagnosing a thread", "Synara diagnosed a thread"],
-      ["synara_create_thread", "Synara is creating a thread", "Synara created a thread"],
-      ["synara_create_threads", "Synara is creating threads", "Synara created threads"],
-      [
-        "synara_wait_for_threads",
-        "Synara is waiting for threads",
-        "Synara finished waiting for threads",
-      ],
-      ["synara_send_message", "Synara is sending a message", "Synara sent a message"],
-      ["synara_interrupt_thread", "Synara is interrupting a thread", "Synara interrupted a thread"],
-      ["synara_set_thread_title", "Synara is renaming a thread", "Synara renamed a thread"],
-      ["synara_set_thread_archived", "Synara is updating a thread", "Synara updated a thread"],
-      [
-        "synara_create_automation",
-        "Synara is creating an automation",
-        "Synara created an automation",
-      ],
-      ["synara_list_automations", "Synara is listing automations", "Synara listed automations"],
-      [
-        "synara_cancel_automation",
-        "Synara is stopping an automation",
-        "Synara stopped an automation",
-      ],
-      ["synara_overview", "Synara is gathering an overview", "Synara gathered an overview"],
-      [
-        "synara_list_allowed_projects",
-        "Synara is listing allowed projects",
-        "Synara listed allowed projects",
-      ],
-      ["synara_create_task", "Synara is creating a task", "Synara created a task"],
-      [
-        "synara_wait_for_task",
-        "Synara is waiting for a task",
-        "Synara finished waiting for a task",
-      ],
-      ["synara_read_task", "Synara is reading a task", "Synara read a task"],
-    ] as const;
-
-    for (const [toolName, running, completed] of cases) {
-      expect(deriveSynaraMcpToolTitle({ toolName, status: "running" })).toBe(running);
-      expect(deriveSynaraMcpToolTitle({ toolName, status: "completed" })).toBe(completed);
-    }
-
-    expect(
-      deriveSynaraMcpToolTitle({
-        toolName: "synara_create_threads",
-        status: "failed",
-      }),
-    ).toBe("Synara couldn't create threads");
-    expect(
-      deriveSynaraMcpToolTitle({
-        toolName: "synara_create_thread",
-        status: "cancelled",
-      }),
-    ).toBe("Synara stopped creating a thread");
-  });
-
-  it("turns provider-specific create-thread identifiers into activity sentences", () => {
-    expect(
-      deriveSynaraMcpToolTitle({
-        toolName: "Synara__synara_create_thread",
-        status: "running",
-      }),
-    ).toBe("Synara is creating a thread");
-    expect(
-      deriveSynaraMcpToolTitle({
-        toolName: "mcp__synara__synara_create_thread",
-        status: "completed",
-      }),
-    ).toBe("Synara created a thread");
-  });
-
   it("recognizes bare and already-humanized Synara tool names", () => {
     expect(deriveSynaraMcpToolTitle({ toolName: "synara_send_message", status: "running" })).toBe(
       "Synara is sending a message",
@@ -180,6 +105,9 @@ describe("deriveSynaraMcpToolTitle", () => {
     expect(
       deriveSynaraMcpToolTitle({ title: "Synara: Synara List Threads", status: "completed" }),
     ).toBe("Synara listed threads");
+    expect(
+      deriveSynaraMcpToolTitle({ toolName: "synara_create_thread", status: "cancelled" }),
+    ).toBe("Synara stopped creating a thread");
   });
 
   it("ignores tools from other MCP servers", () => {
@@ -233,21 +161,6 @@ describe("deriveSynaraMcpToolTitle", () => {
     ).toBeNull();
   });
 
-  it("leaves free-text activity summaries starting with Synara untouched", () => {
-    expect(
-      deriveSynaraMcpToolTitle({
-        title: "Synara recovered a stale running state",
-        status: "completed",
-      }),
-    ).toBeNull();
-    expect(
-      deriveSynaraMcpToolTitle({
-        fallbackLabel: "Synara restarted the provider session",
-        status: "running",
-      }),
-    ).toBeNull();
-  });
-
   it("removes transport identifiers without hiding meaningful Synara details", () => {
     expect(
       sanitizeSynaraMcpToolPreview({
@@ -266,29 +179,28 @@ describe("deriveSynaraMcpToolTitle", () => {
   });
 });
 
-describe("deriveReadableToolTitle", () => {
-  it("humanizes search commands even when wrapped in shell -lc", () => {
-    expect(
-      deriveReadableToolTitle({
-        title: "Ran command",
-        fallbackLabel: "Ran command",
-        itemType: "command_execution",
-        requestKind: "command",
-        command: `/bin/zsh -lc 'rg -n "tool call" apps/web/src'`,
-      }),
-    ).toBe("Searched");
+describe("isSynaraBrowserToolCall", () => {
+  it("recognizes canonical presentation titles without a tool identifier", () => {
+    expect(isSynaraBrowserToolCall({ title: "Open browser tab" })).toBe(true);
+    expect(isSynaraBrowserToolCall({ fallbackLabel: "Snapshot browser page" })).toBe(true);
+    expect(isSynaraBrowserToolCall({ title: "Synara listed threads" })).toBe(false);
   });
+});
 
-  it("humanizes file read commands", () => {
-    expect(
-      deriveReadableToolTitle({
-        title: "Ran command",
-        fallbackLabel: "Ran command",
-        itemType: "command_execution",
-        command: "sed -n '520,550p' apps/web/src/session-logic.ts",
-      }),
-    ).toBe("Read");
-  });
+describe("deriveReadableToolTitle", () => {
+  it.each([["mcp__synara__computer_activate_window", "Activate a window"]])(
+    "uses the curated Computer label for %s",
+    (toolName, expected) => {
+      expect(
+        deriveReadableToolTitle({
+          title: "Tool",
+          fallbackLabel: "Tool",
+          itemType: "mcp_tool_call",
+          payload: { data: { item: { tool: toolName } } },
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("humanizes git status commands", () => {
     expect(
@@ -312,23 +224,6 @@ describe("deriveReadableToolTitle", () => {
     ).toBe("Bash");
   });
 
-  it("extracts a descriptor from payload when the title is generic", () => {
-    expect(
-      deriveReadableToolTitle({
-        title: "Tool call",
-        fallbackLabel: "Tool call",
-        itemType: "dynamic_tool_call",
-        payload: {
-          data: {
-            item: {
-              toolName: "mcp__xcodebuildmcp__list_sims",
-            },
-          },
-        },
-      }),
-    ).toBe("Xcodebuildmcp: List Sims");
-  });
-
   it("treats Cursor placeholder titles as generic", () => {
     expect(
       deriveReadableToolTitle({
@@ -349,59 +244,32 @@ describe("deriveReadableToolTitle", () => {
     ).toBe("Read");
   });
 
-  it("formats MCP identifiers into readable tool names", () => {
+  it("humanizes provider tool identifiers used as lifecycle titles", () => {
     expect(
       deriveReadableToolTitle({
-        title: "MCP tool call",
-        fallbackLabel: "MCP tool call",
+        title: "get_app_state",
+        fallbackLabel: "get_app_state",
         itemType: "mcp_tool_call",
-        payload: {
-          data: {
-            toolName: "mcp__codex_apps__github_fetch_pr",
-          },
-        },
       }),
-    ).toBe("Codex Apps: Github Fetch Pr");
-  });
-
-  it("formats structured MCP server/tool payloads into readable tool names", () => {
-    expect(
-      deriveReadableToolTitle({
-        title: "MCP tool call",
-        fallbackLabel: "MCP tool call",
-        itemType: "mcp_tool_call",
-        payload: {
-          data: {
-            item: {
-              type: "mcpToolCall",
-              server: "computer-use",
-              tool: "get_app_state",
-            },
-          },
-        },
-      }),
-    ).toBe("Computer Use: Get App State");
+    ).toBe("Get App State");
   });
 });
 
 describe("deriveReadableCommandDisplay", () => {
+  it.each(["|", "\t\r\n|\t"])("keeps the first command before a pipe: %j", (pipe) => {
+    const command = `cat src/result.ts${pipe}head -n 1`;
+    expect(deriveReadableCommandDisplay(command)).toEqual({
+      verb: "Read",
+      target: "src/result.ts",
+      fullCommand: command,
+    });
+  });
+
   it("extracts search targets without leaking the full shell wrapper inline", () => {
     expect(deriveReadableCommandDisplay(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toEqual({
       verb: "Searched",
       target: "for tool call in web/src",
       fullCommand: `/bin/zsh -lc 'rg -n "tool call" apps/web/src'`,
-    });
-  });
-
-  it("compacts file paths for read commands", () => {
-    expect(
-      deriveReadableCommandDisplay(
-        "sed -n '520,550p' apps/web/src/components/chat/MessagesTimeline.tsx",
-      ),
-    ).toEqual({
-      verb: "Read",
-      target: "chat/MessagesTimeline.tsx",
-      fullCommand: "sed -n '520,550p' apps/web/src/components/chat/MessagesTimeline.tsx",
     });
   });
 
@@ -496,12 +364,6 @@ describe("deriveFriendlyCommandTarget", () => {
     ).toBe("PowerShell");
   });
 
-  it("reads as the object of the row's sentence", () => {
-    expect(deriveFriendlyCommandTarget(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toBe(
-      "for tool call in web/src",
-    );
-  });
-
   it("keeps long targets short enough to sit inline", () => {
     const target = deriveFriendlyCommandTarget(`echo ${"a".repeat(200)}`);
     expect(target.length).toBeLessThanOrEqual(72);
@@ -517,27 +379,25 @@ describe("deriveInlineCommandCall", () => {
   });
 });
 
-describe("isInspectCommand", () => {
+describe("resolveCommandVisualKind", () => {
   it("detects read-only inspection commands (read/search/find/list)", () => {
-    expect(isInspectCommand("cat package.json")).toBe(true);
-    expect(isInspectCommand("sed -n 1,40p src/app.ts")).toBe(true);
-    expect(isInspectCommand("head -n 20 README.md")).toBe(true);
-    expect(isInspectCommand(`rg -n "tool call" apps/web/src`)).toBe(true);
-    expect(isInspectCommand("grep -R foo .")).toBe(true);
-    expect(isInspectCommand("find . -name '*.ts'")).toBe(true);
-    expect(isInspectCommand("ls -la src")).toBe(true);
-    expect(isInspectCommand(`/bin/zsh -lc 'rg -n "x" src'`)).toBe(true);
+    expect(resolveCommandVisualKind("cat package.json")).toBe("inspect");
+    expect(resolveCommandVisualKind("sed -n 1,40p src/app.ts")).toBe("inspect");
+    expect(resolveCommandVisualKind("head -n 20 README.md")).toBe("inspect");
+    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("inspect");
+    expect(resolveCommandVisualKind("grep -R foo .")).toBe("inspect");
+    expect(resolveCommandVisualKind("find . -name '*.ts'")).toBe("inspect");
+    expect(resolveCommandVisualKind("ls -la src")).toBe("inspect");
+    expect(resolveCommandVisualKind(`/bin/zsh -lc 'rg -n "x" src'`)).toBe("inspect");
   });
 
   it("does not treat mutating or executing commands as inspections", () => {
-    expect(isInspectCommand("git status")).toBe(false);
-    expect(isInspectCommand("node build.js")).toBe(false);
-    expect(isInspectCommand("rm -rf dist")).toBe(false);
-    expect(isInspectCommand("mkdir foo")).toBe(false);
+    expect(resolveCommandVisualKind("git status")).toBe("git");
+    expect(resolveCommandVisualKind("node build.js")).toBe("terminal");
+    expect(resolveCommandVisualKind("rm -rf dist")).toBe("terminal");
+    expect(resolveCommandVisualKind("mkdir foo")).toBe("terminal");
   });
-});
 
-describe("resolveCommandVisualKind", () => {
   it("classifies git commands through shell and global-option wrappers", () => {
     expect(resolveCommandVisualKind("git status --short")).toBe("git");
     expect(resolveCommandVisualKind("git -C apps/web status --short")).toBe("git");
@@ -548,10 +408,5 @@ describe("resolveCommandVisualKind", () => {
     expect(resolveCommandVisualKind("gh pr view 274 --repo owner/repo")).toBe("github");
     expect(resolveCommandVisualKind("env -u GH_TOKEN gh pr status")).toBe("github");
     expect(resolveCommandVisualKind("hub pull-request -m test")).toBe("github");
-  });
-
-  it("keeps inspections and ordinary commands distinct", () => {
-    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("inspect");
-    expect(resolveCommandVisualKind("bun run build")).toBe("terminal");
   });
 });

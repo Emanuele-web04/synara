@@ -15,10 +15,11 @@
 /**
  * Height (px) of the chat-surface top chrome bar — the row shared by the chat,
  * settings, workspace, and (open) sidebar headers. The web side renders this as the
- * Tailwind class `h-[46px]` (kept literal so Tailwind can scan it; guarded against
- * drift from this number in apps/web/.../chatHeaderControls.tsx).
+ * Tailwind class `h-[44px]` (kept literal so Tailwind can scan it; guarded against
+ * drift from this number in apps/web/.../chatHeaderControls.tsx). Keep it even: the
+ * native traffic lights take whole points, so an odd height cannot center them.
  */
-export const CHAT_SURFACE_HEADER_HEIGHT_PX = 46;
+export const CHAT_SURFACE_HEADER_HEIGHT_PX = 44;
 
 /** Leading inset (px) of the macOS traffic-light cluster from the window's left edge. */
 export const MAC_TRAFFIC_LIGHT_INSET_X_PX = 16;
@@ -58,13 +59,57 @@ export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR =
   "--desktop-top-bar-traffic-light-gutter";
 
 /**
+ * Coerce an untrusted zoom factor (missing bridge, stale IPC payload) to a usable
+ * multiplier. Every zoom-aware conversion in this file funnels through here so a
+ * bogus value degrades to "no zoom" instead of collapsing geometry to 0 or NaN.
+ */
+export function normalizeDesktopZoomFactor(zoomFactor: unknown): number {
+  return typeof zoomFactor === "number" && Number.isFinite(zoomFactor) && zoomFactor > 0
+    ? zoomFactor
+    : 1;
+}
+
+/**
  * Gutter width in layout CSS pixels for the current page zoom factor.
  * Inverse-scales so the on-screen gap stays aligned with the native lights.
  */
 export function resolveMacDesktopTopBarTrafficLightGutterCssPx(zoomFactor: number): number {
-  const safeZoom =
-    typeof zoomFactor === "number" && Number.isFinite(zoomFactor) && zoomFactor > 0
-      ? zoomFactor
-      : 1;
-  return Math.round(MAC_DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_PX / safeZoom);
+  return Math.round(
+    MAC_DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_PX / normalizeDesktopZoomFactor(zoomFactor),
+  );
+}
+
+/** Axis-aligned rectangle, in whichever pixel space the caller is working in. */
+export interface DesktopRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Convert a renderer rectangle (`getBoundingClientRect()`, i.e. layout CSS pixels)
+ * into the window-relative DIPs that Electron's native view APIs expect.
+ *
+ * `webContents` zoom scales the renderer's CSS pixel against the window's DIP grid:
+ * at zoom z, one CSS px covers z DIPs, so a slot measured as `w` CSS px physically
+ * spans `w * z` DIPs. Native views (`WebContentsView.setBounds`, `BrowserWindow`
+ * bounds) are never zoomed, so handing them raw CSS numbers makes them miss their
+ * DOM slot by exactly `1 / z` — the native browser view overflows the panel when the
+ * shell is zoomed out and under-fills it when zoomed in.
+ */
+export function resolveDesktopDipRectFromCssRect(
+  rect: DesktopRect,
+  zoomFactor: number,
+): DesktopRect {
+  const safeZoom = normalizeDesktopZoomFactor(zoomFactor);
+  if (safeZoom === 1) {
+    return rect;
+  }
+  return {
+    x: rect.x * safeZoom,
+    y: rect.y * safeZoom,
+    width: rect.width * safeZoom,
+    height: rect.height * safeZoom,
+  };
 }

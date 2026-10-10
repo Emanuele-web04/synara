@@ -1,17 +1,18 @@
 // FILE: ComposerInputBanners.tsx
-// Purpose: Picks which banner (if any) renders inside the composer surface — a plan
-// follow-up or automation setup prompt. Pending approvals and AskUserQuestion prompts
-// render as detached cards above the composer (see ComposerPendingApprovalPanel /
-// ComposerPendingUserInputPanel), not here. Centralizes the precedence and the shared
-// banner chrome so callers pass data, not layout.
+// Purpose: Picks the contextual banner that renders inside the composer surface.
+// Pending approvals and AskUserQuestion prompts render as detached cards above the composer
+// (see ComposerPendingApprovalPanel / ComposerPendingUserInputPanel), and the thread goal
+// renders as a stacked panel above the composer (see ComposerGoalHeader), not here.
+// Centralizes precedence and shared banner chrome so callers pass data, not layout.
 // Layer: Chat composer UI
 // Exports: ComposerInputBanners
 
-import { type ReactNode } from "react";
+import { type ComponentProps, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { ComposerAutomationSetupBanner } from "./ComposerAutomationSetupBanner";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
+import { ComposerSnoozeNotice } from "./ComposerSnoozeNotice";
 import { COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME } from "./composerPickerStyles";
 
 interface ComposerInputBannersProps {
@@ -23,12 +24,15 @@ interface ComposerInputBannersProps {
   // Setup-mode control while gathering an automation's task/schedule (the exchange
   // itself renders as bubbles in the transcript).
   automationSetup: { onCancel: () => void } | null;
+  // A snoozed chat stays reachable; this strip explains what sending does.
+  snooze: ComponentProps<typeof ComposerSnoozeNotice> | null;
 }
 
 export function ComposerInputBanners({
   roundedTopReset,
   planFollowUp,
   automationSetup,
+  snooze,
 }: ComposerInputBannersProps) {
   let content: ReactNode = null;
   if (planFollowUp) {
@@ -37,14 +41,19 @@ export function ComposerInputBanners({
     content = <ComposerAutomationSetupBanner onCancel={automationSetup.onCancel} />;
   }
 
-  if (!content) {
+  if (!content && !snooze) {
     return null;
   }
 
   return (
     <div
-      className={cn(COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME, roundedTopReset && "!rounded-t-none")}
+      className={cn(
+        COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
+        "divide-y divide-[color:var(--color-border-light)]",
+        roundedTopReset && "!rounded-t-none",
+      )}
     >
+      {snooze ? <ComposerSnoozeNotice {...snooze} /> : null}
       {content}
     </div>
   );

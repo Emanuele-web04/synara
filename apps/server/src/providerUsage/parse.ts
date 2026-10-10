@@ -6,6 +6,7 @@
 import type {
   ProviderKind,
   ProviderUsageStatus,
+  ServerCodexResetCredits,
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
@@ -88,7 +89,7 @@ export function titleCase(value: string): string {
 }
 
 export function formatUsd(amount: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 2,
@@ -104,6 +105,7 @@ export interface SnapshotInput {
   usageLines?: ReadonlyArray<ServerProviderUsageLine>;
   planName?: string;
   detail?: string;
+  resetCredits?: ServerCodexResetCredits;
 }
 
 export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot {
@@ -116,6 +118,7 @@ export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot
     status: input.status,
     ...(input.planName ? { planName: input.planName } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
+    ...(input.resetCredits ? { resetCredits: input.resetCredits } : {}),
   };
 }
 

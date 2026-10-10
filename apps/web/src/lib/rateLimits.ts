@@ -7,16 +7,16 @@ import { providerUsageLearnMoreHref } from "@synara/shared/providerUsage";
 
 export interface RateLimitWindow {
   window: string;
-  usedPercent?: number;
-  utilization?: number;
-  resetsAt?: string;
-  windowDurationMins?: number;
+  usedPercent?: number | undefined;
+  utilization?: number | undefined;
+  resetsAt?: string | undefined;
+  windowDurationMins?: number | undefined;
 }
 
 export interface ProviderRateLimit {
   provider: string;
   updatedAt: string;
-  limits?: RateLimitWindow[];
+  limits?: ReadonlyArray<RateLimitWindow>;
   usedPercent?: number;
   utilization?: number;
   resetsAt?: string;
@@ -32,12 +32,22 @@ export interface VisibleRateLimitRow {
   windowDurationMins?: number;
 }
 
+/** Activity kinds that carry account rate-limit payloads. Shared with the store selector
+ *  that narrows usage subscribers to these activities, so the two stay in sync. */
+export const ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
+  "account.rate-limits.updated",
+  "account.rate-limited",
+]);
+
 const WINDOW_ORDER = new Map([
   ["5h", 0],
-  ["Weekly", 1],
-  ["Sonnet", 2],
-  ["Opus", 3],
-  ["Current", 4],
+  ["Daily", 1],
+  ["Weekly", 2],
+  ["Fable", 3],
+  ["Sonnet", 4],
+  ["Opus", 5],
+  ["Usage credits", 6],
+  ["Current", 7],
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -89,19 +99,30 @@ export function normalizeRateLimitLabel(
   label: string | undefined,
   windowDurationMins?: number,
 ): string {
-  const durationLabel = windowLabelFromDuration(windowDurationMins);
-  if (durationLabel) return durationLabel;
-  if (!label) return "Current";
+  if (!label) return windowLabelFromDuration(windowDurationMins) ?? "Current";
 
   const normalized = label
     .trim()
     .toLowerCase()
     .replace(/[_\s-]+/g, "_");
-  if (normalized === "session" || normalized === "five_hour" || normalized === "5h") {
-    return "5h";
+  // Named pools can share the same duration as standard limits. Keep the pool prefix so
+  // `Core 5h` and `5h` render as separate meters instead of collapsing into one row.
+  if (normalized.startsWith("core_")) {
+    return humanizeLabel(label);
   }
-  if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
-    return "Weekly";
+  // Claude Code calls `seven_day_overage_included` the Fable limit. It is a model
+  // sublimit, distinct from both the account's weekly limit and paid usage credits.
+  // Resolve named buckets before duration so all weekly models keep their identity.
+  if (
+    normalized === "seven_day_fable" ||
+    normalized === "weekly_fable" ||
+    normalized === "fable" ||
+    normalized === "seven_day_overage_included" ||
+    normalized === "weekly_overage_included" ||
+    normalized === "weekly_overage" ||
+    normalized === "weekly_(overage)"
+  ) {
+    return "Fable";
   }
   if (
     normalized === "seven_day_sonnet" ||
@@ -113,7 +134,26 @@ export function normalizeRateLimitLabel(
   if (normalized === "seven_day_opus" || normalized === "weekly_opus" || normalized === "opus") {
     return "Opus";
   }
-  return label;
+  if (normalized === "overage" || normalized === "usage_credits") {
+    return "Usage credits";
+  }
+  const durationLabel = windowLabelFromDuration(windowDurationMins);
+  if (durationLabel) return durationLabel;
+  if (normalized === "session" || normalized === "five_hour" || normalized === "5h") {
+    return "5h";
+  }
+  if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
+    return "Weekly";
+  }
+  return humanizeLabel(label);
+}
+
+function humanizeLabel(label: string): string {
+  return label
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function compareWindowLabels(a: string, b: string): number {
@@ -225,9 +265,14 @@ function extractLimitsFromClaudePayload(
   if (!info) return undefined;
 
   const rateLimitType = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
+  const label = normalizeRateLimitLabel(rateLimitType);
   const windowDurationMins =
-    rateLimitType === "five_hour" ? 300 : rateLimitType === "seven_day" ? 10_080 : undefined;
-  const normalized = normalizeLimitWindow(rateLimitType ?? "Current", {
+    label === "5h"
+      ? 300
+      : label === "Weekly" || label === "Fable" || label === "Sonnet" || label === "Opus"
+        ? 10_080
+        : undefined;
+  const normalized = normalizeLimitWindow(label, {
     utilization: info.utilization,
     resetsAt: info.resetsAt,
     windowDurationMins,
@@ -265,10 +310,7 @@ export function deriveAccountRateLimits(
 
   for (const thread of threads) {
     for (const activity of thread.activities) {
-      if (
-        activity.kind !== "account.rate-limits.updated" &&
-        activity.kind !== "account.rate-limited"
-      ) {
+      if (!ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS.has(activity.kind)) {
         continue;
       }
 

@@ -9,30 +9,34 @@ import { Button } from "../ui/button";
 export const ComposerVoiceButton = function ComposerVoiceButton(props: {
   disabled?: boolean;
   isRecording: boolean;
+  isStarting?: boolean;
   isTranscribing: boolean;
   durationLabel: string;
   onClick: () => void;
 }) {
+  const isBusy = props.isTranscribing || props.isStarting === true;
   const label = props.isTranscribing
     ? "Transcribing voice note"
-    : props.isRecording
-      ? `Stop voice note (${props.durationLabel})`
-      : "Record voice note";
+    : props.isStarting
+      ? "Starting microphone"
+      : props.isRecording
+        ? `Stop voice note (${props.durationLabel})`
+        : "Record voice note";
 
   return (
     <Button
       size="icon-sm"
       variant="ghost"
       className="shrink-0 rounded-md"
-      disabled={props.disabled || props.isTranscribing}
+      disabled={props.disabled || isBusy}
       aria-label={label}
       title={label}
       onClick={props.onClick}
     >
-      {props.isTranscribing ? (
-        <Loader2Icon aria-hidden="true" className="size-4 animate-spin" />
+      {isBusy ? (
+        <Loader2Icon aria-hidden="true" className="size-4 animate-spin text-primary" />
       ) : (
-        <MicIcon aria-hidden="true" className="size-4" />
+        <MicIcon aria-hidden="true" className="size-4 text-primary" />
       )}
     </Button>
   );

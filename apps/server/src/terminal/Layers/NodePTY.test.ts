@@ -4,6 +4,7 @@ import { assert, it } from "@effect/vitest";
 import { PtyAdapter } from "../Services/PTY";
 import { ensureNodePtySpawnHelperExecutable, makeNodePtyLayer } from "./NodePTY";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { prepareProcess } from "@synara/shared/platformProcess";
 
 it.layer(NodeServices.layer)("ensureNodePtySpawnHelperExecutable", (it) => {
   it.effect("adds executable bits when helper exists but is not executable", () =>
@@ -70,6 +71,48 @@ it.layer(NodeServices.layer)("ensureNodePtySpawnHelperExecutable", (it) => {
         makeNodePtyLayer(async () => {
           loadCalls += 1;
           throw new Error("native binding missing");
+        }),
+      ),
+    );
+  });
+
+  it.effect("preserves the prepared Windows batch command line at the node-pty boundary", () => {
+    let received: string | string[] | undefined;
+    const plan = prepareProcess("C:\\Program Files\\provider.cmd", ["auth", "login"], {
+      platform: "win32",
+      env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* PtyAdapter;
+      yield* adapter
+        .spawn({
+          shell: plan.command,
+          args: plan.args,
+          ...(plan.windowsVerbatimArguments
+            ? { windowsVerbatimArguments: plan.windowsVerbatimArguments }
+            : {}),
+          cwd: process.cwd(),
+          cols: 80,
+          rows: 24,
+          env: {},
+        })
+        .pipe(Effect.flip);
+      assert.equal(
+        received,
+        '/d /s /v:off /c call "C:\\Program Files\\provider.cmd" "auth" "login"',
+      );
+    }).pipe(
+      Effect.provide(
+        makeNodePtyLayer(async () => {
+          const native = await import("node-pty");
+          const intercepted: typeof native = {
+            ...native,
+            spawn(_file, args) {
+              received = args;
+              throw new Error("Fixture stops before starting a native process.");
+            },
+          };
+          return intercepted;
         }),
       ),
     );

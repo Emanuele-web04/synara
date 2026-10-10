@@ -1,28 +1,69 @@
 import "../../index.css";
 
-import { page } from "vitest/browser";
+import { useState } from "react";
+
+import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
 import { ExpandedImageOverlay } from "./ExpandedImageOverlay";
+import { useExpandedImagePreview } from "./useExpandedImagePreview";
+import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 
 describe("ExpandedImageOverlay", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
-  it("renders nothing without an expanded image", async () => {
-    const screen = await render(
-      <ExpandedImageOverlay expandedImage={null} onClose={vi.fn()} onNavigate={vi.fn()} />,
-    );
-
+  it("consumes Escape for the image before dismissing its owning draft dialog", async () => {
+    function DraftDialog() {
+      const [open, setOpen] = useState(true);
+      const preview = useExpandedImagePreview();
+      return (
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogPopup>
+            <DialogTitle>New task</DialogTitle>
+            <input aria-label="Task draft" defaultValue="Keep my draft" />
+            <button
+              type="button"
+              onClick={() =>
+                preview.setExpandedImage({
+                  images: [{ src: `${window.location.origin}/synara.png`, name: "Attachment" }],
+                  index: 0,
+                })
+              }
+            >
+              Preview attachment
+            </button>
+            <ExpandedImageOverlay
+              expandedImage={preview.expandedImage}
+              onClose={preview.closeExpandedImage}
+              onNavigate={preview.navigateExpandedImage}
+            />
+          </DialogPopup>
+        </Dialog>
+      );
+    }
+    const screen = await render(<DraftDialog />);
     try {
+      await page.getByRole("button", { name: "Preview attachment" }).click();
+      await expect
+        .element(page.getByRole("dialog", { name: "Expanded image preview" }))
+        .toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
       await expect
         .element(page.getByRole("dialog", { name: "Expanded image preview" }))
         .not.toBeInTheDocument();
+      await expect.element(page.getByRole("dialog", { name: "New task" })).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("textbox", { name: "Task draft" }))
+        .toHaveValue("Keep my draft");
+      await userEvent.keyboard("{Escape}");
+      await expect.element(page.getByRole("dialog", { name: "New task" })).not.toBeInTheDocument();
     } finally {
       await screen.unmount();
     }
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
   });
 
   it("renders the selected image and dispatches previous, next, and close", async () => {
@@ -57,6 +98,41 @@ describe("ExpandedImageOverlay", () => {
       expect(onNavigate).toHaveBeenNthCalledWith(2, 1);
       expect(onClose).toHaveBeenCalledOnce();
     } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("signals native surfaces when the overlay opens and closes", async () => {
+    const onOcclusionChange = vi.fn();
+    window.addEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, onOcclusionChange);
+    const screen = await render(
+      <ExpandedImageOverlay expandedImage={null} onClose={vi.fn()} onNavigate={vi.fn()} />,
+    );
+
+    try {
+      expect(onOcclusionChange).not.toHaveBeenCalled();
+      await expect
+        .element(page.getByRole("dialog", { name: "Expanded image preview" }))
+        .not.toBeInTheDocument();
+
+      await screen.rerender(
+        <ExpandedImageOverlay
+          expandedImage={{
+            images: [{ src: "data:image/png;base64,preview", name: "Preview image" }],
+            index: 0,
+          }}
+          onClose={vi.fn()}
+          onNavigate={vi.fn()}
+        />,
+      );
+      expect(onOcclusionChange).toHaveBeenCalledTimes(1);
+
+      await screen.rerender(
+        <ExpandedImageOverlay expandedImage={null} onClose={vi.fn()} onNavigate={vi.fn()} />,
+      );
+      expect(onOcclusionChange).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, onOcclusionChange);
       await screen.unmount();
     }
   });

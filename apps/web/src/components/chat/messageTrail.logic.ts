@@ -35,6 +35,44 @@ function normalizePreview(text: string): string {
     : collapsed;
 }
 
+// Store messages are immutable — a text change produces a new message object —
+// so the object itself keys its normalized preview. Without this, every
+// transcript render re-runs the whitespace regex over the full text of every
+// message, which is O(total transcript text) per streaming flush.
+const previewByMessage = new WeakMap<object, string>();
+
+function normalizePreviewCached(message: { readonly text: string }): string {
+  const cached = previewByMessage.get(message);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const preview = normalizePreview(message.text);
+  previewByMessage.set(message, preview);
+  return preview;
+}
+
+// The timeline entry array is itself immutable (rebuilt only when its inputs
+// change), so repeat renders off the same entries reuse the whole projection.
+const trailItemsByEntries = new WeakMap<readonly TimelineEntry[], MessageTrailItem[]>();
+// The most recent projection, for reuse across entry arrays (see deriveMessageTrailItems).
+let lastTrailItems: MessageTrailItem[] | undefined;
+
+function trailItemsEqual(left: readonly MessageTrailItem[], right: readonly MessageTrailItem[]) {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => {
+      const other = right[index]!;
+      return (
+        item.id === other.id &&
+        item.ordinal === other.ordinal &&
+        item.preview === other.preview &&
+        item.responsePreview === other.responsePreview &&
+        item.attachmentCount === other.attachmentCount
+      );
+    })
+  );
+}
+
 /**
  * Project the timeline into one trail item per user message, in transcript order.
  * Each item also carries the start of its turn's *final* assistant message (the muted
@@ -45,6 +83,10 @@ function normalizePreview(text: string): string {
 export function deriveMessageTrailItems(
   timelineEntries: readonly TimelineEntry[],
 ): MessageTrailItem[] {
+  const cachedItems = trailItemsByEntries.get(timelineEntries);
+  if (cachedItems !== undefined) {
+    return cachedItems;
+  }
   const items: MessageTrailItem[] = [];
   // Index of the user item whose turn we're inside; every non-empty assistant row
   // overwrites its response so the last one (the end-of-turn message) wins.
@@ -58,19 +100,26 @@ export function deriveMessageTrailItems(
       items.push({
         id: entry.message.id,
         ordinal: items.length + 1,
-        preview: normalizePreview(entry.message.text),
+        preview: normalizePreviewCached(entry.message),
         responsePreview: "",
         attachmentCount: entry.message.attachments?.length ?? 0,
       });
       currentTurnIndex = items.length - 1;
     } else if (role === "assistant" && currentTurnIndex >= 0) {
-      const responsePreview = normalizePreview(entry.message.text);
+      const responsePreview = normalizePreviewCached(entry.message);
       if (responsePreview !== "") {
         items[currentTurnIndex]!.responsePreview = responsePreview;
       }
     }
   }
-  return items;
+  // A streaming reply rebuilds the entry array on every token while the trail itself
+  // (one item per sent message) rarely changes: hand back the previous projection when it
+  // is equal, so the trail keeps its identity and does not re-render per token.
+  const reusedItems =
+    lastTrailItems !== undefined && trailItemsEqual(lastTrailItems, items) ? lastTrailItems : items;
+  lastTrailItems = reusedItems;
+  trailItemsByEntries.set(timelineEntries, reusedItems);
+  return reusedItems;
 }
 
 /** A sent-message row paired with its index in the virtualized row list. */
@@ -373,4 +422,64 @@ export function clampTooltipTop(
 ): number {
   const half = tooltipH / 2 + margin;
   return clampNumber(centerY, half, Math.max(half, railH - half));
+}
+
+// --- Audio wave --------------------------------------------------------
+
+// Reported levels are dB-mapped, and how loud speech lands depends on the
+// microphone: a headset sits near 0.7, a laptop microphone near 0.4. The
+// shaper follows the recent peak so either fills the wave, ignores room noise
+// below the knee, and squares the result so only real peaks reach full width.
+const AUDIO_NOISE_KNEE = 0.12;
+const AUDIO_MIN_PEAK = 0.3;
+// Silence is emitted only once, so decay by elapsed time rather than report count.
+const AUDIO_PEAK_HALF_LIFE_MS = 4_000;
+
+/** Stateful level shaper: maps reported 0..1 levels onto wave height with automatic gain. */
+export function createAudioLevelShaper(): (level: number) => number {
+  let peak = AUDIO_MIN_PEAK;
+  let lastReportedAt = performance.now();
+  return (level) => {
+    const reportedAt = performance.now();
+    const elapsed = Math.max(0, reportedAt - lastReportedAt);
+    lastReportedAt = reportedAt;
+    const release = 0.5 ** (elapsed / AUDIO_PEAK_HALF_LIFE_MS);
+    peak = Math.max(level, AUDIO_MIN_PEAK, peak * release);
+    const relative = clampNumber((level - AUDIO_NOISE_KNEE) / (peak - AUDIO_NOISE_KNEE), 0, 1);
+    return relative * relative;
+  };
+}
+
+/** Per-frame audio envelope: rises at once with the sound, falls back gently. */
+export function stepAudioEnvelope(previous: number, target: number, release: number): number {
+  return target >= previous ? target : Math.max(target, previous * release);
+}
+
+/** Fixed per-tick gain in 0.45..1 so the column never moves in lockstep. */
+export function audioTickGain(index: number): number {
+  const noise = Math.sin((index + 1) * 12.9898) * 43758.5453;
+  return 0.45 + 0.55 * (noise - Math.floor(noise));
+}
+
+/**
+ * Tick widths for the audio wave. `history` holds the smoothed level per
+ * frame, newest first. The wave starts at `centerIndex` and travels outward:
+ * each tick reads the level from `framesPerTick` frames earlier than its inner
+ * neighbour, so sound visibly ripples up and down the rail.
+ */
+export function computeAudioTickWidths(input: {
+  count: number;
+  centerIndex: number;
+  history: readonly number[];
+  framesPerTick: number;
+  baseW: number;
+  maxW: number;
+}): number[] {
+  const { count, centerIndex, history, framesPerTick, baseW, maxW } = input;
+  const widths: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const level = history[Math.abs(i - centerIndex) * framesPerTick] ?? 0;
+    widths.push(baseW + (maxW - baseW) * clampNumber(level, 0, 1) * audioTickGain(i));
+  }
+  return widths;
 }

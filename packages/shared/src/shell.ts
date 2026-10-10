@@ -5,14 +5,12 @@
 import * as OS from "node:os";
 import { execFileSync } from "node:child_process";
 
-const PATH_CAPTURE_START = "__SYNARA_PATH_START__";
-const PATH_CAPTURE_END = "__SYNARA_PATH_END__";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 
 type ExecFileSyncLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: { encoding: "utf8"; timeout: number },
+  options: { encoding: "utf8"; timeout: number; windowsHide?: boolean },
 ) => string;
 
 function trimNonEmpty(value: string | null | undefined): string | undefined {
@@ -97,18 +95,6 @@ export function resolveLoginShell(
   return listLoginShellCandidates(platform, shell)[0];
 }
 
-export function extractPathFromShellOutput(output: string): string | null {
-  const startIndex = output.indexOf(PATH_CAPTURE_START);
-  if (startIndex === -1) return null;
-
-  const valueStartIndex = startIndex + PATH_CAPTURE_START.length;
-  const endIndex = output.indexOf(PATH_CAPTURE_END, valueStartIndex);
-  if (endIndex === -1) return null;
-
-  const pathValue = output.slice(valueStartIndex, endIndex).trim();
-  return pathValue.length > 0 ? pathValue : null;
-}
-
 export function readPathFromLoginShell(
   shell: string,
   execFile: ExecFileSyncLike = execFileSync,
@@ -124,6 +110,7 @@ export function readPathFromLaunchctl(
       execFile("/bin/launchctl", ["getenv", "PATH"], {
         encoding: "utf8",
         timeout: 2000,
+        windowsHide: true,
       }),
     );
   } catch {
@@ -231,6 +218,7 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
   const output = execFile(shell, ["-ilc", buildEnvironmentCaptureCommand(names)], {
     encoding: "utf8",
     timeout: 5000,
+    windowsHide: true,
   });
 
   const environment: Partial<Record<string, string>> = {};
@@ -326,7 +314,9 @@ export const readWindowsPersistentEnvironment: WindowsEnvironmentReader = (
   const output = execFile(
     resolveWindowsPowerShellPath(),
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_ENVIRONMENT_SCRIPT],
-    { encoding: "utf8", timeout: 5000 },
+    // Hide the interpreter window: without it every read flashes a console on
+    // Windows, because this process is a GUI app spawning a console child.
+    { encoding: "utf8", timeout: 5000, windowsHide: true },
   );
 
   let parsed: {

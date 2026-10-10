@@ -13,18 +13,228 @@ import path from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import {
+  applyPiRuntimeApiKeysFromEnvironment,
   createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
+  findModelInRegistry,
   getPiSupportedThinkingOptions,
   buildPiAgentGatewayCustomTools,
+  piInstalledGatewayToolNames,
   makePiBashProcessSupervisor,
+  makePiExtensionModeCoordinator,
   makePiRuntimeEventBase,
+  makePiStoragePaths,
   makePiUserInputOptions,
-  PLAIN_PI_EXTENSION_THEME,
   toPiProviderModelDescriptor,
+  resolvePiStartInstanceId,
+  resolvePiExtensionMode,
 } from "./PiAdapter";
+
+describe("makePiStoragePaths", () => {
+  it("resolves modelSelection-only account identity before Pi storage setup", () => {
+    expect(
+      resolvePiStartInstanceId({
+        modelSelection: {
+          provider: "pi",
+          instanceId: "pi_work",
+          model: "pi/model",
+        },
+      } as never),
+    ).toBe("pi_work");
+  });
+
+  it("keeps legacy defaults byte-for-byte without an account boundary", () => {
+    expect(
+      makePiStoragePaths({
+        stateDir: "/state",
+        homeDir: "/home/user",
+        sdkAgentDir: "/sdk/default-agent",
+      }),
+    ).toEqual({ agentDir: "/sdk/default-agent" });
+  });
+
+  it("uses selected Pi roots and never falls back to the global session directory", () => {
+    expect(
+      makePiStoragePaths({
+        agentDir: "~/configured-agent",
+        environment: {
+          HOME: "/accounts/b",
+          PI_CODING_AGENT_DIR: "/ignored/env-agent",
+          PI_CODING_AGENT_SESSION_DIR: "/accounts/b/selected-sessions",
+        },
+        instanceId: "pi_work",
+        stateDir: "/state",
+        homeDir: "/home/user",
+        sdkAgentDir: "/sdk/default-agent",
+      }),
+    ).toEqual({
+      agentDir: "/accounts/b/configured-agent",
+      sessionDir: "/accounts/b/selected-sessions",
+    });
+  });
+
+  it("derives persistent synthetic agent and session roots for nondefault instances", () => {
+    const paths = makePiStoragePaths({
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/home/user",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir.endsWith("/.pi/agent")).toBe(true);
+    expect(paths.sessionDir).toBe(`${paths.agentDir}/sessions`);
+  });
+
+  it("expands configured tilde paths against the synthetic account home", () => {
+    const paths = makePiStoragePaths({
+      agentDir: "~/.custom-pi",
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/real/server-home",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir).toContain("/.custom-pi");
+    expect(paths.agentDir).not.toContain("/real/server-home");
+  });
+
+  it("falls back to synthetic storage for relative configured agent dirs", () => {
+    const paths = makePiStoragePaths({
+      agentDir: "relative-agent",
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/real/server-home",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir).toContain("/.pi/agent");
+  });
+});
+
+describe("resolvePiExtensionMode", () => {
+  it("preserves default-only extension behavior", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: false });
+  });
+
+  it("forces noExtensions for isolated accounts and coexisting default discovery", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: true });
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: true,
+      }),
+    ).toEqual({ noExtensions: true });
+  });
+
+  it("rejects isolated startup while an extension-enabled default is active", () => {
+    expect(() =>
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: true,
+        hasIsolatedMode: false,
+      }),
+    ).toThrow(/Stop extension-enabled default Pi sessions/);
+  });
+});
+
+describe("Pi extension mode in-flight reservations", () => {
+  const coordinator = () =>
+    makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    }));
+
+  it("rejects concurrent isolated work after extension-enabled discovery reserves first", async () => {
+    const modes = coordinator();
+    let releaseDiscovery!: () => void;
+    const discoveryGate = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    const defaultDiscovery = (async () => {
+      const reservation = modes.reserve(false);
+      try {
+        await discoveryGate;
+      } finally {
+        reservation.release();
+      }
+    })();
+    await Promise.resolve();
+    const [isolatedStart] = await Promise.allSettled([
+      Promise.resolve().then(() => modes.reserve(true)),
+    ]);
+    expect(isolatedStart?.status).toBe("rejected");
+    releaseDiscovery();
+    await defaultDiscovery;
+    expect(modes.reserve(true).noExtensions).toBe(true);
+  });
+
+  it("forces concurrent default work into noExtensions after isolated start reserves first", async () => {
+    const modes = coordinator();
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const isolatedStart = (async () => {
+      const reservation = modes.reserve(true);
+      try {
+        await startGate;
+      } finally {
+        reservation.release();
+      }
+    })();
+    await Promise.resolve();
+    const defaultDiscovery = await Promise.resolve().then(() => modes.reserve(false));
+    expect(defaultDiscovery.noExtensions).toBe(true);
+    defaultDiscovery.release();
+    releaseStart();
+    await isolatedStart;
+    expect(modes.reserve(false).noExtensions).toBe(false);
+  });
+
+  it("allows same-thread default to isolated replacement without exposing the transition", () => {
+    const modes = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: true,
+      hasIsolatedMode: false,
+    }));
+    expect(() => modes.reserve(true)).toThrow(/Stop extension-enabled default Pi sessions/);
+    const replacement = modes.reserve(true, {
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    });
+    expect(replacement.noExtensions).toBe(true);
+    expect(() => modes.reserve(false)).toThrow(/account-mode transition/);
+    replacement.release();
+  });
+
+  it("allows same-thread isolated to default replacement in noExtensions mode", () => {
+    const modes = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: true,
+    }));
+    const replacement = modes.reserve(false, {
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    });
+    expect(replacement.noExtensions).toBe(false);
+    replacement.release();
+  });
+});
 
 describe("Pi native Synara gateway tools", () => {
   it("uses canonical MCP schemas and keeps same-cwd thread tokens distinct", async () => {
@@ -143,6 +353,137 @@ describe("Pi native Synara gateway tools", () => {
     expect(callSignal).toBe(controller.signal);
     expect(controller.signal.aborted).toBe(true);
   });
+
+  it("only adds specialist routes when the catalog advertises a canonical Computer tool", () => {
+    expect(piInstalledGatewayToolNames(["synara_list_threads"])).toEqual(
+      new Set(["synara_list_threads"]),
+    );
+    for (const unrelated of ["computer_future_tool", "mcp__other__computer_click"]) {
+      expect(piInstalledGatewayToolNames([unrelated])).toEqual(new Set([unrelated]));
+    }
+    expect(piInstalledGatewayToolNames(["synara_list_threads", "computer_run"])).toEqual(
+      new Set(["synara_list_threads", ...SYNARA_COMPUTER_TOOL_NAMES]),
+    );
+  });
+
+  it.each([
+    ["help-only", ["computer_help"]],
+    ["list-only", ["computer_list_windows"]],
+    ["read-only", ["computer_list_windows", "computer_get_state", "computer_screenshot"]],
+    ["actions-only", ["computer_click", "computer_press_key", "computer_run"]],
+  ] as const)(
+    "rejects an enabled %s catalog before creating compatibility forwarders",
+    async (_, names) => {
+      let defined = 0;
+      await expect(
+        buildPiAgentGatewayCustomTools({
+          connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-a" },
+          enableComputerControl: true,
+          defineTool: (tool) => {
+            defined += 1;
+            return tool;
+          },
+          fetch: async (_input, init) =>
+            Response.json({
+              jsonrpc: "2.0",
+              id: JSON.parse(String(init?.body)).id,
+              result: {
+                tools: names.map((name) => ({
+                  name,
+                  description: name,
+                  inputSchema: { type: "object", properties: {} },
+                })),
+              },
+            }),
+        }),
+      ).rejects.toThrow("missing required Computer tools");
+      expect(defined).toBe(0);
+    },
+  );
+
+  it("retains enabled specialist routes, no idle schemas, and gateway denials after revocation", async () => {
+    const computerTool = {
+      name: "computer_click",
+      description: "Click.",
+      inputSchema: { type: "object", properties: { x: { type: "number" } } },
+    };
+    const ordinaryTool = {
+      name: "synara_list_threads",
+      description: "List Synara threads.",
+      inputSchema: { type: "object", properties: {} },
+    };
+    let enabled = true;
+    const calls: Array<{ name: string; args: unknown; token: string | null; signal: unknown }> = [];
+    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === "tools/call") {
+        calls.push({
+          name: body.params.name,
+          args: body.params.arguments,
+          token: new Headers(init?.headers).get("Authorization"),
+          signal: init?.signal,
+        });
+      }
+      return Response.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result:
+          body.method === "tools/list"
+            ? { tools: enabled ? [ordinaryTool, computerTool] : [ordinaryTool] }
+            : enabled
+              ? { content: [{ type: "text", text: "ok" }] }
+              : { isError: true, content: [{ type: "text", text: "capability_denied" }] },
+      });
+    };
+    const connection = { url: "http://127.0.0.1:3773/mcp", bearerToken: "t" };
+    const projection = () =>
+      buildPiAgentGatewayCustomTools({
+        connection,
+        defineTool: (tool) => tool,
+        fetch,
+      });
+    const on = await projection();
+    expect(new Set(on.map((tool) => tool.name))).toEqual(
+      new Set([ordinaryTool.name, ...SYNARA_COMPUTER_TOOL_NAMES]),
+    );
+    expect(on[1]?.parameters).toEqual(computerTool.inputSchema);
+    const controller = new AbortController();
+    for (const name of [
+      "computer_read_clipboard",
+      "computer_zoom",
+      "computer_get_accessibility_tree",
+      "computer_get_cursor_position",
+    ]) {
+      const specialist = on.find((tool) => tool.name === name)!;
+      expect(specialist.description).toContain(`computer_help({tool:"${name}"})`);
+      const args = name === "computer_zoom" ? { x: 5, y: 6, width: 40, height: 30 } : {};
+      await expect(
+        specialist.execute(name, args, controller.signal, undefined, {} as never),
+      ).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+      expect(calls.at(-1)).toEqual({
+        name,
+        args,
+        token: "Bearer t",
+        signal: controller.signal,
+      });
+    }
+
+    enabled = false;
+    connection.bearerToken = "revoked";
+    const off = await projection();
+    expect(off.map((tool) => tool.name)).toEqual([ordinaryTool.name]);
+    // A tool closure already issued to an earlier turn still reaches the
+    // authoritative gateway refusal; no idle model-facing stub is needed.
+    await expect(
+      on[1]!.execute("stale", { x: 1 }, undefined, undefined, {} as never),
+    ).rejects.toThrow("capability_denied");
+    await expect(
+      on
+        .find((tool) => tool.name === "computer_read_clipboard")!
+        .execute("stale-specialist", {}, undefined, undefined, {} as never),
+    ).rejects.toThrow("capability_denied");
+    expect(calls.at(-1)?.token).toBe("Bearer revoked");
+  });
 });
 
 describe("Pi Bash process supervision", () => {
@@ -260,10 +601,22 @@ describe("getPiDiscoverableModels", () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
 
     try {
-      const firstRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
-      const secondRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const firstRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        AbortSignal.abort(),
+        { OPENAI_API_KEY: "instance-openai-key" },
+      );
+      const secondRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        AbortSignal.abort(),
+      );
       const firstRegistry = new ModelRegistry(firstRuntime);
       const secondRegistry = new ModelRegistry(secondRuntime);
+
+      expect(firstRuntime.hasConfiguredAuth("openai")).toBe(true);
+      expect(secondRuntime.hasConfiguredAuth("openai")).toBe(false);
 
       firstRegistry.registerProvider("project-local", {
         baseUrl: "http://127.0.0.1:11434/v1",
@@ -288,6 +641,275 @@ describe("getPiDiscoverableModels", () => {
       rmSync(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("blocks ambient API-key fallback for an isolated Pi instance", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-account-isolation-"));
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "ambient-account-key";
+
+    try {
+      const isolatedRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_work",
+      );
+      const defaultRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+
+      expect(isolatedRuntime.hasConfiguredAuth("openai")).toBe(false);
+      await expect(isolatedRuntime.getAuth("openai")).resolves.toBeUndefined();
+      expect(defaultRuntime.hasConfiguredAuth("openai")).toBe(true);
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves custom provider config only from the selected Pi environment", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-custom-config-isolation-"));
+    const previousCustomKey = process.env.CUSTOM_KEY;
+    const previousCustomHeader = process.env.CUSTOM_HEADER;
+    process.env.CUSTOM_KEY = "ambient-account-key";
+    process.env.CUSTOM_HEADER = "ambient-account-header";
+    const commandConfig = `!${JSON.stringify(process.execPath)} -p ${JSON.stringify(
+      "process.env.CUSTOM_KEY",
+    )}`;
+
+    try {
+      writeFileSync(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "$CUSTOM_KEY",
+              headers: { "X-Custom": "$CUSTOM_HEADER" },
+              models: [{ id: "custom-model" }],
+            },
+            "custom-command": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: commandConfig,
+              models: [{ id: "command-model" }],
+            },
+          },
+        }),
+      );
+      const selected = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { CUSTOM_KEY: "selected-account-key", CUSTOM_HEADER: "selected-account-header" },
+        "pi_work",
+      );
+      const empty = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_empty",
+      );
+      const customModel = selected.getModel("custom", "custom-model");
+      if (!customModel) throw new Error("Expected custom Pi model.");
+
+      await expect(selected.getAuth(customModel)).resolves.toMatchObject({
+        auth: {
+          apiKey: "selected-account-key",
+          headers: { "X-Custom": "selected-account-header" },
+        },
+      });
+      await expect(selected.getAuth("custom-command")).resolves.toMatchObject({
+        auth: { apiKey: "selected-account-key" },
+      });
+      expect(empty.hasConfiguredAuth("custom")).toBe(false);
+      expect(empty.hasConfiguredAuth("custom-command")).toBe(false);
+    } finally {
+      if (previousCustomKey === undefined) delete process.env.CUSTOM_KEY;
+      else process.env.CUSTOM_KEY = previousCustomKey;
+      if (previousCustomHeader === undefined) delete process.env.CUSTOM_HEADER;
+      else process.env.CUSTOM_HEADER = previousCustomHeader;
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps identical config commands scoped to each immutable Pi environment", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-command-isolation-"));
+    const commandConfig = `!${JSON.stringify(process.execPath)} -p ${JSON.stringify(
+      "process.env.CUSTOM_KEY",
+    )}`;
+
+    try {
+      writeFileSync(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: commandConfig,
+              models: [{ id: "command-model" }],
+            },
+          },
+        }),
+      );
+      const accountAEnvironment = { CUSTOM_KEY: "selected-account-a" };
+      const accountA = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        accountAEnvironment,
+        "pi_account_a",
+      );
+      accountAEnvironment.CUSTOM_KEY = "mutated-after-snapshot";
+      const accountB = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { CUSTOM_KEY: "selected-account-b" },
+        "pi_account_b",
+      );
+
+      await expect(
+        Promise.all([accountA.getAuth("custom"), accountB.getAuth("custom")]),
+      ).resolves.toMatchObject([
+        { auth: { apiKey: "selected-account-a" } },
+        { auth: { apiKey: "selected-account-b" } },
+      ]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["amazon-bedrock", "stored-bedrock", "Amazon Bedrock"],
+    ["azure-openai-responses", "stored-azure", "Azure OpenAI"],
+    ["google-vertex", "gcp-vertex-credentials", "Vertex ADC"],
+  ])("fails closed for isolated %s ambient-chain auth", async (provider, key, message) => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-routing-isolation-"));
+    try {
+      writeFileSync(
+        path.join(agentDir, "auth.json"),
+        JSON.stringify({ [provider]: { type: "api_key", key } }),
+      );
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth(provider)).rejects.toThrow(message);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Cloudflare routing only from the selected instance", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-cloudflare-isolation-"));
+    try {
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {
+          CLOUDFLARE_ACCOUNT_ID: "account-b",
+          CLOUDFLARE_GATEWAY_ID: "gateway-b",
+          CLOUDFLARE_API_KEY: "key-b",
+        },
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth("cloudflare-ai-gateway")).resolves.toMatchObject({
+        env: {
+          CLOUDFLARE_ACCOUNT_ID: "account-b",
+          CLOUDFLARE_GATEWAY_ID: "gateway-b",
+        },
+      });
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses ambient OpenAI and Anthropic routing credentials", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-header-isolation-"));
+    const previousOpenAiOrg = process.env.OPENAI_ORG_ID;
+    const previousAnthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    process.env.OPENAI_ORG_ID = "ambient-org";
+    process.env.ANTHROPIC_AUTH_TOKEN = "ambient-token";
+    try {
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { OPENAI_API_KEY: "selected-openai", ANTHROPIC_API_KEY: "selected-anthropic" },
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth("openai")).resolves.not.toMatchObject({
+        auth: { headers: expect.objectContaining({ "OpenAI-Organization": "ambient-org" }) },
+      });
+      await expect(runtime.getAuth("anthropic")).resolves.not.toMatchObject({
+        auth: { headers: expect.objectContaining({ Authorization: "Bearer ambient-token" }) },
+      });
+    } finally {
+      if (previousOpenAiOrg === undefined) delete process.env.OPENAI_ORG_ID;
+      else process.env.OPENAI_ORG_ID = previousOpenAiOrg;
+      if (previousAnthropicToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+      else process.env.ANTHROPIC_AUTH_TOKEN = previousAnthropicToken;
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { provider: "zai", id: "glm-5.3-flash", auth: { type: "api_key", key: "test-key" } },
+    {
+      provider: "openai-codex",
+      id: "gpt-6-astra",
+      auth: { type: "oauth", access: "tok", refresh: "ref", expires: 4_102_444_800_000 },
+    },
+  ])(
+    "discovers bundled $provider/$id with configured credentials",
+    async ({ provider, id, auth }) => {
+      const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-bundled-models-"));
+      try {
+        const authPath = path.join(agentDir, "auth.json");
+        writeFileSync(authPath, JSON.stringify({ [provider]: auth }));
+        const runtime = await ModelRuntime.create({
+          authPath,
+          modelsPath: path.join(agentDir, "models.json"),
+          allowModelNetwork: false,
+        });
+        const registry = new ModelRegistry(runtime);
+        const model = getPiDiscoverableModels(registry).find(
+          (candidate) => candidate.provider === provider && candidate.id === id,
+        );
+
+        expect(model).toBeDefined();
+        if (!model) throw new Error(`Missing bundled model: ${provider}/${id}`);
+        expect(findModelInRegistry(registry, `${provider}/${id}`)).toEqual(model);
+        expect(toPiProviderModelDescriptor(model, (name) => name)).toMatchObject({
+          slug: `${provider}/${id}`,
+          upstreamProviderId: provider,
+          supportedReasoningEfforts: expect.arrayContaining([
+            {
+              value: "high",
+              label: expect.any(String),
+              description: expect.any(String),
+            },
+          ]),
+        });
+      } finally {
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("includes custom-provider models authenticated through auth.json semantics", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-models-"));
@@ -394,26 +1016,7 @@ describe("getPiDiscoverableModels", () => {
 });
 
 describe("ensurePiAnthropicCatalogModels", () => {
-  it("does not invent Anthropic models when Anthropic is unauthenticated", () => {
-    const models = ensurePiAnthropicCatalogModels([
-      {
-        id: "glm-5.2",
-        name: "GLM 5.2",
-        api: "openai-completions",
-        provider: "local",
-        baseUrl: "http://127.0.0.1:11434/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-    ]);
-
-    expect(models.every((model) => model.provider !== "anthropic")).toBe(true);
-  });
-
-  it("restores Fable 5 and Opus 4.8 when an oauth catalog omitted them", () => {
+  it("restores Fable 5.1, Fable 5, and Opus 4.8 when an oauth catalog omitted them", () => {
     const peer = {
       id: "claude-opus-4-7",
       name: "Claude Opus 4.7",
@@ -430,9 +1033,17 @@ describe("ensurePiAnthropicCatalogModels", () => {
 
     expect(models.map((model) => model.id)).toEqual([
       "claude-opus-4-7",
+      "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-4-8",
     ]);
+    expect(models.find((model) => model.id === "claude-fable-5-1")).toMatchObject({
+      provider: "anthropic",
+      name: "Claude Fable 5.1",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
     expect(models.find((model) => model.id === "claude-fable-5")).toMatchObject({
       provider: "anthropic",
       name: "Claude Fable 5",
@@ -451,13 +1062,16 @@ describe("getPiSupportedThinkingOptions", () => {
     expect(getPiSupportedThinkingOptions(makePiModel({ reasoning: false }))).toEqual([]);
   });
 
-  it("advertises xhigh only when the concrete Pi model supports it", () => {
-    const withoutXHigh = getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
+  it("advertises xhigh and max only when the concrete Pi model supports them", () => {
+    const withoutExtended = getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
     const withXHigh = getPiSupportedThinkingOptions(
       makePiModel({ reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } }),
     );
+    const withMax = getPiSupportedThinkingOptions(
+      makePiModel({ reasoning: true, thinkingLevelMap: { max: "max" } }),
+    );
 
-    expect(withoutXHigh.map((option) => option.value)).toEqual([
+    expect(withoutExtended.map((option) => option.value)).toEqual([
       "off",
       "minimal",
       "low",
@@ -472,23 +1086,69 @@ describe("getPiSupportedThinkingOptions", () => {
       "high",
       "xhigh",
     ]);
+    expect(withMax.map((option) => option.value)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
   });
 
-  it("respects provider-level disabled thinking levels", () => {
+  it("preserves kimi-k3 style ladders that expose low, high, and max", () => {
     const options = getPiSupportedThinkingOptions(
       makePiModel({
         reasoning: true,
         thinkingLevelMap: {
           off: null,
-          minimal: "low",
+          minimal: null,
           low: "low",
-          medium: "medium",
+          medium: null,
           high: "high",
+          xhigh: null,
+          max: "max",
         },
       }),
     );
 
-    expect(options.map((option) => option.value)).toEqual(["minimal", "low", "medium", "high"]);
+    expect(options.map((option) => option.value)).toEqual(["low", "high", "max"]);
+  });
+});
+
+describe("applyPiRuntimeApiKeysFromEnvironment", () => {
+  it("maps Pi provider-instance API keys into runtime auth without mutating process.env", async () => {
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "global-openai-key";
+    const runtimeKeys = new Map<string, string>();
+
+    try {
+      await applyPiRuntimeApiKeysFromEnvironment(
+        {
+          async setRuntimeApiKey(provider, apiKey) {
+            runtimeKeys.set(provider, apiKey);
+          },
+        },
+        {
+          OPENAI_API_KEY: "instance-openai-key",
+          ANTHROPIC_API_KEY: "anthropic-api-key",
+          ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth-token",
+          OPENCODE_API_KEY: "opencode-key",
+        },
+      );
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+
+    expect(runtimeKeys.get("openai")).toBe("instance-openai-key");
+    expect(runtimeKeys.get("anthropic")).toBe("anthropic-oauth-token");
+    expect(runtimeKeys.get("opencode")).toBe("opencode-key");
+    expect(runtimeKeys.get("opencode-go")).toBe("opencode-key");
+    expect(process.env.OPENAI_API_KEY).toBe(previousOpenAiKey);
   });
 });
 
@@ -517,11 +1177,5 @@ describe("Pi extension UI helpers", () => {
       "Option 2",
       "OpenRouter (2)",
     ]);
-  });
-
-  it("provides a no-color theme object for UI-gated extensions", () => {
-    expect(PLAIN_PI_EXTENSION_THEME.fg("accent", "ready")).toBe("ready");
-    expect(PLAIN_PI_EXTENSION_THEME.bold("done")).toBe("done");
-    expect(PLAIN_PI_EXTENSION_THEME.getThinkingBorderColor("medium")("thinking")).toBe("thinking");
   });
 });

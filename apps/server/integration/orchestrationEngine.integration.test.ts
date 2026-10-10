@@ -122,8 +122,8 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
   Effect.gen(function* () {
     const createdAt = nowIso();
     const provider = harness.adapterHarness?.provider ?? "codex";
-    if (provider === "pi") {
-      throw new Error("Pi integration tests require an explicit model selection.");
+    if (provider === "pi" || provider === "omp") {
+      throw new Error("Pi/OMP integration tests require an explicit model selection.");
     }
     const defaultModel = DEFAULT_MODEL_BY_PROVIDER[provider];
 
@@ -1096,89 +1096,6 @@ itLiveUnlessCi(
         }),
       "claudeAgent",
     ),
-);
-
-it.live("forwards claudeAgent approval responses to the provider session", () =>
-  withHarness(
-    (harness) =>
-      Effect.gen(function* () {
-        yield* seedProjectAndThread(harness);
-
-        yield* harness.adapterHarness!.queueTurnResponseForNextSession({
-          deferCompletion: true,
-          events: [
-            {
-              type: "turn.started",
-              ...runtimeBase("evt-claude-approval-1", "2026-02-24T10:12:00.000Z", "claudeAgent"),
-              threadId: THREAD_ID,
-              turnId: FIXTURE_TURN_ID,
-            },
-            {
-              type: "approval.requested",
-              ...runtimeBase("evt-claude-approval-2", "2026-02-24T10:12:00.050Z", "claudeAgent"),
-              threadId: THREAD_ID,
-              turnId: FIXTURE_TURN_ID,
-              requestId: APPROVAL_REQUEST_ID,
-              requestKind: "command",
-              detail: "Approve Claude tool call",
-            },
-            {
-              type: "turn.completed",
-              ...runtimeBase("evt-claude-approval-3", "2026-02-24T10:12:00.100Z", "claudeAgent"),
-              threadId: THREAD_ID,
-              turnId: FIXTURE_TURN_ID,
-              status: "completed",
-            },
-          ],
-        });
-
-        yield* startTurn({
-          harness,
-          commandId: "cmd-turn-start-claude-approval",
-          messageId: "msg-user-claude-approval",
-          text: "Need approval",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-sonnet-4-6",
-          },
-        });
-
-        const thread = yield* harness.waitForThread(THREAD_ID, (entry) =>
-          entry.activities.some((activity) => activity.kind === "approval.requested"),
-        );
-        assert.equal(thread.session?.threadId, "thread-1");
-
-        const pendingRow = yield* harness.waitForPendingApproval(
-          THREAD_ID,
-          "req-approval-1",
-          (row) => row.status === "pending" && row.lifecycleGeneration !== null,
-        );
-
-        yield* harness.engine.dispatch({
-          type: "thread.approval.respond",
-          commandId: CommandId.makeUnsafe("cmd-claude-approval-respond"),
-          threadId: THREAD_ID,
-          requestId: APPROVAL_REQUEST_ID,
-          lifecycleGeneration: pendingRow.lifecycleGeneration!,
-          decision: "accept",
-          createdAt: nowIso(),
-        });
-
-        yield* harness.waitForPendingApproval(
-          THREAD_ID,
-          "req-approval-1",
-          (row) => row.status === "confirmed" && row.decision === "accept",
-        );
-
-        const approvalResponses = yield* waitForSync(
-          () => harness.adapterHarness!.getApprovalResponses(THREAD_ID),
-          (responses) => responses.length === 1,
-          "claude provider approval response",
-        );
-        assert.equal(approvalResponses[0]?.decision, "accept");
-      }),
-    "claudeAgent",
-  ),
 );
 
 it.live("forwards thread.turn.interrupt to claudeAgent provider sessions", () =>

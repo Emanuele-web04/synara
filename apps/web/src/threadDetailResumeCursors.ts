@@ -47,12 +47,6 @@ export function clearThreadDetailResumeCursor(threadId: ThreadId): void {
   resumeCursorByThreadId.delete(threadId);
 }
 
-export function clearThreadDetailResumeCursors(threadIds: readonly ThreadId[]): void {
-  for (const threadId of threadIds) {
-    resumeCursorByThreadId.delete(threadId);
-  }
-}
-
 /**
  * Drops every cursor whose thread is not in the surviving set. Full-sync
  * projections use this: they prune detail slices down to the threads the
@@ -81,11 +75,14 @@ export function resetThreadDetailResumeCursors(): void {
 /**
  * Subscription input for a thread stream: cursor resume when cached detail is
  * still valid, full-history snapshot otherwise. Every subscribeThread call must
- * go through this so the cursor decision lives in exactly one place.
+ * go through this so the cursor decision lives in exactly one place. A resume
+ * always asks for the gap as one batch so it lands in a single store update.
  */
 export function buildThreadSubscribeInput(threadId: ThreadId): OrchestrationSubscribeThreadInput {
   const afterSequence = resumeCursorByThreadId.get(threadId);
-  return afterSequence === undefined ? { threadId } : { threadId, afterSequence };
+  return afterSequence === undefined
+    ? { threadId }
+    : { threadId, afterSequence, batchReplay: true };
 }
 
 export function resetThreadDetailResumeCursorsForTests(): void {

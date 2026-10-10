@@ -9,7 +9,7 @@
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
-import type { ThreadId } from "@synara/contracts";
+import type { OrchestrationRegenerateThreadTitleResult, ThreadId } from "@synara/contracts";
 import type {
   ProviderBlockingDeliveryEvidence,
   ProviderDeliveryReconciliationOutcome,
@@ -34,7 +34,9 @@ export interface ProviderCommandReactorShape {
    * finalized on shutdown.
    *
    * Filters orchestration domain events to provider-intent types before
-   * processing.
+   * processing. Delivery is FIFO per thread with bounded cross-thread
+   * concurrency. The durable source cursor acknowledges only the settled
+   * prefix; completed later deliveries remain journaled for restart recovery.
    */
   readonly start: Effect.Effect<void, never, Scope.Scope>;
 
@@ -57,6 +59,10 @@ export interface ProviderCommandReactorShape {
     readonly reconciledBy: string;
     readonly note?: string | undefined;
   }) => Effect.Effect<ProviderDeliveryReconciliationResult | null, unknown>;
+
+  readonly regenerateThreadTitle: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<OrchestrationRegenerateThreadTitleResult, unknown>;
 }
 
 /**

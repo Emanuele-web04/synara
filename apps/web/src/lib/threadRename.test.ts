@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const dispatchCommand = vi.fn<(command: unknown) => Promise<void>>();
+const regenerateThreadTitle = vi.fn<() => Promise<unknown>>();
 
 vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({
     orchestration: {
       dispatchCommand,
+      regenerateThreadTitle,
     },
   }),
 }));
@@ -13,8 +15,13 @@ vi.mock("../nativeApi", () => ({
 import { dispatchThreadRename } from "./threadRename";
 
 describe("dispatchThreadRename", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("updates existing server threads", async () => {
     dispatchCommand.mockReset().mockResolvedValue(undefined);
+    regenerateThreadTitle.mockReset();
 
     const outcome = await dispatchThreadRename({
       threadId: "thread-server" as never,
@@ -29,10 +36,13 @@ describe("dispatchThreadRename", () => {
       threadId: "thread-server",
       title: "Renamed server thread",
     });
+    expect(regenerateThreadTitle).not.toHaveBeenCalled();
   });
 
   it("promotes local drafts by creating the thread with the chosen title", async () => {
     dispatchCommand.mockReset().mockResolvedValue(undefined);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-07T12:34:56.000Z"));
 
     const outcome = await dispatchThreadRename({
       threadId: "thread-draft" as never,
@@ -61,7 +71,7 @@ describe("dispatchThreadRename", () => {
       threadId: "thread-draft",
       projectId: "project-chat",
       title: "Inbox cleanup",
-      createdAt: "2026-04-18T00:00:00.000Z",
+      createdAt: "2026-10-07T12:34:56.000Z",
     });
   });
 });

@@ -1,15 +1,19 @@
 // FILE: pullRequestList.logic.ts
-// Purpose: Pure grouping helper for the pull request list's "All" tab — buckets entries by the
-//          viewer's involvement (review requested, authored, others) so the list can
-//          render muted section headers the way the reference design does, without duplicating
-//          this classification in the route component itself.
+// Purpose: Pure list helpers shared by every GitHub item list (pull requests and issues): the
+//          viewer's relation to an item, involvement grouping and filtering, project scoping,
+//          free-text search, pinned ordering, row identity, and pin toggles. The inbox page
+//          composes them in githubInbox.logic.ts.
 // Layer: Web domain helpers (no React)
-// Exports: PullRequestListGroupKey, PullRequestListGroup, grouping, pinned ordering,
-//          involvement/search filters, identity, and badge helpers
+// Exports: PullRequestListGroupKey, PullRequestListGroup, inboxItemViewerRelation, grouping,
+//          project scoping, involvement/search filters, identity, and pin helpers
 
 import type {
-  PullRequestInvolvement,
-  PullRequestListEntry,
+  GitHubInboxItem,
+  GitHubInboxItemKind,
+  GitHubViewerInvolvement,
+  ProjectId,
+  PullRequestActor,
+  PullRequestLabel,
   PullRequestSetPinnedInput,
 } from "@synara/contracts";
 import {
@@ -17,41 +21,134 @@ import {
   pullRequestListRepositoryIdentity,
 } from "@synara/shared/githubRepository";
 
-export type PullRequestListGroupKey = "pinned" | "reviewRequested" | "authored" | "others";
+import type { GitHubInboxInvolvementFilter } from "~/appSettings";
 
-export interface PullRequestListGroup {
+export type PullRequestListGroupKey =
+  | "pinned"
+  | "authored"
+  | "reviewRequested"
+  | "involved"
+  | "others"
+  | "all";
+
+export interface PullRequestListGroup<T = GitHubInboxItem> {
   key: PullRequestListGroupKey;
   label: string;
-  entries: PullRequestListEntry[];
+  entries: T[];
 }
 
 const GROUP_LABELS: Record<PullRequestListGroupKey, string> = {
   pinned: "Pinned",
-  reviewRequested: "Review requested",
-  authored: "Authored",
-  others: "Others",
+  authored: "Authored by me",
+  reviewRequested: "Needs my review",
+  involved: "Involving me",
+  others: "Everything else",
+  all: "All",
 };
 
-export function pullRequestListEntryKey(entry: PullRequestListEntry): string {
+const GROUP_ORDER: readonly PullRequestListGroupKey[] = [
+  "pinned",
+  "authored",
+  "reviewRequested",
+  "involved",
+  "others",
+  "all",
+];
+
+/** The fields that say how the viewer relates to a row. Structural so older pull request rows
+ *  (no kind, no involvement flags) and issue rows (no review request) both qualify. */
+export interface InboxRelationSource {
+  readonly kind?: GitHubInboxItemKind;
+  readonly isPinned?: boolean | undefined;
+  readonly author: PullRequestActor | null;
+  readonly assignees?: ReadonlyArray<PullRequestActor> | undefined;
+  readonly viewerReviewRequested?: boolean | undefined;
+  readonly viewerInvolvement?: GitHubViewerInvolvement | undefined;
+}
+
+export interface InboxViewerRelation {
+  authored: boolean;
+  assigned: boolean;
+  reviewRequested: boolean;
+  /** Authored, assigned, review requested, or matched by GitHub's `involves:@me`. */
+  involved: boolean;
+}
+
+function normalizeLogin(login: string | null | undefined): string | null {
+  return login?.trim().toLowerCase() || null;
+}
+
+/**
+ * We only claim relationships the list data represents. The server's involvement flags are the
+ * source of truth; the login comparison covers rows from an older server and recovered pins.
+ * Review requests only exist on pull requests, and include team-routed requests.
+ */
+export function inboxItemViewerRelation(
+  item: InboxRelationSource,
+  viewerLogin: string | null | undefined,
+): InboxViewerRelation {
+  const viewer = normalizeLogin(viewerLogin);
+  const isViewer = (actor: PullRequestActor | null) =>
+    viewer !== null && normalizeLogin(actor?.login) === viewer;
+  const authored = item.viewerInvolvement?.authored === true || isViewer(item.author);
+  const assigned =
+    item.viewerInvolvement?.assigned === true || (item.assignees ?? []).some(isViewer);
+  const reviewRequested = item.kind !== "issue" && item.viewerReviewRequested === true;
+  return {
+    authored,
+    assigned,
+    reviewRequested,
+    involved: authored || assigned || reviewRequested || item.viewerInvolvement?.involved === true,
+  };
+}
+
+/**
+ * Rows limited to the selected projects. A repository-level row can belong to several projects;
+ * it stays when any of them is selected and keeps only the selected projects' contexts, so its
+ * pin reflects (and its pin toggle writes) those projects alone. No selection means every project.
+ */
+export function scopeInboxItemsToProjects<T extends GitHubInboxItem>(
+  items: ReadonlyArray<T>,
+  projectIds: ReadonlyArray<ProjectId>,
+): T[] {
+  if (projectIds.length === 0) return [...items];
+  const selected = new Set(projectIds);
+  return items.flatMap((item) => {
+    const contexts = pullRequestListProjectContexts(item).filter((context) =>
+      selected.has(context.projectId),
+    );
+    const preferred =
+      contexts.find((context) => context.projectId === item.projectId) ?? contexts[0];
+    if (!preferred) return [];
+    return [
+      {
+        ...item,
+        projectId: preferred.projectId,
+        projectTitle: preferred.projectTitle,
+        projectContexts: contexts,
+        isPinned: contexts.some((context) => context.isPinned),
+      },
+    ];
+  });
+}
+
+/** GitHub label colors are untrusted text; only a plain six-digit hex may reach a style. */
+export function safeGitHubLabelColor(color: string | null | undefined): string | null {
+  return color && /^[0-9a-f]{6}$/i.test(color) ? `#${color}` : null;
+}
+
+export function pullRequestListEntryKey(entry: { repository: string; number: number }): string {
   return pullRequestListRepositoryIdentity(entry);
 }
 
-/** In a project-scoped view a pin owns that project. In the aggregate view the one visible toggle
- * applies consistently across every associated project. */
+/** The one visible pin toggle applies consistently across every project context the row
+ * carries: pinning pins it in each, unpinning clears each project that has it pinned. */
 export function pullRequestPinToggleInputs(
-  entry: PullRequestListEntry,
-  aggregate: boolean,
+  entry: Pick<GitHubInboxItem, "projectId" | "repository" | "number" | "isPinned"> & {
+    projectTitle?: string;
+    projectContexts?: GitHubInboxItem["projectContexts"];
+  },
 ): PullRequestSetPinnedInput[] {
-  if (!aggregate) {
-    return [
-      {
-        projectId: entry.projectId,
-        repository: entry.repository,
-        number: entry.number,
-        isPinned: !entry.isPinned,
-      },
-    ];
-  }
   return pullRequestListProjectContexts(entry)
     .filter((context) => !entry.isPinned || context.isPinned)
     .map((context) => ({
@@ -62,87 +159,106 @@ export function pullRequestPinToggleInputs(
     }));
 }
 
-// The list is fetched once per state as the "all" involvement superset; the Reviewing and
-// Authored tabs are views over it, so switching tabs never waits on the network. Reviewing
-// relies on the server-computed viewerReviewRequested flag (which includes team-routed review
-// requests); Authored matches the author login case-insensitively, like the grouping above.
-export function filterPullRequestEntriesByInvolvement(
-  entries: readonly PullRequestListEntry[],
+// The list is fetched once per state as a superset; every involvement view is a filter over it,
+// so switching views never waits on the network.
+export function filterInboxItemsByInvolvement<T extends InboxRelationSource>(
+  items: readonly T[],
   viewerLogin: string | null | undefined,
-  involvement: PullRequestInvolvement,
-): PullRequestListEntry[] {
-  if (involvement === "reviewing") {
-    return entries.filter((entry) => entry.viewerReviewRequested);
-  }
-  if (involvement === "authored") {
-    const normalizedViewer = viewerLogin?.trim().toLowerCase() || null;
-    return entries.filter(
-      (entry) =>
-        normalizedViewer !== null && entry.author?.login.trim().toLowerCase() === normalizedViewer,
-    );
-  }
-  return [...entries];
+  involvement: GitHubInboxInvolvementFilter,
+): T[] {
+  if (involvement === "everything") return [...items];
+  return items.filter((item) => inboxItemViewerRelation(item, viewerLogin)[involvement]);
 }
 
-/** Free-text list filter: matches title, repository, head branch, "#123"/"123", and author. */
+/** Free-text list filter: title, repository, head branch, "#123"/"123", author, and labels. */
 export function matchesPullRequestSearchQuery(
-  entry: PullRequestListEntry,
+  entry: {
+    title: string;
+    repository: string;
+    number: number;
+    author: PullRequestActor | null;
+    headBranch?: string;
+    labels?: ReadonlyArray<PullRequestLabel>;
+  },
   normalizedQuery: string,
 ): boolean {
   if (normalizedQuery.length === 0) return true;
-  return `${entry.title} ${entry.repository} ${entry.headBranch} #${entry.number} ${entry.author?.login ?? ""}`
+  const labels = (entry.labels ?? []).map((label) => label.name).join(" ");
+  return `${entry.title} ${entry.repository} ${entry.headBranch ?? ""} #${entry.number} ${entry.author?.login ?? ""} ${labels}`
     .toLowerCase()
     .includes(normalizedQuery);
 }
 
-export function countUniqueViewerReviewRequests(entries: readonly PullRequestListEntry[]): number {
-  return new Set(
-    entries.filter((entry) => entry.viewerReviewRequested).map(pullRequestListRepositoryIdentity),
-  ).size;
-}
-
-/** Stable partition used by ungrouped tabs after an optimistic pin toggle. */
-export function orderPullRequestEntriesPinnedFirst(
-  entries: readonly PullRequestListEntry[],
-): PullRequestListEntry[] {
+/** Stable partition used by ungrouped views after an optimistic pin toggle. */
+export function orderPullRequestEntriesPinnedFirst<T extends { isPinned?: boolean | undefined }>(
+  entries: readonly T[],
+): T[] {
   return [
-    ...entries.filter((entry) => entry.isPinned),
-    ...entries.filter((entry) => !entry.isPinned),
+    ...entries.filter((entry) => entry.isPinned === true),
+    ...entries.filter((entry) => entry.isPinned !== true),
   ];
 }
 
-// We only claim relationships represented by list data. In particular, no "previously reviewed"
-// bucket is inferred from authorship because the API result has no review-history signal.
-export function groupPullRequestEntriesByInvolvement(
-  entries: readonly PullRequestListEntry[],
-  viewerLogin: string | null | undefined,
-): PullRequestListGroup[] {
-  const normalizedViewer = viewerLogin?.trim().toLowerCase() || null;
+/**
+ * The list as GitHub shows it: pins first, then every other row in one section, keeping the
+ * caller's order (newest activity first). Empty sections are dropped.
+ */
+export function groupPullRequestEntriesPinnedThenAll<T extends { isPinned?: boolean | undefined }>(
+  entries: readonly T[],
+): PullRequestListGroup<T>[] {
+  const groups: PullRequestListGroup<T>[] = [
+    {
+      key: "pinned",
+      label: GROUP_LABELS.pinned,
+      entries: entries.filter((entry) => entry.isPinned === true),
+    },
+    {
+      key: "all",
+      label: GROUP_LABELS.all,
+      entries: entries.filter((entry) => entry.isPinned !== true),
+    },
+  ];
+  return groups.filter((group) => group.entries.length > 0);
+}
 
-  const buckets: Record<PullRequestListGroupKey, PullRequestListEntry[]> = {
+/**
+ * Buckets rows into the list's sections. Pins lead. Then the viewer's own items, then items
+ * waiting on the viewer's review (teams included), then the rest that involve the viewer
+ * (assigned or mentioned), then everything else. Empty sections are dropped.
+ */
+export function groupPullRequestEntriesByInvolvement<T extends InboxRelationSource>(
+  entries: readonly T[],
+  viewerLogin: string | null | undefined,
+): PullRequestListGroup<T>[] {
+  const buckets: Record<PullRequestListGroupKey, T[]> = {
     pinned: [],
-    reviewRequested: [],
     authored: [],
+    reviewRequested: [],
+    involved: [],
     others: [],
+    all: [],
   };
 
   for (const entry of entries) {
-    if (entry.isPinned) {
+    if (entry.isPinned === true) {
       buckets.pinned.push(entry);
       continue;
     }
-    const authorLogin = entry.author?.login.trim().toLowerCase() || null;
-    if (authorLogin && normalizedViewer && authorLogin === normalizedViewer) {
+    const relation = inboxItemViewerRelation(entry, viewerLogin);
+    if (relation.authored) {
       buckets.authored.push(entry);
-    } else if (entry.viewerReviewRequested) {
+    } else if (relation.reviewRequested) {
       buckets.reviewRequested.push(entry);
+    } else if (relation.involved) {
+      buckets.involved.push(entry);
     } else {
       buckets.others.push(entry);
     }
   }
 
-  const order: PullRequestListGroupKey[] = ["pinned", "reviewRequested", "authored", "others"];
-  return order
-    .filter((key) => buckets[key].length > 0)
-    .map((key) => ({ key, label: GROUP_LABELS[key], entries: buckets[key] }));
+  return GROUP_ORDER.filter((key) => buckets[key].length > 0).map((key) => ({
+    key,
+    label: GROUP_LABELS[key],
+    entries: buckets[key],
+  }));
 }

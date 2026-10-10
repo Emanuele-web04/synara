@@ -6,7 +6,7 @@
 import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
 import { useStore } from "./store";
-import { getThreadFromState } from "./threadDerivation";
+import type { AppState } from "./storeState";
 
 const THREAD_DETAIL_RETENTION_EVICTION_MS = 15 * 60 * 1000;
 // This is a client-side memory cache, not a stream budget: concurrent server
@@ -79,8 +79,8 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
     }
   }
 
-  const thread = getThreadFromState(state, threadId);
-  if (!thread) {
+  const threadShell = state.threadShellById?.[threadId];
+  if (!threadShell) {
     // Claude subagent children can have detail without a shell/sidebar row.
     // Their normalized lifecycle slices still tell us whether eviction would
     // discard live work. Once terminal, the retain timeout and capacity limit
@@ -95,13 +95,27 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
     );
   }
 
-  const orchestrationStatus = thread.session?.orchestrationStatus;
+  const session = state.threadSessionById?.[threadId];
+  const turnState = state.threadTurnStateById?.[threadId];
+  const orchestrationStatus = session?.orchestrationStatus;
   return (
     Boolean(
       orchestrationStatus && orchestrationStatus !== "idle" && orchestrationStatus !== "stopped",
     ) ||
-    thread.latestTurn?.state === "running" ||
-    thread.pendingSourceProposedPlan !== undefined
+    turnState?.latestTurn?.state === "running" ||
+    turnState?.pendingSourceProposedPlan !== undefined
+  );
+}
+
+export function shouldReconcileThreadDetailRetention(
+  current: AppState,
+  previous: AppState,
+): boolean {
+  return (
+    current.sidebarThreadSummaryById !== previous.sidebarThreadSummaryById ||
+    current.threadShellById !== previous.threadShellById ||
+    current.threadSessionById !== previous.threadSessionById ||
+    current.threadTurnStateById !== previous.threadTurnStateById
   );
 }
 
@@ -223,7 +237,10 @@ function reconcileRetentionEntries(): void {
 // the live map, so a nested pass can only evict entries the outer pass has not
 // claimed. The eviction notice is the one part that must not run inline — lease
 // owners answer it by queueing a stream refresh rather than writing state here.
-useStore.subscribe(() => {
+useStore.subscribe((current, previous) => {
+  if (!shouldReconcileThreadDetailRetention(current, previous)) {
+    return;
+  }
   reconcileRetentionEntries();
 });
 
@@ -302,10 +319,17 @@ export function isThreadDetailRetained(threadId: ThreadId): boolean {
   return retainedThreadEntries.has(threadId);
 }
 
+/**
+ * Stream leases are capped below the retention cache, so retained threads
+ * compete for the slots left after visible ones. Threads with live or
+ * actionable work go first: a running thread that loses its lease freezes its
+ * cached detail mid-turn, and reopening it later has to replay the whole gap.
+ */
 export function resolveThreadDetailSubscriptionLeaseIds(input: {
   readonly visibleThreadIds: readonly ThreadId[];
   readonly retainedThreadIds: readonly ThreadId[];
   readonly serverThreadIds: ReadonlySet<ThreadId>;
+  readonly retentionExcludedThreadIds?: ReadonlySet<ThreadId>;
 }): ThreadId[] {
   const threadIds = new Set<ThreadId>();
   for (const threadId of input.visibleThreadIds) {
@@ -314,11 +338,17 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
     // provider events cannot outrun promotion into the server snapshot.
     threadIds.add(threadId);
   }
-  for (const threadId of input.retainedThreadIds) {
+  const leasableRetainedThreadIds = input.retainedThreadIds.filter(
+    (threadId) =>
+      !input.retentionExcludedThreadIds?.has(threadId) && input.serverThreadIds.has(threadId),
+  );
+  // Same predicate that shields detail from eviction: live or actionable work.
+  for (const threadId of [
+    ...leasableRetainedThreadIds.filter((threadId) => isThreadDetailEvictionUnsafe(threadId)),
+    ...leasableRetainedThreadIds,
+  ]) {
     if (threadIds.size >= WS_STREAM_LIMITS.threadPerClient) break;
-    if (input.serverThreadIds.has(threadId)) {
-      threadIds.add(threadId);
-    }
+    threadIds.add(threadId);
   }
   return [...threadIds];
 }

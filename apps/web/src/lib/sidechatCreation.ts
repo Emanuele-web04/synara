@@ -1,0 +1,376 @@
+// FILE: sidechatCreation.ts
+// Purpose: Own the sidechat create/start/snapshot lifecycle independently of composer state:
+//          forked sidechats (a source thread's /side) and standalone ones (the inbox's Ask
+//          about a GitHub item, with no source thread).
+// Layer: Chat orchestration
+
+import type {
+  ClientOrchestrationCommand,
+  ModelSelection,
+  NativeApi,
+  OrchestrationShellSnapshot,
+  ProjectId,
+  RuntimeMode,
+  ThreadId,
+  ThreadSidechatContext,
+} from "@synara/contracts";
+import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
+
+import { newCommandId, newMessageId, newThreadId } from "./utils";
+import { buildThreadHandoffImportedMessages } from "./threadHandoff";
+import type { Project, Thread } from "../types";
+
+const SIDECHAT_MISSING_GRACE_MS = 15_000;
+type SidechatPaneRetention = { kind: "syncing" } | { kind: "grace"; untilMs: number };
+const sidechatPaneRetentionByThreadId = new Map<ThreadId, SidechatPaneRetention>();
+const sidechatPaneRetentionListeners = new Set<() => void>();
+let sidechatPaneRetentionVersion = 0;
+
+function emitSidechatPaneRetentionChange(): void {
+  sidechatPaneRetentionVersion += 1;
+  for (const listener of sidechatPaneRetentionListeners) {
+    listener();
+  }
+}
+
+function setSidechatPaneRetention(threadId: ThreadId, retention: SidechatPaneRetention): void {
+  sidechatPaneRetentionByThreadId.set(threadId, retention);
+  emitSidechatPaneRetentionChange();
+}
+
+export function subscribeSidechatPaneRetention(listener: () => void): () => void {
+  sidechatPaneRetentionListeners.add(listener);
+  return () => sidechatPaneRetentionListeners.delete(listener);
+}
+
+export function getSidechatPaneRetentionVersion(): number {
+  return sidechatPaneRetentionVersion;
+}
+
+export interface SidechatCreationResult {
+  threadId: ThreadId;
+  promptError: unknown | null;
+  snapshotError: unknown | null;
+}
+
+export interface SidechatCreationFlight {
+  readonly creation: Promise<SidechatCreationResult>;
+  readonly completion: Promise<true>;
+  readonly submittedPrompts: Set<string>;
+  promptTail: Promise<void>;
+  creationSettled: boolean;
+}
+
+function scheduleSidechatFlightCleanup(
+  inFlightByKey: Map<string, SidechatCreationFlight>,
+  flightKey: string,
+  flight: SidechatCreationFlight,
+): void {
+  const observedTail = flight.promptTail;
+  void observedTail.then(
+    () => {
+      if (
+        flight.creationSettled &&
+        flight.promptTail === observedTail &&
+        inFlightByKey.get(flightKey) === flight
+      ) {
+        inFlightByKey.delete(flightKey);
+      }
+    },
+    () => {
+      if (
+        flight.creationSettled &&
+        flight.promptTail === observedTail &&
+        inFlightByKey.get(flightKey) === flight
+      ) {
+        inFlightByKey.delete(flightKey);
+      }
+    },
+  );
+}
+
+export function createOrJoinSidechat(input: {
+  inFlightByKey: Map<string, SidechatCreationFlight>;
+  flightKey: string;
+  initialPrompt?: string | undefined;
+  startCreation: (initialPrompt?: string) => Promise<SidechatCreationResult>;
+  sendQueuedPrompt: (threadId: ThreadId, prompt: string) => Promise<void>;
+  onCreationResult: (result: SidechatCreationResult) => void;
+  onQueuedPromptError: (error: unknown) => void;
+}): Promise<true> {
+  const prompt = input.initialPrompt?.trim() ?? "";
+  const existing = input.inFlightByKey.get(input.flightKey);
+  if (existing) {
+    if (prompt.length === 0) {
+      return existing.completion;
+    }
+    if (existing.submittedPrompts.has(prompt)) {
+      return Promise.all([existing.completion, existing.promptTail]).then(() => true as const);
+    }
+    existing.submittedPrompts.add(prompt);
+    existing.promptTail = existing.promptTail.then(async () => {
+      const result = await existing.creation;
+      try {
+        await input.sendQueuedPrompt(result.threadId, prompt);
+      } catch (error) {
+        input.onQueuedPromptError(error);
+      }
+    });
+    if (existing.creationSettled) {
+      scheduleSidechatFlightCleanup(input.inFlightByKey, input.flightKey, existing);
+    }
+    return existing.promptTail.then(() => true as const);
+  }
+
+  const creation = input.startCreation(prompt.length > 0 ? prompt : undefined);
+  const completion = creation.then((result) => {
+    input.onCreationResult(result);
+    return true as const;
+  });
+  const flight: SidechatCreationFlight = {
+    creation,
+    completion,
+    submittedPrompts: new Set(prompt.length > 0 ? [prompt] : []),
+    promptTail: Promise.resolve(),
+    creationSettled: false,
+  };
+  input.inFlightByKey.set(input.flightKey, flight);
+  void flight.completion.then(
+    () => {
+      flight.creationSettled = true;
+      scheduleSidechatFlightCleanup(input.inFlightByKey, input.flightKey, flight);
+    },
+    () => {
+      flight.creationSettled = true;
+      scheduleSidechatFlightCleanup(input.inFlightByKey, input.flightKey, flight);
+    },
+  );
+  return flight.completion;
+}
+
+// Null means the successful fork is still synchronizing and must not be pruned.
+// Missing restored panes receive one bounded recheck window before removal.
+export function sidechatPaneRetentionRemainingMs(
+  threadId: ThreadId,
+  nowMs = Date.now(),
+): number | null {
+  let retention = sidechatPaneRetentionByThreadId.get(threadId);
+  if (!retention) {
+    retention = { kind: "grace", untilMs: nowMs + SIDECHAT_MISSING_GRACE_MS };
+    setSidechatPaneRetention(threadId, retention);
+  }
+  if (retention.kind === "syncing") {
+    return null;
+  }
+  const remainingMs = retention.untilMs - nowMs;
+  if (remainingMs <= 0) {
+    clearSidechatPaneRetention(threadId);
+    return 0;
+  }
+  return remainingMs;
+}
+
+function markSidechatSyncing(threadId: ThreadId): void {
+  setSidechatPaneRetention(threadId, { kind: "syncing" });
+}
+
+function markSidechatSyncFailed(threadId: ThreadId): void {
+  setSidechatPaneRetention(threadId, {
+    kind: "grace",
+    untilMs: Date.now() + SIDECHAT_MISSING_GRACE_MS,
+  });
+}
+
+export function clearSidechatPaneRetention(threadId: ThreadId): void {
+  if (sidechatPaneRetentionByThreadId.delete(threadId)) {
+    emitSidechatPaneRetentionChange();
+  }
+}
+
+export function resolveSidechatRuntimeMode(
+  runtimeMode: RuntimeMode,
+  modelSelection: ModelSelection,
+): RuntimeMode {
+  // Changing provider can lose Auto support; never turn that fallback into Full access.
+  return autoRuntimeModeSelectionIssue({ runtimeMode, modelSelection })
+    ? "approval-required"
+    : runtimeMode;
+}
+
+export async function sendSidechatPrompt(input: {
+  api: NativeApi;
+  threadId: ThreadId;
+  selectedModelSelection: ModelSelection;
+  runtimeMode: RuntimeMode;
+  prompt: string;
+}): Promise<void> {
+  const prompt = input.prompt.trim();
+  if (prompt.length === 0) {
+    return;
+  }
+  await input.api.orchestration.dispatchCommand({
+    type: "thread.turn.start",
+    commandId: newCommandId(),
+    threadId: input.threadId,
+    message: {
+      messageId: newMessageId(),
+      role: "user",
+      text: prompt,
+      attachments: [],
+    },
+    modelSelection: input.selectedModelSelection,
+    runtimeMode: resolveSidechatRuntimeMode(input.runtimeMode, input.selectedModelSelection),
+    interactionMode: "default",
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function createSidechatThread(input: {
+  api: NativeApi;
+  project: Project;
+  sourceThread: Thread;
+  selectedModelSelection: ModelSelection;
+  runtimeMode?: RuntimeMode;
+  initialPrompt?: string | undefined;
+  openSidechat: (threadId: ThreadId) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+}): Promise<SidechatCreationResult> {
+  const nextThreadId = newThreadId();
+  const createdAt = new Date().toISOString();
+  const initialPrompt = input.initialPrompt?.trim() ?? "";
+  const runtimeMode = resolveSidechatRuntimeMode(
+    input.runtimeMode ?? input.sourceThread.runtimeMode,
+    input.selectedModelSelection,
+  );
+  const titleSeed =
+    initialPrompt.length > 0
+      ? buildPromptThreadTitleFallback(initialPrompt)
+      : input.sourceThread.title;
+
+  await input.api.orchestration.dispatchCommand({
+    type: "thread.fork.create",
+    commandId: newCommandId(),
+    threadId: nextThreadId,
+    sourceThreadId: input.sourceThread.id,
+    sidechatSourceThreadId: input.sourceThread.id,
+    projectId: input.project.id,
+    title: `Sidechat: ${titleSeed}`,
+    modelSelection: input.selectedModelSelection,
+    runtimeMode,
+    interactionMode: "default",
+    envMode: input.sourceThread.envMode ?? (input.sourceThread.worktreePath ? "worktree" : "local"),
+    branch: input.sourceThread.branch,
+    worktreePath: input.sourceThread.worktreePath,
+    workingDirectory: input.sourceThread.workingDirectory ?? null,
+    associatedWorktreePath: input.sourceThread.associatedWorktreePath ?? null,
+    associatedWorktreeBranch: input.sourceThread.associatedWorktreeBranch ?? null,
+    associatedWorktreeRef: input.sourceThread.associatedWorktreeRef ?? null,
+    importedMessages: [...buildThreadHandoffImportedMessages(input.sourceThread)],
+    createdAt,
+  });
+
+  return finishSidechatCreation({
+    api: input.api,
+    threadId: nextThreadId,
+    openSidechat: input.openSidechat,
+    syncServerShellSnapshot: input.syncServerShellSnapshot,
+    sendInitialPrompt: () =>
+      sendSidechatPrompt({
+        api: input.api,
+        threadId: nextThreadId,
+        selectedModelSelection: input.selectedModelSelection,
+        runtimeMode,
+        prompt: initialPrompt,
+      }),
+  });
+}
+
+// Shared by both kinds once the server accepted the create: expose the pane, sync the shell
+// snapshot, and send an optional first prompt, each failure reported without undoing the rest.
+async function finishSidechatCreation(input: {
+  api: NativeApi;
+  threadId: ThreadId;
+  openSidechat: (threadId: ThreadId) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  sendInitialPrompt?: () => Promise<void>;
+}): Promise<SidechatCreationResult> {
+  // The sidechat now exists. Expose it immediately so a slow snapshot refresh cannot
+  // leave a successful creation invisible and tempt the user into creating duplicates.
+  markSidechatSyncing(input.threadId);
+  input.openSidechat(input.threadId);
+
+  // Start snapshot synchronization before an optional prompt. A slow/queued turn
+  // must never prevent the successful create from reaching the shell projection.
+  const snapshotPromise = (async (): Promise<unknown | null> => {
+    try {
+      const snapshot = await input.api.orchestration.getShellSnapshot();
+      input.syncServerShellSnapshot(snapshot);
+      return null;
+    } catch (error) {
+      return error;
+    }
+  })();
+
+  const promptPromise = (async (): Promise<unknown | null> => {
+    try {
+      await input.sendInitialPrompt?.();
+      return null;
+    } catch (error) {
+      return error;
+    }
+  })();
+
+  const [snapshotError, promptError] = await Promise.all([snapshotPromise, promptPromise]);
+  if (snapshotError) {
+    markSidechatSyncFailed(input.threadId);
+  } else {
+    clearSidechatPaneRetention(input.threadId);
+  }
+
+  return { threadId: input.threadId, promptError, snapshotError };
+}
+
+/**
+ * Ask about a GitHub item: a sidechat with no source thread, in the project's own checkout
+ * (local, no branch change), so there is no transcript to import and no permissions to
+ * inherit. The caller seeds the item's context card in `openSidechat`, before the pane's
+ * composer mounts, and the user writes the question.
+ */
+export async function createStandaloneSidechat(input: {
+  api: NativeApi;
+  projectId: ProjectId;
+  context: ThreadSidechatContext;
+  itemTitle: string;
+  modelSelection: ModelSelection;
+  runtimeMode: RuntimeMode;
+  openSidechat: (threadId: ThreadId) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  /** `promoteThreadCreate` in the app; injected so this module stays store-free. */
+  dispatchCreate: (
+    command: Extract<ClientOrchestrationCommand, { type: "thread.create" }>,
+  ) => Promise<unknown>;
+}): Promise<SidechatCreationResult> {
+  const threadId = newThreadId();
+  await input.dispatchCreate({
+    type: "thread.create",
+    commandId: newCommandId(),
+    threadId,
+    projectId: input.projectId,
+    title: `Sidechat: ${input.itemTitle}`,
+    modelSelection: input.modelSelection,
+    runtimeMode: resolveSidechatRuntimeMode(input.runtimeMode, input.modelSelection),
+    interactionMode: "default",
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+    sidechatContext: input.context,
+    createdAt: new Date().toISOString(),
+  });
+  return finishSidechatCreation({
+    api: input.api,
+    threadId,
+    openSidechat: input.openSidechat,
+    syncServerShellSnapshot: input.syncServerShellSnapshot,
+  });
+}

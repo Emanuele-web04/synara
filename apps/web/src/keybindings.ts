@@ -10,6 +10,7 @@ import {
   type ThreadJumpKeybindingCommand,
 } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
+import { isUnassignedKeybindingShortcut } from "@synara/shared/keybindingRules";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -70,23 +71,46 @@ function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): Keybinding
 }
 
 const whenNotTerminalFocus = whenNot(whenIdentifier("terminalFocus"));
-const whenThreadJumpAvailable = whenAnd(
-  whenNotTerminalFocus,
-  whenNot(whenIdentifier("terminalWorkspaceOpen")),
+// Cmd+1…9 is app navigation on macOS, including from a focused/full-width terminal.
+// On Linux/Windows `mod` is Ctrl, so keep yielding the chord to the shell and to the
+// terminal workspace's Ctrl+1/Ctrl+2 tabs while that surface is open.
+const whenThreadJumpAvailable = whenOr(
+  whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("terminalWorkspaceOpen"))),
+  whenIdentifier("isMac"),
 );
-// New-surface creation chords (new chat/terminal/provider chat/split) bind to `mod`,
-// which is Cmd on macOS. xterm never forwards a Cmd-chord to the PTY, so a bare
+// App-level `mod` chords (new chat/terminal/provider chat/split, copy thread id) bind to
+// `mod`, which is Cmd on macOS. xterm never forwards a Cmd-chord to the PTY, so a bare
 // `!terminalFocus` guard silently dropped these chords whenever the terminal had focus
-// — the chord did nothing instead of creating anything. `|| isMac` lets them fire from
+// — the chord did nothing instead of running the command. `|| isMac` lets them fire from
 // the terminal on macOS while still yielding the chord to the shell on Linux/Windows,
 // where `mod` is Ctrl and keys like Ctrl+N are real shell input that must pass through.
-const whenCreationAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
+const whenModChordAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
+    command: "thread.archive",
+    shortcut: commandShortcut("a", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
+    command: "thread.snooze",
+    shortcut: commandShortcut("s", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
+    command: "thread.markUnread",
+    shortcut: commandShortcut("u", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
+    command: "sidechat.toggle",
+    shortcut: commandShortcut("s", { altKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
     command: "sidebar.activity",
     shortcut: commandShortcut("u", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "sidebar.addProject",
@@ -101,42 +125,42 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "chat.new",
     shortcut: commandShortcut("n"),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newLatestProject",
     shortcut: commandShortcut("n", { shiftKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newClaude",
     shortcut: commandShortcut("c", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newChat",
     shortcut: commandShortcut("n", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newTerminal",
     shortcut: commandShortcut("t", { shiftKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newCodex",
     shortcut: commandShortcut("x", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newCursor",
     shortcut: commandShortcut("r", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.split",
     shortcut: commandShortcut("\\"),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   // Installed-app only (Electron / standalone PWA). Browsers reserve Ctrl+Tab and
   // Ctrl+Shift+Tab for tab switching and won't deliver them to the page, so the
@@ -168,14 +192,44 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "model.effort.next",
+    shortcut: commandShortcut("tab", { shiftKey: true, modKey: false }),
+    whenAst: whenIdentifier("composerFocus"),
+  },
+  {
     command: "traitsPicker.toggle",
     shortcut: commandShortcut("e", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "diff.change.next",
+    shortcut: commandShortcut("arrowdown", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "diff.change.previous",
+    shortcut: commandShortcut("arrowup", { altKey: true, modKey: false }),
     whenAst: whenNotTerminalFocus,
   },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   {
     command: "composer.focus.toggle",
     shortcut: commandShortcut("l", { metaKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "chat.find",
+    shortcut: commandShortcut("f"),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "search.files",
+    shortcut: commandShortcut("p"),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "search.content",
+    shortcut: commandShortcut("f", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
   },
   {
@@ -196,13 +250,34 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("p", { ctrlKey: true, altKey: true, modKey: false }),
     whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
   },
+  // Open thread tabs, browser-style; see the server defaults for why the chords differ.
+  {
+    command: "threadTab.next",
+    shortcut: commandShortcut("arrowright", { ctrlKey: true }),
+    whenAst: whenIdentifier("isMac"),
+  },
+  {
+    command: "threadTab.previous",
+    shortcut: commandShortcut("arrowleft", { ctrlKey: true }),
+    whenAst: whenIdentifier("isMac"),
+  },
+  {
+    command: "threadTab.next",
+    shortcut: commandShortcut("pagedown", { ctrlKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "threadTab.previous",
+    shortcut: commandShortcut("pageup", { ctrlKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
+  },
   // Numbered space jumps target the switcher's visual tab order (mod+alt+1 = Void).
   // Same guard as the creation chords: Cmd+Alt never reaches the PTY on macOS, while
   // Ctrl+Alt+digit doubles as AltGr input on Linux/Windows and must yield to terminals.
   ...SPACE_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
     command,
     shortcut: commandShortcut(String(index + 1), { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   })),
   {
     command: "thread.jump.1",
@@ -250,6 +325,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenThreadJumpAvailable,
   },
   {
+    command: "thread.copyId",
+    shortcut: commandShortcut("c", { shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
     command: "terminal.workspace.newFullWidth",
     shortcut: commandShortcut("j", { shiftKey: true }),
   },
@@ -260,13 +340,18 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   },
   {
     command: "terminal.workspace.terminal",
-    shortcut: commandShortcut("1"),
+    shortcut: commandShortcut("1", { ctrlKey: true, modKey: false }),
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
   {
     command: "terminal.workspace.chat",
-    shortcut: commandShortcut("2"),
+    shortcut: commandShortcut("2", { ctrlKey: true, modKey: false }),
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
+  },
+  {
+    command: "editor.file.save",
+    shortcut: commandShortcut("s"),
+    whenAst: whenNotTerminalFocus,
   },
 ];
 
@@ -275,6 +360,8 @@ const TERMINAL_WORD_FORWARD = "\u001bf";
 const TERMINAL_LINE_START = "\u0001";
 const TERMINAL_LINE_END = "\u0005";
 const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  // Option+Space reports a non-breaking space on macOS, so match it by physical key.
+  Space: [" "],
   BracketLeft: ["["],
   BracketRight: ["]"],
   Digit0: ["0"],
@@ -315,6 +402,45 @@ const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   KeyZ: ["z"],
 };
 
+/**
+ * The layout-independent key a physical key matches as, or null for keys that are
+ * only matched by the character they produce.
+ */
+export function shortcutKeyFromEventCode(code: string | undefined): string | null {
+  return (code ? EVENT_CODE_KEY_ALIASES[code]?.[0] : undefined) ?? null;
+}
+
+/**
+ * A rule that only records that its command was left without a shortcut. It keeps the
+ * command "configured" so the fallback table below does not bring a default back, and
+ * it is never a binding itself.
+ */
+export function isUnassignedKeybinding(binding: Pick<ResolvedKeybindingRule, "shortcut">): boolean {
+  return isUnassignedKeybindingShortcut(binding.shortcut);
+}
+
+let dispatchSuspensions = 0;
+
+/**
+ * Stops every shortcut from resolving until the returned function is called. The
+ * shortcut recorder holds this while open, so the keys being recorded reach it instead
+ * of running the command they are currently bound to.
+ */
+export function suspendShortcutDispatch(): () => void {
+  dispatchSuspensions += 1;
+  let resumed = false;
+  return () => {
+    if (resumed) return;
+    resumed = true;
+    dispatchSuspensions -= 1;
+  };
+}
+
+/** True while a shortcut recorder holds the keyboard. */
+export function isShortcutDispatchSuspended(): boolean {
+  return dispatchSuspensions > 0;
+}
+
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
   if (normalized === "esc") return "escape";
@@ -323,8 +449,17 @@ function normalizeEventKey(key: string): string {
   return normalized;
 }
 
+/**
+ * The keys a press can match as. A typed letter or digit is the only one: it is the key
+ * the user's layout prints, and the one the recorder saves. Matching its physical key as
+ * well would fire two bindings at once on layouts that move letters (AZERTY's Q types
+ * "a"). Anything else, such as "ß" from Option+S or "!" from Shift+1, also matches as the
+ * physical key, since that is the key the binding names.
+ */
 function resolveEventKeys(event: ShortcutEventLike): Set<string> {
-  const keys = new Set([normalizeEventKey(event.key)]);
+  const typed = normalizeEventKey(event.key);
+  const keys = new Set([typed]);
+  if (/^[a-z0-9]$/.test(typed)) return keys;
   const aliases = event.code ? EVENT_CODE_KEY_ALIASES[event.code] : undefined;
   if (!aliases) return keys;
 
@@ -350,7 +485,8 @@ function matchesShortcutModifiers(
   );
 }
 
-function matchesShortcut(
+/** Whether a key press is exactly `shortcut`, with the same rules as every binding. */
+export function matchesShortcut(
   event: ShortcutEventLike,
   shortcut: KeybindingShortcut,
   platform = navigator.platform,
@@ -365,7 +501,7 @@ function resolvePlatform(options: ShortcutMatchOptions | undefined): string {
 
 function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatchContext {
   // `isMac` is derived from the resolved platform so `when` clauses can gate on it
-  // (e.g. `whenCreationAllowed`) without every dispatch site having to thread the flag
+  // (e.g. `whenModChordAllowed`) without every dispatch site having to thread the flag
   // through `context`. An explicit `context.isMac` still wins via the spread below.
   return {
     terminalFocus: false,
@@ -375,7 +511,10 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
   };
 }
 
-function evaluateWhenNode(node: KeybindingWhenNode, context: ShortcutMatchContext): boolean {
+export function evaluateWhenNode(
+  node: KeybindingWhenNode,
+  context: Readonly<Record<string, boolean>>,
+): boolean {
   switch (node.type) {
     case "identifier":
       if (node.name === "true") return true;
@@ -398,7 +537,11 @@ function matchesWhenClause(
   return evaluateWhenNode(whenAst, context);
 }
 
-function shortcutConflictKey(shortcut: KeybindingShortcut, platform = navigator.platform): string {
+/** Identity of the physical chord a shortcut resolves to on `platform`. */
+export function shortcutConflictKey(
+  shortcut: KeybindingShortcut,
+  platform = navigator.platform,
+): string {
   const useMetaForMod = isMacPlatform(platform);
   const metaKey = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
   const ctrlKey = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
@@ -417,13 +560,23 @@ function findEffectiveShortcutForCommand(
   command: KeybindingCommand,
   options?: ShortcutMatchOptions,
 ): KeybindingShortcut | null {
+  return findEffectiveKeybindingForCommand(keybindings, command, options)?.shortcut ?? null;
+}
+
+export function findEffectiveKeybindingForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): ResolvedKeybindingRule | null {
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
   const claimedShortcuts = new Set<string>();
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding) continue;
+    // Retired split bindings must not consume shell shortcuts from older configs.
+    if (!binding || isUnassignedKeybinding(binding) || binding.command.startsWith("terminal.split"))
+      continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
 
     const conflictKey = shortcutConflictKey(binding.shortcut, platform);
@@ -433,11 +586,36 @@ function findEffectiveShortcutForCommand(
 
     claimedShortcuts.add(conflictKey);
     if (binding.command === command) {
-      return binding.shortcut;
+      return binding;
     }
   }
 
   return null;
+}
+
+export function resolveKeybindingForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): ResolvedKeybindingRule | null {
+  return (
+    findEffectiveKeybindingForCommand(keybindings, command, options) ??
+    findEffectiveKeybindingForCommand(getFallbackBindings(keybindings), command, options)
+  );
+}
+
+export function formatKeybindingWhenExpression(node: KeybindingWhenNode | undefined): string {
+  if (!node) return "";
+  switch (node.type) {
+    case "identifier":
+      return node.name;
+    case "not":
+      return `!(${formatKeybindingWhenExpression(node.node)})`;
+    case "and":
+      return `(${formatKeybindingWhenExpression(node.left)} && ${formatKeybindingWhenExpression(node.right)})`;
+    case "or":
+      return `(${formatKeybindingWhenExpression(node.left)} || ${formatKeybindingWhenExpression(node.right)})`;
+  }
 }
 
 function matchesCommandShortcut(
@@ -459,7 +637,9 @@ function resolveShortcutCommandFromBindings(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding) continue;
+    // Retired split bindings must not consume shell shortcuts from older configs.
+    if (!binding || isUnassignedKeybinding(binding) || binding.command.startsWith("terminal.split"))
+      continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
     if (!matchesShortcut(event, binding.shortcut, platform)) continue;
     return binding.command;
@@ -480,6 +660,7 @@ export function resolveShortcutCommand(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): string | null {
+  if (dispatchSuspensions > 0) return null;
   const explicitCommand = resolveShortcutCommandFromBindings(event, keybindings, options);
   if (explicitCommand !== null) {
     return explicitCommand;
@@ -501,6 +682,8 @@ function formatShortcutKeyLabel(key: string): string {
   if (key === "arrowdown") return "Down";
   if (key === "arrowleft") return "Left";
   if (key === "arrowright") return "Right";
+  if (key === "pageup") return "PgUp";
+  if (key === "pagedown") return "PgDn";
   return key.slice(0, 1).toUpperCase() + key.slice(1);
 }
 
@@ -531,11 +714,18 @@ export function formatShortcutLabel(
 const MODIFIER_SYMBOLS = new Set(["⌘", "⌥", "⌃", "⇧"]);
 
 export function splitShortcutLabel(shortcutLabel: string): string[] {
-  if (shortcutLabel.includes("+")) {
-    return shortcutLabel
+  // macOS labels are symbols with the key last ("⇧⌘K", "⌘+"); the rest are joined with
+  // "+" ("Ctrl+Shift+K"), where a trailing "++" is the plus key itself.
+  if (
+    ![...shortcutLabel].some((char) => MODIFIER_SYMBOLS.has(char)) &&
+    shortcutLabel.includes("+")
+  ) {
+    const plusKey = shortcutLabel === "+" || shortcutLabel.endsWith("++");
+    const parts = (plusKey ? shortcutLabel.slice(0, -1) : shortcutLabel)
       .split("+")
       .map((part) => part.trim())
       .filter((part) => part.length > 0);
+    return plusKey ? [...parts, "+"] : parts;
   }
 
   if ([...shortcutLabel].some((char) => MODIFIER_SYMBOLS.has(char))) {
@@ -574,7 +764,7 @@ export function shortcutLabelForCommand(
     // (e.g. terminal-only) still surface a label in chrome affordances.
     for (let index = keybindings.length - 1; index >= 0; index -= 1) {
       const binding = keybindings[index];
-      if (!binding || binding.command !== command) continue;
+      if (!binding || binding.command !== command || isUnassignedKeybinding(binding)) continue;
       return formatShortcutLabel(binding.shortcut, platform);
     }
     for (const binding of getFallbackBindings(keybindings)) {
@@ -620,6 +810,7 @@ export function shouldShowThreadJumpHints(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
+  if (dispatchSuspensions > 0) return false;
   const platform = resolvePlatform(options);
   const fallbackBindings = getFallbackBindings(keybindings);
 
@@ -636,87 +827,20 @@ export function shouldShowThreadJumpHints(
   return false;
 }
 
-export function isTerminalToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.toggle", options);
-}
-
-export function isTerminalSplitShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.split", options);
-}
-
-export function isTerminalNewShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.new", options);
-}
-
-export function isTerminalCloseShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.close", options);
-}
-
-export function isSidebarToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "sidebar.toggle", options);
-}
-
-export function isDiffToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "diff.toggle", options);
-}
-
-export function isBrowserToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "browser.toggle", options);
-}
-
-export function isChatNewShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.new", options);
-}
-
-export function isChatNewChatShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return (
-    matchesCommandShortcut(event, keybindings, "chat.newChat", options) ||
-    matchesCommandShortcut(event, keybindings, "chat.newLocal", options)
-  );
-}
-
 export function isOpenFavoriteEditorShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "editor.openFavorite", options);
+}
+
+export function isEditorFileSaveShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "editor.file.save", options);
 }
 
 export function isTerminalClearShortcut(event: ShortcutEventLike): boolean {
@@ -733,6 +857,7 @@ export function isKeyboardShortcutsHelpShortcut(
   event: ShortcutEventLike,
   platform = navigator.platform,
 ): boolean {
+  if (dispatchSuspensions > 0) return false;
   return isKeyboardShortcutsHelpChord(
     {
       key: event.key,

@@ -1,6 +1,6 @@
 // FILE: relativeTime.ts
 // Purpose: Compact relative-time labels ("now", "5m", "3h", "2d", "1w", "5mo") for thread and
-//          pull request lists.
+//          pull request lists, plus the snooze countdown label.
 // Layer: Web UI utility
 
 export function formatRelativeTime(iso: string): string {
@@ -15,4 +15,20 @@ export function formatRelativeTime(iso: string): string {
   if (days < 30) return `${Math.floor(days / 7)}w`;
   if (days < 365) return `${Math.floor(days / 30)}mo`;
   return `${Math.floor(days / 365)}y`;
+}
+
+/** Countdown label for a snoozed thread ("28 min left", "1 hr 28 min left", "2 days 1 hr left"). */
+export function formatSnoozeRemainingTime(snoozedUntil: string, nowMs: number): string {
+  const remainingMs = Date.parse(snoozedUntil) - nowMs;
+  if (!(remainingMs > 0)) return "Returning…";
+  const totalMinutes = Math.floor(remainingMs / 60_000);
+  if (totalMinutes < 1) return "Less than a minute left";
+  const days = Math.floor(totalMinutes / 1_440);
+  const hours = Math.floor((totalMinutes % 1_440) / 60);
+  const minutes = totalMinutes % 60;
+  const parts =
+    days > 0
+      ? [`${days} ${days === 1 ? "day" : "days"}`, hours > 0 ? `${hours} hr` : null]
+      : [hours > 0 ? `${hours} hr` : null, minutes > 0 ? `${minutes} min` : null];
+  return `${parts.filter((part) => part !== null).join(" ")} left`;
 }

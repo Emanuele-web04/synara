@@ -1,30 +1,14 @@
 // FILE: SidebarActivityView.logic.ts
 // Purpose: Pure grouping/sorting model for the sidebar Activity view (threads as tasks).
-// Exports: eligibility, status-group resolution, settle helpers, and the view-model builder.
+// Exports: eligibility, stable ordering, settle helpers, and the view-model builder.
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
-
-import { formatRelativeTime } from "~/lib/relativeTime";
-import type { TimestampFormat } from "../appSettings";
-import { canSessionAnswerPendingRequests, isLatestTurnSettled } from "../session-logic";
-import { formatShortTimestamp } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
-import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
-
-/**
- * Task-feed ordering, top to bottom: threads that need the user (approvals,
- * input, ready plans), finished work not yet seen, live work, then everything
- * already reviewed. Settled threads leave these groups entirely and sink to
- * the dimmed Settled section.
- */
-export type ActivityStatusGroup = "attention" | "unseenCompleted" | "running" | "seen";
-
-const ACTIVITY_GROUP_ORDER: Record<ActivityStatusGroup, number> = {
-  attention: 0,
-  unseenCompleted: 1,
-  running: 2,
-  seen: 3,
-};
+import {
+  hasUnseenCompletion,
+  hasUnseenSnoozeReturn,
+  isThreadActivelyWorking,
+} from "./Sidebar.logic";
 
 export function isThreadRunningForActivity(
   thread: Pick<SidebarThreadSummary, "hasLiveTailWork" | "session" | "latestTurn">,
@@ -32,61 +16,32 @@ export function isThreadRunningForActivity(
   return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
 }
 
-type ActivityAttentionInput = Pick<
-  SidebarThreadSummary,
-  | "hasActionableProposedPlan"
-  | "hasLiveTailWork"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "interactionMode"
-  | "latestTurn"
-  | "session"
->;
-
-function requiresActivityAttention(thread: ActivityAttentionInput): boolean {
-  // Mirrors resolveThreadStatusPill: a dead session cannot receive answers, so
-  // its pending requests no longer count as "needs attention".
-  const canAnswerPendingRequests = canSessionAnswerPendingRequests(thread.session);
-  if ((thread.hasPendingApprovals || thread.hasPendingUserInput) && canAnswerPendingRequests) {
-    return true;
-  }
-  return (
-    thread.interactionMode === "plan" &&
-    !thread.hasLiveTailWork &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan
-  );
-}
-
-export function resolveActivityStatusGroup(thread: SidebarThreadSummary): ActivityStatusGroup {
-  if (requiresActivityAttention(thread)) {
-    return "attention";
-  }
-  if (isThreadRunningForActivity(thread)) {
-    return "running";
-  }
-  if (hasUnseenCompletion(thread)) {
-    return "unseenCompleted";
-  }
-  return "seen";
-}
-
 /**
  * Threads that belong in the task feed: top-level, not archived, and having run
- * at least once. Drafts stay out, but a thread whose very first turn is
- * starting up already counts as running work.
+ * at least once, or explicitly snoozed/reminded. Ordinary drafts stay out,
+ * but a thread whose very first turn is starting up already counts as work.
  */
 export function isActivityThread(thread: SidebarThreadSummary): boolean {
   if (thread.archivedAt != null) return false;
   if (thread.parentThreadId) return false;
-  return thread.latestTurn !== null || isThreadRunningForActivity(thread);
+  return (
+    thread.snoozedUntil != null ||
+    thread.snoozeReminderAt != null ||
+    thread.latestTurn !== null ||
+    isThreadRunningForActivity(thread)
+  );
 }
 
 export function isThreadSettledForActivity(
-  thread: Pick<SidebarThreadSummary, "id" | "settledAt">,
+  thread: Pick<SidebarThreadSummary, "id" | "settledAt" | "latestHumanMessageAt">,
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>,
 ): boolean {
-  return settledOverrideByThreadId?.get(thread.id) ?? thread.settledAt != null;
+  const override = settledOverrideByThreadId?.get(thread.id);
+  if (override !== undefined) return override;
+  return (
+    thread.settledAt != null &&
+    parseTimestampMs(thread.latestHumanMessageAt) <= parseTimestampMs(thread.settledAt)
+  );
 }
 
 function parseTimestampMs(value: string | null | undefined): number {
@@ -95,37 +50,19 @@ function parseTimestampMs(value: string | null | undefined): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/**
- * The thread fields the feed is allowed to order by.
- *
- * `updatedAt` is ignored while work streams because every finalized assistant
- * message can bump it and make concurrent rows trade places. Once a thread
- * requires attention, however, output is paused and `updatedAt` is the stable
- * timestamp of the approval/input/plan event that made the row actionable.
- * Milestones remain the fallback for every other status.
- */
-export type ActivityRecencyInput = ActivityAttentionInput &
-  Pick<SidebarThreadSummary, "createdAt" | "latestTurn" | "latestUserMessageAt" | "updatedAt">;
+/** Human sends and intentional reminder wakeups move rows; background work and reads do not. */
+export type ActivityRecencyInput = Pick<
+  SidebarThreadSummary,
+  "createdAt" | "latestHumanMessageAt" | "snoozeReminderAt"
+>;
 
-/** The timestamp a row represents, as ISO, so order and row label never disagree. */
 export function resolveActivityRecencyIso(thread: ActivityRecencyInput): string {
-  let bestIso = thread.createdAt;
-  let bestMs = parseTimestampMs(thread.createdAt);
-  for (const candidate of [
-    thread.latestUserMessageAt,
-    thread.latestTurn?.requestedAt,
-    thread.latestTurn?.startedAt,
-    thread.latestTurn?.completedAt,
-    requiresActivityAttention(thread) ? thread.updatedAt : null,
-  ]) {
-    if (!candidate) continue;
-    const candidateMs = parseTimestampMs(candidate);
-    if (candidateMs > bestMs) {
-      bestMs = candidateMs;
-      bestIso = candidate;
-    }
+  if (parseTimestampMs(thread.snoozeReminderAt) > parseTimestampMs(thread.latestHumanMessageAt)) {
+    return thread.snoozeReminderAt!;
   }
-  return bestIso;
+  return thread.latestHumanMessageAt && parseTimestampMs(thread.latestHumanMessageAt) > 0
+    ? thread.latestHumanMessageAt
+    : thread.createdAt;
 }
 
 export function resolveActivityRecencyMs(thread: ActivityRecencyInput): number {
@@ -146,63 +83,96 @@ function compareThreadIds(
 
 export interface ActivityViewModel {
   pinned: SidebarThreadSummary[];
+  /**
+   * Unpinned, idle chats with an unsent composer message, other than the open one;
+   * they lead the feed until sent or cleared.
+   */
+  drafts: SidebarThreadSummary[];
   active: SidebarThreadSummary[];
   settled: SidebarThreadSummary[];
+  snoozed: SidebarThreadSummary[];
 }
 
 /**
- * Splits eligible threads into the three Activity sections and orders each:
- * pinned by recency, active by status group then recency, settled by when they
- * were settled. Pinned threads live exclusively in the Pinned section, while a
- * settled non-pinned thread is promoted back to active whenever it starts working,
- * needs attention, or has an unseen completion. An optional project filter narrows
- * every section without changing the ordering rules.
+ * True when an unsent composer draft should lift the thread into Drafts (or to
+ * the top of Pinned). The open thread and threads that are working or starting
+ * a turn keep their place, so typing a follow-up never makes a row jump; their
+ * pencil glyph still marks the draft.
+ */
+function isParkedActivityDraft(
+  thread: Pick<SidebarThreadSummary, "id" | "hasLiveTailWork" | "session" | "latestTurn">,
+  input: {
+    draftThreadIdSet: ReadonlySet<ThreadId> | null;
+    activeThreadId: ThreadId | null;
+  },
+): boolean {
+  if (!input.draftThreadIdSet?.has(thread.id)) return false;
+  if (thread.id === input.activeThreadId) return false;
+  return !(
+    isThreadRunningForActivity(thread) ||
+    thread.session?.orchestrationStatus === "starting" ||
+    thread.latestTurn?.state === "running"
+  );
+}
+
+/**
+ * Pinned, draft, and active rows follow human sends; explicitly settled rows keep
+ * settlement order. Pinned drafts stay pinned but lead that section.
  */
 export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
+  draftThreadIdSet?: ReadonlySet<ThreadId>;
+  /** The open thread: its draft is being typed, so it never moves to Drafts. */
+  activeThreadId?: ThreadId | null;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
   projectFilterIds?: ReadonlySet<ProjectId> | null;
 }): ActivityViewModel {
   const projectFilterIds = input.projectFilterIds ?? null;
+  const draftOptions = {
+    draftThreadIdSet: input.draftThreadIdSet ?? null,
+    activeThreadId: input.activeThreadId ?? null,
+  };
+  const isDraft = (thread: SidebarThreadSummary) => isParkedActivityDraft(thread, draftOptions);
   const pinned: SidebarThreadSummary[] = [];
+  const drafts: SidebarThreadSummary[] = [];
   const active: SidebarThreadSummary[] = [];
   const settled: SidebarThreadSummary[] = [];
+  const snoozed: SidebarThreadSummary[] = [];
 
   for (const thread of input.threads) {
     if (!isActivityThread(thread)) continue;
     if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
+    // The server clears snooze on expiry. Client clocks must not surface a thread
+    // before that durable update, and pins cannot bypass the user's snooze.
+    if (thread.snoozedUntil != null) {
+      snoozed.push(thread);
+      continue;
+    }
     if (input.pinnedThreadIdSet.has(thread.id)) {
       pinned.push(thread);
       continue;
     }
-    const statusGroup = resolveActivityStatusGroup(thread);
-    if (
-      isThreadSettledForActivity(thread, input.settledOverrideByThreadId) &&
-      statusGroup === "seen"
-    ) {
+    if (isDraft(thread)) {
+      drafts.push(thread);
+      continue;
+    }
+    if (isThreadSettledForActivity(thread, input.settledOverrideByThreadId)) {
       settled.push(thread);
     } else {
       active.push(thread);
     }
   }
 
+  const compareRecency = (left: SidebarThreadSummary, right: SidebarThreadSummary) =>
+    resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
+    compareThreadIds(left, right);
   pinned.sort(
-    (left, right) =>
-      resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
-      compareThreadIds(left, right),
+    (left, right) => Number(isDraft(right)) - Number(isDraft(left)) || compareRecency(left, right),
   );
-  active.sort((left, right) => {
-    const groupDelta =
-      ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(left)] -
-      ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(right)];
-    if (groupDelta !== 0) return groupDelta;
-    return (
-      resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
-      compareThreadIds(left, right)
-    );
-  });
+  drafts.sort(compareRecency);
+  active.sort(compareRecency);
   settled.sort((left, right) => {
     // Optimistically settled threads have no settledAt yet; their latest
     // activity stands in so they surface at the top of the section.
@@ -211,7 +181,12 @@ export function buildActivityViewModel(input: {
     return rightSettledMs - leftSettledMs || compareThreadIds(left, right);
   });
 
-  return { pinned, active, settled };
+  snoozed.sort(
+    (left, right) =>
+      parseTimestampMs(left.snoozedUntil) - parseTimestampMs(right.snoozedUntil) ||
+      compareThreadIds(left, right),
+  );
+  return { pinned, drafts, active, settled, snoozed };
 }
 
 export type ActivityDateBucket = "today" | "yesterday" | "earlier";
@@ -232,8 +207,7 @@ export function resolveActivityDateBucket(
 
 /**
  * Splits an already-ordered active list into calendar sections. Ordering is
- * preserved as-is inside each bucket, so status priority keeps working within
- * a day and the Earlier section can collapse the long tail.
+ * preserved inside each bucket; Earlier can collapse the long tail.
  */
 export function splitActivityThreadsByDateBucket(
   threads: readonly SidebarThreadSummary[],
@@ -267,11 +241,7 @@ export type ActivityProjectGroup =
       threads: SidebarThreadSummary[];
     };
 
-/**
- * Groups an already-ordered active list by project, busiest-recent project
- * first. Thread order inside a group is preserved, so status priority still
- * decides who leads each project block.
- */
+/** Groups the feed by project, ordered by each project's most recent human send. */
 export function groupActivityThreadsByProject(
   threads: readonly SidebarThreadSummary[],
   isRealProject: (projectId: ProjectId) => boolean,
@@ -304,12 +274,23 @@ export function groupActivityThreadsByProject(
           },
     );
   }
-  return Array.from(groupByKey.values()).toSorted(
-    (left, right) =>
-      Math.max(...right.threads.map(resolveActivityRecencyMs)) -
-        Math.max(...left.threads.map(resolveActivityRecencyMs)) ||
-      left.key.localeCompare(right.key),
-  );
+  // Precomputed so the comparator stays O(1) per call instead of rescanning
+  // every thread of both groups on each comparison.
+  const recencyByKey = new Map<string, number>();
+  for (const group of groupByKey.values()) {
+    let recencyMs = 0;
+    for (const thread of group.threads) {
+      recencyMs = Math.max(recencyMs, resolveActivityRecencyMs(thread));
+    }
+    recencyByKey.set(group.key, recencyMs);
+  }
+
+  return Array.from(groupByKey.values()).toSorted((left, right) => {
+    return (
+      recencyByKey.get(right.key)! - recencyByKey.get(left.key)! ||
+      left.key.localeCompare(right.key)
+    );
+  });
 }
 
 export type ActivityScopeOption =
@@ -318,7 +299,7 @@ export type ActivityScopeOption =
 
 /**
  * Scope menu entries: every real project with eligible activity, busiest first.
- * Project-less chats (chat/studio-kind containers) collapse into ONE "Synara"
+ * Project-less chats (chat/group-kind containers) collapse into ONE "Synara"
  * entry instead of one look-alike row per hidden container project.
  */
 export function collectActivityScopeOptions(
@@ -391,50 +372,7 @@ export function resolveActivityDayStartMs(nowMs: number): number {
   return dayStart.getTime();
 }
 
-/**
- * Keeps actionable or live work ahead of the user's already-reviewed working
- * set. `active` is already status-sorted, so both returned arrays preserve the
- * intended attention → unseen completion → running → seen ordering.
- */
-export function splitPriorityActivityThreads(active: readonly SidebarThreadSummary[]): {
-  priority: SidebarThreadSummary[];
-  seen: SidebarThreadSummary[];
-} {
-  const priority: SidebarThreadSummary[] = [];
-  const seen: SidebarThreadSummary[] = [];
-  for (const thread of active) {
-    if (resolveActivityStatusGroup(thread) === "seen") {
-      seen.push(thread);
-    } else {
-      priority.push(thread);
-    }
-  }
-  return { priority, seen };
-}
-
-/**
- * When the user last touched a thread themselves: opened it (lastVisitedAt) or
- * sent a message (latestUserMessageAt). Agent/automation activity deliberately
- * does not count — the Recent section tracks the user's working set, not the
- * server's.
- */
-export function resolveActivityInteractionMs(
-  thread: Pick<SidebarThreadSummary, "lastVisitedAt" | "latestUserMessageAt">,
-): number {
-  return Math.max(
-    parseTimestampMs(thread.lastVisitedAt),
-    parseTimestampMs(thread.latestUserMessageAt),
-  );
-}
-
-/**
- * Pulls the user's working set out of the (already status-sorted) active list:
- * up to `limit` threads they interacted with *today*, newest interaction first.
- * The freshness window is the point of the section — without it the slots stay
- * occupied by whatever was last opened, so a thread touched days ago squats at
- * the top until it is archived. Nothing is hidden by aging out: the remainder
- * keeps its original order and falls through to the date buckets below.
- */
+/** The five most recent human sends or reminders in the current working day. */
 export function splitRecentActivityThreads(
   active: readonly SidebarThreadSummary[],
   options: { nowMs: number; limit?: number },
@@ -442,10 +380,14 @@ export function splitRecentActivityThreads(
   const limit = options.limit ?? ACTIVITY_RECENT_LIMIT;
   const dayStartMs = resolveActivityDayStartMs(options.nowMs);
   const recent = active
-    .filter((thread) => resolveActivityInteractionMs(thread) >= dayStartMs)
+    .filter(
+      (thread) =>
+        resolveActivityRecencyMs(thread) >= dayStartMs &&
+        (thread.latestHumanMessageAt != null || thread.snoozeReminderAt != null),
+    )
     .toSorted(
       (left, right) =>
-        resolveActivityInteractionMs(right) - resolveActivityInteractionMs(left) ||
+        resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
         compareThreadIds(left, right),
     )
     .slice(0, limit);
@@ -454,6 +396,31 @@ export function splitRecentActivityThreads(
     recent,
     rest: active.filter((thread) => !recentThreadIds.has(thread.id)),
   };
+}
+
+/**
+ * Rows a collapsible, paged Activity section mounts. The open thread is always
+ * kept on screen, the way the classic project list reveals it past its page cap:
+ * past the page it joins `visible`, and under a collapsed header it is returned
+ * as `revealed` so the section can show it without expanding. Section state is
+ * untouched, so the row drops back into place once another thread is opened.
+ */
+export function resolveActivitySectionRows<T extends Pick<SidebarThreadSummary, "id">>(
+  rows: readonly T[],
+  options: { open: boolean; previewLimit: number; activeThreadId: ThreadId | null },
+): { visible: T[]; revealed: T[] } {
+  const activeIndex =
+    options.activeThreadId === null
+      ? -1
+      : rows.findIndex((thread) => thread.id === options.activeThreadId);
+  if (!options.open) {
+    const activeRow = rows[activeIndex];
+    return { visible: [], revealed: activeRow ? [activeRow] : [] };
+  }
+  const visible = rows.slice(0, options.previewLimit);
+  const activeRow = rows[activeIndex];
+  if (activeRow && activeIndex >= options.previewLimit) visible.push(activeRow);
+  return { visible, revealed: [] };
 }
 
 /**
@@ -466,7 +433,7 @@ export function collectVisibleActivityThreadIds(input: {
   groupMode: ActivityGroupMode;
   pinnedOpen: boolean;
   pinned: readonly SidebarThreadSummary[];
-  priority: readonly SidebarThreadSummary[];
+  drafts: readonly SidebarThreadSummary[];
   recent: readonly SidebarThreadSummary[];
   today: readonly SidebarThreadSummary[];
   yesterday: readonly SidebarThreadSummary[];
@@ -475,41 +442,52 @@ export function collectVisibleActivityThreadIds(input: {
   projectGroups: readonly (readonly SidebarThreadSummary[])[];
   settledOpen: boolean;
   settled: readonly SidebarThreadSummary[];
+  /** The open thread shown under a collapsed header; mounted whatever the section state. */
+  revealed?: {
+    pinned: readonly SidebarThreadSummary[];
+    earlier: readonly SidebarThreadSummary[];
+    settled: readonly SidebarThreadSummary[];
+  };
 }): ThreadId[] {
   const visible: SidebarThreadSummary[] = [];
   if (input.pinnedOpen) visible.push(...input.pinned);
+  if (input.revealed) visible.push(...input.revealed.pinned);
   if (input.groupMode === "project") {
     for (const group of input.projectGroups) visible.push(...group);
   } else {
-    visible.push(...input.priority, ...input.recent, ...input.today, ...input.yesterday);
+    visible.push(...input.drafts, ...input.recent, ...input.today, ...input.yesterday);
     if (input.earlierOpen) visible.push(...input.earlier);
+    if (input.revealed) visible.push(...input.revealed.earlier);
   }
   if (input.settledOpen) visible.push(...input.settled);
+  if (input.revealed) visible.push(...input.revealed.settled);
   return [...new Set(visible.map((thread) => thread.id))];
-}
-
-/**
- * Row timestamp: today's threads show the exact clock time (task-feed precision,
- * and it disambiguates same-title chats that would both read "2h"); older rows
- * keep the coarser relative label.
- */
-export function formatActivityRowTime(input: {
-  thread: ActivityRecencyInput;
-  nowMs: number;
-  timestampFormat: TimestampFormat;
-}): string {
-  const isoDate = resolveActivityRecencyIso(input.thread);
-  if (resolveActivityDateBucket(input.thread, input.nowMs) === "today") {
-    return formatShortTimestamp(isoDate, input.timestampFormat);
-  }
-  return formatRelativeTime(isoDate);
 }
 
 /** Threads "Mark all as read" should visit: eligible feed rows with an unseen completion. */
 export function collectUnreadActivityThreads(
   threads: readonly SidebarThreadSummary[],
 ): SidebarThreadSummary[] {
-  return threads.filter((thread) => isActivityThread(thread) && hasUnseenCompletion(thread));
+  return threads.filter(
+    (thread) =>
+      thread.snoozedUntil == null &&
+      isActivityThread(thread) &&
+      (hasUnseenCompletion(thread) || hasUnseenSnoozeReturn(thread)),
+  );
+}
+
+/**
+ * The visit that reads an activity thread: its latest completion, or the snooze reminder
+ * when the chat came back from snooze after it. Like opening the chat, this uses the
+ * server's reminder time rather than this device's clock.
+ */
+export function resolveActivityThreadReadAt(thread: SidebarThreadSummary): string | undefined {
+  const completedAt = thread.latestTurn?.completedAt ?? undefined;
+  const reminderAt = thread.snoozeReminderAt ?? undefined;
+  if (reminderAt === undefined || !hasUnseenSnoozeReturn(thread)) return completedAt;
+  return completedAt !== undefined && Date.parse(completedAt) > Date.parse(reminderAt)
+    ? completedAt
+    : reminderAt;
 }
 
 /** The open thread is already being read even if its visited timestamp update is one render late. */

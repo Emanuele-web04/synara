@@ -1,10 +1,22 @@
 # External MCP integrations
 
-Synara can expose a small, user-approved MCP tool surface to another local app such as Codex or
-Claude. This integration is separate from the internal `/mcp` endpoint injected into provider
-sessions.
+External MCP lets another local application—such as Codex, Claude Code, or an MCP-capable desktop
+client—create and inspect restricted Synara tasks through a user-approved integration.
 
-## Guided setup
+It is separate from the internal Agent Gateway injected into supported provider sessions already
+running inside Synara.
+
+## Internal gateway or external integration
+
+| Surface       | Caller                                  | Authority model                                                                            |
+| ------------- | --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Agent Gateway | A provider session inside a Synara task | Thread-scoped capabilities and caller-turn authority                                       |
+| External MCP  | Another paired local application        | User-created integration with selected projects, scopes, limits, and revocable credentials |
+
+Use External MCP when work begins outside Synara but should execute through Synara's durable task
+and worktree pipeline.
+
+## Create the integration
 
 1. Start Synara and open **Settings → Integrations**.
 2. Name the connection and choose whether it may use every current and future project (the default)
@@ -18,7 +30,7 @@ sessions.
    client that cannot run the setup prompt, complete pairing in Synara and use the copy-ready JSON
    configuration instead. Synara uses the exact executable and data directory of the running
    installation; no global `synara` command, project ID, model slug, request ID, or credential
-   handling is required from the user.
+   path is required from the user.
 5. Synara moves from **Waiting for pairing** to **Paired** after the local credential exchange, then
    to **Connected** after the client makes its first request.
 
@@ -27,8 +39,8 @@ For an already paired integration, **Continue setup** restores the setup prompt.
 never replaces an already paired credential.
 
 The generated prompt is the recommended path for agentic clients. The commands and configuration
-below document the equivalent manual setup for Claude Desktop and other clients that cannot complete
-it automatically.
+below document the equivalent manual setup for Claude Desktop and other clients that cannot run the
+guided setup automatically.
 
 The guided flow avoids asking the user for project IDs, provider/model slugs, request IDs, data paths,
 or credentials. The generated launcher is structurally equivalent to:
@@ -37,22 +49,26 @@ or credentials. The generated launcher is structurally equivalent to:
 /absolute/path/to/runtime /absolute/path/to/synara-server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
 ```
 
+External clients register as `synara-external`; `synara` is reserved for the managed internal
+gateway. This avoids combining the external stdio transport with the internal HTTP configuration.
+Existing client registrations are not renamed automatically.
+
 The Codex copy action generates:
 
 ```sh
-codex mcp add synara [--env ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
+codex mcp add synara-external [--env ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
 ```
 
 The Claude Code copy action generates a user-scoped configuration:
 
 ```sh
-claude mcp add --scope user synara [-e ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
+claude mcp add --scope user synara-external [-e ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
 ```
 
 The equivalent manual Codex `config.toml` is:
 
 ```toml
-[mcp_servers.synara]
+[mcp_servers.synara-external]
 command = "/absolute/path/to/runtime"
 args = ["/absolute/path/to/synara-server", "mcp", "serve", "--integration", "mcp_int_REDACTED", "--home-dir", "/absolute/path/to/synara-data"]
 # Desktop builds also include: env = { ELECTRON_RUN_AS_NODE = "1" }
@@ -63,7 +79,7 @@ For clients that use JSON MCP configuration:
 ```json
 {
   "mcpServers": {
-    "synara": {
+    "synara-external": {
       "command": "/absolute/path/to/runtime",
       "args": [
         "/absolute/path/to/synara-server",

@@ -8,7 +8,6 @@ import {
   advanceThreadDetailResumeCursor,
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
-  clearThreadDetailResumeCursors,
   getThreadDetailResumeCursor,
   hasThreadDetailResumeCursor,
   resetThreadDetailResumeCursorsForTests,
@@ -30,7 +29,11 @@ describe("threadDetailResumeCursors", () => {
     expect(buildThreadSubscribeInput(thread)).toEqual({ threadId: thread });
 
     setThreadDetailResumeCursor(thread, 12);
-    expect(buildThreadSubscribeInput(thread)).toEqual({ threadId: thread, afterSequence: 12 });
+    expect(buildThreadSubscribeInput(thread)).toEqual({
+      threadId: thread,
+      afterSequence: 12,
+      batchReplay: true,
+    });
   });
 
   it("advances monotonically for events but lets snapshots overwrite backwards", () => {
@@ -56,7 +59,7 @@ describe("threadDetailResumeCursors", () => {
     expect(hasThreadDetailResumeCursor(threadOne)).toBe(false);
     expect(hasThreadDetailResumeCursor(threadTwo)).toBe(true);
 
-    clearThreadDetailResumeCursors([threadTwo]);
+    clearThreadDetailResumeCursor(threadTwo);
     expect(buildThreadSubscribeInput(threadTwo)).toEqual({ threadId: threadTwo });
   });
 });

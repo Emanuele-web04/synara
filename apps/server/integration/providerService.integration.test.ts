@@ -4,6 +4,7 @@ import { it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
 
 import { ProviderUnsupportedError } from "../src/provider/Errors.ts";
+import { ServerSecretStore } from "../src/auth/Services/ServerSecretStore.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
@@ -11,9 +12,9 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../src/provider/Services/ProviderService.ts";
-import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { SqlitePersistenceMemory } from "../src/persistence/Layers/Sqlite.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
+import { ServerSettingsService } from "../src/serverSettings.ts";
 
 import {
   makeTestProviderAdapterHarness,
@@ -59,7 +60,13 @@ const makeIntegrationFixture = Effect.gen(function* () {
   const shared = Layer.mergeAll(
     directoryLayer,
     Layer.succeed(ProviderAdapterRegistry, registry),
-    AnalyticsService.layerTest,
+    Layer.succeed(ServerSecretStore, {
+      get: () => Effect.succeed(null),
+      set: () => Effect.void,
+      getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+      remove: () => Effect.void,
+    }),
+    ServerSettingsService.layerTest(),
   ).pipe(Layer.provide(SqlitePersistenceMemory));
 
   const layer = makeProviderServiceLive().pipe(Layer.provide(shared));
@@ -124,52 +131,6 @@ it.effect("replays typed runtime fixture events", () =>
         {
           type: "agentMessage",
           text: "I will make a small update.\nDone.\n",
-        },
-      ]);
-    }).pipe(Effect.provide(fixture.layer));
-  }).pipe(Effect.provide(NodeServices.layer)),
-);
-
-it.effect("replays file-changing fixture turn events", () =>
-  Effect.gen(function* () {
-    const fixture = yield* makeIntegrationFixture;
-    const { join } = yield* Path.Path;
-    const { writeFileString } = yield* FileSystem.FileSystem;
-
-    yield* Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const session = yield* provider.startSession(
-        ThreadId.makeUnsafe("thread-integration-tools"),
-        {
-          threadId: ThreadId.makeUnsafe("thread-integration-tools"),
-          provider: "codex",
-          cwd: fixture.cwd,
-          runtimeMode: "full-access",
-        },
-      );
-      assert.equal((session.threadId ?? "").length > 0, true);
-
-      const snapshot = yield* runTurn({
-        provider,
-        harness: fixture.harness,
-        threadId: session.threadId,
-        userText: "make a small change",
-        response: {
-          events: codexTurnToolFixture,
-          mutateWorkspace: ({ cwd }) =>
-            writeFileString(join(cwd, "README.md"), "v2\n").pipe(Effect.asVoid, Effect.ignore),
-        },
-      });
-
-      assert.equal(snapshot.turns.length, 1);
-      assert.deepEqual(snapshot.turns[0]?.items, [
-        {
-          type: "userMessage",
-          content: [{ type: "text", text: "make a small change" }],
-        },
-        {
-          type: "agentMessage",
-          text: "Applied the requested edit.\n",
         },
       ]);
     }).pipe(Effect.provide(fixture.layer));

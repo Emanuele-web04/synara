@@ -16,6 +16,7 @@ const paths: ServerWorkspacePaths = {
   homeDir: null,
   chatWorkspaceRoot: null,
   studioWorkspaceRoot: null,
+  groupsWorkspaceRoot: null,
 };
 
 const workSpaceId = SpaceId.makeUnsafe("space-work");
@@ -36,7 +37,11 @@ function project(input: { id: string; spaceId?: SpaceId | null; kind?: Project["
   };
 }
 
-function thread(input: { id: string; projectId: string }): SidebarThreadSummary {
+function thread(input: {
+  id: string;
+  projectId: string;
+  sidechatSourceThreadId?: ThreadId | null;
+}): SidebarThreadSummary {
   return {
     id: ThreadId.makeUnsafe(input.id),
     projectId: ProjectId.makeUnsafe(input.projectId),
@@ -53,6 +58,8 @@ function thread(input: { id: string; projectId: string }): SidebarThreadSummary 
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
+    sidechatSourceThreadId: input.sidechatSourceThreadId ?? null,
   };
 }
 
@@ -89,7 +96,7 @@ describe("selecting an empty Space", () => {
       availableSplitViewIds: new Set(),
       threadIds: [voidThread.id],
       sidebarThreadSummaryById: { [voidThread.id]: { projectId: voidThread.projectId } },
-      studioProjectIds: new Set(),
+      groupProjectIds: new Set(),
       draftProjectIdByThreadId: new Map(),
       rememberedSplitViewThreadIds: undefined,
       landingSpace: {
@@ -109,7 +116,7 @@ describe("selecting an empty Space", () => {
         availableSplitViewIds: new Set(),
         threadIds: [homeThread.id],
         sidebarThreadSummaryById: { [homeThread.id]: { projectId: homeThread.projectId } },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: undefined,
         landingSpace: { spaceId: workSpaceId, projectById, workspacePaths: paths },
@@ -127,13 +134,35 @@ describe("selecting an empty Space", () => {
         availableSplitViewIds: new Set(["split-cross-space"]),
         threadIds: [voidThread.id],
         sidebarThreadSummaryById: { [voidThread.id]: { projectId: voidThread.projectId } },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         // Unscoped startup preserves the remembered split without applying a Space policy.
         rememberedSplitViewThreadIds: undefined,
         landingSpace: null,
       }),
     ).toEqual({ threadId: voidThread.id, splitViewId: "split-cross-space" });
+  });
+
+  it("does not restore a remembered side chat as a standalone route", () => {
+    const sidechat = thread({ id: "thread-sidechat", projectId: voidThread.projectId });
+
+    expect(
+      resolveChatIndexRestoreRoute({
+        lastThreadRoute: { threadId: sidechat.id },
+        availableSplitViewIds: new Set(),
+        threadIds: [sidechat.id],
+        sidebarThreadSummaryById: {
+          [sidechat.id]: {
+            projectId: sidechat.projectId,
+            sidechatSourceThreadId: voidThread.id,
+          },
+        },
+        groupProjectIds: new Set(),
+        draftProjectIdByThreadId: new Map(),
+        rememberedSplitViewThreadIds: undefined,
+        landingSpace: null,
+      }),
+    ).toBeNull();
   });
 
   it("drops a split containing a thread from another Space while retaining its focused route", () => {
@@ -150,7 +179,7 @@ describe("selecting an empty Space", () => {
           [workThread.id]: { projectId: workThread.projectId },
           [voidThread.id]: { projectId: voidThread.projectId },
         },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: [workThread.id, voidThread.id],
         landingSpace: {
@@ -174,7 +203,7 @@ describe("selecting an empty Space", () => {
         sidebarThreadSummaryById: {
           [workThread.id]: { projectId: workThread.projectId },
         },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: undefined,
         landingSpace: {
@@ -200,7 +229,7 @@ describe("selecting an empty Space", () => {
           [firstThread.id]: { projectId: firstThread.projectId },
           [secondThread.id]: { projectId: secondThread.projectId },
         },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: [firstThread.id, secondThread.id],
         landingSpace: {
@@ -264,6 +293,29 @@ describe("resolveSpaceSelectionTarget", () => {
         sortThreads: (threads) => threads,
       }),
     ).toEqual({ kind: "empty", spaceId: workSpaceId });
+  });
+
+  it("never treats a parent-linked side chat as a Space landing", () => {
+    const workProject = project({ id: "project-work", spaceId: workSpaceId });
+    const parent = thread({ id: "thread-parent", projectId: "project-work" });
+    const sidechat = thread({
+      id: "thread-sidechat",
+      projectId: "project-work",
+      sidechatSourceThreadId: parent.id,
+    });
+
+    expect(
+      resolveSpaceSelectionTarget({
+        spaceId: workSpaceId,
+        projects: [workProject],
+        projectById: new Map([[workProject.id, workProject]]),
+        threads: [sidechat, parent],
+        rememberedThreadId: sidechat.id,
+        rememberedProjectId: null,
+        paths,
+        sortThreads: (threads) => threads,
+      }),
+    ).toEqual({ kind: "thread", threadId: parent.id });
   });
 });
 
