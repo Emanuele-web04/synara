@@ -1,10 +1,14 @@
 import type {
-  ProjectId,
+  GitHubInboxState,
+  GitHubInboxSort,
   PullRequestActionInput,
+  PullRequestAutoFixListResult,
+  PullRequestAutoFixSetInput,
   PullRequestCommentInput,
   PullRequestSetPinnedInput,
   PullRequestState,
 } from "@synara/contracts";
+import { normalizeGitHubPullRequestUrl } from "@synara/shared/githubRepository";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 
 import { ensureNativeApi } from "~/nativeApi";
@@ -14,9 +18,10 @@ import {
   rollbackPullRequestGitCaches,
   type GitPullRequestActionRollback,
 } from "./pullRequestGitCache";
+import { githubInboxQueryKeys } from "./githubInboxQueryOptions";
 import {
   cancelPullRequestListScopes,
-  invalidateOtherPullRequestListQueries,
+  githubInboxStateForPullRequestState,
   invalidatePullRequestListScopes,
   isPullRequestListQueryKey,
   listScopesContainingPullRequest,
@@ -52,7 +57,7 @@ import {
   type PinMutationContext,
   type PullRequestActionProtectionContext,
 } from "./pullRequestMutationCoordinator";
-import { normalizePullRequestListKeyInput, pullRequestQueryKeys } from "./pullRequestQueryOptions";
+import { pullRequestQueryKeys } from "./pullRequestQueryOptions";
 
 export const pullRequestMutationKeys = {
   action: ["pull-requests", "action"] as const,
@@ -60,14 +65,6 @@ export const pullRequestMutationKeys = {
   comment: ["pull-requests", "comment"] as const,
   forceRefresh: ["pull-requests", "force-refresh"] as const,
 };
-
-function refreshPullRequestReviewRequestCounts(queryClient: QueryClient): void {
-  // This global sidebar badge is passive UI. Mark it stale and refresh active observers without
-  // keeping the originating PR action pending while every repository is counted again.
-  void queryClient
-    .invalidateQueries({ queryKey: pullRequestQueryKeys.reviewRequestCounts })
-    .catch(() => undefined);
-}
 
 type ActionOwnedFields = { state?: PullRequestState; isDraft?: boolean; closedAt?: string | null };
 type ActionMutationContext = {
@@ -96,38 +93,29 @@ function optimisticPullRequestActionPatch(
   }
 }
 
+// The sidebar review badge reads the open inbox list, so invalidating the open scope (which a
+// state change always touches, as source or target) also refreshes the badge.
 function actionListScopes(
   queryClient: QueryClient,
   input: PullRequestActionInput,
-  targetState: PullRequestState | undefined,
+  targetState: GitHubInboxState | undefined,
 ): PullRequestListQueryScope[] {
   const scopes = listScopesContainingPullRequestRepository(queryClient, input);
-  if (targetState === undefined) return scopes;
-  const byKey = new Map(
-    scopes.map((scope) => [`${scope.state}\u0000${scope.projectId ?? ""}`, scope] as const),
-  );
-  const projectIds = new Set<ProjectId | null>([
-    input.projectId,
-    null,
-    ...scopes.map((scope) => scope.projectId),
-  ]);
-  for (const projectId of projectIds) {
-    const target = { state: targetState, projectId };
-    byKey.set(`${target.state}\u0000${target.projectId ?? ""}`, target);
+  if (targetState === undefined || scopes.some((scope) => scope.state === targetState)) {
+    return scopes;
   }
-  return [...byKey.values()];
+  return [...scopes, { state: targetState }];
 }
 
 function pullRequestActionTargetState(
   action: PullRequestActionInput["action"],
-): PullRequestState | undefined {
+): GitHubInboxState | undefined {
   switch (action) {
     case "close":
+    case "merge":
       return "closed";
     case "reopen":
       return "open";
-    case "merge":
-      return "merged";
     case "ready":
     case "draft":
       return undefined;
@@ -250,7 +238,6 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
         invalidatePullRequestActionDetails(queryClient, input),
         queryClient.invalidateQueries(pullRequestGitQueryFilters(input)),
       ]);
-      refreshPullRequestReviewRequestCounts(queryClient);
     },
     onSuccess: async (result, input, context) => {
       // GitHub already accepted the action. Cache reconciliation is best-effort and must not
@@ -261,7 +248,6 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
         invalidatePullRequestActionDetails(queryClient, input),
         queryClient.invalidateQueries(pullRequestGitQueryFilters(input, result.workspaceRoot)),
       ]);
-      refreshPullRequestReviewRequestCounts(queryClient);
     },
     onSettled: (_result, error, _input, context) => {
       if (context) {
@@ -371,12 +357,9 @@ export function pullRequestCommentMutationOptions(queryClient: QueryClient) {
       const detailState = queryClient.getQueryData<{ state?: PullRequestState }>(detailKey)?.state;
       const affectedScopes = listScopesContainingPullRequestRepository(queryClient, input);
       if (detailState) {
-        // A new comment updates GitHub's `updatedAt` and can move an out-of-cap PR into either
-        // aggregate. Include those destination scopes even when no cached row proves membership.
-        affectedScopes.push(
-          { state: detailState, projectId: input.projectId },
-          { state: detailState, projectId: null },
-        );
+        // A new comment updates GitHub's `updatedAt` and can move an out-of-cap PR into the
+        // list. Include that scope even when no cached row proves membership.
+        affectedScopes.push({ state: githubInboxStateForPullRequestState(detailState) });
       }
       await Promise.all([
         invalidatePullRequestListScopes(queryClient, affectedScopes),
@@ -396,18 +379,17 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
     // merged field-by-field through the retained identity protection below.
     scope: { id: PULL_REQUEST_ACTION_REFRESH_SCOPE_ID },
     networkMode: "always",
-    mutationFn: (input: { state: PullRequestState; projectId: ProjectId | null }) =>
-      ensureNativeApi().pullRequests.list({
-        involvement: "all",
+    mutationFn: (input: { state: GitHubInboxState; sort?: GitHubInboxSort }) =>
+      ensureNativeApi().githubInbox.list({
         state: input.state,
-        projectId: input.projectId,
+        sort: input.sort ?? "created",
         forceRefresh: true,
       }),
     onMutate: async (input) => {
       const context = beginPullRequestRefresh(queryClient);
       try {
         await queryClient.cancelQueries({
-          queryKey: pullRequestQueryKeys.list(normalizePullRequestListKeyInput(input)),
+          queryKey: githubInboxQueryKeys.list(input.state, input.sort),
           exact: true,
         });
         return context;
@@ -416,8 +398,8 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
         throw error;
       }
     },
-    onSuccess: async (result, input, context) => {
-      const refreshedQueryKey = pullRequestQueryKeys.list(normalizePullRequestListKeyInput(input));
+    onSuccess: (result, input, context) => {
+      const refreshedQueryKey = githubInboxQueryKeys.list(input.state, input.sort);
       const protectedIdentities = context
         ? protectedPinIdentitiesForRefresh(queryClient, context)
         : new Set<string>();
@@ -433,10 +415,36 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
         refreshedQueryKey,
         preserveProtectedPinValues(actionProtectedResult, current, protectedIdentities),
       );
-      await invalidateOtherPullRequestListQueries(queryClient, refreshedQueryKey);
     },
     onSettled: (_result, _error, _input, context) => {
       finishPullRequestRefresh(queryClient, context);
+    },
+  });
+}
+
+/** Auto-fix CI switch; shared by the PR menu checkbox and the composer hint. */
+export function pullRequestSetAutoFixMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: (input: PullRequestAutoFixSetInput) =>
+      ensureNativeApi().pullRequests.setAutoFix(input),
+    // Swap this PR's entry in the chat's list so every row and the composer tip update at once.
+    onSuccess: (result, input) => {
+      queryClient.setQueryData<PullRequestAutoFixListResult>(
+        pullRequestQueryKeys.autoFix(input.threadId),
+        (current) => ({
+          states: [
+            ...(current?.states ?? []).filter(
+              (state) =>
+                normalizeGitHubPullRequestUrl(state.pullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                normalizeGitHubPullRequestUrl(state.requestedPullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                state.pullRequestUrl !== result.state?.pullRequestUrl,
+            ),
+            ...(result.state ? [result.state] : []),
+          ],
+        }),
+      );
     },
   });
 }

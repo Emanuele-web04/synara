@@ -80,7 +80,7 @@ function selectThreadMessages(state: AppState, threadId: ThreadId): Thread["mess
   );
 }
 
-function selectThreadActivities(state: AppState, threadId: ThreadId): Thread["activities"] {
+export function selectThreadActivities(state: AppState, threadId: ThreadId): Thread["activities"] {
   return collectByIds(
     state.activityIdsByThreadId?.[threadId] ?? EMPTY_ACTIVITY_IDS_BY_THREAD[threadId],
     state.activityByThreadId?.[threadId] ?? EMPTY_ACTIVITY_MAP,
@@ -138,6 +138,9 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     session,
     latestTurn: turnState?.latestTurn ?? null,
     pendingSourceProposedPlan: turnState?.pendingSourceProposedPlan,
+    ...(turnState?.pendingTurnStartMessageId !== undefined
+      ? { pendingTurnStartMessageId: turnState.pendingTurnStartMessageId }
+      : {}),
     messages,
     activities,
     proposedPlans,

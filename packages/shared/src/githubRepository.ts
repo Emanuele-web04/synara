@@ -58,6 +58,16 @@ export function parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(
   return isValidGitHubRepositoryNameWithOwner(nameWithOwner) ? nameWithOwner : null;
 }
 
+/** Canonical identity for matching the same PR across web URL suffixes/casing. */
+export function normalizeGitHubPullRequestUrl(input: string | null | undefined): string | null {
+  const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(input);
+  const number = /\/pull\/(\d+)/i.exec(input?.trim() ?? "")?.[1];
+  const parsedNumber = Number(number);
+  return repository && Number.isSafeInteger(parsedNumber) && parsedNumber > 0
+    ? `https://github.com/${repository.toLowerCase()}/pull/${parsedNumber}`
+    : null;
+}
+
 // Repository-level pull-request identity and local-project association helpers live in their own
 // module, but are exposed through this established GitHub subpath so dev servers do not need a
 // restart when the helper set grows.

@@ -19,6 +19,14 @@ const command = (id: string, cmd = "bun run build") =>
   workEntry({ id, itemType: "command_execution", command: cmd });
 const edit = (id: string, files: string[]) =>
   workEntry({ id, itemType: "file_change", changedFiles: files });
+// Claude reports Read as a generic dynamic tool call with JSON arguments.
+const claudeRead = (id: string, filePath: string) =>
+  workEntry({
+    id,
+    itemType: "dynamic_tool_call",
+    toolName: "Read",
+    detail: `Read: ${JSON.stringify({ file_path: filePath })}`,
+  });
 
 describe("classifyToolCallSummaryCategory", () => {
   it("classifies file changes as edits", () => {
@@ -26,13 +34,6 @@ describe("classifyToolCallSummaryCategory", () => {
     expect(
       classifyToolCallSummaryCategory(workEntry({ id: "e2", requestKind: "file-change" })),
     ).toBe("edit");
-  });
-
-  it("classifies file reads via requestKind and read-only commands", () => {
-    expect(classifyToolCallSummaryCategory(workEntry({ id: "r1", requestKind: "file-read" }))).toBe(
-      "read",
-    );
-    expect(classifyToolCallSummaryCategory(command("r2", "cat src/app.ts"))).toBe("read");
   });
 
   it("classifies search commands, structured search actions, and web searches", () => {
@@ -103,10 +104,6 @@ describe("isSummarizableToolCallEntry", () => {
       ),
     ).toBe(false);
   });
-
-  it("accepts plain tool entries", () => {
-    expect(isSummarizableToolCallEntry(command("c1"))).toBe(true);
-  });
 });
 
 describe("summarizeToolCallGroup", () => {
@@ -119,18 +116,7 @@ describe("summarizeToolCallGroup", () => {
     ).toBeNull();
   });
 
-  it("labels a homogeneous command run", () => {
-    const summary = summarizeToolCallGroup([
-      command("c1"),
-      command("c2"),
-      command("c3"),
-      command("c4"),
-    ]);
-    expect(summary?.label).toBe("Ran 4 commands");
-    expect(summary?.entryCount).toBe(4);
-  });
-
-  it("joins mixed categories in a fixed order", () => {
+  it("joins mixed categories with verbs in the order the work happened", () => {
     const summary = summarizeToolCallGroup([
       command("s1", 'rg -n "alpha" src'),
       edit("e1", ["a.ts"]),
@@ -140,7 +126,72 @@ describe("summarizeToolCallGroup", () => {
       command("c2", "bun run lint"),
       command("s3", "rg gamma docs"),
     ]);
-    expect(summary?.label).toBe("Ran 2 commands, Edited 2 files, Searched 3 files");
+    expect(summary?.label).toBe("Searched 3 times, edited 2 files, ran 2 commands");
+    expect(summary?.iconCategory).toBe("mixed");
+  });
+
+  it("summarizes Claude reads and a failing command like the transcript mockup", () => {
+    const summary = summarizeToolCallGroup([
+      claudeRead("r1", "/repo/calc.py"),
+      claudeRead("r2", "/repo/README.md"),
+      command("c1", "ls"),
+      command("c2", "wc -l calc.py README.md"),
+      workEntry({
+        id: "c3",
+        itemType: "command_execution",
+        command: 'rg "^def " calc.py',
+        toolStatus: "failed",
+      }),
+    ]);
+    expect(summary?.label).toBe("Read 2 files, ran 2 commands, searched once");
+    expect(summary?.failedCount).toBe(1);
+    expect(summary?.failedLabel).toBe("1 failed");
+  });
+
+  it("includes provider error-toned tool failures in the count and summary", () => {
+    const summary = summarizeToolCallGroup([
+      command("ok", "ls"),
+      workEntry({
+        id: "failed",
+        itemType: "command_execution",
+        command: "missing-command",
+        activityKind: "tool.completed",
+        toolStatus: "failed",
+        tone: "error",
+      }),
+    ]);
+    expect(summary?.label).toBe("Ran 2 commands");
+    expect(summary?.failedCount).toBe(1);
+  });
+
+  it("names at most three kinds and folds the rest into other actions", () => {
+    const summary = summarizeToolCallGroup([
+      claudeRead("r1", "/repo/a.ts"),
+      command("c1", "bun run lint"),
+      edit("e1", ["a.ts"]),
+      command("s1", "rg foo src"),
+      workEntry({ id: "m1", itemType: "mcp_tool_call", toolName: "linear_get_issue" }),
+    ]);
+    expect(summary?.label).toBe("Read 1 file, ran 1 command, 3 other actions");
+  });
+
+  it("wears the kind's glyph when every call is the same kind", () => {
+    expect(
+      summarizeToolCallGroup([claudeRead("r1", "/repo/a.ts"), claudeRead("r2", "/repo/b.ts")])
+        ?.iconCategory,
+    ).toBe("read");
+    expect(summarizeToolCallGroup([command("c1"), command("c2", "ls")])?.iconCategory).toBe(
+      "command",
+    );
+  });
+
+  it("never reports a listing or find as a read of the current directory", () => {
+    const summary = summarizeToolCallGroup([
+      command("c1", "ls"),
+      command("c2", 'find . -name "*.md" -not -path "./.git/*"'),
+    ]);
+    expect(summary?.label).toBe("Ran 1 command, searched once");
+    expect(summary?.failedLabel).toBeNull();
   });
 
   it("counts distinct files for edits across entries", () => {
@@ -170,20 +221,6 @@ describe("summarizeToolCallGroup", () => {
     expect(summary?.label).toBe("Read 2 files");
   });
 
-  it("uses singular forms for single counts", () => {
-    const summary = summarizeToolCallGroup([command("c1"), edit("e1", ["a.ts"])]);
-    expect(summary?.label).toBe("Ran 1 command, Edited 1 file");
-  });
-
-  it("labels MCP tools and agent tasks", () => {
-    const summary = summarizeToolCallGroup([
-      workEntry({ id: "m1", itemType: "mcp_tool_call" }),
-      workEntry({ id: "m2", itemType: "dynamic_tool_call" }),
-      workEntry({ id: "a1", itemType: "collab_agent_tool_call" }),
-    ]);
-    expect(summary?.label).toBe("Ran 1 agent task, Used 2 tools");
-  });
-
   it("labels an uncategorized-only run as plain tool calls", () => {
     const summary = summarizeToolCallGroup([
       workEntry({ id: "o1", itemType: "image_view" }),
@@ -201,15 +238,5 @@ describe("summarizeToolCallGroup", () => {
     ]);
     expect(summary?.label).toBe("Ran 2 commands");
     expect(summary?.entryCount).toBe(2);
-  });
-
-  it("flags groups that still contain running work", () => {
-    const settled = summarizeToolCallGroup([command("c1"), command("c2")]);
-    expect(settled?.hasRunningEntry).toBe(false);
-    const running = summarizeToolCallGroup([
-      command("c1"),
-      workEntry({ id: "c2", itemType: "command_execution", toolStatus: "running" }),
-    ]);
-    expect(running?.hasRunningEntry).toBe(true);
   });
 });

@@ -132,6 +132,14 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
       learnMoreHref: "https://app.devin.ai/usage",
     },
   },
+  {
+    kind: "omp",
+    displayName: PROVIDER_DISPLAY_NAMES.omp,
+    available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/omp",
+    supportsNativeTurnSteering: false,
+    usage: null,
+  },
 ] as const satisfies readonly ProviderDescriptor[]);
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(

@@ -1,11 +1,17 @@
 import {
+  type ComputerPermission,
+  type ComputerBuildSignature,
+  COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+  COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   isToolLifecycleItemType,
+  type ModelSelection,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurnState,
   type OrchestrationThreadActivity,
   type ProviderKind,
   type ToolLifecycleItemType,
   type TurnId,
+  type UserInputQuestion,
 } from "@synara/contracts";
 import {
   decodeSubagentAgentStates,
@@ -15,6 +21,7 @@ import {
 } from "@synara/shared/subagents";
 import {
   approvalRequestKindFromRequestType,
+  pendingRequestInstanceKey,
   type ApprovalRequestKind,
 } from "@synara/shared/threadSummary";
 import {
@@ -22,6 +29,7 @@ import {
   summarizeToolRawOutput,
 } from "@synara/shared/toolOutputSummary";
 import { pluralize, stripTerminalControlSequences } from "@synara/shared/text";
+import { suppressCoordinatorCheckinMessages } from "@synara/shared/coordinatorCheckin";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
@@ -32,11 +40,17 @@ import {
   type SynaraMcpToolStatus,
 } from "./lib/toolCallLabel";
 import { toolArgumentSummaryToolName } from "./lib/toolArgumentSummary";
+import { computerToolName, describeComputerToolCall } from "./lib/computerToolPresentation";
 import {
   deriveWorkLogToolDetails,
   mergeWorkLogToolDetails,
   type WorkLogToolDetails,
 } from "./lib/toolCallDetails";
+import {
+  FAST_MODE_STATE_ACTIVITY_KIND,
+  fastModeNoticeFromActivity,
+  type FastModeNotice,
+} from "./lib/fastModeState";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type { ChatMessage, ProposedPlan } from "./types";
@@ -49,9 +63,31 @@ export type WorkLogRequestKind = ApprovalRequestKind;
 const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
 export const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
 const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
+// Mirror the same-thread Hand off activities in ProviderCommandReactor.ts.
+export const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
+export const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+
+export interface ProviderHandoffInfo {
+  status: "completed" | "failed";
+  sourceProvider: ProviderKind;
+  sourceModel: string;
+  targetProvider: ProviderKind;
+  targetModel: string;
+  /** Full selections (effort, fast mode); rebuilt from provider + model when absent. */
+  sourceModelSelection: ModelSelection;
+  targetModelSelection: ModelSelection;
+  /** Prior-transcript context the target receives with its first turn. */
+  contextText: string | null;
+  /** Why the target could not start; only set on failure. */
+  failureDetail: string | null;
+  /** Set when that side requested fast mode but its session was not serving it. */
+  sourceFastModeNotice?: FastModeNotice | null;
+  targetFastModeNotice?: FastModeNotice | null;
+}
 
 export type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
+  | "fork-from-earlier-turn"
   | "fresh-session"
   | "interrupt-escalation"
   | "native-history-unavailable"
@@ -68,10 +104,35 @@ export interface ProviderContextLifecycleInfo {
   recapPreviewTruncated: boolean;
 }
 
+export interface WorkLogComputerSetupRequired {
+  /**
+   * The grants the OS is withholding, so the card can name them. Empty when the
+   * backend refused without naming one — the card then says what it can.
+   */
+  missing: readonly ComputerPermission[];
+  /**
+   * How the running build is signed, when the backend could say. Only an
+   * `adhoc` build gets the stale-grant explanation, because only there can
+   * System Settings show the switch on while the grant does not apply.
+   */
+  buildSignature?: ComputerBuildSignature;
+  /**
+   * The app macOS files this Synara's grants against, when a desktop shell told
+   * the server which flavor it is. The card's `tccutil` advice names it, and
+   * absent means that advice is withheld rather than guessed — a guessed
+   * identifier resets a different Synara's grants.
+   */
+  bundleId?: string;
+}
+
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
-  /** Server-owned orchestration event sequence for causal ordering. */
+  /**
+   * Provider runtime sequence, used to break equal-time ties in the timeline.
+   * Absent for server-created rows: their orchestration event sequence is a
+   * different counter, so they order by `createdAt` instead.
+   */
   sequence?: number;
   turnId?: TurnId | null;
   label: string;
@@ -91,9 +152,42 @@ export interface WorkLogEntry {
   requestKind?: WorkLogRequestKind;
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
+  // Set on the one entry a turn's subagents fold into: the transcript renders
+  // it as the subagent card (see SubagentRunCard.logic.ts).
+  subagentRun?: WorkLogSubagentRun;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  // Deterministic coordinator-monitor rows (worker settled / stuck /
+  // batch roll-up) render as compact centered pills in the coordinator
+  // conversation, each carrying a link into the reported thread.
+  synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
+  // Completion notices and Monitor updates both anchor the response they woke.
+  monitorNotification?: {
+    taskId: string;
+    name: string;
+    output: string;
+    outcome: "updated" | "completed" | "failed" | "stopped";
+  };
+  backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
+  // One background task for its whole life: the row sits where the agent
+  // launched it and its status updates in place (running, finished, failed,
+  // stopped) instead of adding a row per lifecycle event.
+  backgroundTask?: WorkLogBackgroundTask;
+  // A subagent's own progress, reported to the thread that launched it. It is
+  // that subagent's current step, never the launcher's reasoning.
+  subagentProgress?: WorkLogSubagentProgress;
+  // Computer-control denial rows render as an actionable card (enable control
+  // and retry) instead of a plain error line; carry just what that card needs.
+  computerControlDenied?: WorkLogComputerControlDenied;
+  computerSetupRequired?: WorkLogComputerSetupRequired;
   providerContextLifecycle?: ProviderContextLifecycleInfo;
+  providerHandoff?: ProviderHandoffInfo;
+  /** Durable terminal feedback; session readiness never clears a failed turn. */
+  turnFailure?: { cause: string; message: string; errorCode?: string };
+  // An answered agent question, paired with the answers the user submitted. It
+  // renders as a question/answer exchange that stays visible outside the
+  // collapsed turn instead of as two bare "User input" log lines.
+  userInputExchange?: ReadonlyArray<WorkLogUserInputExchangeItem>;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -101,6 +195,14 @@ export interface WorkLogEntry {
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
+}
+
+export interface WorkLogUserInputExchangeItem {
+  id: string;
+  header: string;
+  question: string;
+  options: ReadonlyArray<string>;
+  answer: string | null;
 }
 
 export type WorkLogLiveActivityState =
@@ -132,6 +234,10 @@ export interface WorkLogAutomation {
   proposalState?: "pending" | "accepted" | "dismissed";
 }
 
+export interface WorkLogComputerControlDenied {
+  toolName: string | null;
+}
+
 export interface WorkLogSynaraCreatedThread {
   threadId: string;
   title: string;
@@ -146,6 +252,57 @@ export interface WorkLogSynaraThreadCreation {
   requestedCount: number;
   createdCount: number;
   threads: ReadonlyArray<WorkLogSynaraCreatedThread>;
+}
+
+export interface WorkLogSynaraWorkerNoticeThread {
+  threadId: string;
+  title: string;
+  outcome: string | null;
+  result: string | null;
+  pr: string | null;
+  /** Owning group project — the needs-you actions resolve against it. */
+  projectId: string | null;
+}
+
+export interface WorkLogBackgroundTaskCompletion {
+  taskId: string;
+  taskType: string | null;
+  description: string | null;
+  // How the task ended; absent on completions derived before outcomes existed.
+  outcome?: WorkLogBackgroundTaskOutcome;
+}
+
+export type WorkLogBackgroundTaskOutcome = "finished" | "failed" | "stopped";
+
+export interface WorkLogBackgroundTask {
+  taskId: string;
+  taskType: string | null;
+  description: string | null;
+  // The command that runs in the background, from the launching tool call.
+  command: string | null;
+  status: "running" | WorkLogBackgroundTaskOutcome;
+  startedAt: string;
+  completedAt: string | null;
+  exitCode: number | null;
+}
+
+export interface WorkLogSubagentProgress {
+  /** The spawning tool call id: the subagent's provider thread id. */
+  toolUseId: string;
+  /** First progress activity in this invocation, stable across parent turns. */
+  invocationId?: string;
+  title: string | null;
+  /** The subagent's final state, once it ended. */
+  outcome?: "completed" | "failed" | "stopped";
+}
+
+export interface WorkLogSynaraWorkerNotice {
+  kind: "settled" | "stuck" | "needs-you" | "rollup";
+  marker: string | null;
+  phrase: string | null;
+  threads: ReadonlyArray<WorkLogSynaraWorkerNoticeThread>;
+  /** Synara-native action ids on a needs-you card (retry / stop / open). */
+  actions?: ReadonlyArray<"retry" | "stop" | "open">;
 }
 
 export interface WorkLogSubagent {
@@ -164,6 +321,30 @@ export interface WorkLogSubagent {
   title?: string | undefined;
   statusLabel?: string | undefined;
   isActive?: boolean | undefined;
+}
+
+/** What the parent's own log says about one subagent of a folded run. */
+export interface WorkLogSubagentRunMember {
+  /** The subagent's key in `subagents` (its provider thread id). */
+  key: string;
+  /** When the launching call first named this subagent. */
+  launchedAt: string;
+  /** The latest step the subagent reported to its launcher. */
+  latestStep: string | null;
+  /** Final state from the subagent's task completion, once it ended. */
+  outcome: "completed" | "failed" | "stopped" | null;
+  /** The launching call's own error, when the launch itself failed. */
+  failure: string | null;
+  /** When a later collab call first reported it finished (Codex "settled"). */
+  settledAt: string | null;
+  /** A later launch of the same child bounds evidence for this invocation. */
+  nextLaunchedAt?: string;
+}
+
+export interface WorkLogSubagentRun {
+  // Adjacent transcript calls retain their identities for jump and visibility tracking.
+  entryIds?: ReadonlyArray<string>;
+  members: ReadonlyArray<WorkLogSubagentRunMember>;
 }
 
 export interface WorkLogSubagentAction {
@@ -264,15 +445,41 @@ export function orderedActivities(
   return ordered;
 }
 
-// Routed subagent work (Claude's agent fan-out) belongs to the composer subagent
-// strip and to the child threads themselves — the transcript never renders a
-// subagent roster. The check runs on derived entries rather than raw activities
+// Routed subagent work (Claude's agent fan-out) belongs to the transcript's
+// subagent card and to the child threads themselves, never to plain tool rows.
+// The check runs on derived entries rather than raw activities
 // because providers stream the tool call first and attach receiver metadata on a
 // later lifecycle update that merges into the same entry. Generic OpenCode task
 // calls carry no receiver metadata and keep their ordinary chat row.
-export function isRoutedSubagentWorkEntry(entry: Pick<WorkLogEntry, "itemType" | "subagents">) {
-  return entry.itemType === "collab_agent_tool_call" && (entry.subagents?.length ?? 0) > 0;
+export function isRoutedSubagentWorkEntry(
+  entry: Pick<WorkLogEntry, "itemType" | "subagents" | "subagentAction">,
+) {
+  if (entry.itemType !== "collab_agent_tool_call") {
+    return false;
+  }
+  if ((entry.subagents?.length ?? 0) > 0) {
+    return true;
+  }
+  // Waiting on, closing, or hearing back from subagents only changes their
+  // state, which the card and the child threads already show. Codex sends
+  // these without receiver ids, so without this they read as bare "Wait" rows.
+  return isSubagentStateOnlyWorkEntry(entry);
 }
+
+// A collab call that only reports on subagents already launched (wait, close,
+// settled). It may update their state but never launches one.
+export function isSubagentStateOnlyWorkEntry(entry: Pick<WorkLogEntry, "subagentAction">): boolean {
+  const tool = normalizeCollabIdentifier(entry.subagentAction?.tool ?? null);
+  return tool !== null && SUBAGENT_STATE_ONLY_COLLAB_TOOLS.has(tool);
+}
+
+const SUBAGENT_STATE_ONLY_COLLAB_TOOLS: ReadonlySet<string> = new Set([
+  "wait",
+  "waitagent",
+  "close",
+  "closeagent",
+  "subagentsettled",
+]);
 
 // Returns the same array when nothing is routed so memoized consumers keep their
 // reference identity on the common (no subagents) path.
@@ -297,6 +504,7 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter(
       (activity) =>
@@ -305,16 +513,19 @@ export function deriveWorkLogEntries(
         activity.kind !== "task.completed",
     )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
+    .filter((activity) => !isQuietApprovalResolutionActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
       (activity) =>
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
+    .filter((activity) => activity.kind !== FAST_MODE_STATE_ACTIVITY_KIND)
     .filter((activity) => activity.summary !== "Checkpoint captured")
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .map(toDerivedWorkLogEntry);
+  const userInputExchangeEntries = withUserInputExchanges(entries, ordered);
   // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
   // `toolName` and `activityKind` are intentionally kept: they are public
   // WorkLogEntry fields that the timeline relies on to pick the right icon (e.g.
@@ -322,8 +533,8 @@ export function deriveWorkLogEntries(
   // GitHub icon, user-input rows -> question / submit glyphs). Stripping
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
-  return reconcileSettledLiveActivities(
-    collapseDerivedWorkLogEntries(entries),
+  const derived = reconcileSettledLiveActivities(
+    collapseDerivedWorkLogEntries(userInputExchangeEntries),
     ordered,
     latestTurnId,
     options,
@@ -340,6 +551,536 @@ export function deriveWorkLogEntries(
         ...entry
       }) => entry,
     );
+  const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered);
+  if (handoffFastModeNotices.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      const notices = handoffFastModeNotices.get(entry.id);
+      if (!entry.providerHandoff || !notices) continue;
+      // Copy rather than mutate: the handoff info is shared with the per-activity cache.
+      derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
+    }
+  }
+  const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
+  return [
+    ...withBackgroundTaskRows(withSubagentProgressOutcomes(derived, ordered), ordered),
+    ...completions,
+    ...deriveTurnFailureEntries(ordered),
+  ];
+}
+
+interface BackgroundTaskState extends WorkLogBackgroundTask {
+  toolUseId: string | null;
+  // The "Moved to background" notice that first announced the task.
+  noticeActivityId: string | null;
+}
+
+function backgroundTaskOutcome(status: unknown): WorkLogBackgroundTaskOutcome | null {
+  switch (typeof status === "string" ? status.trim().toLowerCase() : null) {
+    case "completed":
+      return "finished";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "killed":
+    case "cancelled":
+    case "interrupted":
+      return "stopped";
+    default:
+      return null;
+  }
+}
+
+function parseBackgroundTaskExitCode(detail: string | null): number | null {
+  const match = detail ? /exit code (\d+)/i.exec(detail) : null;
+  return match ? Number.parseInt(match[1]!, 10) : null;
+}
+
+// Folds a thread's task lifecycle into one state per background task: the
+// "Moved to background" notice (or a user's move to background) makes a task
+// a background task, task.started links it to the call that launched it, and
+// task.updated/task.completed settle it. Subagents (`local_agent`) keep their
+// own rows, so they are left out.
+function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadActivity>): {
+  tasks: Map<string, BackgroundTaskState>;
+  // Notices that first announced a subagent: those keep their own row.
+  noticesAnnouncingSubagents: Set<string>;
+} {
+  const tasks = new Map<string, BackgroundTaskState>();
+  const noticesAnnouncingSubagents = new Set<string>();
+  const seenTaskIds = new Set<string>();
+  const started = new Map<
+    string,
+    { toolUseId: string | null; taskType: string | null; startedAt: string }
+  >();
+  const admit = (
+    taskId: string,
+    activity: OrchestrationThreadActivity,
+    info: { taskType: string | null; description: string | null; noticeActivityId: string | null },
+  ) => {
+    const launch = started.get(taskId);
+    const taskType = info.taskType ?? launch?.taskType ?? null;
+    if (taskType === "monitor") return;
+    if (taskType === "local_agent") {
+      // An untyped update can precede both the start and the first notice.
+      // Once identified, the subagent keeps its own row and first notice.
+      const provisional = tasks.get(taskId);
+      if (provisional) {
+        tasks.delete(taskId);
+        seenTaskIds.delete(taskId);
+      }
+      const noticeActivityId = provisional?.noticeActivityId ?? info.noticeActivityId;
+      if (noticeActivityId && !seenTaskIds.has(taskId)) {
+        noticesAnnouncingSubagents.add(noticeActivityId);
+        seenTaskIds.add(taskId);
+      }
+      return;
+    }
+    if (seenTaskIds.has(taskId)) return;
+    seenTaskIds.add(taskId);
+    tasks.set(taskId, {
+      taskId,
+      taskType,
+      description: info.description,
+      command: null,
+      status: "running",
+      startedAt: launch?.startedAt ?? activity.createdAt,
+      completedAt: null,
+      exitCode: null,
+      toolUseId: launch?.toolUseId ?? null,
+      noticeActivityId: info.noticeActivityId,
+    });
+  };
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (
+      activity.kind === "runtime.warning" &&
+      payload?.nativeEventType === "background_tasks_changed"
+    ) {
+      const announced = asRecord(payload.data)?.tasks;
+      if (!Array.isArray(announced)) continue;
+      for (const task of announced) {
+        const record = asRecord(task);
+        const taskId = asTrimmedString(record?.task_id);
+        if (!taskId) continue;
+        admit(taskId, activity, {
+          taskType: asTrimmedString(record?.task_type),
+          description: asTrimmedString(record?.description),
+          noticeActivityId: activity.id,
+        });
+      }
+      continue;
+    }
+    const taskId = asTrimmedString(payload?.taskId);
+    if (!taskId) continue;
+    if (activity.kind === "task.started") {
+      const launch = {
+        toolUseId: asTrimmedString(payload?.toolUseId),
+        taskType: asTrimmedString(payload?.taskType),
+        startedAt: activity.createdAt,
+      };
+      started.set(taskId, launch);
+      const task = tasks.get(taskId);
+      if (task) {
+        if (launch.taskType === "local_agent") {
+          admit(taskId, activity, {
+            taskType: launch.taskType,
+            description: null,
+            noticeActivityId: null,
+          });
+          continue;
+        }
+        task.toolUseId ??= launch.toolUseId;
+        task.description ??= asTrimmedString(payload?.detail);
+      }
+      continue;
+    }
+    if (activity.kind === "task.updated" && payload?.isBackgrounded === true) {
+      admit(taskId, activity, {
+        taskType: asTrimmedString(payload?.taskType),
+        description: asTrimmedString(payload?.detail),
+        noticeActivityId: null,
+      });
+    }
+    const task = tasks.get(taskId);
+    if (!task || task.status !== "running") continue;
+    if (activity.kind === "task.updated" || activity.kind === "task.completed") {
+      const outcome = backgroundTaskOutcome(payload?.status);
+      if (!outcome) continue;
+      const detail = asTrimmedString(payload?.detail);
+      task.status = outcome;
+      task.completedAt = activity.createdAt;
+      task.exitCode = parseBackgroundTaskExitCode(detail);
+    }
+  }
+  return { tasks, noticesAnnouncingSubagents };
+}
+
+// One row per background task, in place of the call that launched it (or of
+// its "Moved to background" notice when that call is not visible). The row's
+// status follows the task, so the transcript never stacks a launch notice,
+// a launching command and a completion line for the same work.
+function withBackgroundTaskRows<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<WorkLogEntry> {
+  if (
+    !ordered.some(
+      (activity) =>
+        (activity.kind === "runtime.warning" &&
+          asRecord(activity.payload)?.nativeEventType === "background_tasks_changed") ||
+        (activity.kind === "task.updated" && asRecord(activity.payload)?.isBackgrounded === true),
+    )
+  ) {
+    return entries;
+  }
+  const { tasks, noticesAnnouncingSubagents } = deriveBackgroundTaskStates(ordered);
+  if (tasks.size === 0) {
+    return entries;
+  }
+  const launchEntryByToolUseId = new Map<string, Entry>();
+  for (const entry of entries) {
+    if (entry.toolCallId) launchEntryByToolUseId.set(entry.toolCallId, entry);
+  }
+  const taskByToolUseId = new Map<string, BackgroundTaskState>();
+  const tasksByNoticeId = new Map<string, BackgroundTaskState[]>();
+  for (const task of tasks.values()) {
+    const launchEntry = task.toolUseId ? launchEntryByToolUseId.get(task.toolUseId) : undefined;
+    if (launchEntry && task.toolUseId) {
+      task.command = launchEntry.rawCommand ?? launchEntry.command ?? null;
+      taskByToolUseId.set(task.toolUseId, task);
+    } else if (task.noticeActivityId) {
+      const noticeTasks = tasksByNoticeId.get(task.noticeActivityId) ?? [];
+      noticeTasks.push(task);
+      tasksByNoticeId.set(task.noticeActivityId, noticeTasks);
+    }
+  }
+  const rowFor = (task: BackgroundTaskState, anchor: WorkLogEntry, id: string): WorkLogEntry => {
+    const { toolUseId: _toolUseId, noticeActivityId: _noticeActivityId, ...backgroundTask } = task;
+    return {
+      id,
+      createdAt: anchor.createdAt,
+      ...(anchor.sequence !== undefined ? { sequence: anchor.sequence } : {}),
+      ...(anchor.turnId ? { turnId: anchor.turnId } : {}),
+      label: "Background task",
+      tone: "tool",
+      ...(anchor.activityKind ? { activityKind: anchor.activityKind } : {}),
+      backgroundTask,
+    };
+  };
+  const rows: WorkLogEntry[] = [];
+  for (const entry of entries) {
+    const launchedTask = entry.toolCallId ? taskByToolUseId.get(entry.toolCallId) : undefined;
+    if (launchedTask) {
+      rows.push(rowFor(launchedTask, entry, entry.id));
+      continue;
+    }
+    if (entry.nativeEventType === "background_tasks_changed") {
+      for (const task of tasksByNoticeId.get(entry.id) ?? []) {
+        rows.push(rowFor(task, entry, `${entry.id}:${task.taskId}`));
+      }
+      // The notice only stays for work this model does not cover (subagents).
+      if (noticesAnnouncingSubagents.has(entry.id)) {
+        rows.push(entry);
+      }
+      continue;
+    }
+    rows.push(entry);
+  }
+  return rows;
+}
+
+function subagentOutcomeFromStatus(
+  status: string | null | undefined,
+): "completed" | "failed" | "stopped" | undefined {
+  switch (status?.trim().toLowerCase()) {
+    case "completed":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "interrupted":
+    case "cancelled":
+    case "killed":
+      return "stopped";
+    default:
+      return undefined;
+  }
+}
+
+export interface SubagentTaskEnd {
+  outcome: "completed" | "failed" | "stopped";
+  endedAt: string;
+  /** The same provider task's previous, already settled invocation. */
+  previous?: SubagentTaskEnd;
+}
+
+/**
+ * When and how each subagent task ended, keyed by its launching tool call id,
+ * from the parent's task completions. A background subagent's own thread ends
+ * its first turn at launch, so this is the only reliable end it has.
+ */
+export function deriveSubagentTaskEnds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, SubagentTaskEnd> {
+  const ends = new Map<string, SubagentTaskEnd>();
+  const resumed = new Set<string>();
+  for (const activity of activities) {
+    const payload = asRecord(activity.payload);
+    const toolUseId = asTrimmedString(payload?.toolUseId);
+    if (activity.kind === "task.started" && toolUseId && ends.has(toolUseId)) {
+      resumed.add(toolUseId);
+    }
+    if (activity.kind !== "task.completed") continue;
+    const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
+    if (toolUseId && outcome) {
+      const previous = resumed.has(toolUseId) ? ends.get(toolUseId) : ends.get(toolUseId)?.previous;
+      ends.set(toolUseId, {
+        outcome,
+        endedAt: activity.createdAt,
+        ...(previous ? { previous } : {}),
+      });
+      resumed.delete(toolUseId);
+    }
+  }
+  return ends;
+}
+
+// Keep terminal outcomes within one invocation. A resumed task reuses its tool
+// id, but a task.started after settlement opens a new scope. Background progress
+// can span parent turns without starting a new invocation.
+function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<Entry> {
+  if (!entries.some((entry) => entry.subagentProgress !== undefined)) {
+    return entries;
+  }
+  type Invocation = { id?: string; outcome?: WorkLogSubagentProgress["outcome"] };
+  const invocationByToolUseId = new Map<string, Invocation>();
+  const invocationByProgressId = new Map<string, Invocation>();
+  const currentInvocation = (toolUseId: string): Invocation => {
+    let invocation = invocationByToolUseId.get(toolUseId);
+    if (!invocation) {
+      invocation = {};
+      invocationByToolUseId.set(toolUseId, invocation);
+    }
+    return invocation;
+  };
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (activity.kind === "task.started") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      if (toolUseId && invocationByToolUseId.get(toolUseId)?.outcome !== undefined) {
+        // Older progress retains its settled invocation object. A repeated
+        // start while still live leaves the existing invocation intact.
+        invocationByToolUseId.set(toolUseId, {});
+      }
+      continue;
+    }
+    if (activity.kind === "task.progress") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      if (toolUseId) {
+        const invocation = currentInvocation(toolUseId);
+        invocation.id ??= activity.id;
+        invocationByProgressId.set(activity.id, invocation);
+      }
+      continue;
+    }
+    if (activity.kind === "task.completed") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
+      if (toolUseId && outcome) currentInvocation(toolUseId).outcome = outcome;
+      continue;
+    }
+    if (
+      (activity.kind === "tool.updated" || activity.kind === "tool.completed") &&
+      extractWorkLogItemType(payload) === "collab_agent_tool_call"
+    ) {
+      for (const [threadId, state] of Object.entries(
+        decodeSubagentAgentStates(collabPayloadItem(payload)),
+      )) {
+        const outcome = subagentOutcomeFromStatus(state.status);
+        if (outcome) currentInvocation(threadId).outcome = outcome;
+      }
+    }
+  }
+  return entries.map((entry) => {
+    const invocation = entry.subagentProgress ? invocationByProgressId.get(entry.id) : undefined;
+    return invocation && entry.subagentProgress
+      ? {
+          ...entry,
+          subagentProgress: {
+            ...entry.subagentProgress,
+            invocationId: invocation.id ?? entry.id,
+            ...(invocation.outcome ? { outcome: invocation.outcome } : {}),
+          },
+        }
+      : entry;
+  });
+}
+
+// A handoff row summarizes two sessions. Each side reads the fast-mode state its own
+// session reported: the source up to the handoff, the target from there to the next one.
+function deriveHandoffFastModeNotices(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">> {
+  const notices = new Map<
+    string,
+    Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">
+  >();
+  let sessionNotice: FastModeNotice | null = null;
+  let openHandoffId: string | null = null;
+  for (const activity of ordered) {
+    if (activity.kind === FAST_MODE_STATE_ACTIVITY_KIND) {
+      sessionNotice = fastModeNoticeFromActivity(activity);
+      if (openHandoffId !== null) {
+        notices.set(openHandoffId, {
+          ...notices.get(openHandoffId),
+          targetFastModeNotice: sessionNotice,
+        });
+      }
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND) {
+      // The target never started, so the source session keeps running.
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND) {
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      openHandoffId = activity.id;
+      sessionNotice = null;
+    }
+  }
+  return notices;
+}
+
+function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
+  return (
+    activity.turnId !== null &&
+    (activity.kind === "runtime.error" ||
+      (activity.kind === "turn.completed" &&
+        (asRecord(activity.payload)?.state === "failed" || activity.tone === "error")))
+  );
+}
+
+function deriveTurnFailureEntries(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): WorkLogEntry[] {
+  const terminalStates = new Map<string, unknown>();
+  for (const activity of activities) {
+    if (
+      activity.turnId &&
+      (activity.kind === "turn.completed" || activity.kind === "turn.aborted")
+    ) {
+      terminalStates.set(
+        activity.turnId,
+        activity.kind === "turn.aborted" ? "interrupted" : asRecord(activity.payload)?.state,
+      );
+    }
+  }
+  const failures = new Map<string, WorkLogEntry>();
+  for (const activity of activities) {
+    if (!isTurnFailureActivity(activity)) continue;
+    const payload = asRecord(activity.payload);
+    const terminalState = activity.turnId ? terminalStates.get(activity.turnId) : undefined;
+    if (
+      terminalState === "completed" ||
+      terminalState === "cancelled" ||
+      terminalState === "interrupted"
+    )
+      continue;
+    const id = activity.turnId ? `turn-failure:${activity.turnId}` : activity.id;
+    const previous = failures.get(id);
+    const cause =
+      asTrimmedString(payload?.errorMessage) ??
+      asTrimmedString(payload?.message) ??
+      previous?.turnFailure?.cause ??
+      "The provider reported an error.";
+    const errorCode = asTrimmedString(payload?.errorCode) ?? previous?.turnFailure?.errorCode;
+    const overloaded =
+      errorCode === "server_overloaded" || /selected model is at capacity/i.test(cause);
+    const message = overloaded
+      ? "The task was interrupted because the model is at capacity. Work remains incomplete."
+      : `The task was interrupted by a provider error. Work remains incomplete. ${cause}`;
+    failures.set(id, {
+      id,
+      createdAt: previous?.createdAt ?? activity.createdAt,
+      ...(previous?.sequence !== undefined
+        ? { sequence: previous.sequence }
+        : withProviderSequence(activity)),
+      ...(activity.turnId ? { turnId: activity.turnId } : {}),
+      tone: "error",
+      label: "Task interrupted",
+      activityKind: activity.kind,
+      turnFailure: { cause, message, ...(errorCode ? { errorCode } : {}) },
+    });
+  }
+  return [...failures.values()];
+}
+
+// Completions of tasks a visible "Moved to background" notice announced. They
+// bypass the turn filter once the notice that launched them is visible, and
+// belong to the turn that launched the task: a completion can arrive after the
+// user already started another turn (a stopped turn's subagents report late).
+function deriveBackgroundTaskCompletionEntries(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+  visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
+): WorkLogEntry[] {
+  const backgroundTasks = new Map<
+    string,
+    { taskType: string | null; description: string | null; turnId: TurnId | null }
+  >();
+  const completions: WorkLogEntry[] = [];
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (
+      activity.kind === "runtime.warning" &&
+      payload?.nativeEventType === "background_tasks_changed"
+    ) {
+      if (!shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds)) continue;
+      const tasks = asRecord(payload.data)?.tasks;
+      if (!Array.isArray(tasks)) continue;
+      for (const task of tasks) {
+        const record = asRecord(task);
+        if (typeof record?.task_id !== "string") continue;
+        backgroundTasks.set(record.task_id, {
+          taskType: typeof record.task_type === "string" ? record.task_type : null,
+          description: typeof record.description === "string" ? record.description : null,
+          turnId: activity.turnId,
+        });
+      }
+      continue;
+    }
+    if (activity.kind !== "task.completed" || typeof payload?.taskId !== "string") continue;
+    const launched = backgroundTasks.get(payload.taskId);
+    if (!launched) continue;
+    backgroundTasks.delete(payload.taskId);
+    const { turnId: launchTurnId, ...task } = launched;
+    const turnId = launchTurnId ?? activity.turnId;
+    const noun = task.taskType === "local_agent" ? "Subagent" : "Background task";
+    const outcome =
+      payload.status === "failed"
+        ? "failed"
+        : payload.status === "stopped"
+          ? "stopped"
+          : "finished";
+    completions.push({
+      id: activity.id,
+      createdAt: activity.createdAt,
+      ...withProviderSequence(activity),
+      ...(turnId ? { turnId } : {}),
+      // Status first: a trailing "finished" is trimmed as a tool status word.
+      label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
+      tone: payload.status === "failed" ? "error" : "info",
+      activityKind: activity.kind,
+      backgroundTaskCompletion: { taskId: payload.taskId, ...task, outcome },
+    });
+  }
+  return completions;
 }
 
 function shouldKeepActivityForWorkLog(
@@ -349,9 +1090,23 @@ function shouldKeepActivityForWorkLog(
 ): boolean {
   // Context lifecycle evidence must survive message visibility filters. It is
   // the durable explanation for why a turn may behave differently after reload.
-  if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
+  if (
+    activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND
+  ) {
     return true;
   }
+
+  if (
+    activity.kind === "pull-request.auto-fix.paused" ||
+    activity.kind === "pull-request.auto-fix.stopped"
+  )
+    return true;
+
+  // Authentication can start or finish outside a turn. Keep its latest state
+  // visible even when the transcript has turn-scoped assistant messages.
+  if (activity.kind === "auth.status") return true;
 
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
@@ -364,11 +1119,39 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
-  // Revert failures are the only feedback a failed Undo produces. They can be
-  // emitted before any checkpoint exists to anchor them to a turn (or against a
-  // turn that the revert itself just rolled out of view), so never let the
-  // turn-visibility filter drop them.
-  if (activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND) {
+  // The native subagent cap notice can be budgeted outside any visible turn;
+  // it is the only sign that more subagents ran than the thread shows.
+  if (activity.kind === "subagent.materialization.capped") {
+    return true;
+  }
+
+  // Failed Undo and skipped baseline feedback can precede a provider turn id,
+  // or refer to a turn that Undo rolled out of view. Keep this feedback visible.
+  if (
+    activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND ||
+    activity.kind === "checkpoint.baseline.skipped"
+  ) {
+    return true;
+  }
+
+  // A computer-control denial is the only actionable feedback for a desktop
+  // tool call rejected mid-turn; never let turn-visibility filtering hide it.
+  if (activity.kind === COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND) {
+    return true;
+  }
+  if (activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND) {
+    return true;
+  }
+
+  // Coordinator monitor rows are posted server-side with no turn id; a
+  // coordinator conversation is all turns, so the turn filter would hide every
+  // settle/stuck/roll-up pill.
+  if (
+    activity.kind === "synara.worker.settled" ||
+    activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.worker.needs-you" ||
+    activity.kind === "synara.workers.settled"
+  ) {
     return true;
   }
 
@@ -383,11 +1166,30 @@ function shouldKeepActivityForWorkLog(
 }
 
 function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): boolean {
+  // Turn starts only record the model for the turn header.
+  if (activity.kind === "turn.started" || activity.kind === "turn.stop-requested") {
+    return true;
+  }
   if (activity.kind !== "turn.completed" && activity.kind !== "turn.aborted") {
     return false;
   }
   // Provider lifecycle rows close internal state; assistant/result text is rendered from messages.
   return activity.tone !== "error";
+}
+
+function isQuietApprovalResolutionActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "approval.resolved" || activity.tone === "error") {
+    return false;
+  }
+  // Keep refusals, cancellations and broader grants visible. Only accepted
+  // routine requests are noise; Computer/Device consent remains part of the log,
+  // including clipboard consent, which has no task scope.
+  const payload = asRecord(activity.payload);
+  return (
+    payload?.decision === "accept" &&
+    payload.approvalScope === undefined &&
+    computerToolName(extractToolName(payload)) === null
+  );
 }
 
 function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {
@@ -482,6 +1284,71 @@ function extractWorkLogSynaraThreadCreation(
   return { operationId, requestedCount, createdCount, threads };
 }
 
+function extractWorkLogSynaraWorkerNotice(
+  payload: Record<string, unknown> | null,
+  activityKind: OrchestrationThreadActivity["kind"],
+): WorkLogSynaraWorkerNotice | null {
+  if (!payload || payload.source !== "worker_monitor") {
+    return null;
+  }
+  const parseThreads = (values: unknown): WorkLogSynaraWorkerNoticeThread[] => {
+    if (!Array.isArray(values)) {
+      return [];
+    }
+    return values.flatMap((value): WorkLogSynaraWorkerNoticeThread[] => {
+      const thread = asRecord(value);
+      const threadId = asTrimmedString(thread?.threadId);
+      const title = asTrimmedString(thread?.title);
+      if (!threadId || !title) {
+        return [];
+      }
+      return [
+        {
+          threadId,
+          title,
+          outcome: asTrimmedString(thread?.outcome) ?? null,
+          result: asTrimmedString(thread?.result) ?? null,
+          pr: asTrimmedString(thread?.pr) ?? null,
+          projectId: asTrimmedString(thread?.projectId) ?? null,
+        },
+      ];
+    });
+  };
+  if (activityKind === "synara.workers.settled") {
+    const threads = parseThreads(payload.threads);
+    return threads.length > 0 ? { kind: "rollup", marker: null, phrase: null, threads } : null;
+  }
+  if (
+    activityKind === "synara.worker.settled" ||
+    activityKind === "synara.worker.stuck" ||
+    activityKind === "synara.worker.needs-you"
+  ) {
+    const threads = parseThreads([payload.thread]);
+    if (threads.length === 0) {
+      return null;
+    }
+    const actions = Array.isArray(payload.actions)
+      ? payload.actions.flatMap(
+          (action): Array<"retry" | "stop" | "open"> =>
+            action === "retry" || action === "stop" || action === "open" ? [action] : [],
+        )
+      : undefined;
+    return {
+      kind:
+        activityKind === "synara.worker.needs-you"
+          ? "needs-you"
+          : activityKind === "synara.worker.stuck"
+            ? "stuck"
+            : "settled",
+      marker: asTrimmedString(payload.marker) ?? null,
+      phrase: asTrimmedString(payload.phrase) ?? null,
+      threads,
+      ...(actions ? { actions } : {}),
+    };
+  }
+  return null;
+}
+
 export interface TaskListTaskSnapshot {
   task: string;
   status: "pending" | "inProgress" | "completed";
@@ -522,11 +1389,59 @@ export function parseTaskListTasks(payload: unknown): TaskListTaskSnapshot[] | n
 function isProviderContextLifecycleReason(value: unknown): value is ProviderContextLifecycleReason {
   return (
     value === "conversation-rebuilt" ||
+    value === "fork-from-earlier-turn" ||
     value === "fresh-session" ||
     value === "interrupt-escalation" ||
     value === "native-history-unavailable" ||
     value === "native-resume-failed"
   );
+}
+
+function asProviderKind(value: unknown): ProviderKind | undefined {
+  return PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === value)?.kind;
+}
+
+function asHandoffModelSelection(
+  value: unknown,
+  fallback: { provider: ProviderKind; model: string },
+): ModelSelection {
+  if (value && typeof value === "object") {
+    const candidate = value as { provider?: unknown; model?: unknown };
+    if (candidate.provider === fallback.provider && candidate.model === fallback.model) {
+      return value as ModelSelection;
+    }
+  }
+  return fallback as ModelSelection;
+}
+
+function extractProviderHandoffInfo(
+  payload: Record<string, unknown> | null,
+  status: ProviderHandoffInfo["status"],
+): ProviderHandoffInfo | null {
+  const sourceProvider = asProviderKind(payload?.sourceProvider);
+  const targetProvider = asProviderKind(payload?.targetProvider);
+  const sourceModel = asTrimmedString(payload?.sourceModel);
+  const targetModel = asTrimmedString(payload?.targetModel);
+  if (!sourceProvider || !targetProvider || !sourceModel || !targetModel) {
+    return null;
+  }
+  return {
+    status,
+    sourceProvider,
+    sourceModel,
+    targetProvider,
+    targetModel,
+    sourceModelSelection: asHandoffModelSelection(payload?.sourceModelSelection, {
+      provider: sourceProvider,
+      model: sourceModel,
+    }),
+    targetModelSelection: asHandoffModelSelection(payload?.targetModelSelection, {
+      provider: targetProvider,
+      model: targetModel,
+    }),
+    contextText: asTrimmedString(payload?.contextText),
+    failureDetail: asTrimmedString(payload?.detail),
+  };
 }
 
 function extractProviderContextLifecycleInfo(
@@ -575,7 +1490,167 @@ function extractProviderContextLifecycleInfo(
   };
 }
 
+// Store activities are immutable. Reuse their pure normalization when a live
+// update replaces the containing array; turn filtering and settlement still run
+// for each derivation with the current thread context.
+export function parseUserInputQuestions(
+  payload: Record<string, unknown> | null,
+): ReadonlyArray<UserInputQuestion> | null {
+  const questions = payload?.questions;
+  if (!Array.isArray(questions)) {
+    return null;
+  }
+  const parsed = questions
+    .map<UserInputQuestion | null>((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const question = entry as Record<string, unknown>;
+      if (
+        typeof question.id !== "string" ||
+        typeof question.header !== "string" ||
+        typeof question.question !== "string" ||
+        !Array.isArray(question.options)
+      ) {
+        return null;
+      }
+      const options = question.options
+        .map<UserInputQuestion["options"][number] | null>((option) => {
+          if (!option || typeof option !== "object") return null;
+          const optionRecord = option as Record<string, unknown>;
+          if (
+            typeof optionRecord.label !== "string" ||
+            typeof optionRecord.description !== "string"
+          ) {
+            return null;
+          }
+          return {
+            label: optionRecord.label,
+            description: optionRecord.description,
+          };
+        })
+        .filter((option): option is UserInputQuestion["options"][number] => option !== null);
+      return {
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        options,
+        ...(question.multiSelect === true ? { multiSelect: true } : {}),
+      };
+    })
+    .filter((question): question is UserInputQuestion => question !== null);
+  return parsed.length > 0 ? parsed : null;
+}
+
+// Answers arrive keyed by question id (Codex, Synara UI) or by question text
+// (Claude's AskUserQuestion), as a string, a list, or `{ answers: [...] }`.
+function formatUserInputAnswer(
+  answers: Record<string, unknown> | null,
+  question: UserInputQuestion,
+): string | null {
+  const value = answers?.[question.id] ?? answers?.[question.question];
+  const parts =
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value
+        : Array.isArray(asRecord(value)?.answers)
+          ? (asRecord(value)!.answers as unknown[])
+          : [];
+  const text = parts
+    .filter((part): part is string => typeof part === "string")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join(", ");
+  return text.length > 0 ? text : null;
+}
+
+const userInputExchangeEntryCache = new WeakMap<
+  DerivedWorkLogEntry,
+  { request: OrchestrationThreadActivity; entry: DerivedWorkLogEntry }
+>();
+
+// Replay requests in order so a reused ID cannot pair an old answer with a newer
+// question. Only the exact requested row represented by an exchange is removed.
+function withUserInputExchanges(
+  entries: DerivedWorkLogEntry[],
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): DerivedWorkLogEntry[] {
+  if (!entries.some((entry) => entry.activityKind === "user-input.resolved")) return entries;
+  const openRequests = new Map<
+    string,
+    { request: OrchestrationThreadActivity; questions: ReadonlyArray<UserInputQuestion> }
+  >();
+  const pairsByResolvedId = new Map<
+    string,
+    {
+      request: OrchestrationThreadActivity;
+      questions: ReadonlyArray<UserInputQuestion>;
+      answers: Record<string, unknown> | null;
+    }
+  >();
+  for (const activity of ordered) {
+    if (activity.kind !== "user-input.requested" && activity.kind !== "user-input.resolved") {
+      continue;
+    }
+    const payload = asRecord(activity.payload);
+    const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
+    if (!requestId) continue;
+    const generation =
+      typeof payload?.lifecycleGeneration === "string" && payload.lifecycleGeneration.length > 0
+        ? payload.lifecycleGeneration
+        : undefined;
+    const key = pendingRequestInstanceKey(requestId, generation);
+    if (activity.kind === "user-input.requested") {
+      const questions = parseUserInputQuestions(payload);
+      // An invalid replacement must not leave an earlier question available to pair.
+      openRequests.delete(key);
+      if (questions) openRequests.set(key, { request: activity, questions });
+    } else {
+      const pending = openRequests.get(key);
+      if (pending) {
+        pairsByResolvedId.set(activity.id, { ...pending, answers: asRecord(payload?.answers) });
+        openRequests.delete(key);
+      }
+    }
+  }
+  const answeredActivityIds = new Set<string>();
+  const withExchanges = entries.map((entry) => {
+    if (entry.activityKind !== "user-input.resolved") return entry;
+    const pair = pairsByResolvedId.get(entry.id);
+    if (!pair) return entry;
+    answeredActivityIds.add(pair.request.id);
+    const cached = userInputExchangeEntryCache.get(entry);
+    if (cached?.request === pair.request) return cached.entry;
+    const exchangeEntry: DerivedWorkLogEntry = {
+      ...entry,
+      userInputExchange: pair.questions.map((question) => ({
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        options: question.options.map((option) => option.label),
+        answer: formatUserInputAnswer(pair.answers, question),
+      })),
+    };
+    userInputExchangeEntryCache.set(entry, { request: pair.request, entry: exchangeEntry });
+    return exchangeEntry;
+  });
+  return withExchanges.filter((entry) => !answeredActivityIds.has(entry.id));
+}
+
+const derivedWorkLogEntryCache = new WeakMap<OrchestrationThreadActivity, DerivedWorkLogEntry>();
+
+// Only provider runtime sequences order transcript rows causally; a fallback
+// orchestration event sequence belongs to an unrelated counter.
+function withProviderSequence(activity: OrchestrationThreadActivity): { sequence?: number } {
+  return activity.sequence !== undefined && activity.sequenceSource !== "orchestration"
+    ? { sequence: activity.sequence }
+    : {};
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
+  const cached = derivedWorkLogEntryCache.get(activity);
+  if (cached) {
+    return cached;
+  }
   const payload =
     activity.payload && typeof activity.payload === "object"
       ? (activity.payload as Record<string, unknown>)
@@ -590,7 +1665,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
-    ...(activity.sequence !== undefined ? { sequence: activity.sequence } : {}),
+    ...withProviderSequence(activity),
     ...(activity.turnId !== null ? { turnId: activity.turnId } : {}),
     label: activity.summary,
     tone: activity.tone === "approval" ? "info" : activity.tone,
@@ -632,6 +1707,40 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (runtimeWarningMessage) {
     entry.detail = runtimeWarningMessage;
     entry.runtimeWarningMessage = runtimeWarningMessage;
+    if (payload?.willRetry === true || asRecord(payload?.data)?.willRetry === true) {
+      entry.label = "Provider retrying";
+    }
+  }
+  // A Claude Monitor event wakes the agent like a finished background task, so
+  // it gets the same standalone row that marks where the new response starts.
+  if (activity.kind === "runtime.warning" && nativeEventType === "monitor_event") {
+    const taskId = asTrimmedString(asRecord(payload?.data)?.task_id);
+    const data = asRecord(payload?.data);
+    const outcome =
+      data?.outcome === "completed" || data?.outcome === "failed" || data?.outcome === "stopped"
+        ? data.outcome
+        : "updated";
+    const name = asTrimmedString(data?.name) ?? "";
+    entry.monitorNotification = {
+      taskId: taskId ?? activity.id,
+      name,
+      output: asTrimmedString(data?.output) ?? runtimeWarningMessage ?? "",
+      outcome,
+    };
+    entry.label = `Monitor${name ? ` · ${name}` : ""} ${outcome === "completed" ? "finished" : outcome}`;
+    if (outcome === "failed") entry.tone = "error";
+  }
+  if (activity.kind === "auth.status") {
+    entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
+  }
+  if (activity.kind === "task.progress") {
+    const subagentToolUseId = asTrimmedString(payload?.toolUseId);
+    if (subagentToolUseId) {
+      entry.subagentProgress = {
+        toolUseId: subagentToolUseId,
+        title: asTrimmedString(payload?.subagentTitle),
+      };
+    }
   }
   if (activity.kind === "turn.tasks.updated") {
     const tasks = parseTaskListTasks(payload);
@@ -702,14 +1811,56 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.synaraThreadCreation = synaraThreadCreation;
     }
   }
+  if (
+    activity.kind === "synara.worker.settled" ||
+    activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.worker.needs-you" ||
+    activity.kind === "synara.workers.settled"
+  ) {
+    const notice = extractWorkLogSynaraWorkerNotice(payload, activity.kind);
+    if (notice) {
+      entry.synaraWorkerNotice = notice;
+    }
+  }
+  if (activity.kind === COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND) {
+    const buildSignature = asComputerBuildSignature(payload?.buildSignature);
+    const bundleId = asTrimmedString(payload?.bundleId);
+    entry.computerSetupRequired = {
+      missing: asComputerPermissions(payload?.missing),
+      ...(buildSignature ? { buildSignature } : {}),
+      ...(bundleId ? { bundleId } : {}),
+    };
+  }
+  if (activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND) {
+    entry.computerControlDenied = { toolName: asTrimmedString(payload?.toolName) };
+  }
   if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
     const providerContextLifecycle = extractProviderContextLifecycleInfo(payload);
     if (providerContextLifecycle) {
       entry.providerContextLifecycle = providerContextLifecycle;
     }
   }
+  if (
+    activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND
+  ) {
+    const providerHandoff = extractProviderHandoffInfo(
+      payload,
+      activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ? "completed" : "failed",
+    );
+    if (providerHandoff) {
+      entry.providerHandoff = providerHandoff;
+    }
+  }
+  const computerToolDescription = deriveComputerToolDescription({
+    activity,
+    payload,
+    toolName,
+    title: commandActionDisplay?.title ?? title,
+  });
   const readableTitle =
     extractCollabActionTitle(payload) ??
+    computerToolDescription?.summary ??
     deriveSynaraMcpToolTitle({
       toolName,
       title: commandActionDisplay?.title ?? title,
@@ -758,7 +1909,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   const collapseKey =
     deriveProviderRuntimeReconciliationCollapseKey(activity, payload) ??
-    deriveToolLifecycleCollapseKey(entry);
+    deriveToolLifecycleCollapseKey(entry, hasTurnScopedProviderToolCallId(payload));
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
@@ -766,6 +1917,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (collapseCommand) {
     entry.collapseCommand = collapseCommand;
   }
+  derivedWorkLogEntryCache.set(activity, entry);
   return entry;
 }
 
@@ -1022,7 +2174,8 @@ function collapseDerivedWorkLogEntries(
   // turn: each update replaces the row's content while the row itself stays
   // anchored at the first update's position, so the transcript shows a single
   // progressing checklist row instead of one "Tasks updated" row per snapshot.
-  const taskListIndexByKey = new Map<string, number>();
+  // Authentication uses the same replacement rule for its latest provider state.
+  const snapshotIndexByKey = new Map<string, number>();
   for (const entry of entries) {
     const runtimeReconciliationKey = entry.collapseKey?.startsWith("provider-runtime-reconcile:")
       ? entry.collapseKey
@@ -1033,14 +2186,17 @@ function collapseDerivedWorkLogEntries(
       }
       seenRuntimeReconciliationKeys.add(runtimeReconciliationKey);
     }
-    const taskListKey = entry.collapseKey?.startsWith("taskList:") ? entry.collapseKey : undefined;
-    if (taskListKey !== undefined) {
-      const existingIndex = taskListIndexByKey.get(taskListKey);
+    const snapshotKey =
+      entry.collapseKey?.startsWith("taskList:") || entry.collapseKey?.startsWith("auth:")
+        ? entry.collapseKey
+        : undefined;
+    if (snapshotKey !== undefined) {
+      const existingIndex = snapshotIndexByKey.get(snapshotKey);
       if (existingIndex !== undefined) {
-        collapsed[existingIndex] = mergeTaskListEntries(collapsed[existingIndex]!, entry);
+        collapsed[existingIndex] = mergeSnapshotEntries(collapsed[existingIndex]!, entry);
         continue;
       }
-      taskListIndexByKey.set(taskListKey, collapsed.length);
+      snapshotIndexByKey.set(snapshotKey, collapsed.length);
       collapsed.push(entry);
       continue;
     }
@@ -1129,14 +2285,14 @@ function mergeRuntimeWarningEntries(
   };
 }
 
-// A later task-list snapshot supersedes the earlier one wholesale (providers
-// resend the full checklist), so keep the newest content while preserving the
+// Authentication and task-list snapshots supersede earlier content wholesale. Task providers
+// resend the full checklist, so keep the newest content while preserving the
 // first row's id and createdAt: the id keeps React rows stable across updates
 // and the createdAt keeps the row anchored where the checklist first appeared.
 // A snapshot without readable tasks (explicit clear, or an unreadable payload)
 // carries no progress copy, so it must not overwrite a progressed row with the
 // generic "Tasks updated" label — keep the previous row's content instead.
-function mergeTaskListEntries(
+function mergeSnapshotEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): DerivedWorkLogEntry {
@@ -1379,10 +2535,13 @@ function reconcileSettledLiveActivities(
         : options.latestTurnState === "interrupted"
           ? "cancelled"
           : null;
+  // A latest turn the session is still running is not settled, whatever a
+  // mid-turn message did to its client-side state.
   if (
     latestTurnId &&
     latestTerminalState &&
     options.latestTurnCompletedAt &&
+    options.activeTurnId !== latestTurnId &&
     !terminalByTurnId.has(latestTurnId)
   ) {
     terminalByTurnId.set(latestTurnId, {
@@ -1512,14 +2671,29 @@ function mergeChangedFiles(
   return [...new Set(merged)];
 }
 
+// ACP providers restart their tool-call ids every turn. The server then scopes
+// the runtime item id per turn and records the raw id as `providerToolCallId`,
+// while the activity data keeps carrying that raw id as `toolCallId`.
+function hasTurnScopedProviderToolCallId(payload: Record<string, unknown> | null): boolean {
+  return typeof asRecord(payload?.data)?.providerToolCallId === "string";
+}
+
 // Keep a stable lifecycle key so providers like Claude can stream many
 // in-progress tool deltas without turning each partial update into its own row.
-function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
+// Globally unique ids merge across turns on purpose (a background command can
+// outlive the turn that started it); per-turn ids only identify a call within
+// their turn.
+function deriveToolLifecycleCollapseKey(
+  entry: DerivedWorkLogEntry,
+  turnScopedToolCallId = false,
+): string | undefined {
   if (!isRenderableToolLifecycleActivity(entry.activityKind)) {
     return undefined;
   }
   if (entry.toolCallId) {
-    return `tool:${entry.toolCallId}`;
+    return turnScopedToolCallId && entry.turnId
+      ? `tool:${entry.turnId}\u001f${entry.toolCallId}`
+      : `tool:${entry.toolCallId}`;
   }
   const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
   const itemType = entry.itemType ?? "";
@@ -1573,6 +2747,18 @@ function areToolLifecycleChangedFilesCompatible(
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function asComputerPermissions(value: unknown): readonly ComputerPermission[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is ComputerPermission =>
+      entry === "accessibility" || entry === "screenRecording",
+  );
+}
+
+function asComputerBuildSignature(value: unknown): ComputerBuildSignature | undefined {
+  return value === "adhoc" || value === "signed" ? value : undefined;
 }
 
 function asTrimmedString(value: unknown): string | null {
@@ -2069,7 +3255,21 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemInput = asRecord(item?.input);
-  const candidates = [data?.toolName, data?.tool, item?.toolName, item?.name, itemInput?.toolName];
+  const dataInvocation = asRecord(data?.invocation);
+  const itemInvocation = asRecord(item?.invocation);
+  const candidates = [
+    payload?.toolName,
+    data?.toolName,
+    data?.tool,
+    dataInvocation?.tool,
+    dataInvocation?.toolName,
+    item?.toolName,
+    item?.tool,
+    item?.name,
+    itemInvocation?.tool,
+    itemInvocation?.toolName,
+    itemInput?.toolName,
+  ];
   for (const candidate of candidates) {
     const normalized = asTrimmedString(candidate);
     if (normalized) {
@@ -2077,6 +3277,136 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
     }
   }
   return null;
+}
+
+function deriveComputerToolDescription(input: {
+  activity: OrchestrationThreadActivity;
+  payload: Record<string, unknown> | null;
+  toolName: string | null;
+  title: string | null;
+}) {
+  if (input.payload?.approvalScope === "computer-foreground") {
+    return {
+      summary:
+        input.activity.kind === "approval.requested"
+          ? "Asked to show Computer on screen"
+          : input.payload.decision === "accept"
+            ? "Computer allowed on screen"
+            : input.payload.decision === "decline"
+              ? "Computer kept in the background"
+              : "On-screen request cancelled",
+    };
+  }
+  if (
+    input.payload?.approvalScope === "computer-task" ||
+    input.payload?.approvalScope === "device-task"
+  ) {
+    const family = input.payload.approvalScope === "device-task" ? "Device" : "Computer";
+    return {
+      summary:
+        input.activity.kind === "approval.requested"
+          ? `${family} task approval requested`
+          : input.payload.decision === "accept"
+            ? `${family} task approved`
+            : input.payload.decision === "decline"
+              ? `${family} task declined`
+              : `${family} task approval cancelled`,
+    };
+  }
+  if (!computerToolName(input.toolName)) {
+    return null;
+  }
+  const explicitTitle = normalizeCompactToolLabel(input.title ?? "");
+  if (
+    explicitTitle.length > 0 &&
+    !isGenericToolTitle(explicitTitle) &&
+    !computerToolName(explicitTitle)
+  ) {
+    return null;
+  }
+  const progressTitle = normalizeCompactToolLabel(input.activity.summary);
+  if (
+    input.activity.kind === "tool.updated" &&
+    progressTitle.length > 0 &&
+    !isGenericToolTitle(progressTitle) &&
+    !computerToolName(progressTitle)
+  ) {
+    return { summary: progressTitle };
+  }
+  return describeComputerToolCall({
+    toolName: input.toolName,
+    args: extractComputerToolArgs(input.payload) ?? undefined,
+  });
+}
+
+function extractComputerToolArgs(
+  payload: Record<string, unknown> | null,
+): Readonly<Record<string, unknown>> | null {
+  if (!payload) {
+    return null;
+  }
+  const data = asRecord(payload.data);
+  const item = asRecord(data?.item);
+  const dataInvocation = asRecord(data?.invocation);
+  const itemInvocation = asRecord(item?.invocation);
+  const dataInput = asRecord(data?.input);
+  const itemInput = asRecord(item?.input);
+  const candidates = [
+    item?.arguments,
+    itemInput?.arguments,
+    itemInput?.args,
+    item?.input,
+    itemInvocation?.arguments,
+    itemInvocation?.input,
+    dataInvocation?.arguments,
+    dataInvocation?.input,
+    data?.arguments,
+    dataInput?.arguments,
+    dataInput?.args,
+    data?.input,
+    data?.rawInput,
+    payload.arguments,
+    payload.input,
+  ];
+  for (const candidate of candidates) {
+    const args = asArgumentRecord(candidate);
+    if (args) {
+      return args;
+    }
+  }
+  return parseHistoricalToolParamsDisplay(payload.toolParamsDisplay);
+}
+
+function asArgumentRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      return asArgumentRecord(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseHistoricalToolParamsDisplay(value: unknown): Record<string, unknown> | null {
+  const record = asArgumentRecord(value);
+  if (record) {
+    return record;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const result: Record<string, unknown> = {};
+  for (const entry of value) {
+    const row = asRecord(entry);
+    const name = asTrimmedString(row?.name ?? row?.display_name ?? row?.displayName);
+    if (name) {
+      result[name] = row?.value;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {
@@ -2133,7 +3463,8 @@ function extractWorkLogRequestKind(
     payload?.requestKind === "command" ||
     payload?.requestKind === "file-read" ||
     payload?.requestKind === "file-change" ||
-    payload?.requestKind === "permissions"
+    payload?.requestKind === "permissions" ||
+    payload?.requestKind === "tool"
   ) {
     return payload.requestKind;
   }
@@ -2284,17 +3615,24 @@ function compareActivityLifecycleRank(kind: string): number {
   return 1;
 }
 
+// Time first: messages carry no sequence, and mergeTimelineEntries is only
+// correct when both sides sort by the same key. Sequence-first let one late
+// row with an unrelated low sequence lead the work list, and every message of
+// the block was emitted above all of that block's work.
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
   if (
     "sequence" in left &&
     "sequence" in right &&
     left.sequence !== undefined &&
-    right.sequence !== undefined &&
-    left.sequence !== right.sequence
+    right.sequence !== undefined
   ) {
     return left.sequence - right.sequence;
   }
-  return left.createdAt.localeCompare(right.createdAt);
+  return 0;
 }
 
 type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;
@@ -2440,15 +3778,84 @@ function coalesceAdjacentMessageSegments(entries: TimelineEntry[]): TimelineEntr
   return runs.map((run) => (Array.isArray(run) ? (replacements.get(run) ?? run[0]!) : run));
 }
 
+function startsNewUserTurn(message: ChatMessage): boolean {
+  return (
+    message.role === "user" &&
+    // Effective dispatch semantics are recorded before an emulated steer waits
+    // for interruption/promotion. Fall back to turn binding for events written
+    // before startsNewTurn existed; native steers remain continuations.
+    (message.startsNewTurn ??
+      (message.dispatchMode !== "steer" ||
+        (message.turnId !== null && message.turnId !== undefined)))
+  );
+}
+
+function isSequenced(row: TimelineEntry): boolean {
+  return row.kind === "work" && row.sequence !== undefined;
+}
+
+// The SDK and transcript can report one Monitor termination twice. Coalesce
+// adjacent matching native task/outcome notices only; any reply or different
+// outcome remains a distinct boundary. Keep the exact output and earlier anchor.
+function coalesceMonitorTerminalNotices(entries: TimelineEntry[]): TimelineEntry[] {
+  let result: TimelineEntry[] | undefined;
+  for (let index = 1; index < entries.length; index += 1) {
+    const previous = result?.at(-1) ?? entries[index - 1]!;
+    const current = entries[index]!;
+    if (previous.kind === "work" && current.kind === "work") {
+      const monitorRow = previous.entry.monitorNotification ? previous : current;
+      const completionRow = previous.entry.backgroundTaskCompletion ? previous : current;
+      const monitor = monitorRow.entry.monitorNotification;
+      const completion = completionRow.entry.backgroundTaskCompletion;
+      if (
+        monitorRow !== completionRow &&
+        monitor &&
+        completion &&
+        monitor.outcome !== "updated" &&
+        monitor.taskId === completion.taskId &&
+        monitor.outcome ===
+          (completion.outcome === "finished" ? "completed" : completion.outcome) &&
+        (!previous.entry.turnId ||
+          !current.entry.turnId ||
+          previous.entry.turnId === current.entry.turnId)
+      ) {
+        result ??= entries.slice(0, index);
+        result[result.length - 1] = { ...monitorRow, createdAt: previous.createdAt };
+        continue;
+      }
+    }
+    result?.push(current);
+  }
+  return result ?? entries;
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
   workEntries: WorkLogEntry[],
+  options?: { readonly suppressCoordinatorCheckins?: boolean },
 ): TimelineEntry[] {
+  // Coordinator check-ins (automation-dispatched heartbeat/wake turns) never
+  // render: the automation prompt row, its work/plan rows bound to the check-in
+  // turn, and the reply when it is a silent "nothing to report". A non-silent
+  // reply stays as an ordinary coordinator message.
+  const checkinSuppression = options?.suppressCoordinatorCheckins
+    ? suppressCoordinatorCheckinMessages(messages)
+    : null;
+  const visibleMessages = checkinSuppression ? checkinSuppression.messages : messages;
+  const checkinTurnIds = checkinSuppression?.checkinTurnIds;
+  const visibleProposedPlans = checkinTurnIds
+    ? proposedPlans.filter((plan) => plan.turnId == null || !checkinTurnIds.has(plan.turnId))
+    : proposedPlans;
+  const visibleWorkEntries = checkinTurnIds
+    ? workEntries.filter((entry) => entry.turnId == null || !checkinTurnIds.has(entry.turnId))
+    : workEntries;
   const proposedPlanTurnIds = new Set(
-    proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
+    visibleProposedPlans.flatMap((proposedPlan) =>
+      proposedPlan.turnId ? [proposedPlan.turnId] : [],
+    ),
   );
-  const messageRows: TimelineEntry[] = messages.flatMap((message): TimelineEntry[] => {
+  const messageRows: TimelineEntry[] = visibleMessages.flatMap((message): TimelineEntry[] => {
     const displayMessage =
       message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
         ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
@@ -2491,13 +3898,13 @@ export function deriveTimelineEntries(
       },
     ];
   });
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
+  const proposedPlanRows: TimelineEntry[] = visibleProposedPlans.map((proposedPlan) => ({
     id: proposedPlan.id,
     kind: "proposed-plan",
     createdAt: proposedPlan.createdAt,
     proposedPlan,
   }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
+  const workRows: TimelineEntry[] = visibleWorkEntries.map((entry) => ({
     id: entry.id,
     kind: "work",
     createdAt: entry.createdAt,
@@ -2510,25 +3917,32 @@ export function deriveTimelineEntries(
   const userStarts: string[] = [];
   const messageOrder = new Map<string, number>();
   const turnOrder = new Map<string, number>();
-  const messagesOrdered = messages.every(
+  const messagesOrdered = visibleMessages.every(
     (message, index) =>
-      index === 0 || messages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
+      index === 0 || visibleMessages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
   );
   const orderedMessages = messagesOrdered
-    ? messages
-    : messages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+    ? visibleMessages
+    : visibleMessages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // A user message bound to its turn owns that turn's block even when it was
+  // sent (and queued) while an earlier turn was still running: the earlier
+  // turn's answer stays under its own request instead of moving below it.
+  let userTurnCount = 0;
   for (const message of orderedMessages) {
-    // Effective dispatch semantics are recorded before an emulated steer waits
-    // for interruption/promotion. Fall back to turn binding for events written
-    // before startsNewTurn existed; native steers remain continuations.
-    const startsNewTurn =
-      message.startsNewTurn ??
-      (message.dispatchMode !== "steer" ||
-        (message.turnId !== null && message.turnId !== undefined));
-    if (message.role === "user" && startsNewTurn) {
+    if (!startsNewUserTurn(message)) continue;
+    userTurnCount += 1;
+    if (message.turnId && !turnOrder.has(message.turnId)) {
+      turnOrder.set(message.turnId, userTurnCount);
+    }
+  }
+  for (const message of orderedMessages) {
+    if (startsNewUserTurn(message)) {
       userStarts.push(message.createdAt);
     }
-    const order = userStarts.length;
+    const order =
+      message.role !== "user" && message.turnId
+        ? (turnOrder.get(message.turnId) ?? userStarts.length)
+        : userStarts.length;
     messageOrder.set(message.id, order);
     if (message.turnId && !turnOrder.has(message.turnId)) turnOrder.set(message.turnId, order);
   }
@@ -2567,15 +3981,30 @@ export function deriveTimelineEntries(
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
 
-  return coalesceAdjacentMessageSegments(
-    mergeTimelineEntries(
+  // Keep provider-sequenced work separate from server-created rows so unrelated
+  // counters never break ties against each other. All lists use the same
+  // chronological comparator; provider sequences only order equal-time ties.
+  const sequencedWorkRows = workRows.filter(isSequenced);
+  const timedWorkRows =
+    sequencedWorkRows.length === workRows.length ? [] : workRows.filter((row) => !isSequenced(row));
+  return coalesceMonitorTerminalNotices(
+    coalesceAdjacentMessageSegments(
       mergeTimelineEntries(
-        sortedTimelineEntries(messageRows, compare),
-        sortedTimelineEntries(proposedPlanRows, compare),
+        mergeTimelineEntries(
+          mergeTimelineEntries(
+            sortedTimelineEntries(messageRows, compare),
+            sortedTimelineEntries(proposedPlanRows, compare),
+            compare,
+          ),
+          sortedTimelineEntries(timedWorkRows, compare),
+          compare,
+        ),
+        sortedTimelineEntries(
+          sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
+          compare,
+        ),
         compare,
       ),
-      sortedTimelineEntries(workRows, compare),
-      compare,
     ),
   );
 }

@@ -36,7 +36,7 @@ export interface RunningChatsQuitStoreSlice {
 
 const UNTITLED_CHAT_TITLE = "Untitled thread";
 
-export function runningChatDisplayTitle(title: string | null | undefined): string {
+function runningChatDisplayTitle(title: string | null | undefined): string {
   const trimmed = title?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : UNTITLED_CHAT_TITLE;
 }
@@ -92,8 +92,16 @@ export function runningChatsQuitCopy(
   appName = "Synara",
 ): RunningChatsQuitCopy {
   return {
-    title: chats.length === 1 ? "A chat is still running" : "Chats are still running",
-    description: `Work in progress will stop when ${appName} is closed.`,
+    title:
+      chats.length === 0
+        ? `Quit ${appName}?`
+        : chats.length === 1
+          ? "A chat is still running"
+          : "Chats are still running",
+    description:
+      chats.length === 0
+        ? "Are you sure you want to quit?"
+        : `Work in progress will stop when ${appName} is closed.`,
     resumeLabel: chats.length === 1 ? "Resume chat automatically" : "Resume chats automatically",
     stayLabel: "Cancel",
     quitLabel: "Quit",

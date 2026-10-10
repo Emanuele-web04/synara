@@ -1,0 +1,71 @@
+// FILE: announcementSheetSlot.ts
+// Purpose: One shared slot so startup announcement sheets open one at a time.
+// Layer: Web UI store
+//
+// Startup announcements wait for the first-run gate and onboarding to finish, even
+// while the onboarding dialog is loading. Beta welcome precedes that gate and opts out.
+// Each announcement decides to open from its own asynchronous probe (desktop bridge,
+// server config), so no fixed order can be relied on. The first surface that wants to
+// open takes the slot; the others wait and open after it is dismissed. Confirming a
+// sheet starts its follow-on flow (a dialog, a Settings page), so the waiting sheets
+// stay closed for the rest of this launch instead of covering that flow; they are not
+// acknowledged, so they come back on the next one.
+
+import { useEffect, useId } from "react";
+import { create } from "zustand";
+
+import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
+
+interface AnnouncementSheetSlotStore {
+  owner: string | null;
+  /** Startup probes and the feature tour have finished; passive hints may now claim. */
+  startupSettled: boolean;
+  /** True once a sheet was confirmed; no further sheet opens during this launch. */
+  handedOff: boolean;
+  claim: (id: string, allowAfterHandOff?: boolean) => void;
+  release: (id: string) => void;
+  handOff: () => void;
+  settleStartup: () => void;
+}
+
+export const useAnnouncementSheetSlotStore = create<AnnouncementSheetSlotStore>((set) => ({
+  owner: null,
+  startupSettled: false,
+  handedOff: false,
+  claim: (id, allowAfterHandOff = false) =>
+    set((state) =>
+      state.owner === null && (!state.handedOff || allowAfterHandOff) ? { owner: id } : state,
+    ),
+  release: (id) => set((state) => (state.owner === id ? { owner: null } : state)),
+  handOff: () => set({ handedOff: true }),
+  settleStartup: () => set({ startupSettled: true }),
+}));
+
+/** `open` is true while this sheet wants to open and holds the slot. */
+export function useAnnouncementSheetSlot(
+  wantsOpen: boolean,
+  allowAfterHandOff = false,
+  waitForOnboarding = true,
+): {
+  open: boolean;
+  handOff: () => void;
+} {
+  const id = useId();
+  const owner = useAnnouncementSheetSlotStore((state) => state.owner);
+  const claim = useAnnouncementSheetSlotStore((state) => state.claim);
+  const release = useAnnouncementSheetSlotStore((state) => state.release);
+  const handOff = useAnnouncementSheetSlotStore((state) => state.handOff);
+  const onboardingBlocking = useOnboardingDialogStore(
+    (state) => !state.startupGateSettled || state.isOpen || state.betaWelcomePending,
+  );
+  const eligible = wantsOpen && (!waitForOnboarding || !onboardingBlocking);
+
+  // Re-runs when the owner changes, so a waiting sheet claims the slot once it frees.
+  useEffect(() => {
+    if (eligible) claim(id, allowAfterHandOff);
+    else release(id);
+  }, [allowAfterHandOff, claim, eligible, id, owner, release]);
+  useEffect(() => () => release(id), [id, release]);
+
+  return { open: eligible && owner === id, handOff };
+}

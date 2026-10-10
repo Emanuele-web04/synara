@@ -1,4 +1,5 @@
 import type { DesktopUpdateState } from "@synara/contracts";
+import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 
 export type DownloadProgressSample = {
   readonly percent?: number | null;
@@ -103,9 +104,62 @@ export function isUpdateVersionNewer(currentVersion: string, candidateVersion: s
   if (candidate.minor !== current.minor) return candidate.minor > current.minor;
   if (candidate.patch !== current.patch) return candidate.patch > current.patch;
 
+  // Both prereleases of the same core: compare semver identifiers so a
+  // prerelease train can advance within one base version (beta.2 > beta.1).
+  if (current.prerelease !== null && candidate.prerelease !== null) {
+    const candidateParts = candidate.prerelease.split(".");
+    const currentParts = current.prerelease.split(".");
+    for (let index = 0; index < Math.max(candidateParts.length, currentParts.length); index += 1) {
+      const candidatePart = candidateParts[index];
+      const currentPart = currentParts[index];
+      if (candidatePart === undefined) return false;
+      if (currentPart === undefined) return true;
+      const candidateNumeric = /^\d+$/.test(candidatePart);
+      const currentNumeric = /^\d+$/.test(currentPart);
+      if (candidateNumeric && currentNumeric) {
+        if (Number(candidatePart) !== Number(currentPart)) {
+          return Number(candidatePart) > Number(currentPart);
+        }
+        continue;
+      }
+      if (candidateNumeric !== currentNumeric) return !candidateNumeric;
+      if (candidatePart !== currentPart) return candidatePart > currentPart;
+    }
+    return false;
+  }
+
   // Treat stable as newer than the same prerelease, but never reinstall the
   // exact same stable version from a stale updater cache.
   return current.prerelease !== null && candidate.prerelease === null;
+}
+
+/**
+ * Whether a release is on this flavor's lane. Electron-updater's GitHub
+ * provider falls back to `latest-mac.yml` when the channel manifest is absent,
+ * so without this gate a beta install offers the newest *stable* build — and
+ * installing it would silently swap the app to a different flavor and home
+ * directory. Flavors are install identities, not in-place channels: a beta
+ * only updates to `*-beta.*` releases and a production build only takes stable
+ * ones; upgrading lanes always happens by installing the other app.
+ */
+export function isUpdateVersionAllowedForFlavor(
+  candidateVersion: string,
+  flavor: SynaraDesktopFlavor,
+): boolean {
+  const candidate = parseUpdateVersion(candidateVersion);
+  if (!candidate) {
+    // Beta and production fail closed: an unparseable version can never be
+    // proven to be on the right lane, so it is not offered. Canary/cua keep
+    // the pre-existing "differs means newer" behavior.
+    return flavor !== "beta" && flavor !== "production";
+  }
+  if (flavor === "beta") {
+    return candidate.prerelease === "beta" || (candidate.prerelease?.startsWith("beta.") ?? false);
+  }
+  if (flavor === "production") {
+    return candidate.prerelease === null;
+  }
+  return true;
 }
 
 export function nextStatusAfterDownloadFailure(

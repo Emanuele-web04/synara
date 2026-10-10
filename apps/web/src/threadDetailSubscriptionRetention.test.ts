@@ -39,6 +39,7 @@ describe("threadDetailSubscriptionRetention", () => {
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
           hasLiveTailWork: false,
+          pendingBackgroundWorkCount: 0,
         },
       },
     });
@@ -170,6 +171,7 @@ describe("threadDetailSubscriptionRetention", () => {
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
           hasLiveTailWork: true,
+          pendingBackgroundWorkCount: 0,
         },
       },
     });
@@ -332,6 +334,51 @@ describe("threadDetailSubscriptionRetention", () => {
     ).toEqual([
       ...visible,
       ...retained.slice(0, WS_STREAM_LIMITS.threadPerClient - visible.length),
+    ]);
+  });
+
+  it("leases retained threads with live work before idle ones", () => {
+    const visible = ThreadId.makeUnsafe("visible-live-priority");
+    const idle = Array.from({ length: WS_STREAM_LIMITS.threadPerClient }, (_, index) =>
+      ThreadId.makeUnsafe(`idle-${index}`),
+    );
+    const running = ThreadId.makeUnsafe("running-background");
+    const awaitingApproval = ThreadId.makeUnsafe("awaiting-approval-background");
+    for (const threadId of [...idle, running, awaitingApproval]) {
+      registerIdleSidebarThread(threadId);
+    }
+    const summaries = useStore.getState().sidebarThreadSummaryById;
+    useStore.setState({
+      sidebarThreadSummaryById: {
+        ...summaries,
+        [running]: {
+          ...summaries[running]!,
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-background"),
+            state: "running",
+            requestedAt: "2026-01-01T00:00:00.000Z",
+            startedAt: "2026-01-01T00:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        },
+        [awaitingApproval]: { ...summaries[awaitingApproval]!, hasPendingApprovals: true },
+      },
+    });
+    // Insertion order would hand every remaining slot to idle threads first.
+    const retained = [...idle, running, awaitingApproval];
+
+    expect(
+      resolveThreadDetailSubscriptionLeaseIds({
+        visibleThreadIds: [visible],
+        retainedThreadIds: retained,
+        serverThreadIds: new Set(retained),
+      }),
+    ).toEqual([
+      visible,
+      running,
+      awaitingApproval,
+      ...idle.slice(0, WS_STREAM_LIMITS.threadPerClient - 3),
     ]);
   });
 

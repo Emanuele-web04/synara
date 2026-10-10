@@ -1,9 +1,12 @@
 import type {
+  ComputerProvisionResult,
   ProviderKind,
   ServerConfig,
+  ServerConsumeCodexResetCreditInput,
   ServerListProviderUsageInput,
   ServerProviderStatus,
   ServerStopLocalServerInput,
+  StatsGetRecapInput,
   ThreadId,
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
@@ -29,8 +32,12 @@ export const serverQueryKeys = {
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
+  recap: (input: StatsGetRecapInput) =>
+    ["server", "recap", input.from, input.to, input.slotBoundaries.join(",")] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
+  computerStatus: () => ["server", "computerStatus"] as const,
+  computerAuditHistory: () => ["server", "computerAuditHistory"] as const,
 };
 
 export const serverMutationKeys = {
@@ -48,6 +55,38 @@ export function serverConfigQueryOptions() {
   });
 }
 
+/** Polled while the Computer use settings panel is visible, so keep it refetchable. */
+export const COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
+
+export function computerStatusQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.computerStatus(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      // Desktop-bridge NativeApi implementations update out of band and may
+      // predate the computer namespace.
+      if (!api.computer) {
+        throw new Error("This app build cannot read computer status.");
+      }
+      return api.computer.getStatus({});
+    },
+    staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
+  });
+}
+
+/** Share one setup request across the settings panel and transcript cards. */
+let computerProvisionInFlight: Promise<ComputerProvisionResult> | undefined;
+export function provisionComputer(): Promise<ComputerProvisionResult> {
+  if (computerProvisionInFlight) return computerProvisionInFlight;
+  const api = ensureNativeApi();
+  if (!api.computer?.provision)
+    return Promise.reject(new Error("This app build cannot set up computer control."));
+  computerProvisionInFlight = api.computer.provision({}).finally(() => {
+    computerProvisionInFlight = undefined;
+  });
+  return computerProvisionInFlight;
+}
+
 interface ProviderStatusSnapshot {
   readonly revision: number;
   readonly providers: readonly ServerProviderStatus[];
@@ -59,17 +98,59 @@ const latestProviderStatusSnapshotByQueryClient = new WeakMap<
   ProviderStatusSnapshot
 >();
 
+const configRefreshRevisionByQueryClient = new WeakMap<QueryClient, number>();
+const providerConfigHydrationByQueryClient = new WeakMap<QueryClient, Promise<ServerConfig>>();
+
 export function hasReconciledServerProviderStatuses(queryClient: QueryClient): boolean {
   return latestProviderStatusSnapshotByQueryClient.get(queryClient)?.reconciled === true;
+}
+
+function providerStatusIdentity(
+  status: Pick<ServerProviderStatus, "provider" | "driver" | "instanceId">,
+): string {
+  const driver = status.driver ?? status.provider;
+  return `${driver}:${status.instanceId ?? status.provider}`;
+}
+
+function mergeProviderStatusSnapshots(
+  previous: readonly ServerProviderStatus[] | undefined,
+  next: readonly ServerProviderStatus[],
+): readonly ServerProviderStatus[] {
+  if (!previous || previous.length === 0) {
+    return next;
+  }
+
+  const previousByIdentity = new Map(
+    previous.map((status) => [providerStatusIdentity(status), status]),
+  );
+  return next.map((status) => {
+    const prior = previousByIdentity.get(providerStatusIdentity(status));
+    if (!prior) {
+      return status;
+    }
+
+    // Provider refreshes can overlap: a slow initial Pi probe may publish its
+    // warning after the fast recovery probe has already published ready.
+    // checkedAt is stamped when each probe begins, so never let an older
+    // snapshot resurrect a stale banner/toast in the web cache.
+    const priorCheckedAt = Date.parse(prior.checkedAt);
+    const nextCheckedAt = Date.parse(status.checkedAt);
+    return Number.isFinite(priorCheckedAt) &&
+      Number.isFinite(nextCheckedAt) &&
+      nextCheckedAt < priorCheckedAt
+      ? prior
+      : status;
+  });
 }
 
 function recordProviderStatusSnapshot(
   queryClient: QueryClient,
   providers: readonly ServerProviderStatus[],
 ): ProviderStatusSnapshot {
+  const previous = latestProviderStatusSnapshotByQueryClient.get(queryClient);
   const snapshot = {
-    revision: (latestProviderStatusSnapshotByQueryClient.get(queryClient)?.revision ?? 0) + 1,
-    providers,
+    revision: (previous?.revision ?? 0) + 1,
+    providers: mergeProviderStatusSnapshots(previous?.providers, providers),
     reconciled: true,
   };
   latestProviderStatusSnapshotByQueryClient.set(queryClient, snapshot);
@@ -88,30 +169,60 @@ export async function reconcileServerProviderStatuses(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
-  recordProviderStatusSnapshot(queryClient, providers);
+  const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+  const snapshot = recordProviderStatusSnapshot(queryClient, providers);
+  const effectiveProviders = mergeProviderStatusSnapshots(
+    currentConfig?.providers,
+    snapshot.providers,
+  );
+  if (effectiveProviders !== snapshot.providers) {
+    latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+      ...snapshot,
+      providers: effectiveProviders,
+    });
+  }
 
   let applied = false;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
     if (!current) return current;
     applied = true;
-    return { ...current, providers };
+    return {
+      ...current,
+      providers: mergeProviderStatusSnapshots(current.providers, effectiveProviders),
+    };
   });
   if (applied) return;
 
   const loadConfig =
     options?.loadConfig ??
-    (() =>
-      queryClient.fetchQuery({
-        ...serverConfigQueryOptions(),
-        staleTime: 0,
-      }));
+    (async () => {
+      const inFlight = providerConfigHydrationByQueryClient.get(queryClient);
+      if (inFlight) return inFlight;
+      // Coalesce initial stream hydration without fetchQuery's automatic cache
+      // write, which would erase a newer cache writer before reconciliation.
+      const request = ensureNativeApi().server.getConfig();
+      providerConfigHydrationByQueryClient.set(queryClient, request);
+      try {
+        return await request;
+      } finally {
+        providerConfigHydrationByQueryClient.delete(queryClient);
+      }
+    });
   const hydratedConfig = await loadConfig();
-  const latestProviders =
-    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.providers ?? providers;
-  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => ({
-    ...(current ?? hydratedConfig),
-    providers: latestProviders,
-  }));
+  const latestSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient) ?? snapshot;
+  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
+    // Hydration and another cache writer may both know about a newer probe.
+    // Keep stream membership, but choose the freshest status for each instance.
+    const reconciledProviders = mergeProviderStatusSnapshots(
+      current?.providers,
+      mergeProviderStatusSnapshots(hydratedConfig.providers, latestSnapshot.providers),
+    );
+    latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+      ...latestSnapshot,
+      providers: reconciledProviders,
+    });
+    return { ...(current ?? hydratedConfig), providers: reconciledProviders };
+  });
 }
 
 /**
@@ -124,29 +235,45 @@ export async function refreshServerConfigAfterTransportOpen(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
+  const configRefreshRevision = (configRefreshRevisionByQueryClient.get(queryClient) ?? 0) + 1;
+  configRefreshRevisionByQueryClient.set(queryClient, configRefreshRevision);
   const providerSnapshotAtStart = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  const configSnapshotAtStart = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
   const providerRevisionAtStart = providerSnapshotAtStart?.revision ?? 0;
   latestProviderStatusSnapshotByQueryClient.set(queryClient, {
     revision: providerRevisionAtStart,
     providers: providerSnapshotAtStart?.providers ?? [],
     reconciled: false,
   });
-  const loadConfig =
-    options?.loadConfig ??
-    (() =>
-      queryClient.fetchQuery({
-        ...serverConfigQueryOptions(),
-        staleTime: 0,
-      }));
+  // A reconnect must issue a fresh projection read. fetchQuery can share an
+  // older in-flight request and write its stale membership before we reconcile.
+  const loadConfig = options?.loadConfig ?? (() => ensureNativeApi().server.getConfig());
   const config = await loadConfig();
+  if (configRefreshRevisionByQueryClient.get(queryClient) !== configRefreshRevision) return;
   const latestProviderSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  const streamArrivedDuringRefresh =
+    latestProviderSnapshot?.reconciled === true &&
+    latestProviderSnapshot.revision > providerRevisionAtStart;
+  const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+  const providers = mergeProviderStatusSnapshots(
+    configSnapshotAtStart?.providers,
+    mergeProviderStatusSnapshots(
+      currentConfig?.providers,
+      streamArrivedDuringRefresh
+        ? mergeProviderStatusSnapshots(config.providers, latestProviderSnapshot.providers)
+        : mergeProviderStatusSnapshots(providerSnapshotAtStart?.providers, config.providers),
+    ),
+  );
+  // A configuration refresh can be newer than the last stream event. Retain
+  // its statuses too, without pretending a fresh stream snapshot has arrived.
+  latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+    revision: latestProviderSnapshot?.revision ?? providerRevisionAtStart,
+    providers,
+    reconciled: streamArrivedDuringRefresh,
+  });
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), {
     ...config,
-    providers:
-      latestProviderSnapshot?.reconciled === true &&
-      latestProviderSnapshot.revision > providerRevisionAtStart
-        ? latestProviderSnapshot.providers
-        : config.providers,
+    providers,
   });
 }
 
@@ -310,6 +437,11 @@ export async function fetchAllProviderUsage(input: ServerListProviderUsageInput 
   return api.server.listProviderUsage(input);
 }
 
+export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
+  const api = ensureNativeApi();
+  return api.server.consumeCodexResetCredit(input);
+}
+
 /** Provider enablement changes alter the membership of the batch and invalidate any
  * provider-scoped result that may otherwise survive after a provider is disabled. */
 export async function invalidateProviderUsageQueries(queryClient: QueryClient): Promise<void> {
@@ -357,9 +489,36 @@ export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean }
   });
 }
 
+// Inbox recap of one window (a working day and its slots), from Synara's local DB. A recap
+// generated after its window ended is final and stays fresh. Anything earlier is refetched,
+// including yesterday's entry when it is the one "today" left behind after the day rolled
+// over (same window, same key). The current window refreshes while the Inbox is open.
+export function serverRecapQueryOptions(
+  input: StatsGetRecapInput,
+  options: { enabled?: boolean; live?: boolean } = {},
+) {
+  const live = options.live ?? true;
+  const windowEndMs = Date.parse(input.to);
+  return queryOptions({
+    queryKey: serverQueryKeys.recap(input),
+    enabled: options.enabled ?? true,
+    staleTime: (query) => {
+      const generatedAtMs = Date.parse(query.state.data?.generatedAt ?? "");
+      if (generatedAtMs >= windowEndMs) return Number.POSITIVE_INFINITY;
+      return live ? 60_000 : 0;
+    },
+    // Opening the Inbox always shows today's latest numbers.
+    refetchOnMount: live ? "always" : true,
+    refetchInterval: live ? 5 * 60_000 : false,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => ensureNativeApi().stats.getRecap(input),
+  });
+}
+
 // Live remaining-usage for every provider. Always fetches the full batch under a single query
 // key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-provider snapshots, so the batch is cheap.
+// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean

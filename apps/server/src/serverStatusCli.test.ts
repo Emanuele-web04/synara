@@ -147,3 +147,43 @@ describe("server status CLI probe", () => {
     expect(formatSynaraServerStatus(result)).toContain("Synara server: unreachable");
   });
 });
+
+it("prints aggregate loop metrics and rejects malformed optional metrics", async () => {
+  const eventLoop = {
+    available: true,
+    sampleWindowMs: 30000,
+    sampleCount: 1500,
+    delayP50Ms: 20,
+    delayP99Ms: 35,
+    delayMaxMs: 5200,
+    utilization: 0.9,
+    stallWindowCount: 2,
+    maxStallMs: 5200,
+    discardedIdleGapCount: 1,
+    discardedIdleGapMs: 60_000,
+    lastStall: { durationMs: 5200, ageMs: 1000 },
+  };
+  const result = await fetchSynaraServerStatus({
+    fetch: async () =>
+      Response.json({
+        status: "ok",
+        startupReady: true,
+        projection: { state: "healthy" },
+        eventLoop,
+      }),
+  });
+  expect(formatSynaraServerStatus(result)).toContain(
+    "Event loop: p50 20ms / p99 35ms / max 5200ms; ELU 90.0%; stall windows 2",
+  );
+  expect(formatSynaraServerStatus(result)).toContain("Last stall: 5200ms (1000ms ago)");
+  expect(formatSynaraServerStatus(result)).toContain("Ambiguous idle gaps: 1 (60000ms total");
+  const malformed = await fetchSynaraServerStatus({
+    fetch: async () =>
+      Response.json({
+        status: "ok",
+        startupReady: true,
+        eventLoop: { ...eventLoop, delayMaxMs: "private text" },
+      }),
+  });
+  expect(formatSynaraServerStatus(malformed)).not.toContain("private text");
+});

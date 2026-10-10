@@ -14,7 +14,9 @@
  * projection tables, so it restores that stale "running" state verbatim — it is
  * not its job to second-guess history. This module runs once, immediately after
  * bootstrap and before the server starts accepting client commands, and emits
- * stale pending-request failure activities plus a terminal
+ * stale pending-request failure activities, a `thread.message.assistant.complete`
+ * for every assistant message the dead runtime left streaming (keeping the text
+ * already persisted), plus a terminal
  * `thread.session.set { status: "interrupted", activeTurnId: null }` for each
  * orphaned thread. That reuses the normal event-sourced path: activity handlers
  * resolve dead approval/user-input requests, and the projection's session-set
@@ -24,12 +26,18 @@
  *
  * The runtime idle watchdog (AcpTurnIdleWatchdog) only protects turns started in
  * the *current* process; this is its restart-time counterpart for turns
- * orphaned by a process boundary the watchdog never saw.
+ * orphaned by a process boundary the watchdog never saw. The same argument
+ * applies to unresolved approval/user-input interactions, whose answer callback
+ * is equally in-memory: their durable rows are settled here too, which is the
+ * boot-time counterpart to the turn/session-scoped settlement in
+ * `Layers/ProviderRuntimeIngestion.ts` (that one reacts to runtime events, and a
+ * hard-killed process emits none).
  *
  * @module startupTurnReconciliation
  */
 import type {
   OrchestrationCommand,
+  OrchestrationMessage,
   OrchestrationPendingInteraction,
   OrchestrationThreadActivity,
   OrchestrationSession,
@@ -37,20 +45,24 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { CommandId, EventId } from "@synara/contracts";
-import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import {
-  buildStalePendingRequestFailureDetail,
   derivePendingThreadRequestIds,
   type PendingThreadRequestKind,
 } from "@synara/shared/threadSummary";
 import { Array as Arr, Effect, Option } from "effect";
+import type { ProjectionPendingInteraction } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
-
 import {
   CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
   threadHasCheckpointRevertInProgress,
   threadHasInFlightTurn,
 } from "./commandInvariants.ts";
+import {
+  buildStalePendingRequestSettlementCommand,
+  isUnsettledPendingInteraction,
+  pendingInteractionRequestKind,
+  type ThreadActivityAppendCommand,
+} from "./stalePendingInteractions.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -59,11 +71,20 @@ type ThreadSessionSetCommand = Extract<
   OrchestrationCommand,
   { readonly type: "thread.session.set" }
 >;
-type ThreadActivityAppendCommand = Extract<
+type AssistantMessageCompleteCommand = Extract<
   OrchestrationCommand,
-  { readonly type: "thread.activity.append" }
+  { readonly type: "thread.message.assistant.complete" }
 >;
-type RestartReconciliationCommand = ThreadSessionSetCommand | ThreadActivityAppendCommand;
+type RestartReconciliationCommand =
+  | ThreadSessionSetCommand
+  | ThreadActivityAppendCommand
+  | AssistantMessageCompleteCommand;
+
+/** The durable interaction fields the planner needs; a full row is fine. */
+export type ReconcilablePendingInteraction = Pick<
+  ProjectionPendingInteraction,
+  "threadId" | "interactionKind" | "requestId" | "status"
+>;
 
 /** Minimal persisted thread shape the planner inspects (a superset is fine). */
 export interface ReconcilableThread {
@@ -73,6 +94,9 @@ export interface ReconcilableThread {
   readonly latestTurn: { readonly state: "running" | "interrupted" | "completed" | "error" } | null;
   readonly activities?: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly messages?: ReadonlyArray<
+    Pick<OrchestrationMessage, "id" | "role" | "streaming" | "turnId">
   >;
   readonly pendingInteractions?:
     | ReadonlyArray<
@@ -103,23 +127,40 @@ function hasDanglingActiveTurn(thread: ReconcilableThread): boolean {
   return thread.session?.activeTurnId != null && !threadHasInFlightTurn(thread);
 }
 
+/**
+ * Plans one settlement per unanswerable human request on a thread.
+ *
+ * Two sources, deliberately unioned:
+ *
+ *  - The thread's timeline activities, which is what the UI's own pending-request
+ *    derivation reads.
+ *  - The durable `projection_pending_interactions` rows, which are the
+ *    settlement authority behind `pendingApprovalCount` /
+ *    `pendingUserInputCount`. A row can outlive its timeline evidence: an
+ *    answer attempt against a dead runtime already appended a
+ *    `respond.failed` activity (so the timeline derivation considers the
+ *    request closed) while leaving the row `retryable`, and the thread-detail
+ *    activity window is bounded, so an old request can fall out of it entirely.
+ *    Either way the row kept the question card up with nothing able to answer
+ *    it.
+ *
+ * Timeline-derived commands win on collision: they carry no lifecycle
+ * generation, so they close every open instance of the request id rather than
+ * just the row's generation.
+ */
 function planStalePendingRequestCommands(input: {
   readonly thread: ReconcilableThread;
+  readonly pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction>;
   readonly now: string;
 }): ReadonlyArray<ThreadActivityAppendCommand> {
   const commands: ThreadActivityAppendCommand[] = [];
   if (input.thread.pendingInteractions !== undefined) {
-    const isAlreadyStale = createStalePendingInteractionMatcher(input.thread.activities ?? []);
     for (const interaction of input.thread.pendingInteractions) {
       // A process restart loses every live provider callback. Pending,
       // responding, and previously retryable rows are therefore no longer
-      // answerable. Uncertain user-input responses are also retryable unless
-      // their callback has already been explicitly invalidated.
-      if (
-        interaction.status === "confirmed" ||
-        isAlreadyStale(interaction) ||
-        (interaction.status === "uncertain" && interaction.interactionKind === "approval")
-      ) {
+      // answerable. Legacy uncertain rows also need durable terminal settlement,
+      // even if a stale failure already removed them from the activity summary.
+      if (!isUnsettledPendingInteraction(interaction)) {
         continue;
       }
       commands.push(
@@ -140,26 +181,36 @@ function planStalePendingRequestCommands(input: {
   const pendingRequestIds = derivePendingThreadRequestIds({
     activities: input.thread.activities ?? [],
   });
-  for (const requestId of pendingRequestIds.approvalRequestIds) {
+  const plannedRequests = new Set<string>();
+  const planRequest = (requestKind: PendingThreadRequestKind, requestId: string) => {
+    const requestKey = `${requestKind}:${requestId}`;
+    if (plannedRequests.has(requestKey)) {
+      return;
+    }
+    plannedRequests.add(requestKey);
     commands.push(
       buildStalePendingRequestCommand({
         threadId: input.thread.id,
         now: input.now,
-        requestKind: "approval",
+        requestKind,
         requestId,
       }),
     );
+  };
+
+  for (const requestId of pendingRequestIds.approvalRequestIds) {
+    planRequest("approval", requestId);
   }
 
   for (const requestId of pendingRequestIds.userInputRequestIds) {
-    commands.push(
-      buildStalePendingRequestCommand({
-        threadId: input.thread.id,
-        now: input.now,
-        requestKind: "user-input",
-        requestId,
-      }),
-    );
+    planRequest("user-input", requestId);
+  }
+
+  for (const row of input.pendingInteractions) {
+    if (row.threadId !== input.thread.id || !isUnsettledPendingInteraction(row)) {
+      continue;
+    }
+    planRequest(pendingInteractionRequestKind(row.interactionKind), row.requestId);
   }
 
   return commands;
@@ -190,6 +241,31 @@ function planStaleCheckpointRevertCommand(input: {
   };
 }
 
+/**
+ * Finalizes assistant messages a dead runtime left mid-stream. Only live
+ * ingestion ever dispatches `thread.message.assistant.complete`, so without this
+ * the orphaned turn's partial answer stays `streaming` forever: it never folds
+ * into the settled turn, cannot be copied, and is skipped by search. The decider
+ * re-reads the persisted row, so the text already streamed is kept as is.
+ */
+function planStreamingMessageFinalizeCommands(input: {
+  readonly thread: ReconcilableThread;
+  readonly now: string;
+}): ReadonlyArray<AssistantMessageCompleteCommand> {
+  return (input.thread.messages ?? [])
+    .filter((message) => message.role === "assistant" && message.streaming)
+    .map((message) => ({
+      type: "thread.message.assistant.complete",
+      commandId: CommandId.makeUnsafe(
+        `restart-reconcile-message:${input.thread.id}:${message.id}:${input.now}`,
+      ),
+      threadId: input.thread.id,
+      messageId: message.id,
+      ...(message.turnId !== null ? { turnId: message.turnId } : {}),
+      createdAt: input.now,
+    }));
+}
+
 function buildStalePendingRequestCommand(input: {
   readonly threadId: ThreadId;
   readonly now: string;
@@ -204,37 +280,23 @@ function buildStalePendingRequestCommand(input: {
     input.requestId,
     input.now,
   ].join(":");
-  const isApproval = input.requestKind === "approval";
-  return {
-    type: "thread.activity.append",
-    commandId: CommandId.makeUnsafe(commandKey),
+  return buildStalePendingRequestSettlementCommand({
     threadId: input.threadId,
-    activity: {
-      id: EventId.makeUnsafe(commandKey),
-      tone: "error",
-      kind: isApproval ? "provider.approval.respond.failed" : "provider.user-input.respond.failed",
-      summary: isApproval
-        ? "Provider approval response failed"
-        : "Provider user input response failed",
-      payload: {
-        detail: buildStalePendingRequestFailureDetail(input.requestKind, input.requestId),
-        requestId: input.requestId,
-        ...(input.lifecycleGeneration !== undefined
-          ? { lifecycleGeneration: input.lifecycleGeneration }
-          : {}),
-      },
-      turnId: null,
-      createdAt: input.now,
-    },
-    createdAt: input.now,
-  };
+    commandId: CommandId.makeUnsafe(commandKey),
+    requestKind: input.requestKind,
+    requestId: input.requestId,
+    ...(input.lifecycleGeneration !== undefined
+      ? { lifecycleGeneration: input.lifecycleGeneration }
+      : {}),
+    now: input.now,
+  });
 }
 
 /**
- * Pure planner: maps persisted threads to stale-request resolution commands and
- * terminal `thread.session.set` commands. Extracted from the effectful runner so
- * the reliability-critical selection logic is unit-testable without a database,
- * clock, or engine.
+ * Pure planner: maps persisted threads to stale-request resolution commands,
+ * streaming-message finalization, and terminal `thread.session.set` commands.
+ * Extracted from the effectful runner so the reliability-critical selection
+ * logic is unit-testable without a database, clock, or engine.
  *
  * `now` is threaded in (rather than read from a clock) so the same inputs always
  * produce the same commands — including a deterministic, per-startup `commandId`
@@ -242,12 +304,26 @@ function buildStalePendingRequestCommand(input: {
  */
 export function planRestartTurnReconciliation(input: {
   readonly threads: ReadonlyArray<ReconcilableThread>;
+  readonly pendingInteractions?: ReadonlyArray<ReconcilablePendingInteraction>;
   readonly now: string;
 }): ReadonlyArray<RestartReconciliationCommand> {
+  const pendingInteractions = input.pendingInteractions ?? [];
+  const pendingByThread = new Map<string, ReconcilablePendingInteraction[]>();
+  for (const row of pendingInteractions) {
+    const rows = pendingByThread.get(row.threadId) ?? [];
+    rows.push(row);
+    pendingByThread.set(row.threadId, rows);
+  }
   const commands: RestartReconciliationCommand[] = [];
   for (const thread of input.threads) {
     const hasInFlightTurn = threadHasInFlightTurn(thread);
-    commands.push(...planStalePendingRequestCommands({ thread, now: input.now }));
+    commands.push(
+      ...planStalePendingRequestCommands({
+        thread,
+        pendingInteractions: pendingByThread.get(thread.id) ?? [],
+        now: input.now,
+      }),
+    );
     const staleCheckpointRevertCommand = planStaleCheckpointRevertCommand({
       thread,
       now: input.now,
@@ -255,10 +331,11 @@ export function planRestartTurnReconciliation(input: {
     if (staleCheckpointRevertCommand !== null) {
       commands.push(staleCheckpointRevertCommand);
     }
+    if (!hasInFlightTurn && !hasDanglingActiveTurn(thread)) {
+      continue;
+    }
+    commands.push(...planStreamingMessageFinalizeCommands({ thread, now: input.now }));
     if (!hasInFlightTurn) {
-      if (!hasDanglingActiveTurn(thread)) {
-        continue;
-      }
       // Preserve the terminal status (and its banner) - only the stale active
       // turn pointer is wrong here.
       commands.push({
@@ -310,9 +387,15 @@ export function planRestartTurnReconciliation(input: {
  * failed individual dispatch must never block the server from coming up.
  *
  * Deliberately not a second `getCommandReadModel()` load. That query costs ~150ms
- * on a large database and this runs on the blocking startup path, after several
- * reactors have already started — so re-reading it would be both slower and
- * staler than the model the engine is already maintaining.
+ * on a large database and this runs on the blocking startup path, after the
+ * orchestration reactor has already started — so re-reading it would be both
+ * slower and staler than the model the engine is already maintaining.
+ *
+ * The durable pending-interaction rows are read once, up front. Rows created
+ * after that read belong to a runtime started in *this* process and stay
+ * untouched, which is what keeps this safe to run while reactors are already
+ * live: nothing in the snapshot can become answerable again, and nothing
+ * answerable can enter the snapshot.
  */
 export const reconcileRestartStuckTurns: Effect.Effect<
   void,
@@ -321,7 +404,6 @@ export const reconcileRestartStuckTurns: Effect.Effect<
 > = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
-
   const readModel = yield* engine.getReadModel();
 
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
@@ -366,7 +448,11 @@ export const reconcileRestartStuckTurns: Effect.Effect<
     { concurrency: 4 },
   );
 
-  const commands = planRestartTurnReconciliation({ threads: reconcilableThreads, now });
+  const commands = planRestartTurnReconciliation({
+    threads: reconcilableThreads,
+    pendingInteractions: unsettled,
+    now,
+  });
   if (commands.length === 0) {
     return;
   }

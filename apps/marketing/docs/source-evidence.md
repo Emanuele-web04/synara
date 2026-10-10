@@ -355,3 +355,41 @@ operating guides; quantitative claims require the release's benchmark evidence.
 
 **Mirrors:** The release additions are synchronized to both public documentation trees;
 existing site-specific formatting and unrelated documentation differences are retained.
+
+## Synara 0.9.0 release audit — 2026-09-21
+
+Authority: Synara feature head `f3cffcb66bc205c5900bc7720b61d37b7cb39d5f`,
+complete ancestry since `v0.8.4`, and the final 0.9.0 release commit (version,
+notes and documentation changes after that feature head). Reviewed 51 included
+PR merge SHAs plus direct commits. #1197 was reverted; retired Computer
+recording/replay and permanent grants are deliberately not documented as features.
+
+Verified source paths:
+
+- Computer: `apps/web/src/components/settings/ComputerGettingStarted.tsx`,
+  `ComputerSettingsPanel.tsx`, `apps/web/src/lib/computerProvisioning.ts`,
+  `apps/server/src/agentGateway/computerGuidance.ts`,
+  `apps/server/src/computer/ComputerManager.ts`,
+  `apps/desktop/src/desktopPermissions.ts`, and `docs/computer-use-cua/README.md`.
+- Import: `apps/web/src/projectImport/ProjectImportPanel.tsx`,
+  `apps/server/src/orchestration/projectImportRoute.ts`,
+  `projectImportHistory.ts`, and provider-specific import readers.
+- Claude: `apps/web/src/components/chat/ComposerClaudeCacheReviewPanel.tsx`,
+  `ClaudeCacheDetails.tsx`, `apps/web/src/lib/claudeArtifactCommands.ts`,
+  `apps/web/src/components/settings/ProvidersSettingsPanel.tsx`, and
+  `apps/server/src/provider/Layers/ClaudeAdapter.ts`.
+- Codex: `apps/web/src/components/ProviderUsageResetCredits.tsx`,
+  `apps/web/src/lib/starredModels.ts`, and `apps/server/src/codexAppServerManager.ts`.
+- Delegation: `apps/server/src/agentGateway/completionDelivery.ts`.
+- Other workflows: final patches for #1255, #1257, #1261, #1262, #1273,
+  #1274, #1208, #1218, #1248, #1249, #1228 and #1229; current app icon
+  behavior documented in `docs/release.md`.
+
+Computer Use is announced as beta on macOS only at the operator's release
+boundary. Linux code and experiments do not establish supported Linux Computer
+Use. Permission flows, every live provider/app combination, multi-display input
+and personalized installed-app signing were not certified by this docs audit.
+Existing external links are unchanged. UI/CI-only changes are covered by release
+notes, without unsupported battery, latency or package-size percentages. The new
+and updated guides are mirrored to Synara's marketing docs without replacing
+unrelated site-specific content.

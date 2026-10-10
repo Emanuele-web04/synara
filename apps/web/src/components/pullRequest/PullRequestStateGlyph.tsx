@@ -1,16 +1,25 @@
 // FILE: PullRequestStateGlyph.tsx
-// Purpose: State glyph for a pull request (open/draft/closed/merged), shared by the list rows,
-//          the detail panel header, and the dock tab chip. Icon and color both come from
-//          resolvePrStatePresentation — the same mapping the sidebar thread badge and kanban
-//          chip use — so every surface renders a given PR state identically.
+// Purpose: State glyphs for GitHub items: a pull request (open/draft/closed/merged/conflicts),
+//          an issue (open/closed/not planned), and the inbox item glyph that picks between them.
+//          Shared by the list rows, the item header, and the dock tab chip. Icon and color come
+//          from pullRequestStatePresentation, the same mapping the sidebar thread badge and
+//          kanban chip use, so every surface renders a given state identically.
 // Layer: Pull request presentation
-// Exports: PullRequestStateGlyph
+// Exports: PullRequestStateGlyph, IssueStateGlyph, GitHubItemStateGlyph, pullRequestStateLabel
 
-import type { GitPullRequestMergeability, PullRequestState } from "@synara/contracts";
+import type {
+  GitHubInboxItem,
+  GitHubIssueState,
+  GitHubIssueStateReason,
+  GitPullRequestMergeability,
+  PullRequestState,
+} from "@synara/contracts";
 
 import { cn } from "~/lib/utils";
 import {
+  ISSUE_STATE_PRESENTATION_ICONS,
   PR_STATE_PRESENTATION_ICONS,
+  resolveIssueStatePresentation,
   resolvePrStatePresentation,
 } from "./pullRequestStatePresentation";
 
@@ -19,7 +28,10 @@ const SIZE_CLASS_NAME = {
   md: "size-[1.125rem]",
 } as const;
 
-function pullRequestStateLabel(
+type GlyphSize = keyof typeof SIZE_CLASS_NAME;
+
+/** Short visible state word for a pull request ("Draft", "Merged"), as badges and tooltips say it. */
+export function pullRequestStateLabel(
   state: PullRequestState,
   isDraft: boolean,
   mergeability: GitPullRequestMergeability | undefined,
@@ -44,7 +56,7 @@ export function PullRequestStateGlyph({
   state: PullRequestState;
   isDraft: boolean;
   mergeability?: GitPullRequestMergeability | undefined;
-  size?: keyof typeof SIZE_CLASS_NAME;
+  size?: GlyphSize;
   className?: string;
 }) {
   const size = sizeProp ?? "sm";
@@ -59,5 +71,59 @@ export function PullRequestStateGlyph({
     >
       <Icon className={cn("size-full", presentation.colorClass)} aria-hidden="true" />
     </span>
+  );
+}
+
+export function IssueStateGlyph({
+  state,
+  stateReason,
+  size: sizeProp,
+  className,
+}: {
+  state: GitHubIssueState;
+  stateReason: GitHubIssueStateReason | null;
+  size?: GlyphSize;
+  className?: string;
+}) {
+  const size = sizeProp ?? "sm";
+  const presentation = resolveIssueStatePresentation({ state, stateReason });
+  const Icon = ISSUE_STATE_PRESENTATION_ICONS[presentation.iconKind];
+  return (
+    <span
+      className={cn("flex shrink-0 items-center justify-center", SIZE_CLASS_NAME[size], className)}
+      title={presentation.shortLabel}
+      role="img"
+      aria-label={presentation.label}
+    >
+      <Icon className={cn("size-full", presentation.colorClass)} aria-hidden="true" />
+    </span>
+  );
+}
+
+/** The state glyph of an inbox row, whichever kind it is. */
+export function GitHubItemStateGlyph({
+  item,
+  size,
+  className,
+}: {
+  item: GitHubInboxItem;
+  size?: GlyphSize;
+  className?: string;
+}) {
+  return item.kind === "pullRequest" ? (
+    <PullRequestStateGlyph
+      state={item.state}
+      isDraft={item.isDraft}
+      mergeability={item.mergeability}
+      {...(size ? { size } : {})}
+      {...(className ? { className } : {})}
+    />
+  ) : (
+    <IssueStateGlyph
+      state={item.state}
+      stateReason={item.stateReason}
+      {...(size ? { size } : {})}
+      {...(className ? { className } : {})}
+    />
   );
 }

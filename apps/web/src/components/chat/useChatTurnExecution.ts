@@ -1,5 +1,6 @@
 import type {
   ProjectId,
+  ProjectKind,
   ProjectScript,
   ProviderMentionReference,
   ProviderSkillReference,
@@ -18,6 +19,8 @@ import { getDefaultModel } from "@synara/shared/model";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { useCallback } from "react";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { waitForDraftThreadDispatchToSettle } from "~/lib/draftThreadDispatch";
+import { runComposerSendOnce } from "~/lib/composerSendOwnership";
 import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { dispatchThreadNotes } from "~/pinnedMessages";
@@ -27,20 +30,33 @@ import {
 } from "~/projectInstructionsStore";
 import { dispatchThreadGoal } from "~/threadGoal";
 import { collapseExpandedComposerCursor, detectComposerTrigger } from "../../composer-logic";
-import { type DraftThreadEnvMode, type QueuedComposerChatTurn } from "../../composerDraftStore";
+import {
+  useComposerDraftStore,
+  type DraftThreadEnvMode,
+  type QueuedComposerChatTurn,
+} from "../../composerDraftStore";
 import {
   cloneComposerImageAttachment,
   stageUploadComposerAttachments,
 } from "../../lib/composerSend";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
+import { useStore } from "../../store";
+import { getThreadFromState } from "../../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
   WorktreeSetupCancelledError,
   createWorktreeSetupResolution,
+  hasServerReceivedSentMessage,
+  resolveQueuedTurnDispatchSettings,
   revokeUserMessagePreviewUrls,
   runWorktreeCreationFlow,
+  threadSettingsDispatchFields,
+  threadHasProviderLockingActivity,
+  turnStartDispatchFields,
+  type TurnDispatchSettings,
 } from "../ChatView.logic";
 import type { ChatTurnSubmissionInput } from "./chatSendTypes";
 import { waitForSetupScriptTerminalActivity } from "./projectScriptRuntime";
@@ -67,7 +83,7 @@ interface PreparedChatTurn {
   interactionModeForSend: ProviderInteractionMode;
   nextThreadWorkingDirectory: string | null;
   activeThread: Thread;
-  targetProjectKindForSend: "project" | "chat" | "studio";
+  targetProjectKindForSend: ProjectKind;
   setupScriptForWorktree: ProjectScript | null;
   messageCreatedAt: string;
   turnAttachmentsPromise: ReturnType<typeof stageUploadComposerAttachments>;
@@ -81,6 +97,8 @@ interface PreparedChatTurn {
   shouldResumeSettledLocalThread: boolean;
   currentActiveGitBranchForSend: string | null;
   queuedChatTurn: QueuedComposerChatTurn | null;
+  turnDispatchSettings: TurnDispatchSettings;
+  computerControlSequenceForSend: number;
   promptForSend: string;
   composerImagesSnapshot: ChatTurnSubmissionInput["composerImages"];
   composerFilesSnapshot: ChatTurnSubmissionInput["composerFiles"];
@@ -95,6 +113,7 @@ interface PreparedChatTurn {
 }
 type ChatTurnExecutionInput = Pick<
   ChatTurnSubmissionInput,
+  | "prepareProviderHandoffForSend"
   | "isServerThread"
   | "setStoreThreadWorkspace"
   | "clearLocalDispatchWorktreeSetup"
@@ -105,7 +124,8 @@ type ChatTurnExecutionInput = Pick<
   | "runProjectScript"
   | "persistThreadSettingsForNextTurn"
   | "rememberCustomBinaryPathForDispatch"
-  | "assistantDeliveryMode"
+  | "computerControlChangeSequence"
+  | "setComposerDraftComputerControlMode"
   | "setSettledThreadBranchWarningDismissedThreadId"
   | "armLocalDispatchAckFallback"
   | "setQueuedSteerGate"
@@ -115,15 +135,8 @@ type ChatTurnExecutionInput = Pick<
   | "setRestoredQueuedSourceProposedPlan"
   | "failLocalDispatchWorktreeSetup"
   | "setOptimisticUserMessages"
+  | "activeThreadIdRef"
   | "promptRef"
-  | "composerImagesRef"
-  | "composerFilesRef"
-  | "composerAssistantSelectionsRef"
-  | "composerBrowserAnnotationsRef"
-  | "composerFileCommentsRef"
-  | "composerTerminalContextsRef"
-  | "composerPastedTextsRef"
-  | "composerPullRequestContextsRef"
   | "setPrompt"
   | "setComposerCursor"
   | "addComposerImagesToDraft"
@@ -145,6 +158,7 @@ type ChatTurnExecutionInput = Pick<
 >;
 
 export function useChatTurnExecution({
+  prepareProviderHandoffForSend,
   isServerThread,
   setStoreThreadWorkspace,
   clearLocalDispatchWorktreeSetup,
@@ -155,7 +169,8 @@ export function useChatTurnExecution({
   runProjectScript,
   persistThreadSettingsForNextTurn,
   rememberCustomBinaryPathForDispatch,
-  assistantDeliveryMode,
+  computerControlChangeSequence,
+  setComposerDraftComputerControlMode,
   setSettledThreadBranchWarningDismissedThreadId,
   armLocalDispatchAckFallback,
   setQueuedSteerGate,
@@ -165,15 +180,8 @@ export function useChatTurnExecution({
   setRestoredQueuedSourceProposedPlan,
   failLocalDispatchWorktreeSetup,
   setOptimisticUserMessages,
+  activeThreadIdRef,
   promptRef,
-  composerImagesRef,
-  composerFilesRef,
-  composerAssistantSelectionsRef,
-  composerBrowserAnnotationsRef,
-  composerFileCommentsRef,
-  composerTerminalContextsRef,
-  composerPastedTextsRef,
-  composerPullRequestContextsRef,
   setPrompt,
   setComposerCursor,
   addComposerImagesToDraft,
@@ -193,7 +201,7 @@ export function useChatTurnExecution({
   scheduleFailedWorktreeSetupDispatchReset,
   resetLocalDispatch,
 }: ChatTurnExecutionInput) {
-  return useCallback(
+  const execute = useCallback(
     async (preparedTurn: PreparedChatTurn): Promise<boolean> => {
       let {
         nextThreadEnvMode,
@@ -232,6 +240,8 @@ export function useChatTurnExecution({
         shouldResumeSettledLocalThread,
         currentActiveGitBranchForSend,
         queuedChatTurn,
+        turnDispatchSettings: preparedTurnDispatchSettings,
+        computerControlSequenceForSend,
         promptForSend,
         composerImagesSnapshot,
         composerFilesSnapshot,
@@ -245,6 +255,33 @@ export function useChatTurnExecution({
         composerMentionsSnapshot,
       } = preparedTurn;
 
+      const dispatchSettings = resolveQueuedTurnDispatchSettings(
+        preparedTurnDispatchSettings,
+        queuedChatTurn,
+      );
+      const settledDraftDispatch = await waitForDraftThreadDispatchToSettle(threadIdForSend);
+      if (
+        (settledDraftDispatch?.kind === "error" && settledDraftDispatch.outcomeUnknown) ||
+        (!queuedChatTurn &&
+          settledDraftDispatch?.kind === "dispatched" &&
+          !settledDraftDispatch.deferred)
+      ) {
+        await turnAttachmentsPromise.then(
+          (staged) => staged.cleanup(),
+          () => undefined,
+        );
+        // Submission already armed local UI state and added an optimistic row.
+        // The shared draft dispatch owns the real message; release this attempt.
+        sendInFlightRef.current = false;
+        worktreeSetupResolutionRef.current = null;
+        resetLocalDispatch();
+        if (activeThreadIdRef.current === threadIdForSend) {
+          setOptimisticUserMessages((messages) =>
+            messages.filter((message) => message.id !== messageIdForSend),
+          );
+        }
+        return false;
+      }
       let createdServerThreadForLocalDraft = false;
       let createdWorktreeForSendPath: string | null = null;
       let switchedToLocalCheckout = false;
@@ -314,6 +351,90 @@ export function useChatTurnExecution({
           await applyWorkLocallySwitch();
         };
 
+        // Register the task before slow git work so the sidebar can show it
+        // and navigation can leave preparation running on its original thread.
+        const threadCreateModelSelection: ModelSelection = buildModelSelection(
+          selectedModelSelectionForSend.provider,
+          selectedModelSelectionForSend.model ||
+            selectedModelForSend ||
+            targetProjectDefaultModelSelectionForSend?.model ||
+            getDefaultModel(selectedModelSelectionForSend.provider) ||
+            DEFAULT_MODEL_BY_PROVIDER.codex,
+          selectedModelSelectionForSend.options,
+          selectedModelSelectionForSend.provider === "claudeAgent"
+            ? selectedModelSelectionForSend.supportsAutoMode
+            : undefined,
+          { instanceId: selectedModelSelectionForSend.instanceId },
+        );
+
+        if (isLocalDraftThread) {
+          const inheritedProjectInstructions =
+            useProjectInstructionsStore.getState().instructionsByProjectId[
+              targetProjectIdForSend
+            ] ?? "";
+          const inheritedThreadNotes = mergeProjectInstructionsIntoThreadNotes({
+            threadNotes,
+            projectInstructions: inheritedProjectInstructions,
+          });
+          await promoteThreadCreate(
+            {
+              type: "thread.create",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              projectId: targetProjectIdForSend,
+              title,
+              modelSelection: threadCreateModelSelection,
+              runtimeMode: nextRuntimeModeForSend,
+              interactionMode: interactionModeForSend,
+              envMode: nextThreadEnvMode,
+              branch: nextThreadBranch,
+              worktreePath: nextThreadWorktreePath,
+              workingDirectory: nextThreadWorkingDirectory,
+              associatedWorktreePath: nextAssociatedWorktreePath,
+              associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+              associatedWorktreeRef: nextAssociatedWorktreeRef,
+              lastKnownPr: activeThread.lastKnownPr ?? null,
+              // The draft timestamp records when the composer opened. The durable
+              // thread is created by this first send, so order it at the message's
+              // send time just like the turn itself.
+              createdAt: messageCreatedAt,
+            },
+            api,
+          );
+          createdServerThreadForLocalDraft = true;
+          // `thread.create` does not carry notes, so seed the freshly created
+          // server thread's notepad with the inherited project instructions via a
+          // dedicated meta update. Best-effort: a failure here must not abort the turn.
+          if (inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0) {
+            try {
+              await dispatchThreadNotes(threadIdForSend, inheritedThreadNotes);
+            } catch {
+              // Seeding is non-critical; project instructions can still be copied
+              // into the notepad manually from the Environment panel.
+            }
+          }
+          // Same for a goal staged on the draft via /goal: persist it now so the
+          // decider stamps goalStartedAt when the thread actually starts working.
+          const draftGoalForSend = activeThread.goal?.trim() ?? "";
+          if (draftGoalForSend.length > 0) {
+            try {
+              await dispatchThreadGoal(threadIdForSend, draftGoalForSend, {
+                startBehavior: "defer",
+              });
+            } catch {
+              // Non-critical: the goal can be set again with /goal on the live thread.
+            }
+          }
+          if (targetProjectKindForSend === "chat") {
+            await api.orchestration.dispatchCommand({
+              type: "project.meta.update",
+              commandId: newCommandId(),
+              projectId: targetProjectIdForSend,
+              title,
+            });
+          }
+        }
+
         // On first message: lock in branch + create worktree if needed.
         if (baseBranchForWorktree && worktreeSetupResolution) {
           // The server streams each real setup phase (branch → worktree → copy
@@ -366,7 +487,7 @@ export function useChatTurnExecution({
             nextAssociatedWorktreePath = nextAssociatedWorktree.associatedWorktreePath;
             nextAssociatedWorktreeBranch = nextAssociatedWorktree.associatedWorktreeBranch;
             nextAssociatedWorktreeRef = nextAssociatedWorktree.associatedWorktreeRef;
-            if (isServerThread) {
+            if (isServerThread || createdServerThreadForLocalDraft) {
               await api.orchestration.dispatchCommand({
                 type: "thread.meta.update",
                 commandId: newCommandId(),
@@ -387,84 +508,6 @@ export function useChatTurnExecution({
               });
             }
           }
-        }
-
-        const threadCreateModelSelection: ModelSelection = buildModelSelection(
-          selectedModelSelectionForSend.provider,
-          selectedModelSelectionForSend.model ||
-            selectedModelForSend ||
-            targetProjectDefaultModelSelectionForSend?.model ||
-            getDefaultModel(selectedModelSelectionForSend.provider) ||
-            DEFAULT_MODEL_BY_PROVIDER.codex,
-          selectedModelSelectionForSend.options,
-          selectedModelSelectionForSend.provider === "claudeAgent"
-            ? selectedModelSelectionForSend.supportsAutoMode
-            : undefined,
-        );
-
-        if (isLocalDraftThread) {
-          const inheritedProjectInstructions =
-            useProjectInstructionsStore.getState().instructionsByProjectId[
-              targetProjectIdForSend
-            ] ?? "";
-          const inheritedThreadNotes = mergeProjectInstructionsIntoThreadNotes({
-            threadNotes,
-            projectInstructions: inheritedProjectInstructions,
-          });
-          await promoteThreadCreate(
-            {
-              type: "thread.create",
-              commandId: newCommandId(),
-              threadId: threadIdForSend,
-              projectId: targetProjectIdForSend,
-              title,
-              modelSelection: threadCreateModelSelection,
-              runtimeMode: nextRuntimeModeForSend,
-              interactionMode: interactionModeForSend,
-              envMode: nextThreadEnvMode,
-              branch: nextThreadBranch,
-              worktreePath: nextThreadWorktreePath,
-              workingDirectory: nextThreadWorkingDirectory,
-              associatedWorktreePath: nextAssociatedWorktreePath,
-              associatedWorktreeBranch: nextAssociatedWorktreeBranch,
-              associatedWorktreeRef: nextAssociatedWorktreeRef,
-              lastKnownPr: activeThread.lastKnownPr ?? null,
-              createdAt: activeThread.createdAt,
-            },
-            api,
-          );
-          // `thread.create` does not carry notes, so seed the freshly created
-          // server thread's notepad with the inherited project instructions via a
-          // dedicated meta update. Best-effort: a failure here must not abort the turn.
-          if (inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0) {
-            try {
-              await dispatchThreadNotes(threadIdForSend, inheritedThreadNotes);
-            } catch {
-              // Seeding is non-critical; project instructions can still be copied
-              // into the notepad manually from the Environment panel.
-            }
-          }
-          // Same for a goal staged on the draft via /goal: persist it now so the
-          // decider stamps goalStartedAt when the thread actually starts working.
-          const draftGoalForSend = activeThread.goal?.trim() ?? "";
-          if (draftGoalForSend.length > 0) {
-            try {
-              await dispatchThreadGoal(threadIdForSend, draftGoalForSend, {
-                startBehavior: "defer",
-              });
-            } catch {
-              // Non-critical: the goal can be set again with /goal on the live thread.
-            }
-          }
-          if (targetProjectKindForSend === "chat") {
-            await api.orchestration.dispatchCommand({
-              type: "project.meta.update",
-              commandId: newCommandId(),
-              projectId: targetProjectIdForSend,
-              title,
-            });
-          }
-          createdServerThreadForLocalDraft = true;
         }
 
         const setupScript = switchedToLocalCheckout ? null : setupScriptForWorktree;
@@ -495,7 +538,7 @@ export function useChatTurnExecution({
             if (setupTerminal) {
               const setupActivityAbortController = new AbortController();
               const setupActivityWait = waitForSetupScriptTerminalActivity({
-                threadId: threadIdForSend,
+                threadId: setupTerminal.threadId,
                 terminalId: setupTerminal.terminalId,
                 signal: setupActivityAbortController.signal,
               });
@@ -514,13 +557,23 @@ export function useChatTurnExecution({
         // script ran (the creation-step race above only guards the first step).
         await consumeWorktreeSetupResolution();
 
+        const needsProviderHandoff =
+          isServerThread &&
+          queuedChatTurn === null &&
+          threadHasProviderLockingActivity(activeThread) &&
+          dispatchSettings.modelSelection.provider !== activeThread.modelSelection.provider;
         if (isServerThread) {
           await persistThreadSettingsForNextTurn({
+            // The explicit handoff owns a provider switch. An ordinary metadata
+            // update first would erase its source and make the server reject it.
+            ...(needsProviderHandoff
+              ? {
+                  runtimeMode: dispatchSettings.runtimeMode,
+                  interactionMode: dispatchSettings.interactionMode,
+                }
+              : threadSettingsDispatchFields(dispatchSettings)),
             threadId: threadIdForSend,
             createdAt: messageCreatedAt,
-            modelSelection: selectedModelSelectionForSend,
-            runtimeMode: nextRuntimeModeForSend,
-            interactionMode: interactionModeForSend,
           });
         }
 
@@ -558,6 +611,30 @@ export function useChatTurnExecution({
         // turn. Once they settle, consume the last possible choice before the
         // card advances to the non-resolvable "Starting session" step.
         await consumeWorktreeSetupResolution();
+        // A provider picked over the thread's own one: hand off in place while
+        // the message already shows. A failure throws into the rollback below,
+        // which returns the message to the composer.
+        if (needsProviderHandoff && prepareProviderHandoffForSend) {
+          await prepareProviderHandoffForSend(activeThread, dispatchSettings.modelSelection);
+          // The optimistic row predates provider startup. Position this send
+          // after its completed handoff, including when the server clock is ahead.
+          const handoffCreatedAt = getThreadFromState(
+            useStore.getState(),
+            threadIdForSend,
+          )?.activities.findLast((activity) => activity.kind === "provider.handoff")?.createdAt;
+          messageCreatedAt = new Date(
+            Math.max(Date.now(), Date.parse(handoffCreatedAt ?? messageCreatedAt) + 1),
+          ).toISOString();
+          if (activeThreadIdRef.current === threadIdForSend) {
+            setOptimisticUserMessages((messages) =>
+              messages.map((message) =>
+                message.id === messageIdForSend
+                  ? { ...message, createdAt: messageCreatedAt }
+                  : message,
+              ),
+            );
+          }
+        }
         // Carry the expected message id so a snapshot rebuilt after an interim
         // reset (thread switch, ack effect) keeps the message-echo ack signal.
         beginLocalDispatch({
@@ -572,36 +649,50 @@ export function useChatTurnExecution({
         });
         rememberCustomBinaryPathForDispatch({
           threadId: threadIdForSend,
-          provider: selectedModelSelectionForSend.provider,
-          providerOptions: providerOptionsForDispatchForSend,
+          provider: dispatchSettings.modelSelection.provider,
+          providerInstanceId:
+            dispatchSettings.modelSelection.instanceId ?? dispatchSettings.modelSelection.provider,
+          providerOptions: dispatchSettings.providerOptions,
         });
-        await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-          api.orchestration.dispatchCommand({
-            type: "thread.turn.start",
-            commandId: newCommandId(),
-            threadId: threadIdForSend,
-            message: {
-              messageId: messageIdForSend,
-              role: "user",
-              text: outgoingMessageText,
-              attachments: turnAttachments,
-              ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
-              ...(mentionedPluginMentionsForSend.length > 0
-                ? { mentions: mentionedPluginMentionsForSend }
+        await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
+          if (
+            getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null ||
+            isThreadDetailAwaitingVerification(threadIdForSend)
+          ) {
+            throw new Error(
+              "Choose how to resume the held message before sending another message.",
+            );
+          }
+          await api.orchestration
+            .dispatchCommand({
+              type: "thread.turn.start",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              message: {
+                messageId: messageIdForSend,
+                role: "user",
+                text: outgoingMessageText,
+                attachments: turnAttachments,
+                ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
+                ...(mentionedPluginMentionsForSend.length > 0
+                  ? { mentions: mentionedPluginMentionsForSend }
+                  : {}),
+              },
+              ...turnStartDispatchFields(dispatchSettings, dispatchMode),
+              ...(sourceProposedPlanForSend
+                ? { sourceProposedPlan: sourceProposedPlanForSend }
                 : {}),
-            },
-            modelSelection: selectedModelSelectionForSend,
-            ...(providerOptionsForDispatchForSend
-              ? { providerOptions: providerOptionsForDispatchForSend }
-              : {}),
-            assistantDeliveryMode,
-            dispatchMode,
-            runtimeMode: nextRuntimeModeForSend,
-            interactionMode: interactionModeForSend,
-            ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
-            createdAt: messageCreatedAt,
-          }),
-        );
+              createdAt: messageCreatedAt,
+            })
+            .catch((error: unknown) => {
+              if (
+                getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview
+                  ?.messageId !== messageIdForSend
+              ) {
+                throw error;
+              }
+            });
+        });
         turnStartSucceeded = true;
         if (
           shouldResumeSettledLocalThread &&
@@ -635,9 +726,26 @@ export function useChatTurnExecution({
           setPlanSidebarOpen(true);
         }
         if (queuedChatTurn === null) {
-          setRestoredQueuedSourceProposedPlan(threadIdForSend, null);
+          (activeThreadIdRef.current === threadIdForSend
+            ? setRestoredQueuedSourceProposedPlan
+            : useComposerDraftStore.getState().setRestoredSourceProposedPlan)(
+            threadIdForSend,
+            null,
+          );
         }
       })().catch(async (err: unknown) => {
+        // The server already recorded this message, so the turn exists whatever failed
+        // around it. Rolling back would delete the promoted thread and hand the sent
+        // prompt back to the composer, where it survives reloads and gets sent again.
+        if (
+          !turnStartSucceeded &&
+          hasServerReceivedSentMessage(
+            getThreadFromState(useStore.getState(), threadIdForSend),
+            messageIdForSend,
+          )
+        ) {
+          turnStartSucceeded = true;
+        }
         // A user-cancelled worktree setup unwinds through this same rollback,
         // but silently: no error styling on the step row, no thread error.
         const setupCancelled = err instanceof WorktreeSetupCancelledError;
@@ -683,7 +791,7 @@ export function useChatTurnExecution({
               () => undefined,
             );
         }
-        if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
+        if (createdServerThreadForLocalDraft && !turnStartSucceeded && !baseBranchForWorktree) {
           // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
           await api.orchestration
             .dispatchCommand({
@@ -705,14 +813,14 @@ export function useChatTurnExecution({
               () => true,
               () => false,
             );
-          if (removed && isServerThread) {
+          if (removed && (isServerThread || createdServerThreadForLocalDraft)) {
             await api.orchestration
               .dispatchCommand({
                 type: "thread.meta.update",
                 commandId: newCommandId(),
                 threadId: threadIdForSend,
-                envMode: "local",
-                branch: null,
+                envMode: switchedToLocalCheckout ? "local" : "worktree",
+                branch: switchedToLocalCheckout ? null : baseBranchForWorktree,
                 worktreePath: null,
                 associatedWorktreePath: null,
                 associatedWorktreeBranch: null,
@@ -721,7 +829,8 @@ export function useChatTurnExecution({
               .then(
                 () =>
                   setStoreThreadWorkspace(threadIdForSend, {
-                    branch: null,
+                    envMode: switchedToLocalCheckout ? "local" : "worktree",
+                    branch: switchedToLocalCheckout ? null : baseBranchForWorktree,
                     worktreePath: null,
                     associatedWorktreePath: null,
                     associatedWorktreeBranch: null,
@@ -731,61 +840,112 @@ export function useChatTurnExecution({
               );
           }
         }
-        if (queuedChatTurn !== null && !turnStartSucceeded) {
+        const isFocusedSend = activeThreadIdRef.current === threadIdForSend;
+        if (
+          queuedChatTurn !== null &&
+          !turnStartSucceeded &&
+          activeThreadIdRef.current === threadIdForSend
+        ) {
           // The queued snapshot remains available for retry/edit after a rejected
           // dispatch. Drop only this attempt's optimistic transcript row; its
           // attachment preview URLs still belong to the queued snapshot.
-          setOptimisticUserMessages((existing) => {
-            const next = existing.filter((message) => message.id !== messageIdForSend);
-            return next.length === existing.length ? existing : next;
-          });
+          if (isFocusedSend)
+            setOptimisticUserMessages((existing) => {
+              const next = existing.filter((message) => message.id !== messageIdForSend);
+              return next.length === existing.length ? existing : next;
+            });
         }
+        const retryDraft = useComposerDraftStore.getState().draftsByThreadId[threadIdForSend];
         if (
           queuedChatTurn === null &&
           !turnStartSucceeded &&
-          promptRef.current.length === 0 &&
-          composerImagesRef.current.length === 0 &&
-          composerFilesRef.current.length === 0 &&
-          composerAssistantSelectionsRef.current.length === 0 &&
-          composerBrowserAnnotationsRef.current.length === 0 &&
-          composerFileCommentsRef.current.length === 0 &&
-          composerTerminalContextsRef.current.length === 0 &&
-          composerPastedTextsRef.current.length === 0 &&
-          composerPullRequestContextsRef.current.length === 0
+          (!retryDraft ||
+            (retryDraft.prompt.length === 0 &&
+              retryDraft.images.length === 0 &&
+              retryDraft.files.length === 0 &&
+              retryDraft.assistantSelections.length === 0 &&
+              retryDraft.browserAnnotations.length === 0 &&
+              retryDraft.fileComments.length === 0 &&
+              retryDraft.terminalContexts.length === 0 &&
+              retryDraft.pastedTexts.length === 0 &&
+              retryDraft.pullRequestContexts.length === 0))
         ) {
-          setOptimisticUserMessages((existing) => {
-            const removed = existing.filter((message) => message.id === messageIdForSend);
-            for (const message of removed) {
-              revokeUserMessagePreviewUrls(message);
-            }
-            const next = existing.filter((message) => message.id !== messageIdForSend);
-            return next.length === existing.length ? existing : next;
-          });
-          promptRef.current = promptForSend;
+          if (isFocusedSend)
+            setOptimisticUserMessages((existing) => {
+              const removed = existing.filter((message) => message.id === messageIdForSend);
+              for (const message of removed) {
+                revokeUserMessagePreviewUrls(message);
+              }
+              const next = existing.filter((message) => message.id !== messageIdForSend);
+              return next.length === existing.length ? existing : next;
+            });
+          if (isFocusedSend) promptRef.current = promptForSend;
           setPrompt(promptForSend);
           if (sourceProposedPlanForSend) {
-            setRestoredQueuedSourceProposedPlan(threadIdForSend, {
+            (isFocusedSend
+              ? setRestoredQueuedSourceProposedPlan
+              : useComposerDraftStore.getState().setRestoredSourceProposedPlan)(threadIdForSend, {
               threadId: threadIdForSend,
               restoredPrompt: promptForSend,
               sourceProposedPlan: sourceProposedPlanForSend,
             });
           }
-          setComposerCursor(collapseExpandedComposerCursor(promptForSend, promptForSend.length));
-          addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageAttachment));
-          addComposerFilesToDraft(composerFilesSnapshot);
+          if (isFocusedSend)
+            setComposerCursor(collapseExpandedComposerCursor(promptForSend, promptForSend.length));
+          (isFocusedSend
+            ? addComposerImagesToDraft
+            : (value: Parameters<typeof addComposerImagesToDraft>[0]) =>
+                useComposerDraftStore.getState().addImages(threadIdForSend, value))(
+            composerImagesSnapshot.map(cloneComposerImageAttachment),
+          );
+          (isFocusedSend
+            ? addComposerFilesToDraft
+            : (value: Parameters<typeof addComposerFilesToDraft>[0]) =>
+                useComposerDraftStore.getState().addFiles(threadIdForSend, value))(
+            composerFilesSnapshot,
+          );
           for (const selection of composerAssistantSelectionsSnapshot) {
-            addComposerAssistantSelectionToDraft(selection);
+            (isFocusedSend
+              ? addComposerAssistantSelectionToDraft
+              : (value: Parameters<typeof addComposerAssistantSelectionToDraft>[0]) =>
+                  useComposerDraftStore.getState().addAssistantSelection(threadIdForSend, value))(
+              selection,
+            );
           }
           addComposerDraftBrowserAnnotations(threadIdForSend, composerBrowserAnnotationsSnapshot);
           for (const comment of composerFileCommentsSnapshot) {
-            addComposerFileCommentToDraft(comment);
+            (isFocusedSend
+              ? addComposerFileCommentToDraft
+              : (value: Parameters<typeof addComposerFileCommentToDraft>[0]) =>
+                  useComposerDraftStore.getState().addFileComment(threadIdForSend, value))(comment);
           }
-          addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
-          addComposerPastedTextsToDraft(composerPastedTextsSnapshot);
-          addComposerPullRequestContextsToDraft(composerPullRequestContextsSnapshot);
-          updateSelectedComposerSkills(composerSkillsSnapshot);
-          updateSelectedComposerMentions(composerMentionsSnapshot);
-          setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
+          (isFocusedSend
+            ? addComposerTerminalContextsToDraft
+            : (value: Parameters<typeof addComposerTerminalContextsToDraft>[0]) =>
+                useComposerDraftStore.getState().addTerminalContexts(threadIdForSend, value))(
+            composerTerminalContextsSnapshot,
+          );
+          (isFocusedSend
+            ? addComposerPastedTextsToDraft
+            : (value: Parameters<typeof addComposerPastedTextsToDraft>[0]) =>
+                useComposerDraftStore.getState().addPastedTexts(threadIdForSend, value))(
+            composerPastedTextsSnapshot,
+          );
+          (isFocusedSend
+            ? addComposerPullRequestContextsToDraft
+            : (value: Parameters<typeof addComposerPullRequestContextsToDraft>[0]) =>
+                value.forEach((context) =>
+                  useComposerDraftStore.getState().addPullRequestContext(threadIdForSend, context),
+                ))(composerPullRequestContextsSnapshot);
+          if (isFocusedSend) {
+            updateSelectedComposerSkills(composerSkillsSnapshot);
+            updateSelectedComposerMentions(composerMentionsSnapshot);
+          } else {
+            useComposerDraftStore.getState().setSkills(threadIdForSend, composerSkillsSnapshot);
+            useComposerDraftStore.getState().setMentions(threadIdForSend, composerMentionsSnapshot);
+          }
+          if (isFocusedSend)
+            setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
         }
         if (!setupCancelled) {
           setThreadError(
@@ -818,7 +978,6 @@ export function useChatTurnExecution({
       runProjectScript,
       persistThreadSettingsForNextTurn,
       rememberCustomBinaryPathForDispatch,
-      assistantDeliveryMode,
       setSettledThreadBranchWarningDismissedThreadId,
       armLocalDispatchAckFallback,
       setQueuedSteerGate,
@@ -828,15 +987,8 @@ export function useChatTurnExecution({
       setRestoredQueuedSourceProposedPlan,
       failLocalDispatchWorktreeSetup,
       setOptimisticUserMessages,
+      activeThreadIdRef,
       promptRef,
-      composerImagesRef,
-      composerFilesRef,
-      composerAssistantSelectionsRef,
-      composerBrowserAnnotationsRef,
-      composerFileCommentsRef,
-      composerTerminalContextsRef,
-      composerPastedTextsRef,
-      composerPullRequestContextsRef,
       setPrompt,
       setComposerCursor,
       addComposerImagesToDraft,
@@ -855,6 +1007,12 @@ export function useChatTurnExecution({
       worktreeSetupResolutionRef,
       scheduleFailedWorktreeSetupDispatchReset,
       resetLocalDispatch,
+      prepareProviderHandoffForSend,
     ],
+  );
+  return useCallback(
+    (preparedTurn: PreparedChatTurn) =>
+      runComposerSendOnce(preparedTurn.threadIdForSend, () => execute(preparedTurn)),
+    [execute],
   );
 }

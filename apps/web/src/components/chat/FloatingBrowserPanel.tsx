@@ -27,6 +27,7 @@ import { cn } from "../../lib/utils";
 import { IconButton } from "../ui/icon-button";
 import {
   clampFloatingBrowserPanelRect,
+  floatingBrowserComposerClearancePx,
   FLOATING_BROWSER_PANEL_DEFAULT_SIZE,
   FLOATING_BROWSER_PANEL_MARGIN_PX,
   floatingBrowserResizeCursor,
@@ -85,6 +86,42 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
   const panelRectRef = useRef<FloatingBrowserPanelRect>(DEFAULT_FLOATING_RECT);
   const [panelRect, setPanelRect] = useState<FloatingBrowserPanelRect>(DEFAULT_FLOATING_RECT);
   const [controlsOpen, setControlsOpen] = useState(false);
+  // The host stops above the chat's composer so the card can never sit over its controls
+  // (Send lives bottom-right, exactly where the card starts).
+  const [composerClearancePx, setComposerClearancePx] = useState(0);
+
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    const pane = host?.parentElement;
+    if (!host || !pane) return;
+    let observedComposer: HTMLElement | null = null;
+    const resizeObserver = new ResizeObserver(() => update());
+    const update = () => {
+      const composer = pane.querySelector<HTMLElement>("[data-chat-composer-form]");
+      if (composer !== observedComposer) {
+        if (observedComposer) resizeObserver.unobserve(observedComposer);
+        if (composer) resizeObserver.observe(composer);
+        observedComposer = composer;
+      }
+      const next = floatingBrowserComposerClearancePx({
+        paneBottom: pane.getBoundingClientRect().bottom,
+        composerTop: composer ? composer.getBoundingClientRect().top : null,
+      });
+      setComposerClearancePx((previous) => (previous === next ? previous : next));
+    };
+    update();
+    resizeObserver.observe(pane);
+    // The composer remounts when the empty landing gives way to the transcript. Streaming
+    // mutates this subtree constantly, so only a changed composer element re-measures.
+    const mutationObserver = new MutationObserver(() => {
+      if (pane.querySelector("[data-chat-composer-form]") !== observedComposer) update();
+    });
+    mutationObserver.observe(pane, { childList: true, subtree: true });
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, []);
 
   const applyPanelRect = useCallback((next: FloatingBrowserPanelRect, host: HTMLElement) => {
     const clamped = clampFloatingBrowserPanelRect(next, hostSize(host));
@@ -286,15 +323,15 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     <div
       ref={hostRef}
       data-floating-browser-host="true"
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-30 overflow-hidden"
-      style={{ top: `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` }}
+      className="pointer-events-none absolute inset-x-0 z-30 overflow-hidden"
+      style={{ top: `${CHAT_SURFACE_HEADER_HEIGHT_PX}px`, bottom: `${composerClearancePx}px` }}
     >
       <div
         ref={panelRef}
         data-floating-browser-panel="true"
         role="region"
         aria-label="Floating browser"
-        className="group/floating-browser pointer-events-auto absolute flex flex-col overflow-visible rounded-xl border border-border bg-background text-foreground shadow-2xl ring-1 ring-black/10"
+        className="group/floating-browser pointer-events-auto absolute flex flex-col overflow-visible rounded-2xl border border-border bg-popover/95 text-foreground shadow-[0_12px_48px_-12px_rgb(0_0_0/0.25)] backdrop-blur-xl"
         style={{
           left: `${panelRect.left}px`,
           top: `${panelRect.top}px`,
@@ -330,7 +367,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
           data-floating-browser-controls="true"
           className="pointer-events-none absolute right-2 top-2 z-[70]"
         >
-          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border/80 bg-background/90 p-0.5 shadow-sm backdrop-blur-md">
+          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border bg-popover/95 p-0.5 text-muted-foreground shadow-sm backdrop-blur-xl">
             <IconButton
               type="button"
               variant="ghost"

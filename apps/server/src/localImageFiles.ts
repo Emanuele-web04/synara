@@ -16,7 +16,10 @@ import {
 } from "@synara/shared/localPreviewFiles";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 
-import { resolveCodexGeneratedImagesRoots } from "./codexGeneratedImages.ts";
+import {
+  type CodexGeneratedImageHomeCandidate,
+  resolveCodexGeneratedImageHomes,
+} from "./codexGeneratedImages.ts";
 
 export { LOCAL_IMAGE_ROUTE_PATH };
 
@@ -127,7 +130,9 @@ async function resolveWorkspaceRoot(cwd: string | null): Promise<string | null> 
 export async function resolveAllowedLocalPreviewFile(input: {
   readonly requestedPath: string | null;
   readonly cwd: string | null;
-  readonly codexHomePath?: string;
+  readonly codexHomePath?: CodexGeneratedImageHomeCandidate;
+  /** Additional configured Codex homes (per-instance dedicated homes). */
+  readonly codexHomePaths?: readonly CodexGeneratedImageHomeCandidate[];
   readonly scratchWorkspacesRoot?: string;
   readonly allowAbsoluteLocalPreviewFile?: boolean;
   readonly previewGrant?: string | null;
@@ -196,8 +201,28 @@ export async function resolveAllowedLocalPreviewFile(input: {
   if (!isSupportedLocalImagePath(realFilePath)) {
     return null;
   }
+  // A provided empty array means settings/live sessions intentionally allow no Codex homes.
+  // Only fall back to the ambient CODEX_HOME when callers do not provide an allowlist at all.
+  const codexHomeCandidates =
+    input.codexHomePaths === undefined
+      ? [input.codexHomePath]
+      : input.codexHomePath === undefined
+        ? input.codexHomePaths
+        : [input.codexHomePath, ...input.codexHomePaths];
   const generatedImagesRoots = await Promise.all(
-    resolveCodexGeneratedImagesRoots(input.codexHomePath).map(realpathOrNull),
+    [...new Set(codexHomeCandidates.flatMap((home) => resolveCodexGeneratedImageHomes(home)))].map(
+      async (home) => {
+        const [realHome, realRoot] = await Promise.all([
+          realpathOrNull(home),
+          realpathOrNull(path.join(home, "generated_images")),
+        ]);
+        // A generated_images symlink must not turn a configured Codex home into
+        // an allowlist for an unrelated directory.
+        return realHome !== null && realRoot !== null && isPathInside(realRoot, realHome)
+          ? realRoot
+          : null;
+      },
+    ),
   ).then((roots) => roots.filter((root): root is string => root !== null));
   const allowed =
     generatedImagesRoots.some((root) => isPathInside(realFilePath, root)) ||

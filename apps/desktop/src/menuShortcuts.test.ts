@@ -5,8 +5,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   applyDesktopPhysicalZoomAction,
+  DEFAULT_DESKTOP_MENU_ACCELERATORS,
+  keybindingShortcutToAccelerator,
   resolveDesktopMenuAccelerator,
+  resolveReportedMenuAccelerators,
+  sameDesktopMenuAccelerators,
   resolveDesktopPhysicalZoomAction,
+  resolveDesktopZoomShortcutAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -94,6 +99,115 @@ describe("resolveDesktopPhysicalZoomAction", () => {
   });
 });
 
+describe("resolveDesktopZoomShortcutAction", () => {
+  const linuxCtrlInput = {
+    type: "keyDown",
+    key: "",
+    control: true,
+    meta: false,
+    shift: false,
+    alt: false,
+  };
+
+  it("zooms in on Ctrl+= and Ctrl++ (shifted plus included)", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", { ...linuxCtrlInput, key: "=", code: "Equal" }),
+    ).toBe("zoomIn");
+    // Italian and other layouts type "+" with Shift held.
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "+",
+        code: "BracketRight",
+        shift: true,
+      }),
+    ).toBe("zoomIn");
+  });
+
+  it("zooms in on the numpad plus key", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "Add",
+        code: "NumpadAdd",
+      }),
+    ).toBe("zoomIn");
+  });
+
+  it("zooms out on Ctrl+- and resets on Ctrl+0", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", { ...linuxCtrlInput, key: "-", code: "Minus" }),
+    ).toBe("zoomOut");
+    expect(
+      resolveDesktopZoomShortcutAction("linux", { ...linuxCtrlInput, key: "0", code: "Digit0" }),
+    ).toBe("resetZoom");
+  });
+
+  it("does not steal shifted minus/zero or modified chords", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "_",
+        code: "Minus",
+        shift: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "0",
+        code: "Digit0",
+        shift: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "+",
+        code: "Equal",
+        alt: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "+",
+        code: "Equal",
+        meta: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores NumLock-off numpad presses that surface as navigation keys", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "Insert",
+        code: "Numpad0",
+      }),
+    ).toBeNull();
+  });
+
+  it("only handles Linux Ctrl key-down events", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        type: "keyUp",
+        key: "=",
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        control: false,
+        key: "=",
+      }),
+    ).toBeNull();
+    expect(resolveDesktopZoomShortcutAction("win32", { ...linuxCtrlInput, key: "=" })).toBeNull();
+    expect(resolveDesktopZoomShortcutAction("darwin", { ...linuxCtrlInput, key: "=" })).toBeNull();
+  });
+});
+
 describe("applyDesktopPhysicalZoomAction", () => {
   it("uses Electron's native half-level zoom-out step", () => {
     const target = {
@@ -138,5 +252,126 @@ describe("resolveKeyboardShortcutsMenuAccelerator", () => {
   it("does not assign a global shortcuts help accelerator outside macOS", () => {
     expect(resolveKeyboardShortcutsMenuAccelerator("win32")).toBeUndefined();
     expect(resolveKeyboardShortcutsMenuAccelerator("linux")).toBeUndefined();
+  });
+});
+
+const shortcut = (
+  key: string,
+  modifiers: Partial<{
+    modKey: boolean;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    altKey: boolean;
+    shiftKey: boolean;
+  }> = {},
+) => ({
+  key,
+  modKey: false,
+  metaKey: false,
+  ctrlKey: false,
+  altKey: false,
+  shiftKey: false,
+  ...modifiers,
+});
+
+describe("keybindingShortcutToAccelerator", () => {
+  it.each([
+    [shortcut("b", { modKey: true }), "CmdOrCtrl+B"],
+    [shortcut("b", { modKey: true, shiftKey: true }), "CmdOrCtrl+Shift+B"],
+    [shortcut("arrowleft", { modKey: true, altKey: true }), "CmdOrCtrl+Alt+Left"],
+    [shortcut("arrowdown", { altKey: true }), "Alt+Down"],
+    [shortcut(" ", { ctrlKey: true }), "Ctrl+Space"],
+    [shortcut("escape", { modKey: true }), "CmdOrCtrl+Escape"],
+    [shortcut("+", { modKey: true }), "CmdOrCtrl+Plus"],
+    [shortcut("1", { modKey: true }), "CmdOrCtrl+1"],
+    [shortcut("\\", { modKey: true }), "CmdOrCtrl+\\"],
+    [shortcut("[", { altKey: true }), "Alt+["],
+    [shortcut("f5", { modKey: true }), "CmdOrCtrl+F5"],
+    [shortcut("f12"), "F12"],
+  ])("converts %o to %s", (input, expected) => {
+    expect(keybindingShortcutToAccelerator(input, "darwin")).toBe(expected);
+  });
+
+  it("maps meta to Cmd on macOS and Super elsewhere without repeating mod", () => {
+    expect(keybindingShortcutToAccelerator(shortcut("k", { metaKey: true }), "darwin")).toBe(
+      "Cmd+K",
+    );
+    expect(keybindingShortcutToAccelerator(shortcut("k", { metaKey: true }), "win32")).toBe(
+      "Super+K",
+    );
+    expect(
+      keybindingShortcutToAccelerator(shortcut("k", { modKey: true, metaKey: true }), "darwin"),
+    ).toBe("CmdOrCtrl+K");
+    expect(
+      keybindingShortcutToAccelerator(shortcut("k", { modKey: true, ctrlKey: true }), "darwin"),
+    ).toBe("CmdOrCtrl+Ctrl+K");
+    expect(
+      keybindingShortcutToAccelerator(shortcut("k", { modKey: true, ctrlKey: true }), "win32"),
+    ).toBe("CmdOrCtrl+K");
+  });
+
+  it("returns null for keys Electron cannot express and for unmodified typing keys", () => {
+    expect(keybindingShortcutToAccelerator(shortcut("ß", { altKey: true }), "darwin")).toBeNull();
+    expect(keybindingShortcutToAccelerator(shortcut("f25", { modKey: true }), "darwin")).toBeNull();
+    expect(
+      keybindingShortcutToAccelerator(shortcut("unassigned", { modKey: true }), "darwin"),
+    ).toBeNull();
+    expect(keybindingShortcutToAccelerator(shortcut("b"), "darwin")).toBeNull();
+    expect(keybindingShortcutToAccelerator(shortcut("b", { shiftKey: true }), "darwin")).toBeNull();
+  });
+});
+
+describe("resolveReportedMenuAccelerators", () => {
+  const report = {
+    "terminal.new": shortcut("t", { modKey: true }),
+    "sidebar.toggle": shortcut("j", { modKey: true }),
+    "browser.toggle": null,
+  };
+
+  it("converts a valid report, leaving unbound commands without an accelerator", () => {
+    expect(resolveReportedMenuAccelerators(report, "darwin")).toEqual({
+      "terminal.new": "CmdOrCtrl+T",
+      "sidebar.toggle": "CmdOrCtrl+J",
+      "browser.toggle": null,
+    });
+  });
+
+  it("rejects malformed reports", () => {
+    expect(resolveReportedMenuAccelerators(null, "darwin")).toBeNull();
+    expect(resolveReportedMenuAccelerators("CmdOrCtrl+B", "darwin")).toBeNull();
+    expect(
+      resolveReportedMenuAccelerators({ ...report, "browser.toggle": undefined }, "darwin"),
+    ).toBeNull();
+    expect(
+      resolveReportedMenuAccelerators(
+        { ...report, "sidebar.toggle": { ...report["sidebar.toggle"], modKey: "yes" } },
+        "darwin",
+      ),
+    ).toBeNull();
+    expect(
+      resolveReportedMenuAccelerators(
+        { ...report, "sidebar.toggle": shortcut("x".repeat(65), { modKey: true }) },
+        "darwin",
+      ),
+    ).toBeNull();
+  });
+
+  it("detects an unchanged report so the menu is not rebuilt", () => {
+    const resolved = resolveReportedMenuAccelerators(
+      {
+        "terminal.new": shortcut("t", { modKey: true }),
+        "sidebar.toggle": shortcut("b", { modKey: true }),
+        "browser.toggle": shortcut("b", { modKey: true, shiftKey: true }),
+      },
+      "darwin",
+    );
+    expect(resolved).not.toBeNull();
+    expect(sameDesktopMenuAccelerators(resolved!, DEFAULT_DESKTOP_MENU_ACCELERATORS)).toBe(true);
+    expect(
+      sameDesktopMenuAccelerators(
+        resolveReportedMenuAccelerators(report, "darwin")!,
+        DEFAULT_DESKTOP_MENU_ACCELERATORS,
+      ),
+    ).toBe(false);
   });
 });

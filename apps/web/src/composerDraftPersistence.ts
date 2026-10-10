@@ -1,4 +1,5 @@
 import { normalizePendingUserInputDrafts } from "./pendingUserInputRecovery";
+import { resolveComputerControlMode } from "./computerControlMode";
 // FILE: composerDraftPersistence.ts
 // Purpose: Owns composer draft schema v6, migrations, partialization, merge normalization, and hydration.
 // Exports: Persist middleware transitions and persisted state type.
@@ -9,6 +10,7 @@ import {
   OrchestrationThreadPullRequest,
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderModelOptions,
@@ -39,6 +41,7 @@ import {
   type ComposerPromptHistorySavedDraft,
   type ComposerThreadDraftState,
   type DraftThreadEnvMode,
+  type ModelSelectionByProviderInstance,
   type QueuedComposerTurn,
 } from "./composerDraftDomain";
 import {
@@ -46,7 +49,10 @@ import {
   legacyMergeModelSelectionIntoProviderModelOptions,
   legacySyncModelSelectionOptions,
   legacyToModelSelectionByProvider,
+  modelSelectionStorageKey,
   normalizeModelSelection,
+  normalizeModelSelectionMapByInstance,
+  normalizeProviderInstanceId,
   normalizeProviderKind,
   normalizeProviderModelOptions,
   sanitizeStickyModelSelectionMap,
@@ -70,11 +76,9 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
 
-function normalizePersistedModelSelectionMap(
-  value: unknown,
-): Partial<Record<ProviderKind, ModelSelection>> {
+function normalizePersistedModelSelectionMap(value: unknown): ModelSelectionByProviderInstance {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-  const result: Partial<Record<ProviderKind, ModelSelection>> = {};
+  const result: ModelSelectionByProviderInstance = {};
   for (const [legacyProvider, rawSelection] of Object.entries(value)) {
     const selection = normalizeModelSelection(rawSelection, {
       provider: legacyProvider,
@@ -83,11 +87,26 @@ function normalizePersistedModelSelectionMap(
           ? (rawSelection as Record<string, unknown>).model
           : undefined,
     });
-    if (selection && !(legacyProvider === "kilo" && result.opencode !== undefined)) {
-      result[selection.provider] = selection;
+    const key = selection ? modelSelectionStorageKey(selection) : null;
+    if (selection && key && !(legacyProvider === "kilo" && result[key] !== undefined)) {
+      result[key] = selection;
     }
   }
   return result;
+}
+
+function normalizePersistedActiveProviderInstanceId(
+  value: unknown,
+  selections: ModelSelectionByProviderInstance,
+): ProviderInstanceId | null {
+  const instanceId = normalizeProviderInstanceId(value);
+  if (!instanceId) return null;
+  if (selections[instanceId] !== undefined) return instanceId;
+
+  const migratedProvider = normalizeProviderKind(value);
+  return migratedProvider && selections[migratedProvider] !== undefined
+    ? migratedProvider
+    : instanceId;
 }
 
 function cloneBrowserAnnotation(annotation: BrowserAnnotationDraft): BrowserAnnotationDraft {
@@ -144,6 +163,8 @@ const PersistedPullRequestContextDraft = Schema.Struct({
   id: Schema.String,
   createdAt: Schema.String,
   scope: Schema.Literals(PULL_REQUEST_CONTEXT_SCOPES),
+  // Issue cards only; pull request cards omit it, as drafts saved before issues did.
+  itemKind: Schema.optionalKey(Schema.Literal("issue")),
   prNumber: Schema.Number,
   prUrl: Schema.String,
   title: Schema.String,
@@ -211,6 +232,9 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   selectedPromptEffort: Schema.NullOr(Schema.String),
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
+  computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
+  computerControlGeneration: Schema.optionalKey(Schema.Number),
   sourceProposedPlan: Schema.optionalKey(PersistedSourceProposedPlanReference),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -231,6 +255,9 @@ const PersistedQueuedComposerPlanFollowUp = Schema.Struct({
   selectedPromptEffort: Schema.NullOr(Schema.String),
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
+  computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
+  computerControlGeneration: Schema.optionalKey(Schema.Number),
   runtimeMode: RuntimeMode,
 });
 
@@ -286,13 +313,19 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
+  queueStoppedTurnId: Schema.optionalKey(Schema.String),
+  queueResumedTurnId: Schema.optionalKey(Schema.String),
   restoredSourceProposedPlan: Schema.optionalKey(PersistedRestoredSourceProposedPlan),
   modelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
-  activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
+  providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
+  computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
+  computerControlGeneration: Schema.optionalKey(Schema.Number),
 });
 
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
@@ -355,9 +388,9 @@ const PersistedComposerDraftStoreState = Schema.Struct({
   draftThreadsByThreadId: Schema.Record(ThreadId, PersistedDraftThreadState),
   projectDraftThreadIdByProjectId: Schema.Record(ProjectId, ThreadId),
   stickyModelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
-  stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
 });
 
 export type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
@@ -590,6 +623,7 @@ function normalizePersistedPullRequestContextDraft(
     id,
     createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
     scope: candidate.scope,
+    ...(candidate.itemKind === "issue" ? { itemKind: "issue" as const } : {}),
     prNumber,
     prUrl: typeof candidate.prUrl === "string" ? candidate.prUrl : "",
     title,
@@ -605,6 +639,7 @@ function toPersistedPullRequestContext(
     id: context.id,
     createdAt: context.createdAt,
     scope: context.scope,
+    ...(context.itemKind === "issue" ? { itemKind: "issue" as const } : {}),
     prNumber: context.prNumber,
     prUrl: context.prUrl,
     title: context.title,
@@ -659,6 +694,21 @@ function normalizePersistedQueuedTurns(
     const runtimeMode = Schema.is(RuntimeMode)(candidate.runtimeMode)
       ? candidate.runtimeMode
       : null;
+    const computerControlMode = resolveComputerControlMode(
+      candidate.computerControlMode === "off" ||
+        candidate.computerControlMode === "request" ||
+        candidate.computerControlMode === "chat"
+        ? candidate.computerControlMode
+        : undefined,
+      candidate.enableComputerControl === true,
+    );
+    const computerControlGeneration =
+      typeof candidate.computerControlGeneration === "number" &&
+      Number.isSafeInteger(candidate.computerControlGeneration) &&
+      candidate.computerControlGeneration >= 0
+        ? candidate.computerControlGeneration
+        : undefined;
+    const enableComputerControl = computerControlMode !== "off";
     if (
       id.length === 0 ||
       createdAt.length === 0 ||
@@ -747,6 +797,9 @@ function normalizePersistedQueuedTurns(
         selectedPromptEffort,
         modelSelection,
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        enableComputerControl,
+        computerControlMode,
+        ...(computerControlGeneration !== undefined ? { computerControlGeneration } : {}),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
         interactionMode,
@@ -776,6 +829,9 @@ function normalizePersistedQueuedTurns(
         selectedPromptEffort,
         modelSelection,
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        enableComputerControl,
+        computerControlMode,
+        ...(computerControlGeneration !== undefined ? { computerControlGeneration } : {}),
         runtimeMode,
       });
       seenIds.add(id);
@@ -993,14 +1049,32 @@ function normalizePersistedDraftsByThreadId(
     const interactionMode = Schema.is(ProviderInteractionMode)(draftCandidate.interactionMode)
       ? draftCandidate.interactionMode
       : null;
+    // Tri-state: only an explicit boolean is a recorded choice; anything else
+    // means the chat follows the new-chat default.
+    const enableComputerControl =
+      typeof draftCandidate.enableComputerControl === "boolean"
+        ? draftCandidate.enableComputerControl
+        : undefined;
+    const computerControlMode =
+      draftCandidate.computerControlMode === "off" ||
+      draftCandidate.computerControlMode === "request" ||
+      draftCandidate.computerControlMode === "chat"
+        ? draftCandidate.computerControlMode
+        : undefined;
+    const computerControlGeneration =
+      typeof draftCandidate.computerControlGeneration === "number" &&
+      Number.isSafeInteger(draftCandidate.computerControlGeneration) &&
+      draftCandidate.computerControlGeneration >= 0
+        ? draftCandidate.computerControlGeneration
+        : undefined;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
     );
     // If the draft already has the v3 shape, use it directly
     const legacyDraftCandidate = draftValue as LegacyPersistedComposerThreadDraftState;
-    let modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
-    let activeProvider: ProviderKind | null = null;
+    let modelSelectionByProvider: ModelSelectionByProviderInstance = {};
+    let activeProvider: ProviderInstanceId | null = null;
 
     if (
       draftCandidate.modelSelectionByProvider &&
@@ -1010,7 +1084,10 @@ function normalizePersistedDraftsByThreadId(
       modelSelectionByProvider = normalizePersistedModelSelectionMap(
         draftCandidate.modelSelectionByProvider,
       );
-      activeProvider = normalizeProviderKind(draftCandidate.activeProvider);
+      activeProvider = normalizePersistedActiveProviderInstanceId(
+        draftCandidate.activeProvider,
+        modelSelectionByProvider,
+      );
     } else {
       // v2 or legacy format: migrate
       const normalizedModelOptions =
@@ -1040,9 +1117,14 @@ function normalizePersistedDraftsByThreadId(
         modelSelection,
         mergedModelOptions,
       );
-      activeProvider = modelSelection?.provider ?? null;
+      activeProvider = modelSelection ? modelSelectionStorageKey(modelSelection) : null;
     }
 
+    const providerOptionsForDispatch = Schema.is(ProviderStartOptions)(
+      draftCandidate.providerOptionsForDispatch,
+    )
+      ? draftCandidate.providerOptionsForDispatch
+      : undefined;
     const normalizedQueuedTurns = queuedTurns ?? [];
     const restoredSourceProposedPlan = Schema.is(PersistedRestoredSourceProposedPlan)(
       draftCandidate.restoredSourceProposedPlan,
@@ -1068,8 +1150,11 @@ function normalizePersistedDraftsByThreadId(
       !hasQueuedTurns &&
       restoredSourceProposedPlan === null &&
       !hasModelData &&
+      providerOptionsForDispatch === undefined &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      enableComputerControl === undefined &&
+      computerControlMode === undefined
     ) {
       continue;
     }
@@ -1087,10 +1172,20 @@ function normalizePersistedDraftsByThreadId(
       ...(skills.length > 0 ? { skills } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
+      ...(hasQueuedTurns && typeof draftCandidate.queueStoppedTurnId === "string"
+        ? { queueStoppedTurnId: draftCandidate.queueStoppedTurnId }
+        : {}),
+      ...(hasQueuedTurns && typeof draftCandidate.queueResumedTurnId === "string"
+        ? { queueResumedTurnId: draftCandidate.queueResumedTurnId }
+        : {}),
       ...(restoredSourceProposedPlan ? { restoredSourceProposedPlan } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
+      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
+      ...(computerControlMode !== undefined ? { computerControlMode } : {}),
+      ...(computerControlGeneration !== undefined ? { computerControlGeneration } : {}),
     };
   }
 
@@ -1192,6 +1287,18 @@ export function partializeComposerDraftStoreState(
           ...(queuedTurn.providerOptionsForDispatch
             ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
             : {}),
+          enableComputerControl:
+            resolveComputerControlMode(
+              queuedTurn.computerControlMode,
+              queuedTurn.enableComputerControl,
+            ) !== "off",
+          ...(queuedTurn.computerControlGeneration !== undefined
+            ? { computerControlGeneration: queuedTurn.computerControlGeneration }
+            : {}),
+          computerControlMode: resolveComputerControlMode(
+            queuedTurn.computerControlMode,
+            queuedTurn.enableComputerControl,
+          ),
           ...(queuedTurn.sourceProposedPlan
             ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
             : {}),
@@ -1215,6 +1322,18 @@ export function partializeComposerDraftStoreState(
         ...(queuedTurn.providerOptionsForDispatch
           ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
           : {}),
+        enableComputerControl:
+          resolveComputerControlMode(
+            queuedTurn.computerControlMode,
+            queuedTurn.enableComputerControl,
+          ) !== "off",
+        ...(queuedTurn.computerControlGeneration !== undefined
+          ? { computerControlGeneration: queuedTurn.computerControlGeneration }
+          : {}),
+        computerControlMode: resolveComputerControlMode(
+          queuedTurn.computerControlMode,
+          queuedTurn.enableComputerControl,
+        ),
         runtimeMode: queuedTurn.runtimeMode,
       });
     }
@@ -1237,8 +1356,11 @@ export function partializeComposerDraftStoreState(
       !hasQueuedTurns &&
       draft.restoredSourceProposedPlan == null &&
       !hasModelData &&
+      draft.providerOptionsForDispatch == null &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.enableComputerControl === undefined &&
+      draft.computerControlMode === undefined
     ) {
       continue;
     }
@@ -1378,6 +1500,12 @@ export function partializeComposerDraftStoreState(
       ...(draft.skills.length > 0 ? { skills: [...draft.skills] } : {}),
       ...(draft.mentions.length > 0 ? { mentions: [...draft.mentions] } : {}),
       ...(hasQueuedTurns ? { queuedTurns: persistedQueuedTurns } : {}),
+      ...(hasQueuedTurns && draft.queueStoppedTurnId
+        ? { queueStoppedTurnId: draft.queueStoppedTurnId }
+        : {}),
+      ...(hasQueuedTurns && draft.queueResumedTurnId
+        ? { queueResumedTurnId: draft.queueResumedTurnId }
+        : {}),
       ...(draft.restoredSourceProposedPlan
         ? { restoredSourceProposedPlan: draft.restoredSourceProposedPlan }
         : {}),
@@ -1387,8 +1515,20 @@ export function partializeComposerDraftStoreState(
             activeProvider: draft.activeProvider,
           }
         : {}),
+      ...(draft.providerOptionsForDispatch
+        ? { providerOptionsForDispatch: draft.providerOptionsForDispatch }
+        : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.computerControlGeneration !== undefined
+        ? { computerControlGeneration: draft.computerControlGeneration }
+        : {}),
+      ...(draft.computerControlMode !== undefined
+        ? { computerControlMode: draft.computerControlMode }
+        : {}),
+      ...(draft.enableComputerControl !== undefined
+        ? { enableComputerControl: draft.enableComputerControl }
+        : {}),
     };
     persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
   }
@@ -1415,8 +1555,8 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     );
 
   // Handle both v3 (modelSelectionByProvider) and v2/legacy formats
-  let stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
-  let stickyActiveProvider: ProviderKind | null = null;
+  let stickyModelSelectionByProvider: ModelSelectionByProviderInstance = {};
+  let stickyActiveProvider: ProviderInstanceId | null = null;
   if (
     normalizedPersistedState.stickyModelSelectionByProvider &&
     typeof normalizedPersistedState.stickyModelSelectionByProvider === "object"
@@ -1424,7 +1564,10 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     stickyModelSelectionByProvider = normalizePersistedModelSelectionMap(
       normalizedPersistedState.stickyModelSelectionByProvider,
     );
-    stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyActiveProvider);
+    stickyActiveProvider = normalizePersistedActiveProviderInstanceId(
+      normalizedPersistedState.stickyActiveProvider,
+      stickyModelSelectionByProvider,
+    );
   } else {
     // Legacy migration path
     const stickyModelOptions =
@@ -1449,7 +1592,9 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
       stickyModelSelection,
       nextStickyModelOptions,
     );
-    stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyProvider);
+    stickyActiveProvider = stickyModelSelection
+      ? modelSelectionStorageKey(stickyModelSelection)
+      : null;
   }
 
   return {
@@ -1538,9 +1683,13 @@ export function toHydratedThreadDraft(
   persistedDraft: PersistedComposerThreadDraftState,
 ): ComposerThreadDraftState {
   // The persisted draft is already in v3 shape (migration handles older formats)
-  const modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> =
-    persistedDraft.modelSelectionByProvider ?? {};
-  const activeProvider = normalizeProviderKind(persistedDraft.activeProvider) ?? null;
+  const modelSelectionByProvider = normalizeModelSelectionMapByInstance(
+    (persistedDraft.modelSelectionByProvider ?? {}) as ModelSelectionByProviderInstance,
+  );
+  const activeProvider = normalizePersistedActiveProviderInstanceId(
+    persistedDraft.activeProvider,
+    modelSelectionByProvider,
+  );
 
   return {
     ...(persistedDraft.pendingUserInputDrafts
@@ -1569,10 +1718,22 @@ export function toHydratedThreadDraft(
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
     queuedTurns: hydrateQueuedTurnsFromPersisted(threadId, persistedDraft.queuedTurns),
+    ...(persistedDraft.queueStoppedTurnId
+      ? { queueStoppedTurnId: persistedDraft.queueStoppedTurnId }
+      : {}),
+    ...(persistedDraft.queueResumedTurnId
+      ? { queueResumedTurnId: persistedDraft.queueResumedTurnId }
+      : {}),
     restoredSourceProposedPlan: persistedDraft.restoredSourceProposedPlan ?? null,
     modelSelectionByProvider,
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    computerControlMode: persistedDraft.computerControlMode,
+    computerControlGeneration: persistedDraft.computerControlGeneration,
+    enableComputerControl:
+      typeof persistedDraft.enableComputerControl === "boolean"
+        ? persistedDraft.enableComputerControl
+        : undefined,
   };
 }

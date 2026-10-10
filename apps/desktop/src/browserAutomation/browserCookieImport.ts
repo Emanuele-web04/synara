@@ -6,7 +6,7 @@ import {
 } from "betterwright";
 import type { BrowserCookieImportInput, BrowserCookieImportResult } from "@synara/contracts";
 import type { DesktopBrowserManager } from "../browserManager";
-import { openBetterwrightConnection } from "./betterwrightConnection";
+import { synaraHostTarget } from "./betterwrightHostTarget";
 
 const SOURCES = new Set(["chrome", "safari", "edge"]);
 
@@ -64,11 +64,24 @@ export class BrowserCookieImport {
       await assertTarget();
       await this.waitForAgents();
       await assertTarget();
-      const connection = await openBetterwrightConnection(runtime.webContents, undefined, [], true);
+      // This signal only gates adapter connect(): upstream syncCookies takes
+      // no signal, so mid-sync cancellation works by revoking the transport
+      // (stop() below), not through this controller.
+      const interrupt = new AbortController();
+      const hostTarget = synaraHostTarget(runtime.webContents, {
+        cookieImport: true,
+        signal: interrupt.signal,
+      });
       let browser: BetterWright | undefined;
       let close: Promise<void> | undefined;
-      const stop = () => {
-        close ??= connection.close(false);
+      const stop = (cancel = false) => {
+        interrupt.abort();
+        close ??= Promise.allSettled([hostTarget.revokeAll(cancel), browser?.close()]).then(
+          (results) => {
+            const failure = results.find((result) => result.status === "rejected");
+            if (failure?.status === "rejected") throw failure.reason;
+          },
+        );
         void close.catch(() => {});
       };
       const navigation = (
@@ -77,17 +90,18 @@ export class BrowserCookieImport {
         _inPlace: boolean,
         isMainFrame: boolean,
       ) => {
-        if (isMainFrame) stop();
+        if (isMainFrame) stop(true);
       };
       runtime.webContents.on("did-start-navigation", navigation);
-      runtime.webContents.once("destroyed", stop);
-      const timeout = setTimeout(stop, 60_000);
+      const destroyed = () => stop(true);
+      runtime.webContents.once("destroyed", destroyed);
+      const timeout = setTimeout(() => stop(true), 60_000);
       try {
         await assertTarget();
+        interrupt.signal.throwIfAborted();
         browser = new BetterWright({
           home: this.home,
-          provider: connection.provider,
-          hostOwnedTarget: true,
+          hostTarget,
           downloadPolicy: "deny",
           credentialCapture: false,
           vault: false,
@@ -96,14 +110,13 @@ export class BrowserCookieImport {
           parkBackgroundPages: false,
           policy: new NetworkPolicy({ allowLoopback: true }),
         });
-        const target = new URL(connection.provider.cdpUrl);
         const result = await browser.syncCookies({
           source: { browser: input.browser, profile: input.profile },
           ...(origin ? { domains: [origin.hostname] } : {}),
           windowsAppBound: "disabled",
           timeoutMs: 30_000,
-          cloudConsent: `cdp:${target.host}`,
         });
+        interrupt.signal.throwIfAborted();
         if (!result.ok) {
           const stages = [
             "acquisition",
@@ -140,6 +153,7 @@ export class BrowserCookieImport {
           };
         }
         await assertTarget();
+        interrupt.signal.throwIfAborted();
         await runtime.webContents.session.cookies.flushStore();
         try {
           if (!Array.isArray(result.cookieImportDomains))
@@ -157,6 +171,7 @@ export class BrowserCookieImport {
                   : "linux",
           };
         }
+        interrupt.signal.throwIfAborted();
         return {
           ok: true,
           imported: result.synced,
@@ -166,7 +181,7 @@ export class BrowserCookieImport {
       } finally {
         clearTimeout(timeout);
         runtime.webContents.removeListener("did-start-navigation", navigation);
-        runtime.webContents.removeListener("destroyed", stop);
+        runtime.webContents.removeListener("destroyed", destroyed);
         stop();
         await close;
         await browser?.close();
