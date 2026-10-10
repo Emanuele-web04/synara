@@ -143,9 +143,131 @@ function commitWithDate(
   });
 }
 
+const quoteGitShellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** A textconv command requires local Git configuration; attributes alone cannot install it. */
+function configureTextconv(cwd: string) {
+  return Effect.gen(function* () {
+    const fixture = yield* makeTmpDir("git-textconv-test-");
+    const converterPath = path.join(fixture, "converter.cjs");
+    const markerPath = path.join(fixture, "invoked");
+    yield* writeTextFile(
+      converterPath,
+      `require("node:fs").appendFileSync(${JSON.stringify(markerPath)}, "called\\n");
+process.stdout.write("converted content\\n");
+`,
+    );
+    yield* git(cwd, [
+      "config",
+      "diff.synara-test.textconv",
+      `${quoteGitShellArgument(process.execPath.replaceAll("\\", "/"))} ${quoteGitShellArgument(converterPath.replaceAll("\\", "/"))}`,
+    ]);
+    yield* writeTextFile(
+      path.join(cwd, ".gitattributes"),
+      "*.md diff=synara-test\n*.txt diff=synara-test\n",
+    );
+    yield* git(cwd, ["add", ".gitattributes"]);
+    yield* git(cwd, ["commit", "-m", "configure textconv attributes"]);
+
+    // Prove the fixture executes and hides a real change before exercising the service.
+    yield* writeTextFile(path.join(cwd, "README.md"), "textconv fixture probe\n");
+    expect(yield* git(cwd, ["diff", "--textconv", "--", "README.md"])).toBe("");
+    expect(existsSync(markerPath)).toBe(true);
+    yield* writeTextFile(path.join(cwd, "README.md"), "# test\n");
+    yield* Effect.promise(() => fs.unlink(markerPath));
+    return markerPath;
+  });
+}
+
 // ── Tests ──
 
 it.layer(TestLayer)("git integration", (it) => {
+  describe("raw patches with configured textconv", () => {
+    it.effect("keeps review and generated-message patches raw without executing textconv", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const markerPath = yield* configureTextconv(tmp);
+        const core = yield* GitCore;
+        yield* core.createBranch({ cwd: tmp, branch: "feature/raw-patches" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature/raw-patches" });
+        yield* writeTextFile(path.join(tmp, "branch.txt"), "raw branch change\n");
+        yield* git(tmp, ["add", "branch.txt"]);
+        yield* git(tmp, ["commit", "-m", "branch change"]);
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "raw staged change\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "raw unstaged change\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "raw untracked change\n");
+
+        const patches = yield* Effect.all({
+          unstaged: core.readUnstagedPatch(tmp),
+          staged: core.readStagedPatch(tmp),
+          workingTree: core.readWorkingTreePatch(tmp),
+          branch: core.readBranchPatch(tmp),
+          ref: core.readRefPatch(tmp, initialBranch),
+          range: core.readRangeContext(tmp, initialBranch),
+        });
+        expect(patches.unstaged.patch).toContain("+raw unstaged change");
+        expect(patches.unstaged.patch).toContain("+raw untracked change");
+        expect(patches.staged.patch).toContain("+raw staged change");
+        expect(patches.workingTree.patch).toContain("+raw unstaged change");
+        expect(patches.branch.patch).toContain("+raw branch change");
+        expect(patches.ref.patch).toContain("+raw branch change");
+        expect(patches.range.diffPatch).toContain("+raw branch change");
+        const context = yield* core.prepareCommitContext(tmp);
+        expect(context?.stagedPatch).toContain("+raw unstaged change");
+        expect(context?.stagedPatch).toContain("+raw staged change");
+        expect(existsSync(markerPath)).toBe(false);
+      }),
+    );
+
+    it.effect("uses raw patches for worktree copies, snapshots, and ownership checks", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const markerPath = yield* configureTextconv(tmp);
+        yield* writeTextFile(path.join(tmp, "README.md"), "raw staged change\n");
+        yield* git(tmp, ["add", "README.md"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "raw checkout change\n");
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-raw-copy");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        expect(yield* readTextFile(path.join(wtPath, "README.md"))).toBe("raw checkout change\n");
+
+        const snapshotRoot = yield* makeTmpDir("raw-worktree-snapshot-test-");
+        const outputPath = path.join(snapshotRoot, "snapshot");
+        yield* core.snapshotWorktree({ cwd: tmp, outputPath });
+        expect(yield* readTextFile(path.join(outputPath, "changes.patch"))).toContain(
+          "+raw checkout change",
+        );
+
+        yield* git(wtPath, ["add", "README.md"]);
+        yield* writeTextFile(path.join(wtPath, "README.md"), "raw unstaged change\n");
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: null,
+          token: "raw-patch-ownership-token",
+        });
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+        yield* writeTextFile(path.join(wtPath, "README.md"), "raw later change\n");
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree state changed",
+        });
+        expect(existsSync(markerPath)).toBe(false);
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+  });
+
   describe("bounded working-tree and ref reads", () => {
     it.effect("streams rename metadata beyond the capture limit for a selected file", () =>
       Effect.gen(function* () {
