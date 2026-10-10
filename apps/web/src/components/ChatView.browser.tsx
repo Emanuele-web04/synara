@@ -73,7 +73,10 @@ import { readNativeApi } from "../nativeApi";
 import { emitWsTransportState } from "../wsTransportEvents";
 import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
 import { useKanbanUiStore } from "../kanbanUiStore";
-import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
+import {
+  resetThreadDetailResumeCursors,
+  setThreadDetailResumeCursor,
+} from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
@@ -92,6 +95,7 @@ import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { getAppTypographyScale } from "../lib/appTypography";
 import { threadJumpCommandForIndex } from "../keybindings";
 import { useStore } from "../store";
+import { clearThreadDetailCache, writeThreadDetailCache } from "../lib/threadDetailCache";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -169,6 +173,7 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
+let threadDetailSnapshotBarrier: Promise<void> | null = null;
 const wsRequests: WsRequestEnvelope["body"][] = [];
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -1513,13 +1518,17 @@ const worker = setupWorker(
         if (!thread) {
           return;
         }
-        sendEffectRpcChunk(client, parsed.request.id, {
+        const detailSnapshot = {
           kind: "snapshot",
           snapshot: {
             snapshotSequence: fixture.snapshot.snapshotSequence,
             thread,
           },
-        });
+        };
+        const sendDetailSnapshot = () =>
+          sendEffectRpcChunk(client, parsed.request.id, detailSnapshot);
+        if (threadDetailSnapshotBarrier) void threadDetailSnapshotBarrier.then(sendDetailSnapshot);
+        else sendDetailSnapshot();
         return;
       }
       if (method === WS_METHODS.subscribeServerProviderStatuses) {
@@ -2309,8 +2318,11 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
+    resetThreadDetailResumeCursors();
+    await clearThreadDetailCache();
     await resetHomeChatProjectPrewarmStateForTests();
     attachmentResponseDelayMs = 0;
+    threadDetailSnapshotBarrier = null;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
@@ -2351,6 +2363,8 @@ describe("ChatView transcript geometry (full app)", () => {
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
       threadDetailSyncById: {},
+      threadDetailAppliedSequenceById: {},
+      threadHistoryById: {},
       deletedProjectIdsById: {},
       deletedThreadIdsById: {},
       sidebarThreadSummaryById: {},
@@ -14613,6 +14627,75 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each([
+    { streaming: false, confirmedRunning: false },
+    { streaming: true, confirmedRunning: false },
+    { streaming: true, confirmedRunning: true },
+  ])(
+    "only animates later live settlement after cached running detail confirms (streaming=$streaming, confirmedRunning=$confirmedRunning)",
+    async ({ streaming, confirmedRunning }) => {
+      await clearThreadDetailCache();
+      const originalCached = createSnapshotWithInlineToolOverflow({ active: true });
+      const cached = {
+        ...originalCached,
+        threads: originalCached.threads.map((thread) => ({
+          ...thread,
+          messages: thread.messages.map((message) =>
+            message.id === MessageId.makeUnsafe("msg-assistant-inline-tools")
+              ? { ...message, streaming }
+              : message,
+          ),
+        })),
+      };
+      await writeThreadDetailCache(
+        { origin: location.origin, serverInstanceId: "browser-test-server" },
+        { snapshotSequence: cached.snapshotSequence, thread: cached.threads[0]! },
+      );
+      let releaseSnapshot!: () => void;
+      threadDetailSnapshotBarrier = new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+      const authoritative = createSnapshotWithInlineToolOverflow({ active: confirmedRunning });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...authoritative, snapshotSequence: cached.snapshotSequence + 1 },
+      });
+      try {
+        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("cached");
+        expect(useStore.getState().threadTurnStateById?.[THREAD_ID]?.latestTurn?.state).toBe(
+          "running",
+        );
+        releaseSnapshot();
+        if (confirmedRunning) {
+          await vi.waitFor(() => {
+            expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+          });
+          await nextFrame();
+          useStore.getState().syncServerReadModel({
+            ...createSnapshotWithInlineToolOverflow({ active: false }),
+            snapshotSequence: cached.snapshotSequence + 2,
+          });
+        }
+        let transitionFrames = 0;
+        const startedAt = performance.now();
+        while (performance.now() - startedAt < 1_000) {
+          await nextFrame();
+          if (document.querySelector("[data-settled-turn-collapse-transition='true']"))
+            transitionFrames += 1;
+        }
+        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+        if (confirmedRunning) expect(transitionFrames).toBeGreaterThan(0);
+        else expect(transitionFrames).toBe(0);
+      } finally {
+        releaseSnapshot();
+        threadDetailSnapshotBarrier = null;
+        await mounted.cleanup();
+        await clearThreadDetailCache();
+      }
+    },
+  );
 
   // Thread detail does not always land in one write: a thread can paint its
   // transcript before the record that says its last turn already completed. Until

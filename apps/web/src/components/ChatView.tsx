@@ -1786,7 +1786,8 @@ export default function ChatView({
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
-  const activeTurnLayoutLive = isWorking || !latestTurnSettled;
+  const activeTurnLayoutLive =
+    threadDetailSyncState === "cached" ? !latestTurnSettled : isWorking || !latestTurnSettled;
   const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
   const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
   const previousActiveTurnLayoutKeyRef = useRef<string | null>(null);
@@ -1812,6 +1813,14 @@ export default function ChatView({
   });
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   useLayoutEffect(() => {
+    if (threadDetailSyncState === "cached") {
+      // A last-known running turn is hydration, not observed live work. Its
+      // eventual confirmation must not start the live settlement grace period.
+      previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
+      previousActiveTurnLayoutLiveRef.current = false;
+      setKeepSettledActiveTurnLayout(false);
+      return;
+    }
     if (previousActiveTurnLayoutKeyRef.current !== activeTurnLayoutKey) {
       previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
       previousActiveTurnLayoutLiveRef.current = activeTurnLayoutLive;
@@ -1849,6 +1858,7 @@ export default function ChatView({
     activeLatestTurn?.startedAt,
     activeTurnLayoutKey,
     activeTurnLayoutLive,
+    threadDetailSyncState,
   ]);
 
   const { timelineMessages, optimisticUserMessages, setOptimisticUserMessages } =
