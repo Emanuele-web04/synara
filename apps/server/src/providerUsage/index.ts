@@ -431,6 +431,57 @@ function instanceUsageContext(
   };
 }
 
+/** Uses the same account-scoped context and cache as Settings. */
+export function getProviderInstanceUsageSnapshot(
+  instance: ResolvedProviderInstance,
+  ctx: ProviderUsageContext,
+  stateDir: string,
+  baseDir: string,
+  forceRefresh = false,
+): Promise<ServerProviderUsageSnapshot | null> {
+  return getProviderUsageSnapshot(
+    instance.driver,
+    instanceUsageContext(instance, ctx, stateDir, baseDir),
+    forceRefresh,
+  );
+}
+
+/** Read an already observed account snapshot without starting or joining a provider refresh. */
+export async function getCachedProviderInstanceUsageSnapshot(
+  instance: ResolvedProviderInstance,
+  ctx: ProviderUsageContext,
+  stateDir: string,
+  baseDir: string,
+): Promise<ServerProviderUsageSnapshot | null> {
+  const scope = `${instance.driver}:${instance.instanceId}`;
+  const generation = snapshotCacheGenerations.get(scope);
+  const cached = snapshotCache.get(scope);
+  if (!instance.enabled || !cached || generation === undefined) {
+    return null;
+  }
+
+  const providerContext = buildProviderContext(
+    instance.driver,
+    instanceUsageContext(instance, ctx, stateDir, baseDir),
+  );
+  const credentialKey = await resolveCredentialKey(instance.driver, providerContext);
+  if (
+    credentialKey === null ||
+    cached.credentialKey !== credentialKey ||
+    snapshotCacheGenerations.get(scope) !== generation ||
+    snapshotCache.get(scope) !== cached
+  ) {
+    return null;
+  }
+
+  // The live UI path owns refreshes. Expired observations remain informative but cannot be
+  // interpreted as current quota, and reading them must not extend their cache lifetime.
+  const ageMs = ctx.nowMs - cached.fetchedAtMs;
+  return ageMs < 0 || ageMs >= snapshotCacheTtlMs(cached.snapshot)
+    ? { ...cached.snapshot, stale: true }
+    : cached.snapshot;
+}
+
 export const listProviderUsage = Effect.fn(function* (input: ServerListProviderUsageInput) {
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
@@ -460,9 +511,11 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
       };
       const settled = await Promise.allSettled(
         selected.map(async (instance) =>
-          getProviderUsageSnapshot(
-            instance.driver,
-            instanceUsageContext(instance, ctx, serverConfig.stateDir, serverConfig.baseDir),
+          getProviderInstanceUsageSnapshot(
+            instance,
+            ctx,
+            serverConfig.stateDir,
+            serverConfig.baseDir,
             input.forceRefresh === true,
           ),
         ),

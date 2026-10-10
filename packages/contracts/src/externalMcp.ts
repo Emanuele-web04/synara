@@ -18,6 +18,7 @@ export const ExternalMcpCapability = Schema.Literals([
   "tasks:wait",
   "tasks:read",
   "tasks:read-project",
+  "usage:read",
   "runtime:local",
   "runtime:full-access",
   "computer:control",

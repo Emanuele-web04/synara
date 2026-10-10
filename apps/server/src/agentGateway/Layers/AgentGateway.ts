@@ -61,6 +61,12 @@ import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts"
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import {
+  makeProviderAccountUsageReader,
+  ProviderUsageAccountNotFoundError,
+} from "../../providerUsage/agentReader.ts";
+import { summarizeProviderUsageForAgent } from "../../providerUsage/agent.ts";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
@@ -119,6 +125,7 @@ import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
+import { makeAgentGatewayUsageTools } from "../usageTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -238,6 +245,42 @@ export const makeAgentGateway = Effect.gen(function* () {
       }),
     );
   });
+  const loadProviderUsage = makeProviderAccountUsageReader({
+    getSettings: serverSettings.getSettings,
+    context: {
+      homeDir: serverConfig.homeDir,
+      env: process.env,
+      platform: process.platform,
+    },
+    stateDir: serverConfig.stateDir,
+    baseDir: serverConfig.baseDir,
+  });
+  const loadCallerProviderUsage = (provider: ProviderKind, callerThreadId?: string) =>
+    Effect.gen(function* () {
+      const caller = callerThreadId
+        ? yield* snapshotQuery
+            .getThreadShellById(ThreadId.makeUnsafe(callerThreadId))
+            .pipe(Effect.timeout("3 seconds"), Effect.map(Option.getOrUndefined))
+        : undefined;
+      // Compact context remains exact to its caller even though the explicit tool lists accounts.
+      const instanceId =
+        caller?.modelSelection.provider === provider
+          ? resolveModelSelectionInstanceId(caller.modelSelection)
+          : callerThreadId
+            ? undefined
+            : provider;
+      const unavailable = () => [
+        summarizeProviderUsageForAgent({ provider, enabled: false, snapshot: null }),
+      ];
+      if (instanceId === undefined) return unavailable();
+      return yield* loadProviderUsage({ provider, instanceId }).pipe(
+        Effect.catch((error) =>
+          error instanceof ProviderUsageAccountNotFoundError
+            ? Effect.succeed(unavailable())
+            : Effect.fail(error),
+        ),
+      );
+    });
 
   yield* recoverInterruptedAgentGatewayOperations({
     operationRepository,
@@ -347,6 +390,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       homeDir: serverConfig.homeDir,
       chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
     },
+    loadProviderUsage: loadCallerProviderUsage,
   });
   const diagnosticTools = makeThreadDiagnosticTools({
     snapshotQuery,
@@ -1080,6 +1124,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const usageTools = makeAgentGatewayUsageTools({ loadProviderUsage });
   const automationTools = makeAgentGatewayAutomationTools({
     automationService,
     requireThreadShell,
@@ -1576,6 +1621,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
+    ...usageTools,
     createThreads,
     createThread,
     sendMessage,
