@@ -57,7 +57,10 @@ function subagentKey(subagent: WorkLogSubagent): string {
 
 // Later snapshots carry the freshest status, but may omit identity fields the spawn
 // snapshot had; keep identity via fallback while taking the status fields verbatim.
-function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent): WorkLogSubagent {
+export function mergeSubagentSnapshots(
+  previous: WorkLogSubagent,
+  next: WorkLogSubagent,
+): WorkLogSubagent {
   return {
     threadId: next.threadId ?? previous.threadId,
     providerThreadId: next.providerThreadId ?? previous.providerThreadId,
@@ -91,7 +94,7 @@ function anonymousSubagentLabel(statusKind: SubagentStatusKind | null): string {
   }
 }
 
-function toStripItem(
+export function toSubagentStripItem(
   key: string,
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
@@ -135,7 +138,6 @@ function toStripItem(
     isBackground:
       subagent.background === true ||
       backgroundedThreadIds.has(subagent.providerThreadId ?? subagent.threadId),
-    accentColor: presentation.accentColor,
   };
 }
 
@@ -155,7 +157,7 @@ export function collectSubagentStripItems(
     }
   }
   return [...subagentByKey.entries()].map(([key, subagent]) =>
-    toStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
+    toSubagentStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
   );
 }
 
