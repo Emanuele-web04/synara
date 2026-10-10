@@ -1154,6 +1154,107 @@ describe("store event reducer", () => {
     }
   });
 
+  describe("text segments from a mid-stream snapshot", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-segmented");
+    const turnId = TurnId.makeUnsafe("turn-segmented");
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const segmentedState = () =>
+      makeState(
+        makeThread({
+          messages: [
+            {
+              id: assistantId,
+              role: "assistant",
+              text: "Reading files. Found it.",
+              textSegments: [
+                {
+                  sequence: 10,
+                  startedAt: "2026-02-27T00:01:05.000Z",
+                  endedAt: "2026-02-27T00:01:06.000Z",
+                  text: "Reading files.",
+                },
+                {
+                  sequence: 20,
+                  startedAt: "2026-02-27T00:01:07.000Z",
+                  endedAt: "2026-02-27T00:01:08.000Z",
+                  text: " Found it.",
+                },
+              ],
+              turnId,
+              createdAt: "2026-02-27T00:01:05.000Z",
+              streaming: true,
+              source: "native",
+            },
+          ],
+        }),
+      );
+    const delta = (
+      sequence: number,
+      text: string,
+      options: { streaming?: boolean; segmentStartedAt?: string; segmentSequence?: number } = {},
+    ) =>
+      makeDomainEvent(
+        "thread.message-sent",
+        {
+          threadId,
+          messageId: assistantId,
+          role: "assistant",
+          text,
+          turnId,
+          streaming: options.streaming ?? true,
+          ...(options.segmentStartedAt ? { segmentStartedAt: options.segmentStartedAt } : {}),
+          ...(options.segmentSequence !== undefined
+            ? { segmentSequence: options.segmentSequence }
+            : {}),
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: `2026-02-27T00:01:${String(sequence).padStart(2, "0")}.000Z`,
+          source: "native",
+        },
+        { sequence },
+      );
+
+    it("keeps the segments in step with deltas streamed after the snapshot", () => {
+      for (const reduce of [applyOrchestrationEvents, applyOrchestrationEventsHotPath]) {
+        const next = reduce(segmentedState(), [
+          delta(30, " The bug"),
+          delta(31, " is here.", {
+            segmentStartedAt: "2026-02-27T00:01:31.000Z",
+            segmentSequence: 40,
+          }),
+          delta(32, " Fixed."),
+          delta(33, "", { streaming: false }),
+        ]);
+        const message = threadsOf(next)[0]?.messages[0];
+        expect(message?.text).toBe("Reading files. Found it. The bug is here. Fixed.");
+        expect(message?.streaming).toBe(false);
+        expect(message?.textSegments?.map((segment) => segment.text)).toEqual([
+          "Reading files.",
+          " Found it. The bug",
+          " is here. Fixed.",
+        ]);
+        expect(message?.textSegments?.map((segment) => segment.sequence)).toEqual([10, 20, 40]);
+        expect(message?.textSegments?.at(-1)?.endedAt).toBe("2026-02-27T00:01:33.000Z");
+        // Whatever renders the segments must render the whole final text.
+        expect(message?.textSegments?.map((segment) => segment.text).join("")).toBe(message?.text);
+      }
+    });
+
+    it("drops segments that no longer describe a diverging completion text", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const next = applyOrchestrationEvents(segmentedState(), [
+          delta(30, " The bug"),
+          delta(31, "Rewritten final answer.", { streaming: false }),
+        ]);
+        const message = threadsOf(next)[0]?.messages[0];
+        expect(message?.text).toBe("Rewritten final answer.");
+        expect(message?.textSegments).toBeUndefined();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
   it("replaces a non-streaming user message when an active-tail edit reuses its message id", () => {
     const userId = MessageId.makeUnsafe("user-active-edit");
     const initialState = makeState(
