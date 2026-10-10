@@ -1382,34 +1382,108 @@ describe("deriveMessagesTimelineRows", () => {
     expect(messageRow(rows, "report-1")?.turnHeader?.elapsed).toBe("2.9s");
   });
 
-  it("gives a resumed response its own duration when the provider reuses the launching turn id", () => {
+  it.each([false, true])(
+    "keeps both durations when the provider reuses the launching turn id (latest timing=%s)",
+    (latestTiming) => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: [
+          userEntry("request", "2026-01-01T00:00:00Z"),
+          assistantEntry("launch", "2026-01-01T00:00:04Z", {
+            turnId: "same-turn",
+            completedAt: "2026-01-01T00:00:04Z",
+          }),
+          backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Delayed echo"),
+          assistantEntry("resumed", "2026-01-01T00:00:24Z", {
+            turnId: "same-turn",
+            completedAt: "2026-01-01T00:00:24Z",
+          }),
+        ],
+        turnTimingByTurnId: new Map([
+          [
+            TurnId.makeUnsafe("same-turn"),
+            {
+              startedAt: latestTiming ? "2026-01-01T00:00:21Z" : "2026-01-01T00:00:00Z",
+              completedAt: latestTiming ? "2026-01-01T00:00:24Z" : "2026-01-01T00:00:04Z",
+              interrupted: false,
+            },
+          ],
+        ]),
+      });
+      expect(messageRow(rows, "resumed")?.turnHeader?.elapsed).toBe("3.0s");
+      expect(messageRow(rows, "resumed")?.turnHeader?.endedAt).toBe("2026-01-01T00:00:24Z");
+      expect(messageRow(rows, "launch")?.turnHeader?.elapsed).toBe("4.0s");
+      expect(messageRow(rows, "launch")?.turnHeader?.endedAt).toBe("2026-01-01T00:00:04Z");
+    },
+  );
+
+  it.each([true, false])(
+    "preserves the settled launch and live resumed boundary for a reused turn id (streaming=%s)",
+    (streaming) => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        isWorking: true,
+        activeTurnInProgress: true,
+        activeTurnId: TurnId.makeUnsafe("same-turn"),
+        activeTurnStartedAt: "2026-01-01T00:00:00Z",
+        timelineEntries: [
+          userEntry("request", "2026-01-01T00:00:00Z", "same-turn"),
+          assistantEntry("launch", "2026-01-01T00:00:04Z", {
+            turnId: "same-turn",
+            completedAt: "2026-01-01T00:00:04Z",
+          }),
+          backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Delayed echo"),
+          ...(streaming
+            ? [
+                assistantEntry("resumed", "2026-01-01T00:00:22Z", {
+                  turnId: "same-turn",
+                  streaming: true,
+                }),
+              ]
+            : []),
+        ],
+        turnTimingByTurnId: new Map([
+          [
+            TurnId.makeUnsafe("same-turn"),
+            {
+              startedAt: "2026-01-01T00:00:00Z",
+              completedAt: "2026-01-01T00:00:04Z",
+              interrupted: false,
+            },
+          ],
+        ]),
+      });
+      expect(messageRow(rows, "launch")?.turnHeader?.elapsed).toBe("4.0s");
+      expect(messageRow(rows, "launch")?.assistantTurnInProgress).toBe(false);
+      expect(rows.map((row) => row.id)).toEqual([
+        "entry-request",
+        "entry-launch",
+        "working-header-row",
+        ...(streaming ? ["entry-resumed"] : []),
+        "working-indicator-row",
+      ]);
+      expect(rows.find((row) => row.kind === "working-header")).toMatchObject({
+        createdAt: "2026-01-01T00:00:21Z",
+        resumedBy: [{ description: "Delayed echo", outcome: "finished" }],
+      });
+    },
+  );
+
+  it("keeps a bound live request when a background notification arrives during its response", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("live-turn"),
+      activeTurnStartedAt: "2026-01-01T00:00:01Z",
       timelineEntries: [
-        userEntry("request", "2026-01-01T00:00:00Z"),
-        assistantEntry("launch", "2026-01-01T00:00:04Z", {
-          turnId: "same-turn",
-          completedAt: "2026-01-01T00:00:04Z",
-        }),
-        backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Delayed echo"),
-        assistantEntry("resumed", "2026-01-01T00:00:24Z", {
-          turnId: "same-turn",
-          completedAt: "2026-01-01T00:00:24Z",
-        }),
+        userEntry("request", "2026-01-01T00:00:00Z", "live-turn"),
+        assistantEntry("stream", "2026-01-01T00:00:02Z", { turnId: "live-turn", streaming: true }),
+        backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Other work"),
       ],
-      turnTimingByTurnId: new Map([
-        [
-          TurnId.makeUnsafe("same-turn"),
-          {
-            startedAt: "2026-01-01T00:00:00Z",
-            completedAt: "2026-01-01T00:00:04Z",
-            interrupted: false,
-          },
-        ],
-      ]),
     });
-    expect(messageRow(rows, "resumed")?.turnHeader?.elapsed).toBe("3.0s");
-    expect(messageRow(rows, "resumed")?.turnHeader?.endedAt).toBe("2026-01-01T00:00:24Z");
+    expect(rows[1]).toMatchObject({ kind: "working-header", createdAt: "2026-01-01T00:00:01Z" });
+    expect(rows[1]?.kind === "working-header" && rows[1].resumedBy).toBeUndefined();
   });
 
   describe("turn headers", () => {
@@ -1453,7 +1527,7 @@ describe("deriveMessagesTimelineRows", () => {
                       "stop",
                       "empty-turn",
                       "turn.stop-requested",
-                      {},
+                      { requestedBy: "user" },
                       "2026-01-01T00:00:01Z",
                     ),
                   ]
@@ -1490,7 +1564,13 @@ describe("deriveMessagesTimelineRows", () => {
           latestTurn: null,
           activities: [
             turnActivity("start", "empty-turn", "turn.started", {}, "2026-01-01T00:00:00Z"),
-            turnActivity("stop", "empty-turn", "turn.stop-requested", {}, "2026-01-01T00:00:01Z"),
+            turnActivity(
+              "stop",
+              "empty-turn",
+              "turn.stop-requested",
+              { requestedBy: "user" },
+              "2026-01-01T00:00:01Z",
+            ),
           ],
         }),
       });
@@ -1634,7 +1714,13 @@ describe("deriveMessagesTimelineRows", () => {
         ...baseInput,
         timelineEntries: threeTurns,
         turnTimingByTurnId: timings([
-          turnActivity("stop-request", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:04Z"),
+          turnActivity(
+            "stop-request",
+            "t2",
+            "turn.stop-requested",
+            { requestedBy: "user" },
+            "2026-01-01T00:01:04Z",
+          ),
           turnActivity(
             "stop",
             "t2",
@@ -1688,7 +1774,13 @@ describe("deriveMessagesTimelineRows", () => {
 
     it("attributes an interrupted turn to the user only after a Stop request for that turn", () => {
       const timing = timings([
-        turnActivity("stop", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:04Z"),
+        turnActivity(
+          "stop",
+          "t2",
+          "turn.stop-requested",
+          { requestedBy: "user" },
+          "2026-01-01T00:01:04Z",
+        ),
         turnActivity(
           "done2",
           "t2",
@@ -1715,9 +1807,32 @@ describe("deriveMessagesTimelineRows", () => {
       expect(messageRow(rows, "a3")?.turnHeader?.outcome).toBe("interrupted");
     });
 
+    it.each([{}, { requestedBy: "agent" }, { requestedBy: "system" }] as const)(
+      "keeps an interrupted turn neutral without explicit user provenance: %j",
+      (payload) => {
+        const timing = timings([
+          turnActivity("stop", "t2", "turn.stop-requested", payload, "2026-01-01T00:01:04Z"),
+          turnActivity(
+            "done",
+            "t2",
+            "turn.completed",
+            { state: "interrupted" },
+            "2026-01-01T00:01:06Z",
+          ),
+        ]);
+        expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).not.toBe(true);
+      },
+    );
+
     it("keeps a provider failure attributed to the provider despite a Stop request", () => {
       const timing = timings([
-        turnActivity("stop", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:04Z"),
+        turnActivity(
+          "stop",
+          "t2",
+          "turn.stop-requested",
+          { requestedBy: "user" },
+          "2026-01-01T00:01:04Z",
+        ),
         turnActivity(
           "failed",
           "t2",
@@ -1746,7 +1861,13 @@ describe("deriveMessagesTimelineRows", () => {
           { state: "interrupted" },
           "2026-01-01T00:01:06Z",
         ),
-        turnActivity("late-stop", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:07Z"),
+        turnActivity(
+          "late-stop",
+          "t2",
+          "turn.stop-requested",
+          { requestedBy: "user" },
+          "2026-01-01T00:01:07Z",
+        ),
       ]);
       expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).not.toBe(true);
     });
