@@ -310,7 +310,8 @@ function resolveSubagentSiblingLabel(input: {
   return index >= 0 ? `${DEFAULT_SUBAGENT_LABEL} ${index + 1}` : null;
 }
 
-function hashLabelSeed(seed: string): number {
+// Stable 32-bit hash for per-subagent picks (accent color, avatar glyph).
+export function hashLabelSeed(seed: string): number {
   let hash = 0;
   for (const character of seed) {
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
@@ -498,9 +499,9 @@ export function subagentStatusTextToneClassName(
 ): string {
   switch (statusKind) {
     case "running":
-      return "text-sky-300/85";
+      return "text-sky-600 dark:text-sky-300/85";
     case "failed":
-      return "text-rose-300/85";
+      return "text-rose-600 dark:text-rose-300/85";
     default:
       return "text-muted-foreground/55";
   }
