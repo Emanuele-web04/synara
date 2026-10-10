@@ -2964,7 +2964,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          <SynaraWorkingLoader />
+          {workingLabel === "Thinking" ? (
+            <SynaraWorkingLoader />
+          ) : (
+            <span aria-hidden="true" className="flex shrink-0">
+              {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
+            </span>
+          )}
           <span>{workingLabel}</span>
         </div>
       )}
