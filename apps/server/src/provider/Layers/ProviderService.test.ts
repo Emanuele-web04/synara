@@ -1923,6 +1923,32 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("skips a native fork through an earlier turn the provider cannot cut at", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const sourceThreadId = asThreadId("thread-fork-through-turn-source");
+      const targetThreadId = asThreadId("thread-fork-through-turn-target");
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: "codex",
+        threadId: sourceThreadId,
+        runtimeMode: "full-access",
+      });
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+
+      const result = yield* provider.forkThread!({
+        sourceThreadId,
+        threadId: targetThreadId,
+        throughTurnId: TurnId.makeUnsafe("turn-earlier"),
+        runtimeMode: "full-access",
+      });
+
+      // Forking at the latest point would hand the model turns the fork does not show.
+      assert.equal(result, null);
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 0);
+    }),
+  );
+
   it.effect("reuses a deferred native fork binding and preserves its inherited cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

@@ -32,6 +32,14 @@ async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\synara") {
   return renderWithQueryClient(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
 }
 
+async function renderAutoDirectionMarkdown(text: string) {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+
+  return renderWithQueryClient(
+    <ChatMarkdown text={text} cwd={undefined} isStreaming={false} directionMode="auto-blocks" />,
+  );
+}
+
 async function renderUserMarkdown(text: string) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
@@ -64,6 +72,28 @@ describe("streamingCodeHighlightIntervalMs", () => {
 });
 
 describe("ChatMarkdown", () => {
+  it("lets link-only Arabic and English blocks resolve independently", async () => {
+    const markup = await renderAutoDirectionMarkdown(
+      "[مرحبا بالعالم](https://example.com/rtl)\n\n[English text](https://example.com/ltr)",
+    );
+
+    expect(markup).toContain('<div class="chat-markdown');
+    expect(markup).toContain('data-direction-mode="auto-blocks"');
+    expect(markup).toContain('<p dir="auto"><a href="https://example.com/rtl"');
+    expect(markup).toContain('<p dir="auto"><a href="https://example.com/ltr"');
+    // The anchor must remain direction-neutral so its label participates in
+    // the parent paragraph's first-strong scan. A dir=auto anchor would create
+    // an isolation boundary and make link-only RTL paragraphs resolve LTR.
+    expect(markup).not.toContain('<a dir="auto"');
+  });
+
+  it("isolates technical inline content without hiding prose direction", async () => {
+    const markup = await renderAutoDirectionMarkdown("[مرحبا](https://example.com) ثم `npm test`");
+
+    expect(markup).toContain('<p dir="auto">');
+    expect(markup).toContain('<code dir="ltr">npm test</code>');
+  });
+
   it("renders GitHub alert blockquotes with a title and strips the marker", async () => {
     const markup = await renderMarkdown("> [!NOTE]\n> **Medium Risk**\n> Details");
 
