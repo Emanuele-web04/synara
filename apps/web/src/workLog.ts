@@ -551,22 +551,37 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
   const tasks = new Map<string, BackgroundTaskState>();
   const noticesAnnouncingSubagents = new Set<string>();
   const seenTaskIds = new Set<string>();
-  const started = new Map<string, { toolUseId: string | null; startedAt: string }>();
+  const started = new Map<
+    string,
+    { toolUseId: string | null; taskType: string | null; startedAt: string }
+  >();
   const admit = (
     taskId: string,
     activity: OrchestrationThreadActivity,
     info: { taskType: string | null; description: string | null; noticeActivityId: string | null },
   ) => {
-    if (seenTaskIds.has(taskId)) return;
-    seenTaskIds.add(taskId);
-    if (info.taskType === "local_agent") {
-      if (info.noticeActivityId) noticesAnnouncingSubagents.add(info.noticeActivityId);
+    const launch = started.get(taskId);
+    const taskType = info.taskType ?? launch?.taskType ?? null;
+    if (taskType === "local_agent") {
+      // An untyped update can precede both the start and the first notice.
+      // Once identified, the subagent keeps its own row and first notice.
+      const provisional = tasks.get(taskId);
+      if (provisional) {
+        tasks.delete(taskId);
+        seenTaskIds.delete(taskId);
+      }
+      const noticeActivityId = provisional?.noticeActivityId ?? info.noticeActivityId;
+      if (noticeActivityId && !seenTaskIds.has(taskId)) {
+        noticesAnnouncingSubagents.add(noticeActivityId);
+        seenTaskIds.add(taskId);
+      }
       return;
     }
-    const launch = started.get(taskId);
+    if (seenTaskIds.has(taskId)) return;
+    seenTaskIds.add(taskId);
     tasks.set(taskId, {
       taskId,
-      taskType: info.taskType,
+      taskType,
       description: info.description,
       command: null,
       status: "running",
@@ -602,11 +617,20 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
     if (activity.kind === "task.started") {
       const launch = {
         toolUseId: asTrimmedString(payload?.toolUseId),
+        taskType: asTrimmedString(payload?.taskType),
         startedAt: activity.createdAt,
       };
       started.set(taskId, launch);
       const task = tasks.get(taskId);
       if (task) {
+        if (launch.taskType === "local_agent") {
+          admit(taskId, activity, {
+            taskType: launch.taskType,
+            description: null,
+            noticeActivityId: null,
+          });
+          continue;
+        }
         task.toolUseId ??= launch.toolUseId;
         task.description ??= asTrimmedString(payload?.detail);
       }
