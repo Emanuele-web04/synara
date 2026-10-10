@@ -1469,13 +1469,14 @@ describe("ProviderCommandReactor", () => {
   async function seedRenameConversation(
     harness: Awaited<ReturnType<typeof createHarness>>,
     userText = "Fix the backend authentication callback race",
+    threadId = ThreadId.makeUnsafe("thread-1"),
   ) {
     const createdAt = new Date().toISOString();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.messages.import",
         commandId: CommandId.makeUnsafe(`cmd-rename-context-${crypto.randomUUID()}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId,
         messages: [
           {
             messageId: asMessageId(`rename-user-${crypto.randomUUID()}`),
@@ -5422,8 +5423,13 @@ describe("ProviderCommandReactor", () => {
           instanceId: "codex",
           model: "gpt-5-codex",
         },
-        message: expect.stringContaining("User: Fix the backend authentication callback race"),
+        message: expect.stringContaining(
+          "User intent: Fix the backend authentication callback race",
+        ),
       }),
+    );
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).not.toContain(
+      "I found the race",
     );
     expect((await readHarnessThread(harness))?.title).toBe("Backend auth callback");
     expect(harness.interruptTurn).not.toHaveBeenCalled();
@@ -5522,6 +5528,411 @@ describe("ProviderCommandReactor", () => {
     expect(harness.generateThreadTitle).not.toHaveBeenCalled();
     expect((await readHarnessThread(harness))?.title).toBe("Thread");
   });
+
+  it("returns pinned for automatic refresh when the title is manually pinned", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-pin-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        manualTitlePinned: true,
+      }),
+    );
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Should not apply" }));
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        triggeredBy: "automatic",
+      }),
+    );
+
+    expect(result).toEqual({ status: "pinned", title: null });
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.title).toBe("Thread");
+  });
+
+  it("refuses automatic refresh while title policy is off", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Must not generate" }));
+    expect(
+      await Effect.runPromise(
+        harness.reactor.regenerateThreadTitle({
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          triggeredBy: "automatic",
+        }),
+      ),
+    ).toEqual({ status: "stale", title: null });
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["global", "off", "stale"],
+    ["project", "off", "stale"],
+    ["thread", "off", "stale"],
+    ["global", "suggested", "suggested"],
+    ["project", "suggested", "suggested"],
+    ["thread", "suggested", "stale"],
+  ] as const)(
+    "honors %s title policy after generation switches to %s",
+    async (level, mode, status) => {
+      const harness = await createHarness({
+        serverSettings: { titleRefresh: { mode: "automatic" } },
+      });
+      await seedRenameConversation(harness);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      harness.generateThreadTitle.mockReturnValue(
+        Effect.promise(() => gate).pipe(Effect.as({ title: "Policy-aware candidate" })),
+      );
+      const generation = Effect.runPromise(
+        harness.reactor.regenerateThreadTitle({
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          triggeredBy: "automatic",
+        }),
+      );
+      try {
+        await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+        if (level === "global") {
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ titleRefresh: { mode } }),
+          );
+        } else if (level === "project") {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "project.meta.update",
+              commandId: CommandId.makeUnsafe("cmd-change-project-title-policy"),
+              projectId: asProjectId("project-1"),
+              titleRefreshMode: mode,
+            }),
+          );
+        } else {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe("cmd-change-thread-title-policy"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              titleRefreshMode: mode,
+            }),
+          );
+        }
+      } finally {
+        release();
+      }
+      // A thread-local policy edit advances the conditional title revision;
+      // its in-flight candidate is discarded even when the new mode suggests.
+      expect(await generation).toEqual({
+        status,
+        title: status === "suggested" ? "Policy-aware candidate" : null,
+      });
+      const thread = await readHarnessThread(harness);
+      expect(thread?.title).toBe("Thread");
+      expect(thread?.pendingSuggestedTitle).toBe(
+        status === "suggested" ? "Policy-aware candidate" : null,
+      );
+    },
+  );
+
+  it.each([{ manualTitlePinned: true }, { titleRefreshMode: "off" }] as const)(
+    "rejects a title policy changed at dispatch: %j",
+    async (policy) => {
+      const harness = await createHarness({
+        serverSettings: { titleRefresh: { mode: "automatic" } },
+      });
+      await seedRenameConversation(harness);
+      harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Too late candidate" }));
+      harness.interceptEngineDispatch((command) => {
+        if (command.type !== "thread.meta.update" || command.expectedTitleSequence === undefined) {
+          return undefined;
+        }
+        // The reactor has already re-read the unpinned/automatic thread. Put
+        // the user's standalone policy edit ahead of its conditional commit.
+        harness.interceptEngineDispatch(() => undefined);
+        return harness.engine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-title-policy-before-conditional-write"),
+            threadId: command.threadId,
+            ...policy,
+          })
+          .pipe(Effect.andThen(() => harness.engine.dispatch(command)));
+      });
+      expect(
+        await Effect.runPromise(
+          harness.reactor.regenerateThreadTitle({
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            triggeredBy: "automatic",
+          }),
+        ),
+      ).toEqual({ status: "stale", title: null });
+      expect(await readHarnessThread(harness)).toMatchObject({ title: "Thread", ...policy });
+    },
+  );
+
+  it("lets an explicit refresh proceed on a pinned title and unpins it", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-pin-title-explicit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        manualTitlePinned: true,
+      }),
+    );
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Fresh explicit title" }));
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+
+    expect(result).toEqual({ status: "renamed", title: "Fresh explicit title" });
+    const thread = await readHarnessThread(harness);
+    expect(thread?.title).toBe("Fresh explicit title");
+    expect(thread?.manualTitlePinned).toBe(false);
+  });
+
+  it("unpins and clears a pending suggestion when explicit refresh keeps the same title", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-pin-unchanged-title-explicit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Existing backend title",
+        manualTitlePinned: true,
+        pendingSuggestedTitle: "Stale suggestion",
+      }),
+    );
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.succeed({ title: "Existing backend title" }),
+    );
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+
+    expect(result).toEqual({ status: "unchanged", title: "Existing backend title" });
+    const thread = await readHarnessThread(harness);
+    expect(thread?.manualTitlePinned).toBe(false);
+    expect(thread?.pendingSuggestedTitle).toBeNull();
+  });
+
+  it("stores a pending suggestion instead of renaming in suggested mode", async () => {
+    const harness = await createHarness({
+      serverSettings: { titleRefresh: { mode: "suggested" } },
+    });
+    await seedRenameConversation(harness);
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.succeed({ title: "Suggested backend title" }),
+    );
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        triggeredBy: "automatic",
+      }),
+    );
+
+    expect(result).toEqual({ status: "suggested", title: "Suggested backend title" });
+    const thread = await readHarnessThread(harness);
+    expect(thread?.title).toBe("Thread");
+    expect(thread?.pendingSuggestedTitle).toBe("Suggested backend title");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "title.refresh")?.payload,
+    ).toEqual({
+      triggeredBy: "automatic",
+      mode: "suggested",
+      status: "suggested",
+    });
+  });
+
+  it("queues an explicit refresh behind automatic generation without sharing its semantics", async () => {
+    const harness = await createHarness({
+      serverSettings: { titleRefresh: { mode: "suggested" } },
+    });
+    await seedRenameConversation(harness);
+    let releaseAutomatic!: () => void;
+    const automaticGate = new Promise<void>((resolve) => {
+      releaseAutomatic = resolve;
+    });
+    harness.generateThreadTitle
+      .mockImplementationOnce(() =>
+        Effect.promise(() => automaticGate).pipe(Effect.as({ title: "Automatic suggestion" })),
+      )
+      .mockReturnValue(Effect.succeed({ title: "Explicit replacement" }));
+
+    const automatic = Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        triggeredBy: "automatic",
+      }),
+    );
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    const explicit = Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+
+    releaseAutomatic();
+    expect(await automatic).toEqual({ status: "suggested", title: "Automatic suggestion" });
+    expect(await explicit).toEqual({ status: "renamed", title: "Explicit replacement" });
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(2);
+    const thread = await readHarnessThread(harness);
+    expect(thread?.title).toBe("Explicit replacement");
+    expect(thread?.pendingSuggestedTitle).toBeNull();
+  });
+
+  it("counts durable user turns toward the first automatic refresh milestone", async () => {
+    const harness = await createHarness({
+      serverSettings: {
+        titleRefresh: {
+          mode: "automatic",
+          minNewUserTurns: 1,
+          minElapsedMillis: 0,
+        },
+      },
+    });
+    await seedRenameConversation(harness);
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "First milestone title" }));
+
+    await emitHarnessTurnTerminal(harness, {
+      eventId: "evt-title-refresh-first-milestone",
+      provider: "codex",
+      type: "completed",
+    });
+
+    await waitFor(
+      async () => (await readHarnessThread(harness))?.title === "First milestone title",
+    );
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains other chats during automatic title generation and cancels owned work on shutdown", async () => {
+    const harness = await createHarness({
+      serverSettings: {
+        titleRefresh: { mode: "automatic", minNewUserTurns: 1, minElapsedMillis: 0 },
+      },
+    });
+    const titleThreadId = ThreadId.makeUnsafe("thread-title-background");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-title-background-create"),
+        threadId: titleThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Callback investigation",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await seedRenameConversation(harness, "Fix the callback race", titleThreadId);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-title-background-other-chat-name"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Queued follow-up",
+        manualTitlePinned: true,
+      }),
+    );
+    await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-during-title"),
+      messageId: asMessageId("msg-queued-during-title"),
+      text: "Send while the other chat generates its title",
+    });
+    let titleGenerationInterrupted = false;
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.never.pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            titleGenerationInterrupted = true;
+          }),
+        ),
+      ),
+    );
+    const activeScope = scope;
+    expect(activeScope).not.toBeNull();
+    try {
+      await emitHarnessTurnTerminal(harness, {
+        eventId: "evt-title-background-completed",
+        threadId: titleThreadId,
+        provider: "codex",
+        type: "completed",
+      });
+      await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+      await emitHarnessTurnTerminal(harness, {
+        eventId: "evt-title-background-duplicate",
+        threadId: titleThreadId,
+        provider: "codex",
+        type: "completed",
+      });
+      await settleLiveTurn(harness, {
+        turnId: asTurnId("turn-running-during-title"),
+        eventId: "evt-other-chat-completed-during-title",
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        input: "Send while the other chat generates its title",
+      });
+      expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+      expect(titleGenerationInterrupted).toBe(false);
+    } finally {
+      await Effect.runPromise(Scope.close(activeScope!, Exit.void));
+      scopes.delete(activeScope!);
+      scope = null;
+    }
+    expect(titleGenerationInterrupted).toBe(true);
+    expect((await readHarnessThread(harness, titleThreadId))?.title).toBe("Callback investigation");
+
+    // The interrupted automatic owner must release the trigger-aware
+    // single-flight entry: an explicit request must not inherit a dead waiter.
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Callback race fixed" }));
+    expect(
+      await Effect.runPromise(harness.reactor.regenerateThreadTitle({ threadId: titleThreadId })),
+    ).toEqual({ status: "renamed", title: "Callback race fixed" });
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "does not refresh a title after a %s turn terminal state",
+    async (type) => {
+      const harness = await createHarness({
+        serverSettings: {
+          titleRefresh: {
+            mode: "automatic",
+            minNewUserTurns: 1,
+            minElapsedMillis: 0,
+          },
+        },
+      });
+      await seedRenameConversation(harness);
+      harness.generateThreadTitle.mockReturnValue(
+        Effect.succeed({ title: "Must not be generated" }),
+      );
+
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `evt-title-refresh-${type}`,
+        provider: "codex",
+        type,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.title).toBe("Thread");
+    },
+  );
 
   it("discards a generated title after an explicit A-to-B-to-A rename", async () => {
     const harness = await createHarness();

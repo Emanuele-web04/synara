@@ -387,6 +387,7 @@ import {
 } from "./chat/chatHeaderControls";
 import type { LateComposerSendHandlers } from "./chat/chatSendTypes";
 import { composerTranscriptBottomInsetPx, useComposerOverlayHeight } from "./chat/composerOverlay";
+import { TitleSuggestionSlot } from "./TitleSuggestionBanner";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
@@ -5937,6 +5938,14 @@ export default function ChatView({
                 pendingBackgroundWorkCount > 0
               }
             />
+            {activeThread?.pendingSuggestedTitle ? (
+              <div className="pb-2">
+                <TitleSuggestionSlot
+                  threadId={activeThread.id}
+                  candidate={activeThread.pendingSuggestedTitle}
+                />
+              </div>
+            ) : null}
             {settledThreadBranchMismatch ? (
               <div className="pb-2">
                 <ComposerBranchMismatchBanner {...settledThreadBranchMismatch} />

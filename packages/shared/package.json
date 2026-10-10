@@ -156,6 +156,18 @@
       "types": "./src/chatThreads.ts",
       "import": "./src/chatThreads.ts"
     },
+    "./threadTitleRefreshPolicy": {
+      "types": "./src/threadTitleRefreshPolicy.ts",
+      "import": "./src/threadTitleRefreshPolicy.ts"
+    },
+    "./threadTitleRefreshTrigger": {
+      "types": "./src/threadTitleRefreshTrigger.ts",
+      "import": "./src/threadTitleRefreshTrigger.ts"
+    },
+    "./threadTitleRefreshContext": {
+      "types": "./src/threadTitleRefreshContext.ts",
+      "import": "./src/threadTitleRefreshContext.ts"
+    },
     "./todo": {
       "types": "./src/todo.ts",
       "import": "./src/todo.ts"

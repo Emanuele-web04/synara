@@ -1,7 +1,12 @@
 import { Schema } from "effect";
-import { IsoDateTime, TrimmedString } from "./baseSchemas";
+import { IsoDateTime, NonNegativeInt, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
-import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import {
+  ModelSelection,
+  ProviderKind,
+  ThreadEnvironmentMode,
+  ThreadTitleRefreshMode,
+} from "./orchestration";
 import { ProviderInstanceConfigMap, ProviderInstanceId } from "./providerInstance";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
@@ -123,6 +128,15 @@ const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(2
   Schema.withDecodingDefault(() => []),
 );
 
+/** Global default plus trigger thresholds for opt-in automatic title refresh (#1041). */
+export const ThreadTitleRefreshSettings = Schema.Struct({
+  mode: ThreadTitleRefreshMode.pipe(Schema.withDecodingDefault(() => "off" as const)),
+  minNewUserTurns: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 5)),
+  minElapsedMillis: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 10 * 60 * 1_000)),
+  maxAttemptsPerWindow: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 3)),
+});
+export type ThreadTitleRefreshSettings = typeof ThreadTitleRefreshSettings.Type;
+
 // User-level skill toggles. Skills are keyed by lowercased name because the
 // unified catalog dedupes provider copies of the same skill by name.
 export const SkillsServerSettings = Schema.Struct({
@@ -143,6 +157,14 @@ export const ServerSettings = Schema.Struct({
   lowerProviderProcessPriority: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  titleRefresh: ThreadTitleRefreshSettings.pipe(
+    Schema.withDecodingDefault(() => ({
+      mode: "off" as const,
+      minNewUserTurns: 5,
+      minElapsedMillis: 10 * 60 * 1_000,
+      maxAttemptsPerWindow: 3,
+    })),
+  ),
   // The GitHub inbox reads one repository per project (the preferred remote). When true it also
   // reads the project's other GitHub remotes, such as the upstream of a fork.
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
@@ -210,6 +232,14 @@ export const ServerSettingsPatch = Schema.Struct({
   lowerProviderProcessPriority: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
+  titleRefresh: Schema.optionalKey(
+    Schema.Struct({
+      mode: Schema.optionalKey(ThreadTitleRefreshMode),
+      minNewUserTurns: Schema.optionalKey(NonNegativeInt),
+      minElapsedMillis: Schema.optionalKey(NonNegativeInt),
+      maxAttemptsPerWindow: Schema.optionalKey(NonNegativeInt),
+    }),
+  ),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),
   sidechatExpiry: Schema.optionalKey(SidechatExpiry),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),

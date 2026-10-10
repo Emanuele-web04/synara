@@ -365,6 +365,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {
+    id: "behavior:thread-titles",
+    section: "behavior",
+    title: "Thread titles",
+    keywords: "Automatic suggested title refresh rename stale conversation opt-in manual pin",
+  },
+  {
     id: "behavior:sidechat-expiry",
     section: "behavior",
     title: "Side chat expiry",

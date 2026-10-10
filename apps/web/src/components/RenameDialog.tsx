@@ -3,7 +3,7 @@
 // Layer: Shared UI component
 // Exports: RenameDialog
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -25,6 +25,8 @@ export interface RenameDialogProps {
   allowEmpty?: boolean | undefined;
   placeholder?: string | undefined;
   saveLabel?: string | undefined;
+  /** Extra controls rendered between the input and the footer actions. */
+  belowField?: ReactNode | undefined;
   /** Snooze reuses this dialog with a native date-time field. */
   inputType?: "text" | "datetime-local" | undefined;
   /** Extra gate on Save beyond the empty check, e.g. a date in the future. */
@@ -46,6 +48,7 @@ export function RenameDialog({
   allowEmpty: allowEmptyProp,
   placeholder,
   saveLabel: saveLabelProp,
+  belowField,
   inputType,
   isValueValid,
   onOpenChange,
@@ -69,6 +72,7 @@ export function RenameDialog({
           allowEmpty={allowEmpty}
           placeholder={placeholder}
           saveLabel={saveLabel}
+          belowField={belowField}
           inputType={inputType ?? "text"}
           isValueValid={isValueValid}
           onOpenChange={onOpenChange}
@@ -85,6 +89,7 @@ function RenameDialogForm({
   allowEmpty,
   placeholder,
   saveLabel,
+  belowField,
   inputType,
   isValueValid,
   onOpenChange,
@@ -95,6 +100,7 @@ function RenameDialogForm({
   allowEmpty: boolean;
   placeholder: string | undefined;
   saveLabel: string;
+  belowField: ReactNode | undefined;
   inputType: "text" | "datetime-local";
   isValueValid: ((value: string) => boolean) | undefined;
   onOpenChange: (open: boolean) => void;
@@ -156,6 +162,7 @@ function RenameDialogForm({
           />
         </form>
       </DialogPanel>
+      {belowField ? <div className="px-6 pb-1">{belowField}</div> : null}
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={isSaving}>
           Cancel

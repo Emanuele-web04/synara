@@ -3,7 +3,7 @@
 // Layer: UI component
 // Exports: EditProjectDialog, EditProjectValue
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME } from "./CreateGitHubProjectFields";
@@ -33,6 +33,7 @@ export interface EditProjectDialogProps {
   /** Placeholder for the name field: what the project is called with no local name. */
   folderName: string;
   initialValue: EditProjectValue;
+  belowField?: ReactNode;
   onOpenChange: (open: boolean) => void;
   onSave: (value: EditProjectValue) => void;
 }
@@ -42,6 +43,7 @@ export function EditProjectDialog({
   cwd,
   folderName,
   initialValue,
+  belowField,
   onOpenChange,
   onSave,
 }: EditProjectDialogProps) {
@@ -57,6 +59,7 @@ export function EditProjectDialog({
           cwd={cwd}
           folderName={folderName}
           initialValue={initialValue}
+          belowField={belowField}
           onOpenChange={onOpenChange}
           onSave={onSave}
         />
@@ -69,6 +72,7 @@ function EditProjectForm({
   cwd,
   folderName,
   initialValue,
+  belowField,
   onOpenChange,
   onSave,
 }: Omit<EditProjectDialogProps, "open">) {
@@ -156,6 +160,7 @@ function EditProjectForm({
           </PopoverPopup>
         </Popover>
       </DialogPanel>
+      {belowField ? <div className="px-6 pb-1">{belowField}</div> : null}
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
           Cancel

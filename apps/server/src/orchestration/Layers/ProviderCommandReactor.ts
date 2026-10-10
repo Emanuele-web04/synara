@@ -63,10 +63,12 @@ import {
 } from "effect";
 import {
   buildPromptThreadTitleFallback,
-  buildThreadTitleConversationContext,
   isGenericChatThreadTitle,
   isUsableGeneratedThreadTitle,
 } from "@synara/shared/chatThreads";
+import { buildThreadTitleRefreshContext } from "@synara/shared/threadTitleRefreshContext";
+import { resolveThreadTitleRefreshMode } from "@synara/shared/threadTitleRefreshPolicy";
+import { evaluateThreadTitleRefreshTrigger } from "@synara/shared/threadTitleRefreshTrigger";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -9010,35 +9012,128 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const start = seedThreadModelSelections.pipe(
-    Effect.andThen(
-      Effect.all([
-        startProviderIntentSource.pipe(
-          Effect.andThen(
-            recoverClaudeCompactions.pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  isRecoveringClaudeCompactions = false;
-                  startupClaudeCompactionTurns.clear();
+  // Opt-in automatic title refresh (#1041). Throttle state is process-local:
+  // turn counting and attempt timing derive from durable messages, so a restart
+  // only resets backoff windows (safe direction: at most one sooner refresh).
+  interface TitleRefreshThrottleState {
+    userTurnsSeen: number;
+    lastAttemptAt: number | null;
+    windowStartedAt: number;
+    attemptsInWindow: number;
+    notBefore: number | null;
+  }
+  const titleRefreshThrottleByThread = new Map<ThreadId, TitleRefreshThrottleState>();
+  const TITLE_REFRESH_RATE_WINDOW_MILLIS = 60 * 60 * 1_000;
+  const TITLE_REFRESH_FAILURE_BACKOFF_MILLIS = 5 * 60 * 1_000;
+
+  const countSettledUserTurns = (
+    messages: ReadonlyArray<{ role: string; text: string; streaming?: boolean }>,
+  ): number =>
+    messages.filter(
+      (message) =>
+        message.role === "user" && message.streaming !== true && message.text.trim().length > 0,
+    ).length;
+
+  const appendTitleRefreshAuditActivity = (input: {
+    readonly threadId: ThreadId;
+    readonly triggeredBy: "explicit" | "automatic";
+    readonly mode: "off" | "suggested" | "automatic";
+    readonly status: string;
+  }) =>
+    orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: serverCommandId(`thread-title-refresh:${Date.now()}`),
+        threadId: input.threadId,
+        activity: {
+          id: EventId.makeUnsafe(`thread-title-refresh:${crypto.randomUUID()}`),
+          tone: "info" as const,
+          kind: "title.refresh",
+          summary: `Title refresh ${input.status} (${input.triggeredBy})`,
+          payload: {
+            triggeredBy: input.triggeredBy,
+            mode: input.mode,
+            status: input.status,
+          },
+          turnId: null,
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("provider command reactor failed to record title refresh audit", {
+            threadId: input.threadId,
+            cause: cause instanceof Error ? cause.message : String(cause),
+          }),
+        ),
+      );
+
+  const automaticTitleRefreshes = new Set<ThreadId>();
+  const runAutomaticTitleRefresh = (threadId: ThreadId) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        if (automaticTitleRefreshes.has(threadId)) return false;
+        automaticTitleRefreshes.add(threadId);
+        return true;
+      }),
+      (ownsRefresh) =>
+        ownsRefresh
+          ? maybeAutoRefreshThreadTitle(threadId).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("provider command reactor failed to evaluate title refresh", {
+                  threadId,
+                  cause: cause instanceof Error ? cause.message : String(cause),
                 }),
               ),
+            )
+          : Effect.void,
+      (ownsRefresh) =>
+        Effect.sync(() => {
+          if (ownsRefresh) automaticTitleRefreshes.delete(threadId);
+        }),
+    );
+
+  const start = Effect.gen(function* () {
+    // Title generation must not hold the shared terminal-event consumer. Own
+    // background work in the reactor scope so shutdown cancels it and releases
+    // both the per-thread admission and title-generation single-flight entry.
+    const titleRefreshScope = yield* Effect.scope;
+    yield* seedThreadModelSelections;
+    yield* Effect.all([
+      startProviderIntentSource.pipe(
+        Effect.andThen(
+          recoverClaudeCompactions.pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                isRecoveringClaudeCompactions = false;
+                startupClaudeCompactionTurns.clear();
+              }),
             ),
           ),
-          Effect.andThen(recoverQueuedTurnPromotions),
-          Effect.andThen(recoverActiveThreadGoals),
         ),
-        Stream.runForEach(providerService.streamEvents, (event) => {
-          if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
-            return Effect.void;
-          }
-          return processQueueDrainEventSafely(event);
-        }).pipe(Effect.forkScoped),
-        runBlockedGoalContinuationRetries.pipe(Effect.forkScoped),
-        runProviderContextLifecycleActivityRetries.pipe(Effect.forkScoped),
-      ]).pipe(Effect.asVoid),
-    ),
-    Effect.orDie,
-  ) as ProviderCommandReactorShape["start"];
+        Effect.andThen(recoverQueuedTurnPromotions),
+        Effect.andThen(recoverActiveThreadGoals),
+      ),
+      Stream.runForEach(providerService.streamEvents, (event) => {
+        if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
+          return Effect.void;
+        }
+        return processQueueDrainEventSafely(event).pipe(
+          Effect.andThen(() =>
+            event.type === "turn.completed" && event.payload.state === "completed"
+              ? runAutomaticTitleRefresh(event.threadId).pipe(
+                  Effect.forkIn(titleRefreshScope),
+                  Effect.asVoid,
+                )
+              : Effect.void,
+          ),
+        );
+      }).pipe(Effect.forkScoped),
+      runBlockedGoalContinuationRetries.pipe(Effect.forkScoped),
+      runProviderContextLifecycleActivityRetries.pipe(Effect.forkScoped),
+    ]);
+  }).pipe(Effect.orDie) as ProviderCommandReactorShape["start"];
 
   const drain: ProviderCommandReactorShape["drain"] = Effect.gen(function* () {
     while (true) {
@@ -9073,6 +9168,7 @@ const make = Effect.gen(function* () {
 
   const generateConversationTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
     Effect.gen(function* () {
+      const triggeredBy = input.triggeredBy ?? "explicit";
       const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
         input.threadId,
       );
@@ -9080,17 +9176,46 @@ const make = Effect.gen(function* () {
       if (!thread || thread.deletedAt != null || thread.archivedAt != null) {
         return yield* Effect.fail(new Error("Thread is unavailable."));
       }
-      const context = buildThreadTitleConversationContext(thread.messages);
+      if (triggeredBy === "automatic" && thread.manualTitlePinned === true) {
+        return { status: "pinned", title: null };
+      }
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const settings = yield* serverSettings.getSettings;
+      const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
+      let mode = resolveThreadTitleRefreshMode({
+        global: settings.titleRefresh.mode,
+        ...(project?.titleRefreshMode !== undefined && project.titleRefreshMode !== null
+          ? { project: project.titleRefreshMode }
+          : {}),
+        ...(thread.titleRefreshMode !== undefined && thread.titleRefreshMode !== null
+          ? { thread: thread.titleRefreshMode }
+          : {}),
+      });
+      if (triggeredBy === "automatic" && mode === "off") {
+        return { status: "stale", title: null };
+      }
+      const expectedTitle =
+        readModel.threads.find((candidate) => candidate.id === input.threadId)?.title ??
+        thread.title;
+      const userIntents = thread.messages
+        .filter(
+          (message) =>
+            message.role === "user" && message.streaming !== true && message.text.trim().length > 0,
+        )
+        .map((message) => message.text)
+        .slice(-5);
+      // Bounded redacted input (#1041): current title plus recent user intent.
+      // Tool output, assistant output, hidden prompts, and attachments never enter the prompt.
+      const context = buildThreadTitleRefreshContext({
+        currentTitle: expectedTitle,
+        recentUserIntents: userIntents,
+        compactSummary: null,
+      });
       if (!context) {
         return { status: "no-context", title: null };
       }
 
-      const expectedTitle =
-        (yield* orchestrationEngine.getReadModel()).threads.find(
-          (candidate) => candidate.id === input.threadId,
-        )?.title ?? thread.title;
       const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
-      const settings = yield* serverSettings.getSettings;
       const textGenerationInput = yield* resolveThreadTextGenerationInput({
         threadId: input.threadId,
         providerOptions: providerStartOptionsFromServerSettings(settings),
@@ -9118,7 +9243,47 @@ const make = Effect.gen(function* () {
           detail: "The generated thread title was empty or generic.",
         });
       }
-      if (generated.title === expectedTitle) {
+      if (triggeredBy === "automatic") {
+        // The model may finish after the user changes a title or its policy.
+        // Re-read every level of the opt-in policy before choosing an action.
+        // Thread title/pin/mode mutations are also fenced atomically by the
+        // expected revision at dispatch; settings/project reads are snapshots.
+        const latestThread = yield* resolveThread(input.threadId);
+        const latestReadModel = yield* orchestrationEngine.getReadModel();
+        const latestSettings = yield* serverSettings.getSettings;
+        const latestProject = latestReadModel.projects.find(
+          (candidate) => candidate.id === latestThread?.projectId,
+        );
+        mode = resolveThreadTitleRefreshMode({
+          global: latestSettings.titleRefresh.mode,
+          ...(latestProject?.titleRefreshMode != null
+            ? { project: latestProject.titleRefreshMode }
+            : {}),
+          ...(latestThread?.titleRefreshMode != null
+            ? { thread: latestThread.titleRefreshMode }
+            : {}),
+        });
+        if (
+          !latestThread ||
+          latestThread.deletedAt != null ||
+          latestThread.archivedAt != null ||
+          latestThread.manualTitlePinned === true ||
+          latestThread.title !== expectedTitle ||
+          mode === "off"
+        ) {
+          yield* appendTitleRefreshAuditActivity({
+            threadId: input.threadId,
+            triggeredBy,
+            mode,
+            status: "stale",
+          });
+          return { status: "stale", title: null };
+        }
+      }
+      const sameTitle =
+        generated.title === expectedTitle ||
+        generated.title.trim().toLowerCase() === expectedTitle.trim().toLowerCase();
+      if (sameTitle) {
         const currentTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
           input.threadId,
         );
@@ -9127,9 +9292,76 @@ const make = Effect.gen(function* () {
         );
         const titleIsCurrent =
           currentTitleSequence === expectedTitleSequence && currentThread?.title === expectedTitle;
-        return titleIsCurrent
+        const unchanged: OrchestrationRegenerateThreadTitleResult = titleIsCurrent
           ? { status: "unchanged", title: expectedTitle }
           : { status: "stale", title: null };
+        if (titleIsCurrent && triggeredBy === "explicit") {
+          const updated = yield* orchestrationEngine
+            .dispatch({
+              type: "thread.meta.update",
+              commandId: serverCommandId("thread-title-regenerate-unchanged"),
+              threadId: input.threadId,
+              manualTitlePinned: false,
+              pendingSuggestedTitle: null,
+              expectedTitleSequence,
+            })
+            .pipe(
+              Effect.as(true),
+              Effect.catch((error) => {
+                if (
+                  error._tag === "OrchestrationCommandInvariantError" &&
+                  error.commandType === "thread.meta.update"
+                ) {
+                  return Effect.succeed(false);
+                }
+                return Effect.fail(error);
+              }),
+            );
+          if (!updated) return { status: "stale", title: null };
+        }
+        if (triggeredBy === "automatic") {
+          yield* appendTitleRefreshAuditActivity({
+            threadId: input.threadId,
+            triggeredBy,
+            mode,
+            status: unchanged.status,
+          });
+        }
+        return unchanged;
+      }
+
+      // Suggested mode stores a pending candidate instead of renaming.
+      if (triggeredBy === "automatic" && mode === "suggested") {
+        const suggested = yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: serverCommandId("thread-title-suggest"),
+            threadId: input.threadId,
+            pendingSuggestedTitle: generated.title,
+            expectedTitleSequence,
+          })
+          .pipe(
+            Effect.as(true),
+            Effect.catch((error) => {
+              if (
+                error._tag === "OrchestrationCommandInvariantError" &&
+                error.commandType === "thread.meta.update"
+              ) {
+                return Effect.succeed(false);
+              }
+              return Effect.fail(error);
+            }),
+          );
+        if (suggested) {
+          yield* appendTitleRefreshAuditActivity({
+            threadId: input.threadId,
+            triggeredBy,
+            mode,
+            status: "suggested",
+          });
+          return { status: "suggested", title: generated.title };
+        }
+        return { status: "stale", title: null };
       }
 
       const updated = yield* orchestrationEngine
@@ -9138,6 +9370,8 @@ const make = Effect.gen(function* () {
           commandId: serverCommandId("thread-title-regenerate"),
           threadId: input.threadId,
           title: generated.title,
+          pendingSuggestedTitle: null,
+          ...(triggeredBy === "explicit" ? { manualTitlePinned: false } : {}),
           expectedTitleSequence,
         })
         .pipe(
@@ -9152,26 +9386,139 @@ const make = Effect.gen(function* () {
             return Effect.fail(error);
           }),
         );
-      return updated
+      const outcome: OrchestrationRegenerateThreadTitleResult = updated
         ? { status: "renamed", title: generated.title }
         : { status: "stale", title: null };
+      if (triggeredBy === "automatic" || outcome.status === "renamed") {
+        yield* appendTitleRefreshAuditActivity({
+          threadId: input.threadId,
+          triggeredBy,
+          mode,
+          status: outcome.status,
+        });
+      }
+      return outcome;
     });
 
-  const pendingTitleGenerations = new Map<
-    ThreadId,
-    Deferred.Deferred<OrchestrationRegenerateThreadTitleResult, unknown>
-  >();
+  interface PendingTitleGeneration {
+    readonly triggeredBy: "explicit" | "automatic";
+    readonly result: Deferred.Deferred<OrchestrationRegenerateThreadTitleResult, unknown>;
+  }
+
+  const pendingTitleGenerations = new Map<ThreadId, PendingTitleGeneration>();
   const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
     Effect.suspend(() => {
+      const triggeredBy = input.triggeredBy ?? "explicit";
       const pending = pendingTitleGenerations.get(input.threadId);
-      if (pending) return Deferred.await(pending);
+      if (pending) {
+        // Automatic callers can share an explicit refresh. Explicit callers queue behind
+        // automatic work so they never inherit suggested/disabled automatic semantics.
+        if (triggeredBy === "automatic" && pending.triggeredBy === "explicit") {
+          return Deferred.await(pending.result);
+        }
+        if (triggeredBy === pending.triggeredBy) {
+          return Deferred.await(pending.result);
+        }
+        return Deferred.await(pending.result).pipe(
+          Effect.exit,
+          Effect.andThen(regenerateThreadTitle(input)),
+        );
+      }
       const result = Deferred.makeUnsafe<OrchestrationRegenerateThreadTitleResult, unknown>();
-      pendingTitleGenerations.set(input.threadId, result);
+      pendingTitleGenerations.set(input.threadId, { triggeredBy, result });
       return generateConversationTitle(input).pipe(
-        Effect.onExit((exit) => Deferred.done(result, exit)),
-        Effect.ensuring(Effect.sync(() => pendingTitleGenerations.delete(input.threadId))),
+        Effect.onExit((exit) =>
+          Effect.sync(() => pendingTitleGenerations.delete(input.threadId)).pipe(
+            Effect.andThen(Deferred.done(result, exit)),
+          ),
+        ),
       );
     });
+
+  // Background trigger (#1041): after a settled turn completes with no live
+  // provider turn, evaluate the milestone policy and fire at most one
+  // generation through the same single-flight path as explicit requests.
+  const maybeAutoRefreshThreadTitle = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const thread = yield* resolveThread(threadId);
+    if (!thread || thread.deletedAt != null || thread.archivedAt != null) return;
+    if (yield* hasLiveProviderTurn(threadId)) return;
+    if (
+      thread.manualTitlePinned === true ||
+      (thread.pendingSuggestedTitle !== null && thread.pendingSuggestedTitle !== undefined)
+    ) {
+      return;
+    }
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const settings = yield* serverSettings.getSettings;
+    const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
+    const mode = resolveThreadTitleRefreshMode({
+      global: settings.titleRefresh.mode,
+      ...(project?.titleRefreshMode !== undefined && project.titleRefreshMode !== null
+        ? { project: project.titleRefreshMode }
+        : {}),
+      ...(thread.titleRefreshMode !== undefined && thread.titleRefreshMode !== null
+        ? { thread: thread.titleRefreshMode }
+        : {}),
+    });
+    if (mode !== "automatic" && mode !== "suggested") return;
+    const totalUserTurns = countSettledUserTurns(thread.messages);
+    const now = Date.now();
+    const state = titleRefreshThrottleByThread.get(threadId) ?? {
+      // Durable history is progress toward the first milestone, including after restart.
+      userTurnsSeen: 0,
+      lastAttemptAt: null,
+      windowStartedAt: now,
+      attemptsInWindow: 0,
+      notBefore: null,
+    };
+    if (state.windowStartedAt + TITLE_REFRESH_RATE_WINDOW_MILLIS <= now) {
+      state.windowStartedAt = now;
+      state.attemptsInWindow = 0;
+    }
+    const decision = evaluateThreadTitleRefreshTrigger(
+      {
+        newUserTurnsSinceRefresh: totalUserTurns - state.userTurnsSeen,
+        millisSinceLastAttempt:
+          state.lastAttemptAt === null ? null : Math.max(0, now - state.lastAttemptAt),
+        providerTurnActive: false,
+        manualTitlePinned: false,
+        attemptsInWindow: state.attemptsInWindow,
+        nowMillis: now,
+        notBeforeMillis: state.notBefore,
+      },
+      {
+        minNewUserTurns: settings.titleRefresh.minNewUserTurns,
+        minElapsedMillis: settings.titleRefresh.minElapsedMillis,
+        maxAttemptsPerWindow: settings.titleRefresh.maxAttemptsPerWindow,
+      },
+    );
+    if (!decision.shouldRefresh) {
+      titleRefreshThrottleByThread.set(threadId, state);
+      return;
+    }
+    state.attemptsInWindow += 1;
+    state.lastAttemptAt = now;
+    titleRefreshThrottleByThread.set(threadId, state);
+    const result = yield* regenerateThreadTitle({ threadId, triggeredBy: "automatic" }).pipe(
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    const next = titleRefreshThrottleByThread.get(threadId) ?? state;
+    if (
+      result !== null &&
+      (result.status === "renamed" ||
+        result.status === "suggested" ||
+        result.status === "unchanged")
+    ) {
+      next.userTurnsSeen = totalUserTurns;
+      next.notBefore = null;
+    } else if (result !== null && result.status === "stale") {
+      next.userTurnsSeen = totalUserTurns;
+      next.notBefore = null;
+    } else {
+      next.notBefore = Date.now() + TITLE_REFRESH_FAILURE_BACKOFF_MILLIS;
+    }
+    titleRefreshThrottleByThread.set(threadId, next);
+  });
 
   return {
     start,

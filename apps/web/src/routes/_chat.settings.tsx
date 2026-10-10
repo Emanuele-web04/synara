@@ -7,6 +7,7 @@ import {
   type DesktopAudioInputDevice,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
+  type ThreadTitleRefreshMode,
   type SidechatExpiry,
 } from "@synara/contracts";
 import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
@@ -198,6 +199,12 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
+const TITLE_REFRESH_MODE_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "suggested", label: "Suggested" },
+  { value: "automatic", label: "Automatic" },
+] as const satisfies ReadonlyArray<{ value: ThreadTitleRefreshMode; label: string }>;
 
 const SIDECHAT_EXPIRY_OPTIONS = [
   { value: "1h", label: "1 hour" },
@@ -489,6 +496,7 @@ function SettingsRouteView() {
       ? ["Font smoothing"]
       : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
+    ...(settings.titleRefreshMode !== defaults.titleRefreshMode ? ["Thread titles"] : []),
     ...(settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts
       ? ["Activity toasts"]
       : []),
@@ -1505,6 +1513,30 @@ function SettingsRouteView() {
       />
 
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Thread titles"
+          description="Refresh stale thread titles as conversations evolve. Suggested previews a candidate first; automatic applies it. Manual renames always win. Off by default."
+          resetAction={
+            settings.titleRefreshMode !== defaults.titleRefreshMode ? (
+              <SettingResetButton
+                label="thread title refresh"
+                onClick={() =>
+                  updateSettings({
+                    titleRefreshMode: defaults.titleRefreshMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.titleRefreshMode}
+              onValueChange={(value) => updateSettings({ titleRefreshMode: value })}
+              ariaLabel="Thread title refresh"
+              options={TITLE_REFRESH_MODE_OPTIONS}
+            />
+          }
+        />
         <SettingsRow
           title="Open pull requests and issues"
           description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."

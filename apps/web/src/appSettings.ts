@@ -26,6 +26,7 @@ import {
   SidechatExpiry,
   SourceControlWritingStyle,
   SourceControlCustomInstructions,
+  ThreadTitleRefreshMode,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -560,6 +561,9 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  // Server-backed global default for opt-in automatic title refresh (#1041).
+  // Off unless onboarding explicitly asks; per-project/per-thread overrides win.
+  titleRefreshMode: ThreadTitleRefreshMode.pipe(withDefaults(() => "off" as const)),
   sourceControlWritingStyle: SourceControlWritingStyle.pipe(
     withDefaults(() => "repository" as const),
   ),
@@ -1563,6 +1567,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationProviderInstanceId: settings.textGenerationModelSelection.instanceId,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    titleRefreshMode: settings.titleRefresh.mode,
     sourceControlWritingStyle: settings.sourceControlWritingStyle,
     sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
@@ -1697,6 +1702,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
+  }
+  if (hasOwn(patch, "titleRefreshMode") && patch.titleRefreshMode !== undefined) {
+    serverPatch.titleRefresh = { mode: patch.titleRefreshMode };
   }
   if (patch.sourceControlWritingStyle !== undefined) {
     serverPatch.sourceControlWritingStyle = patch.sourceControlWritingStyle;
