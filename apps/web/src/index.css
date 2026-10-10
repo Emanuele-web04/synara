@@ -3388,16 +3388,17 @@ diffs-container {
   backdrop-filter: none;
 }
 
-/* The composer no longer frosts what scrolls beneath it, so the transcript dissolves
-   across the composer's resting tuck (`--scroll-edge-fade-tuck`, composerOverlay.ts) instead
-   of running under the editor. `--scroll-edge-fade-inset-b` is the composer's top edge; without it the
-   gradient ends past the viewport and masks nothing. */
+/* The composer no longer frosts what scrolls beneath it, so the transcript dissolves over a
+   tuck-sized band (`--scroll-edge-fade-tuck`, composerOverlay.ts) that ends at the composer's
+   top edge instead of running under it: the sheer stacked panels (subagents, tasks, queue)
+   put their header text right at that edge. The resting tail stops above the band.
+   `--scroll-edge-fade-inset-b` is the composer's top edge; without it the gradient ends past
+   the viewport and masks nothing. */
 :root[data-window-translucency="window"] .scroll-edge-fade {
   --scroll-edge-fade-glass: linear-gradient(
     to bottom,
-    #000 calc(100% - var(--scroll-edge-fade-inset-b, 0px)),
-    transparent
-      calc(100% - var(--scroll-edge-fade-inset-b, 0px) + var(--scroll-edge-fade-tuck, 0px))
+    #000 calc(100% - var(--scroll-edge-fade-inset-b, 0px) - var(--scroll-edge-fade-tuck, 0px)),
+    transparent calc(100% - var(--scroll-edge-fade-inset-b, 0px))
   );
   -webkit-mask-image:
     var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),

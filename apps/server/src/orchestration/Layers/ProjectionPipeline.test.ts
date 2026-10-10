@@ -43,6 +43,7 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { runManagedAttachmentCleanupBatch } from "../../managedAttachmentCleanup.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { createEmptyReadModel, projectEvent } from "../projector.ts";
 
 const readProjectedMessage = (threadId: ThreadId, messageId: MessageId) =>
   Effect.gen(function* () {
@@ -127,6 +128,95 @@ const exists = (filePath: string) =>
   });
 
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-test-");
+
+it.layer(makeProjectionPipelinePrefixedTestLayer("synara-latest-turn-test-"))(
+  "idle session latest turn",
+  (it) => {
+    it.effect("preserves the latest completed turn across idle session events and replay", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.makeUnsafe("thread-idle-latest-turn");
+        const createdAt = "2026-10-09T00:00:00.000Z";
+        let readModel = createEmptyReadModel(createdAt);
+        const append = makeScenarioAppender(
+          (event) =>
+            Effect.gen(function* () {
+              const savedEvent = yield* eventStore.append(event);
+              readModel = yield* projectEvent(readModel, savedEvent).pipe(Effect.orDie);
+              yield* projectionPipeline.projectEvent(savedEvent);
+            }),
+          "idle-latest-turn",
+        );
+        yield* append({
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          payload: {
+            threadId,
+            projectId: ProjectId.makeUnsafe("project-idle-latest-turn"),
+            title: "Idle latest turn",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        for (const turnNumber of [1, 2]) {
+          const turnId = TurnId.makeUnsafe(`turn-idle-latest-${turnNumber}`);
+          for (const [index, status] of ["running", "ready", "ready", "ready"].entries()) {
+            const updatedAt = `2026-10-09T00:0${turnNumber}:0${index}.000Z`;
+            yield* append({
+              type: "thread.session-set",
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: updatedAt,
+              payload: {
+                threadId,
+                session: {
+                  threadId,
+                  status: status === "running" ? "running" : "ready",
+                  providerName: "codex",
+                  providerInstanceId: "codex",
+                  runtimeMode: "full-access",
+                  activeTurnId: status === "running" ? turnId : null,
+                  lastError: null,
+                  updatedAt,
+                },
+              },
+            });
+          }
+          const expectedTurn = readModel.threads.find(
+            (thread) => thread.id === threadId,
+          )?.latestTurn;
+          assert.equal(expectedTurn?.turnId, turnId);
+          assert.equal(expectedTurn?.state, "completed");
+          const readLatestTurn = () => sql<{ readonly turnId: string; readonly state: string }>`
+          SELECT threads.latest_turn_id AS "turnId", turns.state
+          FROM projection_threads AS threads
+          LEFT JOIN projection_turns AS turns
+            ON turns.thread_id = threads.thread_id AND turns.turn_id = threads.latest_turn_id
+          WHERE threads.thread_id = ${threadId}
+        `;
+          assert.deepEqual(yield* readLatestTurn(), [{ turnId, state: "completed" }]);
+          yield* sql`
+          DELETE FROM projection_state
+          WHERE projector IN (
+            ${ORCHESTRATION_PROJECTOR_NAMES.threads},
+            ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
+          )
+        `;
+          yield* projectionPipeline.bootstrap;
+          assert.deepEqual(yield* readLatestTurn(), [{ turnId, state: "completed" }]);
+        }
+      }),
+    );
+  },
+);
 
 it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   it.effect("bootstraps all projection states and writes projection rows", () =>
