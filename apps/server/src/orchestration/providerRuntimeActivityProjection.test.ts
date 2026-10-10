@@ -614,7 +614,7 @@ describe("provider runtime activity projection", () => {
     expect(events.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
   });
 
-  it("projects only readable completed Codex-family reasoning summaries", () => {
+  it("projects only readable completed Codex, Antigravity, and OpenCode reasoning", () => {
     const absent = [
       runtimeEvent({
         type: "content.delta",
@@ -645,7 +645,7 @@ describe("provider runtime activity projection", () => {
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
 
-    for (const provider of ["codex", "antigravity"] as const) {
+    for (const provider of ["codex", "antigravity", "opencode"] as const) {
       const [activity] = projectProviderRuntimeActivities(
         runtimeEvent({
           type: "item.completed",
@@ -1122,6 +1122,31 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    for (const [provider, usageSessionId] of [
+      ["cursor", "native-session"],
+      ["codex", "native-session"],
+      ["antigravity", "native-session:generation-after-restart"],
+    ] as const) {
+      const [resumedUsage] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "thread.token-usage.updated",
+          eventId: `${provider}-resumed-usage`,
+          provider,
+          lifecycleGeneration: "generation-after-restart",
+          providerRefs: { providerThreadId: "native-session" },
+          payload: { usage: { usedTokens: 0, totalProcessedTokens: 4_200 } },
+        }),
+      );
+      expect(resumedUsage).toMatchObject({
+        kind: "context-window.updated",
+        payload: {
+          provider,
+          totalProcessedTokens: 4_200,
+          usageSessionId,
+        },
+      });
+    }
+
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "session.configured",
@@ -1160,6 +1185,46 @@ describe("provider runtime activity projection", () => {
       kind: "context-window.configured",
       payload: { cleared: true },
     });
+
+    const [blockedFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-blocked",
+        provider: "claudeAgent",
+        payload: {
+          config: { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" },
+        },
+      }),
+    );
+    expect(blockedFastMode).toMatchObject({
+      id: "fast-mode-blocked",
+      kind: "fast-mode.state",
+      payload: { state: "off", disabledReason: "extra_usage_disabled" },
+    });
+
+    const [activeFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-on",
+        provider: "claudeAgent",
+        payload: { config: { fast_mode_state: "on" } },
+      }),
+    );
+    expect(activeFastMode).toMatchObject({ kind: "fast-mode.state", payload: { state: "on" } });
+
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "session.configured",
+          eventId: "fast-mode-with-context",
+          provider: "claudeAgent",
+          payload: { config: { autoCompactWindow: "1m", fast_mode_state: "cooldown" } },
+        }),
+      ).map((activity) => [activity.id, activity.kind]),
+    ).toEqual([
+      ["fast-mode-with-context", "context-window.configured"],
+      ["fast-mode-with-context:fast-mode", "fast-mode.state"],
+    ]);
 
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({

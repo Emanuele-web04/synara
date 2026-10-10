@@ -46,6 +46,11 @@ import {
   mergeWorkLogToolDetails,
   type WorkLogToolDetails,
 } from "./lib/toolCallDetails";
+import {
+  FAST_MODE_STATE_ACTIVITY_KIND,
+  fastModeNoticeFromActivity,
+  type FastModeNotice,
+} from "./lib/fastModeState";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type { ChatMessage, ProposedPlan } from "./types";
@@ -75,6 +80,9 @@ export interface ProviderHandoffInfo {
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
   failureDetail: string | null;
+  /** Set when that side requested fast mode but its session was not serving it. */
+  sourceFastModeNotice?: FastModeNotice | null;
+  targetFastModeNotice?: FastModeNotice | null;
 }
 
 export type ProviderContextLifecycleReason =
@@ -121,7 +129,7 @@ export interface WorkLogEntry {
   id: string;
   createdAt: string;
   /**
-   * Provider runtime sequence for causal ordering within the provider stream.
+   * Provider runtime sequence, used to break equal-time ties in the timeline.
    * Absent for server-created rows: their orchestration event sequence is a
    * different counter, so they order by `createdAt` instead.
    */
@@ -451,6 +459,7 @@ export function deriveWorkLogEntries(
       (activity) =>
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
+    .filter((activity) => activity.kind !== FAST_MODE_STATE_ACTIVITY_KIND)
     .filter((activity) => activity.summary !== "Checkpoint captured")
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
@@ -482,6 +491,15 @@ export function deriveWorkLogEntries(
         ...entry
       }) => entry,
     );
+  const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered);
+  if (handoffFastModeNotices.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      const notices = handoffFastModeNotices.get(entry.id);
+      if (!entry.providerHandoff || !notices) continue;
+      // Copy rather than mutate: the handoff info is shared with the per-activity cache.
+      derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
+    }
+  }
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
   return [
     ...withSubagentProgressOutcomes(derived, ordered),
@@ -572,6 +590,42 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
       ? { ...entry, subagentProgress: { ...entry.subagentProgress, outcome } }
       : entry;
   });
+}
+
+// A handoff row summarizes two sessions. Each side reads the fast-mode state its own
+// session reported: the source up to the handoff, the target from there to the next one.
+function deriveHandoffFastModeNotices(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">> {
+  const notices = new Map<
+    string,
+    Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">
+  >();
+  let sessionNotice: FastModeNotice | null = null;
+  let openHandoffId: string | null = null;
+  for (const activity of ordered) {
+    if (activity.kind === FAST_MODE_STATE_ACTIVITY_KIND) {
+      sessionNotice = fastModeNoticeFromActivity(activity);
+      if (openHandoffId !== null) {
+        notices.set(openHandoffId, {
+          ...notices.get(openHandoffId),
+          targetFastModeNotice: sessionNotice,
+        });
+      }
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND) {
+      // The target never started, so the source session keeps running.
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND) {
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      openHandoffId = activity.id;
+      sessionNotice = null;
+    }
+  }
+  return notices;
 }
 
 function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
@@ -3209,17 +3263,24 @@ function compareActivityLifecycleRank(kind: string): number {
   return 1;
 }
 
+// Time first: messages carry no sequence, and mergeTimelineEntries is only
+// correct when both sides sort by the same key. Sequence-first let one late
+// row with an unrelated low sequence lead the work list, and every message of
+// the block was emitted above all of that block's work.
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
   if (
     "sequence" in left &&
     "sequence" in right &&
     left.sequence !== undefined &&
-    right.sequence !== undefined &&
-    left.sequence !== right.sequence
+    right.sequence !== undefined
   ) {
     return left.sequence - right.sequence;
   }
-  return left.createdAt.localeCompare(right.createdAt);
+  return 0;
 }
 
 type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;
@@ -3533,10 +3594,9 @@ export function deriveTimelineEntries(
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
 
-  // Sequenced work rows order causally among themselves; rows without a
-  // provider sequence (server-created) order by time. Sorting both kinds in one
-  // list mixes the two orders into a cycle, so each list is sorted on its own
-  // and only merged.
+  // Keep provider-sequenced work separate from server-created rows so unrelated
+  // counters never break ties against each other. All lists use the same
+  // chronological comparator; provider sequences only order equal-time ties.
   const sequencedWorkRows = workRows.filter(isSequenced);
   const timedWorkRows =
     sequencedWorkRows.length === workRows.length ? [] : workRows.filter((row) => !isSequenced(row));

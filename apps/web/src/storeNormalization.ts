@@ -121,6 +121,7 @@ export function threadSessionsEqual(
     left.provider === right.provider &&
     left.status === right.status &&
     left.orchestrationStatus === right.orchestrationStatus &&
+    left.runtimeMode === right.runtimeMode &&
     left.activeTurnId === right.activeTurnId &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
@@ -936,7 +937,11 @@ function readModelSessionFromThreadSession(
     ...(previousSession.providerInstanceId !== undefined
       ? { providerInstanceId: previousSession.providerInstanceId }
       : {}),
-    runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? "full-access",
+    runtimeMode:
+      previousSession.runtimeMode ??
+      previousThread?.runtimeMode ??
+      incomingSession?.runtimeMode ??
+      "full-access",
     activeTurnId: previousSession.activeTurnId ?? null,
     lastError: previousSession.lastError ?? null,
     updatedAt: previousSession.updatedAt,
@@ -1682,6 +1687,7 @@ export function normalizeThreadSession(
       : {}),
     status: toLegacySessionStatus(incoming.status),
     orchestrationStatus: incoming.status,
+    runtimeMode: incoming.runtimeMode,
     activeTurnId: incoming.activeTurnId ?? undefined,
     createdAt: incoming.updatedAt,
     updatedAt: incoming.updatedAt,
@@ -1693,6 +1699,7 @@ export function normalizeThreadSession(
     previous.providerInstanceId === nextSession.providerInstanceId &&
     previous.status === nextSession.status &&
     previous.orchestrationStatus === nextSession.orchestrationStatus &&
+    previous.runtimeMode === nextSession.runtimeMode &&
     previous.activeTurnId === nextSession.activeTurnId &&
     previous.createdAt === nextSession.createdAt &&
     previous.updatedAt === nextSession.updatedAt &&
@@ -1859,9 +1866,10 @@ export function normalizeThreadFromReadModel(
   const pendingSourceProposedPlan =
     latestTurn?.sourceProposedPlan ??
     (incoming.session?.status === "running" ? previous?.pendingSourceProposedPlan : undefined);
-  // The read model carries no pending turn start; keep the live one until the
-  // next session start consumes it.
-  const pendingTurnStartMessageId = previous?.pendingTurnStartMessageId;
+  // Snapshots carry no pending request. Preserve known clears as well as live
+  // claims; native compaction explicitly clears the server's pending request.
+  const pendingTurnStartMessageId =
+    claudeCacheReview?.status === "compacting" ? null : previous?.pendingTurnStartMessageId;
 
   if (
     previous &&
@@ -1884,6 +1892,7 @@ export function normalizeThreadFromReadModel(
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
+    previous.pendingTurnStartMessageId === pendingTurnStartMessageId &&
     previous.lastVisitedAt === lastVisitedAt &&
     (previous.parentThreadId ?? null) === (incoming.parentThreadId ?? null) &&
     (previous.creationSource ?? null) === (incoming.creationSource ?? null) &&
@@ -1950,7 +1959,7 @@ export function normalizeThreadFromReadModel(
     isPinned: incoming.isPinned ?? false,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
-    ...(pendingTurnStartMessageId ? { pendingTurnStartMessageId } : {}),
+    ...(pendingTurnStartMessageId !== undefined ? { pendingTurnStartMessageId } : {}),
     lastVisitedAt,
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
@@ -2161,10 +2170,12 @@ export function normalizeThreadShellSnapshot(
       ...(latestTurn?.sourceProposedPlan
         ? { pendingSourceProposedPlan: latestTurn.sourceProposedPlan }
         : {}),
-      // Shell rows carry no pending turn start; the next session start consumes it.
-      ...(previous?.pendingTurnStartMessageId
-        ? { pendingTurnStartMessageId: previous.pendingTurnStartMessageId }
-        : {}),
+      // Keep known clears when shell snapshots replace the normalized turn state.
+      ...(claudeCacheReview?.status === "compacting"
+        ? { pendingTurnStartMessageId: null }
+        : previous?.pendingTurnStartMessageId !== undefined
+          ? { pendingTurnStartMessageId: previous.pendingTurnStartMessageId }
+          : {}),
     },
   };
 }

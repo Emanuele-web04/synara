@@ -395,7 +395,7 @@ export function useHandleNewThread() {
       })();
     }
 
-    return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async () => {
+    return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async (signal) => {
       const threadId = newThreadId();
       if (wantsTemporaryThread) {
         markTemporaryThread(threadId);
@@ -412,6 +412,7 @@ export function useHandleNewThread() {
         entryPoint,
       });
       const committed = await stageDraftNavigation({
+        signal,
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {

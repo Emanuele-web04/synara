@@ -62,6 +62,14 @@ export async function dispatchThreadFork(input: {
   throughMessageId?: MessageId | null;
 }): Promise<ThreadId> {
   const { sourceThread } = input;
+  if (input.throughMessageId) {
+    const selected = sourceThread.messages.find((message) => message.id === input.throughMessageId);
+    if (!selected || !hasImportableThreadMessages({ messages: [selected] })) {
+      throw new Error(
+        "Selected message is no longer available to fork. Refresh the chat and try again.",
+      );
+    }
+  }
   const importedMessages = buildThreadHandoffImportedMessages(sourceThread, {
     throughMessageId: input.throughMessageId ?? null,
   });
