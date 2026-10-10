@@ -13,6 +13,7 @@ import {
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 
 import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
@@ -132,6 +133,7 @@ export function ActivityThreadRow({
   onRenamePointerUp,
   onContextMenu,
   renderHoverCard,
+  rowRef,
 }: {
   thread: SidebarThreadSummary;
   project: Project | undefined;
@@ -152,6 +154,7 @@ export function ActivityThreadRow({
   onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
+  rowRef?: Ref<HTMLButtonElement>;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const branch = resolveThreadDisplayBranch(thread);
@@ -197,8 +200,10 @@ export function ActivityThreadRow({
         }
       >
         <button
+          ref={rowRef}
           type="button"
           onClick={onOpen}
+          aria-current={isActive ? "page" : undefined}
           // Same native drag as the classic thread rows: drop on a chat pane to
           // split, or on a composer to @mention the chat.
           draggable
@@ -271,17 +276,19 @@ export function ActivityThreadRow({
             <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
-            {isWorktree ? (
-              <WorktreeIcon
-                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                aria-label="Worktree"
-              />
-            ) : null}
-            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
+              {isWorktree ? (
+                <span className="inline-flex size-5 shrink-0 items-center justify-center">
+                  <WorktreeIcon
+                    className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                    aria-label="Worktree"
+                  />
+                </span>
+              ) : null}
               {pr ? (
                 <PrStateChip
                   pr={pr}
-                  className="[&_svg]:size-2.5"
+                  className="min-h-5 min-w-5 justify-center [&_svg]:size-3"
                   onOpen={(event) => onOpenPullRequest(event, pr)}
                 />
               ) : null}
@@ -659,10 +666,18 @@ export function SidebarActivityView({
         threads,
         pinnedThreadIdSet,
         draftThreadIdSet,
+        activeThreadId,
         settledOverrideByThreadId,
         projectFilterIds,
       }),
-    [draftThreadIdSet, pinnedThreadIdSet, projectFilterIds, settledOverrideByThreadId, threads],
+    [
+      activeThreadId,
+      draftThreadIdSet,
+      pinnedThreadIdSet,
+      projectFilterIds,
+      settledOverrideByThreadId,
+      threads,
+    ],
   );
   const scopedPinnedThreads = model.pinned;
   const draftThreads = model.drafts;
@@ -788,6 +803,37 @@ export function SidebarActivityView({
     ],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
+  const lastActiveRevealKeyRef = useRef<string | null>(null);
+  const activeRevealKey =
+    activeThreadId !== null && visibleThreadIds.includes(activeThreadId)
+      ? `${activeThreadId}:${groupMode}:${activeScope ?? "all"}`
+      : null;
+  useEffect(() => {
+    if (activeRevealKey === null) {
+      lastActiveRevealKeyRef.current = null;
+      return;
+    }
+    if (lastActiveRevealKeyRef.current === activeRevealKey) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const row = activeRowRef.current;
+      const viewport = row?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+      if (!row || !viewport || viewport.clientHeight === 0 || row.getClientRects().length === 0) {
+        return;
+      }
+      lastActiveRevealKeyRef.current = activeRevealKey;
+      const rowBounds = row.getBoundingClientRect();
+      const viewportBounds = viewport.getBoundingClientRect();
+      // Move only this sidebar viewport and preserve focus in the chat/composer.
+      // A later activity update must not pull a reader back to the selected row.
+      if (rowBounds.top < viewportBounds.top) {
+        viewport.scrollTop += rowBounds.top - viewportBounds.top;
+      } else if (rowBounds.bottom > viewportBounds.bottom) {
+        viewport.scrollTop += rowBounds.bottom - viewportBounds.bottom;
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeRevealKey, visibleThreadIdsFingerprint]);
   const visibleThreadIdsRef = useRef(visibleThreadIds);
   visibleThreadIdsRef.current = visibleThreadIds;
   useEffect(() => {
@@ -806,7 +852,11 @@ export function SidebarActivityView({
     }
   };
 
-  const renderRow = (thread: SidebarThreadSummary, isSettled: boolean) => (
+  const renderRow = (
+    thread: SidebarThreadSummary,
+    isSettled: boolean,
+    registerActiveRow = true,
+  ) => (
     <ActivityThreadRow
       key={thread.id}
       thread={thread}
@@ -843,6 +893,7 @@ export function SidebarActivityView({
       onRenamePointerUp={onThreadRenamePointerUp}
       onContextMenu={onThreadContextMenu}
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
+      {...(registerActiveRow && activeThreadId === thread.id ? { rowRef: activeRowRef } : {})}
     />
   );
   const renderActiveRow = (thread: SidebarThreadSummary) =>
@@ -873,7 +924,13 @@ export function SidebarActivityView({
           onToggle={() => setPinnedOpen((open) => !open)}
           revealedChildren={pinnedRows.revealed.map(renderActiveRow)}
         >
-          {scopedPinnedThreads.map(renderActiveRow)}
+          {scopedPinnedThreads.map((thread) =>
+            renderRow(
+              thread,
+              isThreadSettledForActivity(thread, settledOverrideByThreadId),
+              pinnedOpen,
+            ),
+          )}
         </SidebarCollapsibleSection>
       ) : null}
 

@@ -1290,6 +1290,42 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // A thread lease protects this conversation, but other threads can still
+    // edit the same checkout. Check them while holding the workspace lease,
+    // before either Undo scope changes files or the provider conversation.
+    const checkpointWorkspaceIdentity =
+      yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(checkpointCwd);
+    for (const peer of commandReadModel.threads) {
+      if (relevantThreadIds.includes(peer.id)) continue;
+      const providerThread = yield* resolveProviderSessionThread(projectionSnapshotQuery, peer.id);
+      const peerSession = providerSessions.find(
+        (session) => session.threadId === (providerThread?.id ?? peer.id),
+      );
+      const pendingStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+        threadId: peer.id,
+      });
+      if (
+        !threadHasInFlightTurn(peer) &&
+        !providerSessionHasInFlightTurn(peerSession) &&
+        !(Option.isSome(pendingStart) && peer.session?.status !== "error")
+      )
+        continue;
+      const peerCwd =
+        peerSession?.cwd ??
+        resolveThreadWorkspaceCwd({ thread: peer, projects: commandReadModel.projects });
+      if (!peerCwd) continue;
+      const peerIdentity = yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(peerCwd);
+      if (peerIdentity !== checkpointWorkspaceIdentity) continue;
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
     if (event.payload.scope === "files") {
       const isUndoableCheckpoint = (checkpoint: (typeof thread.checkpoints)[number]) =>
         checkpoint.status === "ready" &&

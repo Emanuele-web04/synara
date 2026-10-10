@@ -22,12 +22,14 @@ New thread (⌘N on macOS, Ctrl+N elsewhere) reopens an unsent draft. Once a sen
 including worktree preparation, it opens another draft while the original send continues.
 The task appears in the sidebar before Git preparation finishes, with a **Preparing worktree**
 indicator. Its provider session starts only after the worktree is ready. If preparation fails or
-is cancelled, the task and its prompt remain available for retry.
+is cancelled, the task and its prompt remain available for retry. Pressing Send again while a
+message for the same task is still being sent shows a notice and keeps the new text in the
+composer; it is not sent twice.
 
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
-  is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Code review, Automations, Hubs (Beta), and
+  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs (Beta), and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
@@ -42,7 +44,7 @@ is cancelled, the task and its prompt remain available for retry.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
-- **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without
+- **Tasks** (Stable and Beta) — a to-do list for anything you need to do, with or without
   a project. Select a to-do to open its floating card, then hand it to an agent with **Start**: pick the
   provider, model, and effort, the project or folder it works in, and a new or existing chat. The
   agent receives the to-do's current title and note. The to-do then follows the chat's status — Running, Needs you, Review when the agent finishes, or
@@ -58,11 +60,11 @@ is cancelled, the task and its prompt remain available for retry.
   The `synara_*_kanban_*` gateway tools read and drive durable cards within the caller's
   ordinary project; local composer drafts remain client-only. Gateway draft creation uses
   the local checkout; isolated worktree callers can create a task instead. These tools do
-  not change the Beta-only Tasks to-do records.
+  not change the Tasks to-do records.
 - **Inbox** (Stable and Beta) — chats needing attention, running and finished work, review
-  requests, and the day’s agent recap, starting at 4am. Beta also shows today’s due and overdue
+  requests, and the day’s agent recap, starting at 4am. Inbox also shows today’s due and overdue
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
-  **All tasks** opens the complete backlog in Beta; Stable keeps these to-do controls hidden.
+  **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
@@ -86,7 +88,9 @@ Desktop quit requests ask for confirmation even when no chats are running. On ma
 ⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
 application and its running chats stay active. Quitting with no open window uses a
 native confirmation. With an open window and running chats, the quit dialog lists the work that
-will stop and offers to resume it automatically on the next launch.
+will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
+or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
+asking.
 
 ## Projects
 
@@ -138,6 +142,9 @@ A turn is one cycle inside that task:
 
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
+
+Chat code blocks above 250,000 characters display their complete source as plain text,
+using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
@@ -333,11 +340,15 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
-Pre-turn checkpoint and Studio output baselines share a five-second preparation budget, including
+File Undo and thread revert refuse to change a workspace while another thread has an active or
+pending turn in that same Git checkout. Symlinks and nested folders share this protection;
+separate Git worktrees remain independent. Stop the active turn before retrying Undo.
+
+Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;
 invalid values use the default and positive values are clamped to that range. When preparation fails
 or the combined budget expires, Synara reports unavailable baselines and preserves independently
-completed results. Studio reports completed, not-applicable and failed preparation separately;
+completed results. The Hub output worker reports completed, not-applicable and failed preparation separately;
 failed or inapplicable preparation is never presented as a preserved baseline. The provider starts
 after cancellation cleanup finishes, which can extend beyond the preparation budget; an absolute process-cleanup bound has not been verified. A bounded exact-ref
 check after cleanup recognizes a checkpoint published just before cancellation. Initial and later
@@ -349,9 +360,10 @@ Native provider turns, including native child turns, may begin without Synara's 
 Synara never takes a replacement capture. Expected missing-baseline notices for native children are
 suppressed when they have no independent send, while failures of their own sends and actual capture
 errors remain visible. Diff and file undo that require an exact initial checkpoint remain unavailable,
-and Studio output discovery is unavailable for turns without a prepared Studio baseline. File Undo
+and Hub output discovery is unavailable for turns without a prepared Hub baseline. File Undo
 also refuses an earlier turn when a later managed checkpoint has no initial baseline, before changing
-files or checkpoint refs.
+files or checkpoint refs. The worker is named `HubOutputReactor`; legacy `studio.*` RPC and
+activity keys remain unchanged for client and persisted-history compatibility.
 
 ## Hubs
 
