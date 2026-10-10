@@ -141,6 +141,9 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
+Chat code blocks above 250,000 characters display their complete source as plain text,
+using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
+
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
 If it was not accepted, Synara records a rejection that also blocks a delayed copy, then restores

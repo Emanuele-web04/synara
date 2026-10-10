@@ -78,7 +78,6 @@ import { claudeCacheForModel } from "../../provider/claudeCacheObservation.ts";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   formatProviderDeliveryBlockDetail,
-  isProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
@@ -4059,25 +4058,15 @@ const make = Effect.gen(function* () {
       }
     }
 
+    // Only the local rename owns the repository mutation lock. Remote
+    // publication can wait on authentication or network I/O indefinitely and
+    // must not block branch/worktree creation in other linked worktrees.
     const renamed = yield* git.withMutation(
       input.cwd,
-      Effect.gen(function* () {
-        const result = yield* git.renameBranch({
-          cwd: input.cwd,
-          oldBranch: input.oldBranch,
-          newBranch: input.targetBranch,
-        });
-        yield* git.publishBranch({ cwd: input.cwd, branch: result.branch }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("provider command reactor failed to publish renamed branch", {
-              threadId: input.threadId,
-              cwd: input.cwd,
-              branch: result.branch,
-              cause: Cause.pretty(cause),
-            }),
-          ),
-        );
-        return result;
+      git.renameBranch({
+        cwd: input.cwd,
+        oldBranch: input.oldBranch,
+        newBranch: input.targetBranch,
       }),
     );
     yield* orchestrationEngine.dispatch({
@@ -4090,6 +4079,16 @@ const make = Effect.gen(function* () {
       associatedWorktreeBranch: renamed.branch,
       associatedWorktreeRef: renamed.branch,
     });
+    yield* git.publishBranch({ cwd: input.cwd, branch: renamed.branch }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to publish renamed branch", {
+          threadId: input.threadId,
+          cwd: input.cwd,
+          branch: renamed.branch,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
   });
 
   const resolveFirstTurnThread = Effect.fnUntraced(function* (
@@ -7511,21 +7510,12 @@ const make = Effect.gen(function* () {
       return true;
     });
 
-    // The "Unblock thread" action only renders for the block-detail contract,
-    // which used to be written lazily on the first skipped turn start. Read the
-    // durable session log rather than the projection so callers during replay
-    // or startup see the session other writers just persisted, and merge the
-    // detail over the session's actual state: quarantining a delivery must
-    // never flatten a live turn's status or activeTurnId, and the conditional
-    // write loses to any session that moved on since the read.
-    const surfaceQuarantinedThreadBlock = Effect.fnUntraced(function* (input: {
-      readonly threadId: ThreadId;
-      readonly detail: string;
-    }) {
-      const detail = formatProviderDeliveryBlockDetail(input.detail);
+    // Replay and recovery must see the session other writers just persisted,
+    // even when its projection has not caught up yet.
+    const readLatestThreadSession = Effect.fnUntraced(function* (threadId: ThreadId) {
       const highWater = yield* orchestrationEngine.getEventHighWaterSequence;
-      const session = yield* orchestrationEngine
-        .readThreadEventsThrough(input.threadId, 0, highWater, ["thread.session-set"])
+      return yield* orchestrationEngine
+        .readThreadEventsThrough(threadId, 0, highWater, ["thread.session-set"])
         .pipe(
           Stream.runFold(
             () => null as OrchestrationSession | null,
@@ -7533,6 +7523,17 @@ const make = Effect.gen(function* () {
               event.type === "thread.session-set" ? event.payload.session : _latest,
           ),
         );
+    });
+
+    // The "Unblock thread" action only renders for the block-detail contract.
+    // Merge its current reason over the durable session without flattening a
+    // live turn, and lose the conditional write if another session moved on.
+    const surfaceQuarantinedThreadBlock = Effect.fnUntraced(function* (input: {
+      readonly threadId: ThreadId;
+      readonly detail: string;
+    }) {
+      const detail = formatProviderDeliveryBlockDetail(input.detail);
+      const session = yield* readLatestThreadSession(input.threadId);
       const createdAt = new Date().toISOString();
       if (session === null) {
         // No durable session yet: seed a full error session the way the skip
@@ -7544,13 +7545,20 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      if (isProviderDeliveryBlockDetail(session.lastError)) return;
+      if (session.lastError === detail) return;
       yield* setThreadSession({
         threadId: input.threadId,
         expectedSession: { status: session.status, updatedAt: session.updatedAt },
         session: { ...session, lastError: detail, updatedAt: createdAt },
         createdAt,
-      });
+      }).pipe(
+        Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+          error.detail ===
+          `Thread '${input.threadId}' session changed before the conditional update.`
+            ? Effect.void
+            : Effect.fail(error),
+        ),
+      );
     });
 
     const settleTerminalFailure = Effect.fnUntraced(function* (input: {
@@ -8258,6 +8266,48 @@ const make = Effect.gen(function* () {
                     threadId: input.threadId,
                     afterSequence: input.eventSequence,
                   });
+                }
+                const remaining = yield* deliveryRepository.firstBlockingDeliveryForThread({
+                  consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                  threadId: input.threadId,
+                });
+                if (Option.isSome(remaining)) {
+                  quarantinedThreads.add(input.threadId);
+                  yield* surfaceQuarantinedThreadBlock({
+                    threadId: input.threadId,
+                    detail: remaining.value.lastError ?? "an earlier provider command failed",
+                  });
+                } else {
+                  const session = yield* readLatestThreadSession(input.threadId);
+                  const reconciledDetail = formatProviderDeliveryBlockDetail(
+                    delivery.value.lastError ?? "an earlier provider command failed",
+                  );
+                  // Reconciliation only owns this block's error. A replay or
+                  // another session writer may already have supplied a newer one.
+                  if (session?.lastError === reconciledDetail) {
+                    const createdAt = new Date().toISOString();
+                    yield* setThreadSession({
+                      threadId: input.threadId,
+                      expectedSession: session,
+                      session: {
+                        ...session,
+                        status:
+                          session.status === "error" && session.activeTurnId === null
+                            ? "stopped"
+                            : session.status,
+                        lastError: null,
+                        updatedAt: createdAt,
+                      },
+                      createdAt,
+                    }).pipe(
+                      Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+                        error.detail ===
+                        `Thread '${input.threadId}' session changed before the conditional update.`
+                          ? Effect.void
+                          : Effect.fail(error),
+                      ),
+                    );
+                  }
                 }
               }
 
