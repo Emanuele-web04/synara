@@ -1,7 +1,7 @@
 // FILE: SubagentRunCard.logic.ts
-// Purpose: Folds a turn's routed subagent work into the one entry the transcript
-// renders as the subagent card, and derives that card's rows (identity, live
-// state, current action, durations, result preview, nested subagents) and its
+// Purpose: Folds routed subagent work into entries for its invocations, and
+// derives each transcript card's rows (identity, live state, current action,
+// durations, result preview, nested subagents) and its
 // header counts.
 // Layer: Chat transcript logic
 // Exports: foldSubagentRunWorkEntries, deriveSubagentRunCard,
@@ -51,7 +51,7 @@ interface RunDraft {
 }
 
 function runKeyForEntry(entry: WorkLogEntry): string {
-  return entry.turnId ? `turn:${entry.turnId}` : `entry:${entry.id}`;
+  return `entry:${entry.id}`;
 }
 
 function isTerminalStatus(status: string | null | undefined): boolean {
@@ -74,10 +74,10 @@ function progressStep(entry: WorkLogEntry): string | null {
 }
 
 /**
- * One card per turn: every subagent a turn launched folds into a single entry
- * placed where the first one was launched. Later collab calls about a known
- * subagent (wait, close, a later status snapshot) update its row instead of
- * adding one, and its progress reports feed the row's current step. State-only
+ * Each launching call retains its position; adjacent calls group after timeline ordering. A
+ * repeat launch/resume of a child opens another invocation, even in that turn.
+ * Later state-only calls (wait, close, settled) update its latest invocation,
+ * and progress reports feed the matching invocation's current step. State-only
  * calls about unknown subagents are dropped, as before.
  */
 export function foldSubagentRunWorkEntries(
@@ -97,8 +97,23 @@ export function foldSubagentRunWorkEntries(
       const key = subagent.threadId;
       // A resume starts another invocation in its launching turn. State-only
       // reports may arrive in later parent turns and still settle the last run.
-      const runKey = runKeyForEntry(entry);
-      const knownRun = stateOnly ? runs.get(runKeyBySubagentKey.get(key) ?? "") : runs.get(runKey);
+      let runKey = runKeyForEntry(entry);
+      const previousRun = runs.get(runKeyBySubagentKey.get(key) ?? "");
+      let knownRun =
+        stateOnly || previousRun?.anchor.turnId === entry.turnId ? previousRun : runs.get(runKey);
+      if (
+        !stateOnly &&
+        knownRun?.subagentByKey.has(key) &&
+        knownRun.anchor.id !== entry.id &&
+        (/^(?:spawn|resume)[_-]?agent$/i.test(entry.subagentAction?.tool ?? "") ||
+          isTerminalStatus(knownRun.subagentByKey.get(key)?.rawStatus))
+      ) {
+        // A parent may finish and resume the same child more than once in a
+        // single turn. Keep each invocation's outcome and clock; an input to
+        // an already running child remains an update to its current run.
+        runKey = `entry:${entry.id}`;
+        knownRun = runs.get(runKey);
+      }
       if (knownRun?.subagentByKey.has(key)) {
         const previous = knownRun.subagentByKey.get(key);
         knownRun.subagentByKey.set(
@@ -114,7 +129,6 @@ export function foldSubagentRunWorkEntries(
       if (stateOnly) {
         continue;
       }
-      const previousRun = runs.get(runKeyBySubagentKey.get(key) ?? "");
       const previousMember = previousRun?.memberByKey.get(key);
       if (previousMember && previousRun !== knownRun) {
         previousMember.nextLaunchedAt = entry.createdAt;
@@ -149,23 +163,37 @@ export function foldSubagentRunWorkEntries(
     return entries;
   }
 
+  const invocationsBySubagentKey = new Map<
+    string,
+    Array<{ run: RunDraft; member: MutableRunMember }>
+  >();
+  for (const run of runs.values()) {
+    for (const member of run.memberByKey.values()) {
+      const providerThreadId = run.subagentByKey.get(member.key)?.providerThreadId;
+      for (const alias of new Set([member.key, providerThreadId ?? member.key])) {
+        const invocations = invocationsBySubagentKey.get(alias) ?? [];
+        invocations.push({ run, member });
+        invocationsBySubagentKey.set(alias, invocations);
+      }
+    }
+  }
+
   // A subagent's progress reports become its row's current step.
   entries.forEach((entry, index) => {
     const progress = entry.subagentProgress;
     if (!progress) {
       return;
     }
-    const run = runs.get(
-      entry.turnId ? `turn:${entry.turnId}` : (runKeyBySubagentKey.get(progress.toolUseId) ?? ""),
+    const invocations = (invocationsBySubagentKey.get(progress.toolUseId) ?? []).filter(
+      ({ run }) => !entry.turnId || run.anchor.turnId === entry.turnId,
     );
-    if (!run) {
-      return;
-    }
-    const member = [...run.memberByKey.values()].find(
-      (candidate) =>
-        candidate.key === progress.toolUseId ||
-        run.subagentByKey.get(candidate.key)?.providerThreadId === progress.toolUseId,
-    );
+    // Late reports retain their original invocation even when the parent
+    // turn is reused. A lone launch retains the existing timestamp fallback.
+    const member = (
+      invocations.findLast(
+        ({ member }) => Date.parse(entry.createdAt) >= Date.parse(member.launchedAt),
+      ) ?? invocations[0]
+    )?.member;
     if (!member) {
       return;
     }
