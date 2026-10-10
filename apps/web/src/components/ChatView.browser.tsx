@@ -3641,13 +3641,15 @@ describe("ChatView transcript geometry (full app)", () => {
       await page.getByRole("button", { name: "Toggle thread sidebar", exact: true }).click();
       const rail = page.getByRole("navigation", { name: "Primary" });
       await expect.element(rail.getByRole("button", { name: "Home", exact: true })).toBeVisible();
-      await expect
-        .element(rail.getByRole("button", { name: "Settings", exact: true }))
-        .toBeVisible();
       // Customize has no shell slot to anchor to on phones; it opens beside the sheet's rail.
       await rail.getByRole("button", { name: "More", exact: true }).click();
       await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
       await expect.element(page.getByRole("button", { name: "Done", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Done", exact: true }).click();
+      // Settings remains available from the account menu while using the local-only mode.
+      await rail.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.getByRole("menuitem", { name: /^Settings\b/ }).click();
+      await expect.poll(() => mounted.router.state.location.pathname).toBe("/settings");
     } finally {
       await mounted.cleanup();
     }

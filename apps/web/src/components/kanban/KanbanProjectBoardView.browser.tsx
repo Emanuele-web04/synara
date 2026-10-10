@@ -5,7 +5,8 @@ import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-vi.mock("~/appSettings", () => ({
+vi.mock("~/appSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/appSettings")>()),
   useAppSettings: () => ({
     settings: { defaultProvider: "codex", sidebarProjectSortOrder: "manual" },
     setSetting: vi.fn(),

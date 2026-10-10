@@ -175,8 +175,8 @@ Live verification covered desktop save → public API → light/dark page colors
 same-origin JavaScript assets, and value/date hover readouts for daily tokens,
 daily prompts and hourly prompts. The public profile remains opt-in.
 
-As of 2026-10-07, the live marketing project is **dpcode-website** on Vercel,
-not this checkout's `apps/marketing`. Two project-level rewrites serve profiles
+As of 2026-10-07, the live marketing site is a separate Vercel project from
+this checkout's `apps/marketing`. Two project-level rewrites serve profiles
 from Cloudflare without sending the browser to workers.dev:
 
 - **Synara public profile links** (`afea1383-b1c5-4103-9a73-e02827960732`):
