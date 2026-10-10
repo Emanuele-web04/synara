@@ -7,7 +7,8 @@
 import type { ProviderKind } from "@synara/contracts";
 import { useState } from "react";
 
-import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
+import type { FastModeNotice } from "~/lib/fastModeState";
+import { ChevronDownIcon, FastModeIcon, FastModeOutlineIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ProviderAccountDot } from "../ProviderAccountMark";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
@@ -34,6 +35,8 @@ export function ComposerModelMenuTrigger(props: {
   statusLabel: string | null;
   contextWindowLabel?: string | null | undefined;
   showsFastBadge: boolean;
+  /** Fast mode was requested but is not serving; the badge turns into a muted outline. */
+  fastModeNotice?: FastModeNotice | null | undefined;
   hideModelLabel?: boolean | undefined;
   hideStatusLabel?: boolean | undefined;
   disabled?: boolean | undefined;
@@ -127,10 +130,20 @@ export function ComposerModelMenuTrigger(props: {
             </span>
           )}
           {label.showsFastBadge ? (
-            <FastModeIcon
-              aria-hidden="true"
-              className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"
-            />
+            props.fastModeNotice ? (
+              <span className="inline-flex shrink-0" title={props.fastModeNotice.detail}>
+                <FastModeOutlineIcon
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 text-muted-foreground opacity-70"
+                />
+                <span className="sr-only">{props.fastModeNotice.label}</span>
+              </span>
+            ) : (
+              <FastModeIcon
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"
+              />
+            )
           ) : null}
           {label.statusLabel ? (
             props.hideStatusLabel ? (
