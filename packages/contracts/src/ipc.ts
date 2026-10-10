@@ -111,6 +111,23 @@ import type {
   ProjectThreadIndexEntry,
 } from "./projectAgent";
 import type {
+  MindAffirmInput,
+  MindForgetInput,
+  MindHistoryInput,
+  MindHistoryResult,
+  MindListInput,
+  MindListResult,
+  MindMemory,
+  MindProfile,
+  MindProfileGetInput,
+  MindProfileGetResult,
+  MindProfileSetInput,
+  MindSearchInput,
+  MindSearchResult,
+  MindSetPinnedInput,
+  MindUpdateInput,
+} from "./mind";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -1479,6 +1496,17 @@ export interface NativeApi {
     update: (input: TodoUpdateInput) => Promise<Todo>;
     delete: (input: TodoDeleteInput) => Promise<void>;
     onEvent: (callback: (event: TodoStreamEvent) => void) => () => void;
+  };
+  mind: {
+    list: (input: MindListInput) => Promise<MindListResult>;
+    search: (input: MindSearchInput) => Promise<MindSearchResult>;
+    forget: (input: MindForgetInput) => Promise<void>;
+    setPinned: (input: MindSetPinnedInput) => Promise<MindMemory>;
+    affirm: (input: MindAffirmInput) => Promise<MindMemory>;
+    update: (input: MindUpdateInput) => Promise<MindMemory>;
+    history: (input: MindHistoryInput) => Promise<MindHistoryResult>;
+    profileGet: (input: MindProfileGetInput) => Promise<MindProfileGetResult>;
+    profileSet: (input: MindProfileSetInput) => Promise<MindProfile>;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

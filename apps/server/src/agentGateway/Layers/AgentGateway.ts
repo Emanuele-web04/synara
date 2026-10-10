@@ -46,6 +46,7 @@ import { Effect, Layer, Option } from "effect";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { MindService } from "../../mind/Services/MindService.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -98,6 +99,7 @@ import { cloneDelegatedAttachments } from "../delegatedAttachments";
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "../../managedAttachmentPrincipal";
 
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
+import { makeAgentGatewayMemoryTools } from "../memoryTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
 import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
@@ -174,6 +176,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const projectAgentService = yield* ProjectAgentService;
+  const mindService = yield* MindService;
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
@@ -1120,6 +1123,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         }) ?? null
       );
     }).pipe(Effect.orElseSucceed(() => null));
+  const memoryTools = makeAgentGatewayMemoryTools({ mindService, requireThreadShell });
   const browserTools = makeAgentGatewayBrowserTools(browserAutomationHost, {
     resolveWorkspaceRoot,
   });
@@ -1585,6 +1589,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadArchived,
     setThreadGoal,
     ...automationTools,
+    ...memoryTools,
     ...browserTools,
     ...kanbanTools,
     ...(deviceService?.supported === true

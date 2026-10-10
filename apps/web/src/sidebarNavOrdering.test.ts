@@ -23,6 +23,10 @@ describe("resolveTasksSurfaceSlot", () => {
     ]);
   });
 
+  it("preserves Mind alongside either task surface", () => {
+    expect(resolveTasksSurfaceSlot(["mind", "kanban"], true)).toEqual(["mind", "tasks"]);
+  });
+
   it("leaves an order without either item alone", () => {
     expect(resolveTasksSurfaceSlot(["newThread", "automations"], true)).toEqual([
       "newThread",

@@ -45,6 +45,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "tasks",
   "pullRequests",
   "automations",
+  "mind",
   "studio",
 ] as const;
 export type RailOrderableItemId = (typeof RAIL_ORDERABLE_ITEM_IDS)[number];
@@ -201,6 +202,7 @@ export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
   if (matchesRoute(pathname, "/automations")) return "automations";
+  if (matchesRoute(pathname, "/mind")) return "mind";
   // The rail item keeps its stored id "studio"; Hubs live at /hubs with legacy redirects.
   if (
     matchesRoute(pathname, "/hubs") ||

@@ -82,6 +82,7 @@ import {
 } from "./projectAgent/libraryGit";
 import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
+import { MindService } from "./mind/Services/MindService";
 import {
   ServerAuth,
   type AuthError,
@@ -507,6 +508,7 @@ const makeWsRpcHandlersLayer = () =>
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
+      const mindService = yield* MindService;
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const providerCommandReactor = yield* ProviderCommandReactor;
@@ -1176,6 +1178,11 @@ const makeWsRpcHandlersLayer = () =>
 
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+
+      // User-facing project memory and profiles are owner-only. Agent access
+      // is independently scoped to the caller project by the gateway.
+      const ownerMindRpc = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
+        requireWsOwnerSession.pipe(Effect.andThen(rpcEffect(effect, fallbackMessage)));
 
       const tasksEnabled = isServerBetaFeatureEnabled("tasks");
       const tasksUnavailableError = () =>
@@ -3064,6 +3071,81 @@ const makeWsRpcHandlersLayer = () =>
                 ),
               )
             : Stream.fail(tasksUnavailableError()),
+
+        [WS_METHODS.mindList]: (input) =>
+          ownerMindRpc(
+            // Omitted projectId returns one weight-desc global page (capped,
+            // `count` the true total so the UI can tell when it is truncated).
+            mindService.list(input),
+            "Failed to list memories",
+          ),
+        [WS_METHODS.mindSearch]: (input) =>
+          ownerMindRpc(mindService.search(input), "Failed to search memories"),
+        [WS_METHODS.mindForget]: (input) =>
+          ownerMindRpc(
+            mindService
+              .forget({
+                projectId: input.projectId,
+                memoryId: input.memoryId,
+                // The UI has no thread context; journal actor is the plain user.
+                actor: { kind: "user" },
+                threadId: null,
+                turnId: null,
+              })
+              .pipe(Effect.asVoid),
+            "Failed to forget memory",
+          ),
+        [WS_METHODS.mindSetPinned]: (input) =>
+          ownerMindRpc(
+            mindService.setPinned({
+              projectId: input.projectId,
+              memoryId: input.memoryId,
+              pinned: input.pinned,
+              actor: { kind: "user" },
+              threadId: null,
+              turnId: null,
+            }),
+            "Failed to update memory pin",
+          ),
+        [WS_METHODS.mindAffirm]: (input) =>
+          ownerMindRpc(
+            mindService.affirm({ projectId: input.projectId, memoryId: input.memoryId }),
+            "Failed to affirm memory",
+          ),
+        [WS_METHODS.mindUpdate]: (input) =>
+          ownerMindRpc(
+            mindService.update({
+              projectId: input.projectId,
+              memoryId: input.memoryId,
+              text: input.text,
+              type: input.type,
+              // The UI has no thread context; journal actor is the plain user.
+              actor: { kind: "user" },
+              threadId: null,
+              turnId: null,
+            }),
+            "Failed to update memory",
+          ),
+        [WS_METHODS.mindHistory]: (input) =>
+          ownerMindRpc(
+            mindService.history({ projectId: input.projectId, memoryId: input.memoryId }),
+            "Failed to load memory history",
+          ),
+        [WS_METHODS.mindProfileGet]: (input) =>
+          ownerMindRpc(
+            mindService.profileGet({ projectId: input.projectId }),
+            "Failed to load project profile",
+          ),
+        [WS_METHODS.mindProfileSet]: (input) =>
+          ownerMindRpc(
+            // The UI has no thread context; profiles are user-only with no journal row.
+            mindService.profileSet({
+              projectId: input.projectId,
+              text: input.text,
+              optedIn: input.optedIn,
+            }),
+            "Failed to save project profile",
+          ),
 
         ...makeWsDeviceHandlers(deviceService),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>

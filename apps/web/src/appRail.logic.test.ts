@@ -30,6 +30,7 @@ describe("rail item order", () => {
       "kanban",
       "tasks",
       "pullRequests",
+      "mind",
       "studio",
     ]);
   });
@@ -43,6 +44,7 @@ describe("rail item order", () => {
       "tasks",
       "pullRequests",
       "automations",
+      "mind",
       "studio",
     ]);
     expect(normalizeRailItemOrder(["home", "spaces", "inbox"]).slice(0, 3)).toEqual([
@@ -66,7 +68,7 @@ describe("rail item order", () => {
         studioAvailable: false,
         inboxAvailable: false,
       }),
-    ).toEqual(["home", "kanban", "tasks", "pullRequests", "automations"]);
+    ).toEqual(["home", "kanban", "tasks", "pullRequests", "automations", "mind"]);
     expect(
       buildRailItemOrder({
         order,
@@ -87,6 +89,7 @@ describe("rail item order", () => {
       "tasks",
       "pullRequests",
       "automations",
+      "mind",
     ]);
     expect(isRailItemAvailable("inbox", { studioAvailable: false, inboxAvailable: true })).toBe(
       true,
@@ -159,6 +162,8 @@ describe("railItemForPathname", () => {
     expect(railItemForPathname("/tasks")).toBe("tasks");
     expect(railItemForPathname("/pull-requests/42")).toBe("pullRequests");
     expect(railItemForPathname("/automations")).toBe("automations");
+    expect(railItemForPathname("/mind")).toBe("mind");
+    expect(railItemForPathname("/mindfulness")).toBeNull();
     expect(railItemForPathname("/studio/abc")).toBe("studio");
     expect(railItemForPathname("/groups")).toBe("studio");
     expect(railItemForPathname("/hubs")).toBe("studio");
