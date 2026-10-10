@@ -9,7 +9,6 @@ import {
   type HubWorkSourceMessage,
   type HubWorkState,
   type ProjectId,
-  type SynaraCreateThreadSpec,
   type ThreadId,
   type TurnId,
 } from "@synara/contracts";
@@ -49,7 +48,10 @@ export interface HubWorkSubmitInput {
   readonly callerTurnId?: TurnId;
   readonly requestId: string;
   readonly sourceMessages: readonly HubWorkSourceMessage[];
-  readonly tasks: readonly { readonly spec: SynaraCreateThreadSpec; readonly title?: string }[];
+  readonly tasks: readonly {
+    readonly spec: HubWorkRecord["creationSpec"];
+    readonly title?: string;
+  }[];
 }
 
 export interface HubWorkService {
