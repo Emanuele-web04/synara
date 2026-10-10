@@ -135,7 +135,6 @@ export function useChatQueuedTurns({
   scheduleComposerFocus,
   removeQueuedComposerTurnFromDraft,
   lateComposerSendHandlersRef,
-  insertQueuedComposerTurn,
   phase,
   localDispatch,
   isLocalDraftThread,
@@ -326,29 +325,32 @@ export function useChatQueuedTurns({
       ) {
         return;
       }
-      const previousQueue = queuedComposerTurnsRef.current;
-      const queuedIndex = previousQueue.findIndex((entry) => entry.id === queuedTurn.id);
-      if (queuedIndex < 0) {
+      const queuedTurnForSend = useComposerDraftStore
+        .getState()
+        .draftsByThreadId[threadId]?.queuedTurns.find((entry) => entry.id === queuedTurn.id);
+      if (!queuedTurnForSend || !tryBeginQueuedComposerAutoDispatch(threadId)) {
         return;
       }
-      removeQueuedComposerTurnFromDraft(threadId, queuedTurn.id);
-      const succeeded = await dispatchQueuedComposerTurn(queuedTurn, "steer");
-      if (succeeded) {
-        clearQueuedComposerAutoDispatchRetry(threadId);
-        return;
-      }
-      insertQueuedComposerTurn(threadId, queuedTurn, queuedIndex);
-      if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
-        recordQueuedComposerAutoDispatchFailure(threadId, queuedTurn.id);
-      }
-      setQueuedAutoDispatchTick((tick) => tick + 1);
+      await runLockedQueuedComposerAutoDispatch({
+        threadId,
+        run: async () => {
+          const succeeded = await dispatchQueuedComposerTurn(queuedTurnForSend, "steer");
+          if (succeeded) {
+            clearQueuedComposerAutoDispatchRetry(threadId);
+            removeQueuedComposerTurnFromDraft(threadId, queuedTurnForSend.id);
+            return;
+          }
+          if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+            recordQueuedComposerAutoDispatchFailure(threadId, queuedTurnForSend.id);
+          }
+          setQueuedAutoDispatchTick((tick) => tick + 1);
+        },
+      });
     },
     [
-      queuedComposerTurnsRef,
       setQueuedAutoDispatchTick,
       dispatchQueuedComposerTurn,
       hasPendingCacheReview,
-      insertQueuedComposerTurn,
       removeQueuedComposerTurnFromDraft,
       threadId,
     ],
