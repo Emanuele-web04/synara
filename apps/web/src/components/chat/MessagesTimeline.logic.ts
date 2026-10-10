@@ -439,7 +439,7 @@ export function deriveTurnTimingByTurnId(input: {
   for (const activity of input.activities) {
     if (activity.turnId === null) continue;
     const payload = activityPayloadRecord(activity);
-    if (activity.kind === "turn.stop-requested") {
+    if (activity.kind === "turn.stop-requested" && payload?.requestedBy === "user") {
       if (!stopRequestedAtByTurnId.has(activity.turnId))
         stopRequestedAtByTurnId.set(activity.turnId, activity.createdAt);
       continue;
@@ -1173,6 +1173,21 @@ export function deriveMessagesTimelineRows(input: {
   // completed chat does not end with a detached tool-log footer.
   flushPendingWorkGroup();
 
+  const liveBoundary = findLiveTurnHeaderInsertion(nextRows, input.activeTurnId ?? null);
+  if (liveBoundary.resumedStartedAt) {
+    for (const row of nextRows) {
+      if (
+        row.kind === "message" &&
+        row.message.role === "assistant" &&
+        row.assistantTurnInProgress &&
+        Date.parse(row.createdAt) < Date.parse(liveBoundary.resumedStartedAt)
+      ) {
+        row.assistantTurnInProgress = false;
+        row.assistantCopyStreaming = row.message.streaming;
+      }
+    }
+  }
+
   if (input.worktreeSetup) {
     nextRows.push({
       kind: "worktree-setup",
@@ -1199,6 +1214,7 @@ export function deriveMessagesTimelineRows(input: {
       activeTurnInProgress:
         (input.activeTurnInProgress ?? false) || (input.subagentsRunning ?? false),
       activeTurnId: input.activeTurnId ?? null,
+      activeResponseStartedAt: liveBoundary.resumedStartedAt,
       turnTimingByTurnId: input.turnTimingByTurnId,
     });
   }
@@ -1219,11 +1235,14 @@ export function deriveMessagesTimelineRows(input: {
     input.activeTurnStartedAt &&
     !(input.worktreeSetup && input.worktreeSetupOpen)
   ) {
-    const { index, resumedBy } = findLiveTurnHeaderInsertion(nextRows, input.activeTurnId ?? null);
+    const { index, resumedBy, resumedStartedAt } = findLiveTurnHeaderInsertion(
+      nextRows,
+      input.activeTurnId ?? null,
+    );
     nextRows.splice(index, 0, {
       kind: "working-header",
       id: "working-header-row",
-      createdAt: input.activeTurnStartedAt,
+      createdAt: resumedStartedAt ?? input.activeTurnStartedAt,
       ...(resumedBy ? { resumedBy } : {}),
     });
   }
@@ -1312,7 +1331,14 @@ function markInterruptedTurnsWithoutHeader(
 function findLiveTurnHeaderInsertion(
   rows: ReadonlyArray<MessagesTimelineRow>,
   activeTurnId: TurnId | null,
-): { index: number; resumedBy: TurnResumedBy[] | null } {
+): { index: number; resumedBy: TurnResumedBy[] | null; resumedStartedAt: string | null } {
+  const lastCompletionIndex = rows.findLastIndex(isBackgroundTaskCompletionRow);
+  const completionRow = rows[lastCompletionIndex];
+  const completionBoundary = () => ({
+    index: lastCompletionIndex + 1,
+    resumedBy: collectResumedBy(rows, lastCompletionIndex),
+    resumedStartedAt: completionRow?.kind === "work" ? completionRow.createdAt : null,
+  });
   if (activeTurnId !== null) {
     const requestIndex = rows.findLastIndex(
       (row) =>
@@ -1320,19 +1346,35 @@ function findLiveTurnHeaderInsertion(
         row.message.role === "user" &&
         row.message.turnId === activeTurnId,
     );
-    if (requestIndex >= 0) return { index: requestIndex + 1, resumedBy: null };
+    if (requestIndex >= 0) {
+      // A completed answer before a newer notification proves a response
+      // boundary even when the provider reuses the original request's id.
+      const precedingAssistant = rows
+        .slice(requestIndex + 1, lastCompletionIndex)
+        .findLast(
+          (row) =>
+            row.kind === "message" &&
+            row.message.role === "assistant" &&
+            row.message.turnId === activeTurnId,
+        );
+      if (
+        lastCompletionIndex > requestIndex &&
+        precedingAssistant?.kind === "message" &&
+        !precedingAssistant.message.streaming &&
+        precedingAssistant.message.completedAt
+      ) {
+        return completionBoundary();
+      }
+      return { index: requestIndex + 1, resumedBy: null, resumedStartedAt: null };
+    }
   }
   const lastRequestIndex = rows.findLastIndex(
     (row) => row.kind === "message" && row.message.role === "user",
   );
-  const lastCompletionIndex = rows.findLastIndex(isBackgroundTaskCompletionRow);
   if (lastCompletionIndex > lastRequestIndex) {
-    return {
-      index: lastCompletionIndex + 1,
-      resumedBy: collectResumedBy(rows, lastCompletionIndex),
-    };
+    return completionBoundary();
   }
-  return { index: lastRequestIndex + 1, resumedBy: null };
+  return { index: lastRequestIndex + 1, resumedBy: null, resumedStartedAt: null };
 }
 
 // Returns the terminal assistant only when it is still the transcript tail.
@@ -1373,6 +1415,7 @@ function collapseSettledTurns(
     collapseWork: boolean;
     activeTurnInProgress: boolean;
     activeTurnId: TurnId | null;
+    activeResponseStartedAt: string | null;
     turnTimingByTurnId: ReadonlyMap<TurnId, TurnTiming> | undefined;
   },
 ): void {
@@ -1409,6 +1452,8 @@ function collapseSettledTurns(
     const turnId = message.turnId ?? null;
     const turnIsActive =
       activeTurnInProgress &&
+      (!options.activeResponseStartedAt ||
+        Date.parse(message.createdAt) >= Date.parse(options.activeResponseStartedAt)) &&
       (activeTurnId != null
         ? (turnId != null && turnId === activeTurnId) ||
           message.id === lastTerminalAssistantMessageId
@@ -1516,10 +1561,33 @@ function collapseSettledTurns(
     // Message timestamps only bound the visible output: a turn without a
     // request (subagent child), a stopped turn, or a turn woken by a
     // background task would report the wrong span. Prefer the turn's own.
-    const turnTiming = turnId ? turnTimingByTurnId?.get(turnId) : undefined;
+    const nextResponseBoundary = rows
+      .slice(pass + 1)
+      .find(
+        (candidate) =>
+          isBackgroundTaskCompletionRow(candidate) ||
+          (candidate.kind === "message" && candidate.message.role === "user"),
+      );
+    const nextResponseBoundaryAt =
+      nextResponseBoundary?.kind === "work" || nextResponseBoundary?.kind === "message"
+        ? nextResponseBoundary.createdAt
+        : null;
+    const timingForThisResponse = (id: TurnId) => {
+      const timing = turnTimingByTurnId?.get(id);
+      if (
+        nextResponseBoundaryAt &&
+        ((timing?.startedAt &&
+          Date.parse(timing.startedAt) >= Date.parse(nextResponseBoundaryAt)) ||
+          (timing?.completedAt &&
+            Date.parse(timing.completedAt) >= Date.parse(nextResponseBoundaryAt)))
+      )
+        return undefined;
+      return timing;
+    };
+    const turnTiming = turnId ? timingForThisResponse(turnId) : undefined;
     let turnStart: string | null = null;
     for (const foldedTurnId of foldedTurnIds) {
-      const startedAt = turnTimingByTurnId?.get(foldedTurnId)?.startedAt ?? null;
+      const startedAt = timingForThisResponse(foldedTurnId)?.startedAt ?? null;
       if (startedAt !== null) {
         turnStart = turnStart === null ? startedAt : earliestTimestamp(turnStart, startedAt);
       }

@@ -1,12 +1,12 @@
 import type { OrchestrationEvent, OrchestrationThreadActivity, TurnId } from "@synara/contracts";
 
-// Intent records who requested a stop; only the terminal outcome confirms it.
-// Quitting the app interrupts sessions for recovery, without using Stop.
+// Only explicit manual intent certifies the user Stop control. Automatic,
+// agent, steering and historical requests remain neutral without that actor.
 export function deriveTurnStopActivity(
   event: Extract<OrchestrationEvent, { type: "thread.turn-interrupt-requested" }>,
   activeTurnId: TurnId | null,
 ): OrchestrationThreadActivity | null {
-  if (event.commandId?.startsWith("quit-resume-interrupt:")) return null;
+  if (event.payload.requestedBy !== "user") return null;
   const turnId = event.payload.turnId ?? activeTurnId;
   if (turnId === null) return null;
   return {
@@ -16,7 +16,7 @@ export function deriveTurnStopActivity(
     tone: "info",
     kind: "turn.stop-requested",
     summary: "Stop requested",
-    payload: {},
+    payload: { requestedBy: "user" },
     sequence: event.sequence,
     sequenceSource: "orchestration",
   };

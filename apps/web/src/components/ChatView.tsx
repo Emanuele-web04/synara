@@ -3584,6 +3584,7 @@ export default function ChatView({
     await api.orchestration
       .dispatchCommand({
         type: "thread.turn.interrupt",
+        requestedBy: "user",
         commandId: newCommandId(),
         threadId: activeThread.id,
         createdAt: new Date().toISOString(),
@@ -3674,6 +3675,7 @@ export default function ChatView({
       if (!api || !stripSourceThreadId) return;
       await api.orchestration.dispatchCommand({
         type: "thread.turn.interrupt",
+        requestedBy: "user",
         commandId: newCommandId(),
         threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
         createdAt: new Date().toISOString(),
