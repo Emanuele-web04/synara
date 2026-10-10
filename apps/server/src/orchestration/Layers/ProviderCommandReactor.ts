@@ -89,6 +89,7 @@ import {
 
 import {
   checkpointRefForThreadMessageStart,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
@@ -1942,6 +1943,7 @@ const make = Effect.gen(function* () {
   });
 
   interface EditReplayWorkspaceRestorePlan {
+    readonly rescueCheckpointRef: CheckpointRef;
     readonly cwd: string;
     readonly checkpointRef: CheckpointRef;
     readonly targetTurnCount: number;
@@ -2011,7 +2013,55 @@ const make = Effect.gen(function* () {
       );
     }
 
+    // Capture and record workspace recovery before trimming provider history.
+    // The snapshot can restore files; provider conversation rollback has no undo.
+    const rescueCheckpointRef = checkpointRefForThreadRevertRescue(
+      input.threadId,
+      crypto.randomUUID(),
+    );
+    yield* checkpointStore
+      .captureCheckpoint({ cwd, checkpointRef: rescueCheckpointRef })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new Error(
+              `The pre-edit workspace snapshot could not be captured, so the replay was refused: ${error.message}`,
+            ),
+        ),
+      );
+    const createdAt = new Date().toISOString();
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: serverCommandId("edit-replay-recovery-snapshot"),
+        threadId: input.threadId,
+        activity: {
+          id: EventId.makeUnsafe(crypto.randomUUID()),
+          tone: "info",
+          kind: "checkpoint.edit-replay.snapshot",
+          summary: "Workspace recovery snapshot saved",
+          payload: {
+            detail: `The pre-edit workspace snapshot is retained at ${rescueCheckpointRef}. It contains workspace files, not provider conversation history.`,
+            checkpointRef: rescueCheckpointRef,
+            restoreTargetRef: targetCheckpointRef,
+            restoreTurnCount: targetTurnCount,
+          },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new Error(
+              `The recovery snapshot is kept at ${rescueCheckpointRef}, but its recovery details could not be recorded. The edit replay was refused before provider rollback: ${error.message}`,
+            ),
+        ),
+      );
+
     return {
+      rescueCheckpointRef,
       cwd,
       checkpointRef: targetCheckpointRef,
       targetTurnCount,
@@ -2024,19 +2074,39 @@ const make = Effect.gen(function* () {
     if (plan === null) {
       return;
     }
-    const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: plan.cwd,
-      checkpointRef: plan.checkpointRef,
-      fallbackToHead: plan.targetTurnCount === 0,
-    });
-    if (!restored) {
+    const rescueCheckpointRef = plan.rescueCheckpointRef;
+
+    const restoreOutcome = yield* checkpointStore
+      .restoreCheckpoint({
+        cwd: plan.cwd,
+        checkpointRef: plan.checkpointRef,
+        fallbackToHead: plan.targetTurnCount === 0,
+      })
+      .pipe(
+        Effect.map((restored) =>
+          restored ? ({ kind: "restored" } as const) : ({ kind: "unavailable" } as const),
+        ),
+        Effect.catch((error) => Effect.succeed({ kind: "failed", detail: error.message } as const)),
+      );
+
+    if (restoreOutcome.kind === "unavailable") {
       return yield* Effect.fail(
         new Error(
-          `Filesystem checkpoint for edit replay turn ${plan.targetTurnCount} became unavailable during the rollback.`,
+          `Filesystem checkpoint for edit replay turn ${plan.targetTurnCount} became unavailable during the rollback. The pre-edit snapshot is kept at ${rescueCheckpointRef}; provider history may already have changed.`,
+        ),
+      );
+    }
+    if (restoreOutcome.kind === "failed") {
+      // Keep the rescue snapshot: the worktree may be half-rewritten.
+      return yield* Effect.fail(
+        new Error(
+          `Filesystem restore for edit replay turn ${plan.targetTurnCount} failed (${restoreOutcome.detail}). The pre-edit snapshot is kept at ${rescueCheckpointRef}; provider history may already have changed.`,
         ),
       );
     }
 
+    // Keep the recorded snapshot after success as well: it is the only copy
+    // of user changes made after the checkpoint that was just restored.
     clearWorkspaceIndexCache(plan.cwd);
   });
 

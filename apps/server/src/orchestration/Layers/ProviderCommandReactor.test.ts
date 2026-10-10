@@ -11528,8 +11528,66 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restores the previous filesystem checkpoint before resending a completed edit", async () => {
-    const harness = await createHarness();
+  it.each([
+    "success",
+    "capture-failed",
+    "record-failed",
+    "rollback-failed",
+    "restore-failed",
+  ] as const)("preserves edit replay recovery when %s", async (mode) => {
+    const deletedRefs = vi.fn<CheckpointStoreShape["deleteCheckpointRefs"]>(() => Effect.void);
+    const harness = await createHarness({ checkpointStore: { deleteCheckpointRefs: deletedRefs } });
+    const operations: string[] = [];
+    const gitFailure = () =>
+      new GitCommandError({
+        operation: "test.edit-recovery",
+        cwd: "/tmp/provider-project",
+        command: "git",
+        detail: mode,
+      });
+    harness.captureCheckpoint.mockImplementation(() =>
+      Effect.suspend(() => {
+        operations.push("capture");
+        return mode === "capture-failed" ? Effect.fail(gitFailure()) : Effect.void;
+      }),
+    );
+    harness.rollbackConversation.mockImplementation(() =>
+      Effect.suspend(() => {
+        operations.push("rollback");
+        return mode === "rollback-failed"
+          ? Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "thread/rollback",
+                detail: mode,
+              }),
+            )
+          : Effect.void;
+      }),
+    );
+    harness.restoreCheckpoint.mockImplementation(() =>
+      Effect.suspend(() => {
+        operations.push("restore");
+        return mode === "restore-failed" ? Effect.fail(gitFailure()) : Effect.succeed(true);
+      }),
+    );
+    harness.interceptEngineDispatch((command) => {
+      if (
+        command.type !== "thread.activity.append" ||
+        command.activity.kind !== "checkpoint.edit-replay.snapshot"
+      )
+        return undefined;
+      operations.push("record");
+      return mode === "record-failed"
+        ? Effect.fail(
+            new OrchestrationCommandInternalError({
+              commandId: command.commandId,
+              commandType: command.type,
+              detail: mode,
+            }),
+          )
+        : undefined;
+    });
     const now = new Date().toISOString();
     harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
 
@@ -11567,12 +11625,40 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.restoreCheckpoint).toHaveBeenCalledWith({
-      cwd: "/tmp/provider-project",
-      checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
-      fallbackToHead: true,
-    });
+    if (mode === "success") {
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.restoreCheckpoint).toHaveBeenCalledWith({
+        cwd: "/tmp/provider-project",
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+        fallbackToHead: true,
+      });
+      expect(operations).toEqual(["capture", "record", "rollback", "restore"]);
+    } else {
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      if (mode === "capture-failed" || mode === "record-failed") {
+        expect(harness.rollbackConversation).not.toHaveBeenCalled();
+        expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+      }
+      expect((await readHarnessThread(harness))?.session?.lastError).toContain(mode);
+    }
+    expect(deletedRefs).not.toHaveBeenCalled();
+    const rescueRef = harness.captureCheckpoint.mock.calls[0]?.[0].checkpointRef;
+    expect(rescueRef).toContain("/revert-rescue/");
+    const snapshot = (await readHarnessThread(harness))?.activities.find(
+      (activity) => activity.kind === "checkpoint.edit-replay.snapshot",
+    );
+    if (mode === "capture-failed" || mode === "record-failed") {
+      expect(snapshot).toBeUndefined();
+      if (mode === "record-failed") {
+        expect((await readHarnessThread(harness))?.session?.lastError).toContain(rescueRef);
+      }
+    } else {
+      expect(snapshot).toMatchObject({ turnId: null, payload: { checkpointRef: rescueRef } });
+      if (mode === "restore-failed") {
+        expect((await readHarnessThread(harness))?.session?.lastError).toContain(rescueRef);
+      }
+    }
   });
 
   it("clears the edit loading state when provider rollback fails before resend", async () => {
