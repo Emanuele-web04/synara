@@ -19,7 +19,7 @@ export async function showInFileManager(
 ): Promise<void> {
   if (isDirectory && !isMacAppBundlePath(resolvedPath, platform)) {
     const errorMessage = await shell.openPath(resolvedPath);
-    if (errorMessage.length > 0) {
+    if (errorMessage.trim().length > 0) {
       throw new Error(errorMessage);
     }
     return;
