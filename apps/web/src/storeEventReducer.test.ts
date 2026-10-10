@@ -920,7 +920,7 @@ describe("store event reducer", () => {
     }
   });
 
-  it("preserves cleared request claims through shell and detail snapshots", () => {
+  it("keeps cancelled requests unbound through warm and cold shell/detail hydration", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const messageId = MessageId.makeUnsafe("cancelled-request");
     const createdAt = "2026-09-16T10:00:00.000Z";
@@ -964,52 +964,59 @@ describe("store event reducer", () => {
     for (const reduce of [applyOrchestrationEvents, applyOrchestrationEventsHotPath]) {
       for (const cancellation of cancellations) {
         for (const observedRequest of [false, true]) {
-          let state = reduce(
-            makeState(
-              makeThread({
-                messages: [message],
-                ...(observedRequest ? { pendingTurnStartMessageId: messageId } : {}),
-              }),
-            ),
-            [cancellation],
-          );
-          const snapshot = makeReadModelThread({ messages: [message], claudeCacheReview: null });
-          state = applyShellEvent(state, {
-            kind: "thread-upserted",
-            thread: { ...snapshot, title: "After cancellation shell" },
-            sequence: 12,
-          });
-          state = syncServerThreadDetailHotPath(
-            state,
-            { ...snapshot, title: "After cancellation detail" },
-            13,
-          );
-          state = reduce(state, [
-            makeDomainEvent(
-              "thread.session-set",
-              {
-                threadId,
-                session: {
+          for (const coldReload of [false, true]) {
+            let state = reduce(
+              makeState(
+                makeThread({
+                  messages: [message],
+                  ...(observedRequest ? { pendingTurnStartMessageId: messageId } : {}),
+                }),
+              ),
+              [cancellation],
+            );
+            const snapshot = makeReadModelThread({ messages: [message], claudeCacheReview: null });
+            // A new app store has no memory of the cancellation event. Hydration
+            // must not infer that this unanswered message owns a later turn.
+            if (coldReload) state = makeState(makeThread({ messages: [] }));
+            state = applyShellEvent(state, {
+              kind: "thread-upserted",
+              thread: { ...snapshot, title: "After cancellation shell" },
+              sequence: 12,
+            });
+            state = syncServerThreadDetailHotPath(
+              state,
+              { ...snapshot, title: "After cancellation detail" },
+              13,
+            );
+            state = reduce(state, [
+              makeDomainEvent(
+                "thread.session-set",
+                {
                   threadId,
-                  status: "running",
-                  providerName: "claudeAgent",
-                  runtimeMode: "full-access",
-                  activeTurnId: TurnId.makeUnsafe("unrelated-turn"),
-                  lastError: null,
-                  updatedAt: createdAt,
+                  session: {
+                    threadId,
+                    status: "running",
+                    providerName: "claudeAgent",
+                    runtimeMode: "full-access",
+                    activeTurnId: TurnId.makeUnsafe("unrelated-turn"),
+                    lastError: null,
+                    updatedAt: createdAt,
+                  },
                 },
-              },
-              { sequence: 14 },
-            ),
-          ]);
-          expect(threadsOf(state)[0]?.messages[0]?.turnId).toBeNull();
-          expect(threadsOf(state)[0]?.pendingTurnStartMessageId).toBeNull();
+                { sequence: 14 },
+              ),
+            ]);
+            expect(threadsOf(state)[0]?.messages[0]?.turnId).toBeNull();
+            expect(threadsOf(state)[0]?.pendingTurnStartMessageId).toBe(
+              coldReload ? undefined : null,
+            );
+          }
         }
       }
     }
   });
 
-  it("binds the one unanswered request when the turn start request was not observed", () => {
+  it("waits for authoritative request links when the turn start request was not observed", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = TurnId.makeUnsafe("turn-1");
     const request = (id: string, createdAt: string) => ({
@@ -1038,7 +1045,15 @@ describe("store event reducer", () => {
       makeState(makeThread({ messages: [request("first-send", "2026-02-27T00:01:00.000Z")] })),
       [runningSession],
     );
-    expect(threadsOf(single)[0]?.messages[0]?.turnId).toBe(turnId);
+    expect(threadsOf(single)[0]?.messages[0]?.turnId).toBeNull();
+    const linked = syncServerThreadDetailHotPath(
+      single,
+      makeReadModelThread({
+        messages: [{ ...request("first-send", "2026-02-27T00:01:00.000Z"), turnId }],
+      }),
+      10,
+    );
+    expect(threadsOf(linked)[0]?.messages[0]?.turnId).toBe(turnId);
 
     // Two unanswered requests are ambiguous; the snapshot links them later.
     const ambiguous = applyOrchestrationEvents(
