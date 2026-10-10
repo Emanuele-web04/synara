@@ -3024,7 +3024,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           initialScrollAtEnd={tailAnchorMessageId === null || hasInheritedTailAnchor}
           {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
           maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
-          maintainScrollAtEndThreshold={0.1}
+          maintainScrollAtEndThreshold={
+            followLiveOutput && !tailAnchorSlideInFlight ? Number.POSITIVE_INFINITY : 0.1
+          }
           {...(tailAnchorMessageId !== null
             ? { maintainVisibleContentPosition: false }
             : !followLiveOutput
