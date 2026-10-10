@@ -10,7 +10,41 @@ diff --git a/react.js b/react.js
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -4072,7 +4072,8 @@
+@@ -2934,6 +2934,24 @@
+   const requestedTargetOffset = shouldRecomputeEndTarget && index !== void 0 ? calculateOffsetWithOffsetPosition(ctx, calculateOffsetForIndex(ctx, index), scrollingTo) : (_a3 = scrollingTo.targetOffset) != null ? _a3 : clampScrollOffset(ctx, scrollingTo.offset - (scrollingTo.viewOffset || 0), scrollingTo);
+   return clampScrollOffset(ctx, requestedTargetOffset, scrollingTo);
+ }
++// An end-aligned target can sit past what the scroller can reach (footer and bottom
++// padding are added to it), so the offset never matches and an instant scroll would only
++// finish on its 100ms fallback. Being pinned at the native scroll end is arrival.
++function isPinnedAtNativeScrollEnd(ctx, scroll, clampedTargetOffset) {
++  var _a3, _b;
++  if (clampedTargetOffset <= scroll) {
++    return false;
++  }
++  const state = ctx.state;
++  const node = (_b = (_a3 = state.refScroller.current) == null ? void 0 : _a3.getScrollableNode) == null ? void 0 : _b.call(_a3);
++  if (!node || typeof node.scrollHeight !== "number") {
++    return false;
++  }
++  const horizontal = !!state.props.horizontal;
++  const maxNativeOffset = horizontal ? node.scrollWidth - node.clientWidth : node.scrollHeight - node.clientHeight;
++  const nativeOffset = horizontal ? Math.abs(node.scrollLeft) : node.scrollTop;
++  return maxNativeOffset - nativeOffset <= 1 && Math.abs(nativeOffset - scroll) <= 1;
++}
+ function getResolvedScrollCompletionState(ctx, scrollingTo) {
+   const { state } = ctx;
+   const scroll = state.scrollPending;
+@@ -2946,7 +2964,7 @@
+   const canUseAdjustedCompletion = !scrollingTo.animated || Platform.OS === "ios";
+   return {
+     clampedTargetOffset,
+-    isAtResolvedTarget: Math.abs(scroll - maxOffset) < 1 && (diff1 < 1 || canUseAdjustedCompletion && diff2 < 1)
++    isAtResolvedTarget: Math.abs(scroll - maxOffset) < 1 && (diff1 < 1 || canUseAdjustedCompletion && diff2 < 1 || isPinnedAtNativeScrollEnd(ctx, scroll, clampedTargetOffset))
+   };
+ }
+ function checkFinishedScrollFrame(ctx) {
+@@ -4072,7 +4090,8 @@
  function getIdsInVisibleRange(state, range) {
    var _a3, _b;
    const idsInView = [];
@@ -32,7 +66,41 @@ diff --git a/react.mjs b/react.mjs
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -4051,7 +4051,8 @@
+@@ -2913,6 +2913,24 @@
+   const requestedTargetOffset = shouldRecomputeEndTarget && index !== void 0 ? calculateOffsetWithOffsetPosition(ctx, calculateOffsetForIndex(ctx, index), scrollingTo) : (_a3 = scrollingTo.targetOffset) != null ? _a3 : clampScrollOffset(ctx, scrollingTo.offset - (scrollingTo.viewOffset || 0), scrollingTo);
+   return clampScrollOffset(ctx, requestedTargetOffset, scrollingTo);
+ }
++// An end-aligned target can sit past what the scroller can reach (footer and bottom
++// padding are added to it), so the offset never matches and an instant scroll would only
++// finish on its 100ms fallback. Being pinned at the native scroll end is arrival.
++function isPinnedAtNativeScrollEnd(ctx, scroll, clampedTargetOffset) {
++  var _a3, _b;
++  if (clampedTargetOffset <= scroll) {
++    return false;
++  }
++  const state = ctx.state;
++  const node = (_b = (_a3 = state.refScroller.current) == null ? void 0 : _a3.getScrollableNode) == null ? void 0 : _b.call(_a3);
++  if (!node || typeof node.scrollHeight !== "number") {
++    return false;
++  }
++  const horizontal = !!state.props.horizontal;
++  const maxNativeOffset = horizontal ? node.scrollWidth - node.clientWidth : node.scrollHeight - node.clientHeight;
++  const nativeOffset = horizontal ? Math.abs(node.scrollLeft) : node.scrollTop;
++  return maxNativeOffset - nativeOffset <= 1 && Math.abs(nativeOffset - scroll) <= 1;
++}
+ function getResolvedScrollCompletionState(ctx, scrollingTo) {
+   const { state } = ctx;
+   const scroll = state.scrollPending;
+@@ -2925,7 +2943,7 @@
+   const canUseAdjustedCompletion = !scrollingTo.animated || Platform.OS === "ios";
+   return {
+     clampedTargetOffset,
+-    isAtResolvedTarget: Math.abs(scroll - maxOffset) < 1 && (diff1 < 1 || canUseAdjustedCompletion && diff2 < 1)
++    isAtResolvedTarget: Math.abs(scroll - maxOffset) < 1 && (diff1 < 1 || canUseAdjustedCompletion && diff2 < 1 || isPinnedAtNativeScrollEnd(ctx, scroll, clampedTargetOffset))
+   };
+ }
+ function checkFinishedScrollFrame(ctx) {
+@@ -4051,7 +4069,8 @@
  function getIdsInVisibleRange(state, range) {
    var _a3, _b;
    const idsInView = [];

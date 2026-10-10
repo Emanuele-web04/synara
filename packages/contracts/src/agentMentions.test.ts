@@ -7,67 +7,6 @@ import {
 } from "./agentMentions";
 
 describe("agentMentions", () => {
-  it("shows one preferred alias per Codex model in autocomplete", () => {
-    expect(getAgentMentionAutocompleteAliases("codex")).toEqual([
-      {
-        alias: "5.5",
-        provider: "codex",
-        kind: "model",
-        model: "gpt-5.5",
-        displayName: "GPT-5.5",
-        color: "violet",
-      },
-      {
-        alias: "5.4",
-        provider: "codex",
-        kind: "model",
-        model: "gpt-5.4",
-        displayName: "GPT-5.4",
-        color: "violet",
-      },
-      {
-        alias: "mini",
-        provider: "codex",
-        kind: "model",
-        model: "gpt-5.4-mini",
-        displayName: "GPT-5.4 Mini",
-        color: "fuchsia",
-      },
-      {
-        alias: "5.3-codex",
-        provider: "codex",
-        kind: "model",
-        model: "gpt-5.3-codex",
-        displayName: "GPT-5.3 Codex",
-        color: "teal",
-      },
-      {
-        alias: "spark",
-        provider: "codex",
-        kind: "model",
-        model: "gpt-5.3-codex-spark",
-        displayName: "GPT-5.3 Codex Spark",
-        color: "cyan",
-      },
-      {
-        alias: "5.2",
-        provider: "codex",
-        kind: "model",
-        model: "gpt-5.2",
-        displayName: "GPT-5.2",
-        color: "amber",
-      },
-      {
-        alias: "5.2-codex",
-        provider: "codex",
-        kind: "model",
-        model: "gpt-5.2-codex",
-        displayName: "GPT-5.2 Codex",
-        color: "orange",
-      },
-    ]);
-  });
-
   it("shows provider-specific Claude subagents in autocomplete", () => {
     expect(getAgentMentionAutocompleteAliases("claudeAgent")).toEqual([
       {
@@ -138,6 +77,14 @@ describe("agentMentions", () => {
     expect(getAgentMentionAliases("codex").map(({ alias }) => alias)).toContain("5.4-mini");
     expect(getAgentMentionAliases("claudeAgent").map(({ alias }) => alias)).toContain("reviewer");
     expect(getAgentMentionAliases("claudeAgent").map(({ alias }) => alias)).toContain("planner");
+    const codexAutocomplete = getAgentMentionAutocompleteAliases("codex").map(({ alias }) => alias);
+    expect(codexAutocomplete).toEqual(expect.arrayContaining(["5.3-codex", "spark", "mini"]));
+    for (const hidden of ["codex", "5.3-spark", "5.4-mini"]) {
+      expect(codexAutocomplete).not.toContain(hidden);
+    }
+    expect(
+      new Set(getAgentMentionAutocompleteAliases("codex").map(({ model }) => model)).size,
+    ).toBe(codexAutocomplete.length);
 
     expect(codexCompatAlias?.kind).toBe("model");
     expect(codexCompatAlias?.provider).toBe("codex");

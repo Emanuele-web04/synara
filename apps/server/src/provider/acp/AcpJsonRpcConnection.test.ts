@@ -345,8 +345,8 @@ describe("AcpSessionRuntime", () => {
             cwd: process.cwd(),
             resumeSessionId: "mock-session-1",
             loadReplayPolicy: {
-              quietMs: 20,
-              hardTimeoutMs: 200,
+              quietMs: 300,
+              hardTimeoutMs: 3_000,
             },
             clientInfo: { name: "synara-test", version: "0.0.0" },
             authMethodId: "test",

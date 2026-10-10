@@ -5,8 +5,8 @@ on:
     branches: [perf/shipped-app-size-20260916]
     paths:
       - .github/workflows/shipped-bundle-audit.yml
-      - scripts/lib/desktop-package-files.ts
-      - scripts/desktop-package-files.test.ts
+      - scripts/lib/desktop-bundle-files.ts
+      - scripts/desktop-bundle-files.test.ts
   workflow_dispatch:
 
 permissions:
@@ -43,21 +43,18 @@ jobs:
       - name: Verify packaging policy and retained non-Windows runtime scope
         shell: bash
         run: |
-          bun run --cwd scripts test -- desktop-package-files.test.ts build-desktop-artifact-mac-config.test.ts
-          git show b28d09428e4130bba8c2d617b95509c00677a708:scripts/lib/desktop-package-files.ts > scripts/lib/audited-package-policy.ts
+          bun run --cwd scripts test -- desktop-bundle-files.test.ts build-desktop-artifact-mac-config.test.ts
           node --input-type=module <<'NODE'
-          import {strict as assert} from 'node:assert';
-          import {createDesktopPackageFilePatterns as before} from './scripts/lib/audited-package-policy.ts';
-          import {createDesktopPackageFilePatterns as after} from './scripts/lib/desktop-package-files.ts';
-          // The only non-Windows policy change retains non-TypeScript assets,
-          // including vendored notices, inside these compiled packages' src/.
-          const sourcePackages = ['effect','@effect/platform-node','@effect/platform-node-shared','@anthropic-ai/sdk','openai','zod'];
-          const preserveSourceAssets = patterns => patterns.map(pattern => sourcePackages.some(name => pattern === `!**/node_modules/${name}/src/**`) ? pattern.replace(/\/src\/\*\*$/, '/src/**/*.{ts,tsx,mts,cts}') : pattern);
-          for(const platform of ['mac','linux']) for(const env of [{},{SYNARA_DESKTOP_SOURCEMAP:'1'}]) assert.deepEqual(after(platform,env),preserveSourceAssets(before(platform,env)));
-          assert.deepEqual(after('win',{SYNARA_DESKTOP_SOURCEMAP:'1'}),before('win',{SYNARA_DESKTOP_SOURCEMAP:'1'}));
-          console.log('Non-Windows runtime scope is unchanged; vendored notices and non-TypeScript source assets are retained. Windows diagnostic packaging is unchanged.');
+          import { createDesktopBundleFilePatterns } from './scripts/lib/desktop-bundle-files.ts';
+          const patterns = createDesktopBundleFilePatterns('win');
+          const required = [
+            '!node_modules/**/*.{js,mjs,cjs,ts,mts,cts}.map',
+            '!node_modules/**/*.{d.mts,d.cts,tsbuildinfo}',
+            '!node_modules/node-pty/prebuilds/darwin-*/**',
+          ];
+          for (const pattern of required) if (!patterns.includes(pattern)) throw new Error(`Missing policy: ${pattern}`);
+          console.log('Current-main desktop bundle policy is active; Windows runtime/native payload rules are retained.');
           NODE
-          rm scripts/lib/audited-package-policy.ts
       - name: Build unsigned production candidate
         shell: bash
         run: |

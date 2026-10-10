@@ -1,4 +1,11 @@
-import { ProjectId, SpaceId, ThreadId, TurnId } from "@synara/contracts";
+import {
+  MessageId,
+  ProjectId,
+  SpaceId,
+  ThreadId,
+  TurnId,
+  type PendingClaudeCacheReview,
+} from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -24,6 +31,146 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect(
+    "keeps workspace classification on the owning turn without resurrecting pending starts",
+    () =>
+      Effect.gen(function* () {
+        const turns = yield* ProjectionTurnRepository;
+        const threadId = ThreadId.makeUnsafe("workspace-marker-thread");
+        const messageId = MessageId.makeUnsafe("workspace-marker-message");
+        const turnId = TurnId.makeUnsafe("workspace-marker-turn");
+        const request = {
+          threadId,
+          messageId,
+          requestedAt: "2026-10-10T10:00:00.000Z",
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+        };
+        yield* turns.replacePendingTurnStart(request);
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        assert.isTrue(
+          Option.getOrThrow(yield* turns.getPendingTurnStartByThreadId({ threadId }))
+            .startedWithoutGitWorkspace,
+        );
+        yield* turns.upsertByTurnId({
+          threadId,
+          turnId,
+          pendingMessageId: messageId,
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+          assistantMessageId: null,
+          state: "running",
+          requestedAt: request.requestedAt,
+          startedAt: request.requestedAt,
+          completedAt: null,
+          checkpointTurnCount: null,
+          checkpointRef: null,
+          checkpointStatus: null,
+          checkpointFiles: [],
+        });
+        yield* turns.deletePendingTurnStartByThreadId({ threadId });
+        // A lagging checkpoint consumer now handles the original domain request.
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        assert.isTrue(
+          Option.getOrThrow(yield* turns.getByTurnId({ threadId, turnId }))
+            .startedWithoutGitWorkspace,
+        );
+        assert.isTrue(Option.isNone(yield* turns.getPendingTurnStartByThreadId({ threadId })));
+        const newerMessageId = MessageId.makeUnsafe("newer-workspace-message");
+        yield* turns.replacePendingTurnStart({ ...request, messageId: newerMessageId });
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        const newer = Option.getOrThrow(yield* turns.getPendingTurnStartByThreadId({ threadId }));
+        assert.strictEqual(newer.messageId, newerMessageId);
+        assert.isFalse(newer.startedWithoutGitWorkspace);
+      }),
+  );
+
+  it.effect("persists cache reviews, preserves omitted reviews, and clears them explicitly", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-cache-review");
+      const projectId = ProjectId.makeUnsafe("project-cache-review");
+      const now = "2026-09-16T10:00:00.000Z";
+      const thread = {
+        threadId,
+        projectId,
+        title: "Cache review",
+        modelSelection: { provider: "claudeAgent" as const, model: "claude-opus-4-6" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        envMode: "local" as const,
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        lastKnownPr: null,
+        latestTurnId: null,
+        handoff: null,
+        pinnedMessages: null,
+        notes: null,
+        goal: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      };
+      const review: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("pending-cache-message"),
+        sourceEventSequence: 7,
+        assessment: {
+          nativeSessionId: "native-cache-session",
+          observedAt: now,
+          contextTokens: 850_000,
+          ttlSeconds: 3_600,
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "pending",
+        createdAt: now,
+      };
+
+      // Old callers omit the additive field when creating or updating a row.
+      yield* threads.upsert(thread);
+      assert.isNull(Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview);
+      yield* threads.upsert({ ...thread, claudeCacheReview: review });
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview,
+        review,
+      );
+      yield* threads.upsert({ ...thread, title: "Renamed while awaiting a decision" });
+      assert.deepStrictEqual(
+        (yield* threads.listByProjectId({ projectId }))[0]?.claudeCacheReview,
+        review,
+      );
+
+      const uncertain: PendingClaudeCacheReview = {
+        ...review,
+        status: "uncertain",
+        compactionTurnId: TurnId.makeUnsafe("compact-cache-turn"),
+        error: "The provider delivery outcome could not be confirmed.",
+      };
+      yield* threads.upsert({ ...thread, claudeCacheReview: uncertain });
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview,
+        uncertain,
+      );
+      yield* threads.upsert({ ...thread, claudeCacheReview: null });
+      assert.isNull(Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview);
+      const [row] = yield* sql<{ readonly review: string | null }>`
+        SELECT claude_cache_review_json AS review FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      assert.isNull(row?.review);
+    }),
+  );
+
   it.effect("clears active and soft-deleted project assignments for a deleted space", () =>
     Effect.gen(function* () {
       const projects = yield* ProjectionProjectRepository;
@@ -125,6 +272,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.defaultModelSelection, {
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.4",
       });
     }),
@@ -192,8 +340,67 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
         model: "claude-opus-4-6",
       });
+    }),
+  );
+
+  it.effect("round-trips a standalone sidechat context and reads other threads as null", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const context = {
+        kind: "github-item",
+        itemKind: "pullRequest",
+        repository: "octo/repo",
+        number: 7,
+        url: "https://github.com/octo/repo/pull/7",
+      } as const;
+      const base = {
+        projectId: ProjectId.makeUnsafe("project-sidechat-context"),
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        lastKnownPr: null,
+        latestTurnId: null,
+        handoff: null,
+        pinnedMessages: null,
+        notes: null,
+        goal: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        createdAt: "2026-09-30T10:00:00.000Z",
+        updatedAt: "2026-09-30T10:00:00.000Z",
+        deletedAt: null,
+      } as const;
+      yield* threads.upsert({
+        ...base,
+        threadId: ThreadId.makeUnsafe("thread-standalone-sidechat"),
+        title: "Sidechat: Fix it",
+        sidechatContext: context,
+        sidechatLastActivityAt: base.createdAt,
+      });
+      yield* threads.upsert({
+        ...base,
+        threadId: ThreadId.makeUnsafe("thread-ordinary"),
+        title: "Ordinary",
+      });
+
+      const sidechat = yield* threads.getById({
+        threadId: ThreadId.makeUnsafe("thread-standalone-sidechat"),
+      });
+      const ordinary = yield* threads.getById({ threadId: ThreadId.makeUnsafe("thread-ordinary") });
+      assert.deepStrictEqual(Option.getOrNull(sidechat)?.sidechatContext, context);
+      assert.strictEqual(Option.getOrNull(ordinary)?.sidechatContext ?? null, null);
     }),
   );
 
