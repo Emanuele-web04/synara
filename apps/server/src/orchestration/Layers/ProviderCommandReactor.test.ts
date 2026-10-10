@@ -6730,6 +6730,13 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    // The provider turn stays live until the authorized retry: an accepted
+    // Stop alone does not settle a turn the runtime still runs.
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-durable-uncertain"),
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -20372,6 +20379,65 @@ describe("ProviderCommandReactor", () => {
       turnId: "turn-live-current",
     });
   });
+
+  it.each([
+    { runtimeStatus: "ready", settles: true },
+    { runtimeStatus: "running", settles: false },
+  ] as const)(
+    "settles an accepted Stop promptly only when the runtime has no live turn ($runtimeStatus)",
+    async ({ runtimeStatus, settles }) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const turnId = asTurnId("turn-stop-after-provider-end");
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("cmd-session-set-stop-after-provider-end"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      // "ready": the provider already ended the turn (or was retired by the
+      // interrupt) while its terminal event is still on its way.
+      harness.setRuntimeSessionTurnState({
+        threadId: "thread-1",
+        status: runtimeStatus,
+        ...(runtimeStatus === "running" ? { activeTurnId: turnId } : {}),
+      });
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-turn-interrupt-after-provider-end"),
+          threadId,
+          turnId,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+      await harness.drain();
+
+      const session = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (thread) => thread.id === threadId,
+      )?.session;
+      expect(session).toMatchObject(
+        settles
+          ? { status: "interrupted", activeTurnId: null }
+          : { status: "running", activeTurnId: turnId },
+      );
+    },
+  );
 
   it.each(["ready", "missing-child-shell", "missing-parent-shell"] as const)(
     "serializes child interrupts with earlier parent-session side effects in owner FIFO with %s projection",

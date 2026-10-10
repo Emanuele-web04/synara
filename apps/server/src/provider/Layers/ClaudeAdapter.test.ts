@@ -3995,6 +3995,42 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
+  it.effect("still interrupts the CLI when Stop names a turn that already settled", () => {
+    const harness = makeMultiQueryHarness();
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const completed = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "answer at length",
+        attachments: [],
+      });
+      const query = harness.queries[0]!;
+      // The result clears the adapter turn before ProviderService persists the
+      // terminal event, so a Stop in that window still names the turn.
+      emitSuccessResult(query, "sdk-session-settled-stop", "result-settled-stop", {
+        input_tokens: 1,
+      });
+      yield* Fiber.join(completed);
+
+      yield* adapter.interruptTurn(session.threadId, turn.turnId);
+      assert.equal(query.interruptCalls.length, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("revokes the shared gateway when a background child outlives its parent turn", () => {
     const gateway = makeGatewayCredentialsHarness();
     const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
@@ -9995,6 +10031,107 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("shows the Monitor event that woke the agent into a synthetic turn", () => {
+    // The SDK stream never forwards the notification turn; the CLI only writes it
+    // to the session transcript under CLAUDE_CONFIG_DIR.
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "claude-monitor-transcript-"));
+    const sessionId = "a77129eb-d5c5-4fb7-b76f-a535378bad2b";
+    const projectDir = path.join(configDir, "projects", "-tmp-claude-adapter-test");
+    mkdirSync(projectDir, { recursive: true });
+    const transcript = path.join(projectDir, `${sessionId}.jsonl`);
+    writeFileSync(transcript, "");
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const events: ProviderRuntimeEvent[] = [];
+      const firstCompleted = yield* Deferred.make<void>();
+      const secondCompleted = yield* Deferred.make<void>();
+      const monitorEventSeen = yield* Deferred.make<void>();
+      const isMonitorEvent = (event: ProviderRuntimeEvent) =>
+        event.type === "runtime.warning" &&
+        (event.payload.detail as { subtype?: unknown } | undefined)?.subtype === "monitor_event";
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => {
+          events.push(event);
+          if (isMonitorEvent(event)) return Deferred.succeed(monitorEventSeen, undefined);
+          if (event.type !== "turn.completed") return Effect.void;
+          return Deferred.succeed(
+            events.filter((entry) => entry.type === "turn.completed").length === 1
+              ? firstCompleted
+              : secondCompleted,
+            undefined,
+          );
+        }),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        providerOptions: { claudeAgent: { environment: { CLAUDE_CONFIG_DIR: configDir } } },
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "watch CI", attachments: [] });
+      emitAssistantUsage(harness.query, sessionId, "first-block", "watching", {});
+      emitSuccessResult(harness.query, sessionId, "first-result", {});
+      yield* Deferred.await(firstCompleted);
+
+      writeFileSync(
+        transcript,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "notification-1",
+          timestamp: "2026-10-09T15:03:38.414Z",
+          isSidechain: false,
+          origin: { kind: "task-notification", producer: "session-task" },
+          message: {
+            role: "user",
+            content:
+              '<task-notification>\n<task-id>bu336ro2k</task-id>\n<summary>Monitor event: "CI checks"</summary>\n<event>Lint: pass</event>\n</task-notification>',
+          },
+        })}\n`,
+      );
+      emitAssistantUsage(harness.query, sessionId, "woken-block", "Still running.", {});
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: sessionId,
+        uuid: "woken-result",
+        usage: {},
+        origin: { kind: "task-notification" },
+      } as unknown as SDKMessage);
+      // The transcript read runs beside the stream and may land after the turn ends.
+      yield* Deferred.await(secondCompleted);
+      yield* Deferred.await(monitorEventSeen);
+
+      const syntheticTurnId = events.findLast((event) => event.type === "turn.started")?.turnId;
+      const notices = events.filter(isMonitorEvent);
+      assert.equal(notices.length, 1);
+      assert.deepInclude(notices[0], {
+        type: "runtime.warning",
+        createdAt: "2026-10-09T15:03:38.414Z",
+        turnId: syntheticTurnId,
+        payload: {
+          message: "CI checks — Lint: pass",
+          detail: {
+            type: "system",
+            subtype: "monitor_event",
+            task_id: "bu336ro2k",
+            notificationId: "notification-1",
+            name: "CI checks",
+            output: "Lint: pass",
+            outcome: "updated",
+          },
+        },
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => rmSync(configDir, { recursive: true, force: true }))),
     );
   });
 
