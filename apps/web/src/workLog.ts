@@ -256,6 +256,7 @@ export interface WorkLogSynaraWorkerNoticeThread {
 
 export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
+  outcome?: "completed" | "failed" | "stopped";
   taskType: string | null;
   description: string | null;
 }
@@ -631,7 +632,15 @@ function deriveBackgroundTaskCompletionEntries(
       label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
       tone: payload.status === "failed" ? "error" : "info",
       activityKind: activity.kind,
-      backgroundTaskCompletion: { taskId: payload.taskId, ...task },
+      backgroundTaskCompletion: {
+        taskId: payload.taskId,
+        ...task,
+        ...(payload.status === "completed" ||
+        payload.status === "failed" ||
+        payload.status === "stopped"
+          ? { outcome: payload.status }
+          : {}),
+      },
     });
   }
   return completions;
@@ -3302,6 +3311,40 @@ function coalesceAdjacentMessageSegments(entries: TimelineEntry[]): TimelineEntr
   return runs.map((run) => (Array.isArray(run) ? (replacements.get(run) ?? run[0]!) : run));
 }
 
+// The SDK and transcript can report one Monitor termination twice. Coalesce
+// adjacent matching native task/outcome notices only; any reply or different
+// outcome remains a distinct boundary. Keep the exact output and earlier anchor.
+function coalesceMonitorTerminalNotices(entries: TimelineEntry[]): TimelineEntry[] {
+  let result: TimelineEntry[] | undefined;
+  for (let index = 1; index < entries.length; index += 1) {
+    const previous = result?.at(-1) ?? entries[index - 1]!;
+    const current = entries[index]!;
+    if (previous.kind === "work" && current.kind === "work") {
+      const monitorRow = previous.entry.monitorNotification ? previous : current;
+      const completionRow = previous.entry.backgroundTaskCompletion ? previous : current;
+      const monitor = monitorRow.entry.monitorNotification;
+      const completion = completionRow.entry.backgroundTaskCompletion;
+      if (
+        monitorRow !== completionRow &&
+        monitor &&
+        completion &&
+        monitor.outcome !== "updated" &&
+        monitor.taskId === completion.taskId &&
+        monitor.outcome === completion.outcome &&
+        (!previous.entry.turnId ||
+          !current.entry.turnId ||
+          previous.entry.turnId === current.entry.turnId)
+      ) {
+        result ??= entries.slice(0, index);
+        result[result.length - 1] = { ...monitorRow, createdAt: previous.createdAt };
+        continue;
+      }
+    }
+    result?.push(current);
+  }
+  return result ?? entries;
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
@@ -3447,15 +3490,17 @@ export function deriveTimelineEntries(
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
 
-  return coalesceAdjacentMessageSegments(
-    mergeTimelineEntries(
+  return coalesceMonitorTerminalNotices(
+    coalesceAdjacentMessageSegments(
       mergeTimelineEntries(
-        sortedTimelineEntries(messageRows, compare),
-        sortedTimelineEntries(proposedPlanRows, compare),
+        mergeTimelineEntries(
+          sortedTimelineEntries(messageRows, compare),
+          sortedTimelineEntries(proposedPlanRows, compare),
+          compare,
+        ),
+        sortedTimelineEntries(workRows, compare),
         compare,
       ),
-      sortedTimelineEntries(workRows, compare),
-      compare,
     ),
   );
 }
