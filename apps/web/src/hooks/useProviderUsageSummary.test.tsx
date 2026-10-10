@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { deriveVisibleRateLimitRows, type ProviderRateLimit } from "~/lib/rateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
-import { serverQueryKeys } from "~/lib/serverReactQuery";
+import { serverProviderUsageSnapshotQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { useProviderUsageSummary } from "./useProviderUsageSummary";
 
 vi.mock("~/lib/openUsageReactQuery", async (importOriginal) => {
@@ -18,6 +18,14 @@ vi.mock("~/lib/openUsageReactQuery", async (importOriginal) => {
   return {
     ...actual,
     openUsageProviderSnapshotQueryOptions: vi.fn(actual.openUsageProviderSnapshotQueryOptions),
+  };
+});
+
+vi.mock("~/lib/serverReactQuery", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/serverReactQuery")>();
+  return {
+    ...actual,
+    serverProviderUsageSnapshotQueryOptions: vi.fn(actual.serverProviderUsageSnapshotQueryOptions),
   };
 });
 
@@ -57,6 +65,7 @@ function readProviderUsageSummary(input: {
   instanceId?: string;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   providerSnapshot?: ServerProviderUsageSnapshot | undefined;
+  providerSnapshotPending?: boolean;
   fetchOpenUsageData?: boolean;
 }) {
   // Capture into a ref-style holder: the hook only runs inside the closure, so a
@@ -72,6 +81,7 @@ function readProviderUsageSummary(input: {
       threads: [],
       threadRateLimits: input.threadRateLimits,
       providerSnapshot: input.providerSnapshot,
+      providerSnapshotPending: input.providerSnapshotPending,
       fetchOpenUsageData: input.fetchOpenUsageData,
     });
     return <span />;
@@ -96,6 +106,130 @@ function createQueryClient() {
 }
 
 describe("useProviderUsageSummary", () => {
+  it("waits for the batch before enabling provider-wide fallback reads", () => {
+    const queryClient = createQueryClient();
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.isLoading).toBe(true);
+    expect(serverProviderUsageSnapshotQueryOptions).toHaveBeenLastCalledWith({
+      provider: "claudeAgent",
+      homePath: null,
+      enabled: false,
+    });
+    expect(openUsageProviderSnapshotQueryOptions).toHaveBeenLastCalledWith("claudeAgent", {
+      enabled: false,
+    });
+  });
+
+  it("honors a caller's pending batch even when the query cache has an empty settled result", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+
+    const summary = readProviderUsageSummary({ queryClient, providerSnapshotPending: true });
+
+    expect(summary.isLoading).toBe(true);
+    expect(serverProviderUsageSnapshotQueryOptions).toHaveBeenLastCalledWith({
+      provider: "claudeAgent",
+      homePath: null,
+      enabled: false,
+    });
+  });
+
+  it("does not start a redundant local query when a legacy live snapshot exists", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [fallbackSnapshot()]);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.isLoading).toBe(false);
+    expect(serverProviderUsageSnapshotQueryOptions).toHaveBeenLastCalledWith({
+      provider: "claudeAgent",
+      homePath: null,
+      enabled: false,
+    });
+  });
+
+  it("enables local fallback after an omitted provider's batch settles", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.isLoading).toBe(true);
+    expect(serverProviderUsageSnapshotQueryOptions).toHaveBeenLastCalledWith({
+      provider: "claudeAgent",
+      homePath: null,
+      enabled: true,
+    });
+  });
+
+  it("enables local fallback after the batch fails without leaving the summary stuck pending", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryDefaults(serverQueryKeys.allProviderUsage(), { retryOnMount: false });
+    queryClient
+      .getQueryCache()
+      .build(queryClient, { queryKey: serverQueryKeys.allProviderUsage() })
+      .setState({
+        status: "error",
+        error: new Error("Batch unavailable"),
+        fetchStatus: "idle",
+      });
+    queryClient.setQueryData(
+      serverQueryKeys.providerUsage("claudeAgent", null),
+      fallbackSnapshot(),
+    );
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.isLoading).toBe(false);
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(serverProviderUsageSnapshotQueryOptions).toHaveBeenLastCalledWith({
+      provider: "claudeAgent",
+      homePath: null,
+      enabled: true,
+    });
+  });
+
+  it("keeps a settled missing account empty without fetching driver-wide archives", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [fallbackSnapshot()]);
+
+    const summary = readProviderUsageSummary({ queryClient, instanceId: "claude_work" });
+
+    expect(summary.isLoading).toBe(false);
+    expect(summary.rateLimits).toEqual([]);
+    expect(summary.usageLines).toEqual([]);
+    expect(serverProviderUsageSnapshotQueryOptions).toHaveBeenLastCalledWith({
+      provider: "claudeAgent",
+      homePath: null,
+      enabled: false,
+    });
+  });
+
+  it("exposes a local fallback's non-ok status and blocks contradictory thread telemetry", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    const localSnapshot = snapshot({ status: "needs-auth", detail: "Sign in to read usage." });
+    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent", null), localSnapshot);
+
+    const summary = readProviderUsageSummary({
+      queryClient,
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+          limits: [{ window: "Weekly", usedPercent: 20 }],
+        },
+      ],
+    });
+
+    expect(summary.providerSnapshot).toEqual(localSnapshot);
+    expect(summary.isLoading).toBe(false);
+    expect(summary.rateLimits).toEqual([]);
+    expect(summary.usageLines).toEqual([]);
+  });
+
   it("scopes a snapshot's account identity even when the caller supplies no separate id", () => {
     const queryClient = createQueryClient();
     const summary = readProviderUsageSummary({
@@ -167,6 +301,25 @@ describe("useProviderUsageSummary", () => {
     expect(summary.rateLimits).toEqual([]);
     expect(summary.usageLines).toEqual([]);
   });
+
+  it.each([
+    snapshot({ instanceId: "claudeAgent", ...fallbackSnapshot() }),
+    snapshot({ ...fallbackSnapshot(), provider: "codex", instanceId: "claude_work" }),
+  ])(
+    "rejects an explicit snapshot that does not match the selected account and driver",
+    (providerSnapshot) => {
+      const queryClient = createQueryClient();
+      const summary = readProviderUsageSummary({
+        queryClient,
+        instanceId: "claude_work",
+        providerSnapshot,
+      });
+
+      expect(summary.providerSnapshot).toBeNull();
+      expect(summary.rateLimits).toEqual([]);
+      expect(summary.usageLines).toEqual([]);
+    },
+  );
 
   it.each(["claudeAgent", "claude_work"])(
     "does not mix provider-wide fallback data into the %s account",

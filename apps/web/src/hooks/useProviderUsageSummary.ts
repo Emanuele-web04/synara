@@ -17,6 +17,7 @@ import {
   type OpenUsageUsageLine,
 } from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
+import { resolveProviderUsageLiveQueryPolicy } from "~/lib/providerUsageAccountQueries";
 import {
   isProviderUsageSnapshotNonOk,
   normalizeServerProviderUsageLines,
@@ -100,6 +101,19 @@ export function resolveProviderUsageSummary(input: {
   };
 }
 
+function providerUsageSummaryIsLoading(
+  snapshot: ServerGetProviderUsageSnapshotResult,
+  summary: ProviderUsageSummaryData,
+  queryPending: boolean,
+): boolean {
+  return (
+    queryPending &&
+    !isProviderUsageSnapshotNonOk(snapshot) &&
+    summary.rateLimits.length === 0 &&
+    summary.usageLines.length === 0
+  );
+}
+
 export function useProviderUsageSummary(input: {
   provider: ProviderKind | null | undefined;
   instanceId?: ProviderInstanceId | undefined;
@@ -107,6 +121,8 @@ export function useProviderUsageSummary(input: {
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  /** Defer provider-wide fallback reads while the caller's shared batch is in flight. */
+  providerSnapshotPending?: boolean | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
   const provider = input.provider ?? null;
@@ -117,18 +133,24 @@ export function useProviderUsageSummary(input: {
       enabled: shouldFetchLiveProviderUsage,
     }),
   );
-  const liveProviderSnapshot = (allProviderUsageQuery.data ?? []).find(
-    (snapshot) =>
-      snapshot.provider === provider &&
-      (snapshot.instanceId ?? snapshot.provider) === (instanceId ?? provider),
-  );
-  const authoritativeLiveSnapshot =
-    input.providerSnapshot !== undefined ? input.providerSnapshot : (liveProviderSnapshot ?? null);
-  // Thread, local and OpenUsage fallbacks identify only the driver. They cannot be
-  // attributed to a selected account, even when that account is the default one.
-  const accountScoped =
-    instanceId !== undefined || authoritativeLiveSnapshot?.instanceId !== undefined;
-  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage && !accountScoped;
+  const batchPending =
+    input.providerSnapshotPending === true ||
+    allProviderUsageQuery.isPending ||
+    allProviderUsageQuery.isFetching;
+  const {
+    authoritativeLiveSnapshot,
+    accountScoped,
+    shouldFetchLocalProviderUsage,
+    shouldFetchOpenUsage,
+  } = resolveProviderUsageLiveQueryPolicy({
+    provider,
+    instanceId,
+    providerSnapshot: input.providerSnapshot,
+    batchSnapshots: allProviderUsageQuery.data ?? [],
+    shouldFetchLiveProviderUsage,
+    batchPending,
+    fetchOpenUsageData: input.fetchOpenUsageData,
+  });
   const localUsageSnapshotQuery = useQuery(
     serverProviderUsageSnapshotQueryOptions({
       provider,
@@ -138,29 +160,32 @@ export function useProviderUsageSummary(input: {
   );
   const openUsageSnapshotQuery = useQuery(
     openUsageProviderSnapshotQueryOptions(provider, {
-      enabled: !accountScoped && (input.fetchOpenUsageData ?? true),
+      enabled: shouldFetchOpenUsage,
     }),
   );
   const accountRateLimits = accountScoped
     ? []
     : (input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []));
+  const localUsageSnapshot = accountScoped ? null : (localUsageSnapshotQuery.data ?? null);
+  const providerSnapshot = authoritativeLiveSnapshot ?? localUsageSnapshot;
   const summary = resolveProviderUsageSummary({
     provider,
     accountRateLimits,
-    authoritativeLiveSnapshot,
-    localUsageSnapshot: accountScoped ? null : (localUsageSnapshotQuery.data ?? null),
+    authoritativeLiveSnapshot: providerSnapshot,
+    localUsageSnapshot,
     openUsageSnapshot: accountScoped ? undefined : openUsageSnapshotQuery.data,
   });
 
-  const isLoading =
-    shouldFetchLiveProviderUsage &&
-    allProviderUsageQuery.isPending &&
-    (!shouldFetchLocalProviderUsage || localUsageSnapshotQuery.isPending) &&
-    summary.rateLimits.length === 0 &&
-    summary.usageLines.length === 0;
+  const isLoading = providerUsageSummaryIsLoading(
+    providerSnapshot,
+    summary,
+    (shouldFetchLiveProviderUsage && batchPending) ||
+      (shouldFetchLocalProviderUsage && localUsageSnapshotQuery.isPending),
+  );
 
   return {
     isLoading,
+    providerSnapshot,
     ...summary,
   } as const;
 }

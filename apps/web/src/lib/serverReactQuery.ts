@@ -428,24 +428,28 @@ export function serverRecapQueryOptions(
   });
 }
 
-// Live remaining-usage for every provider. Always fetches the full batch under a single query
-// key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
+// Live remaining-usage for every provider shares one full-batch cache/request cycle.
+// Optional driver-scoped recovery has its own shared key when the batch omits accounts.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean
     | {
         enabled?: boolean;
+        provider?: ProviderKind;
       } = true,
 ) {
   const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  const provider = typeof input === "boolean" ? undefined : input.provider;
   return queryOptions({
-    queryKey: serverQueryKeys.allProviderUsage(),
+    queryKey:
+      provider === undefined
+        ? serverQueryKeys.allProviderUsage()
+        : ([...serverQueryKeys.providerUsageRoot(), "accountFallback", provider] as const),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async () => fetchAllProviderUsage(),
+    queryFn: async () => fetchAllProviderUsage(provider === undefined ? undefined : { provider }),
   });
 }
