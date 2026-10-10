@@ -52,11 +52,6 @@ export function normalizeBrowserPageZoomFactor(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 1;
 }
 
-/** Derives the floating guest page zoom from the canonical viewport and card width. */
-export function resolveBrowserFloatingZoomFactor(slotWidth: number): number {
-  const width = Number.isFinite(slotWidth) && slotWidth > 0 ? slotWidth : 1;
-  return Math.min(1, width / BROWSER_AUTOMATION_VIEWPORT_WIDTH);
-}
 
 // Dedicated auth hosts are safe popup signals. Multi-purpose hosts such as github.com need
 // path checks below so ordinary _blank links still open as tabs.

@@ -35,7 +35,6 @@ import {
   BROWSER_BLANK_URL,
   isBlankBrowserTabUrl,
   resolveCopyableBrowserTabUrl,
-  resolveBrowserFloatingZoomFactor,
 } from "@synara/shared/browserSession";
 import {
   BROWSER_COPY_LINK_TOAST_TITLE,
@@ -1214,11 +1213,16 @@ export function BrowserPanel({
 
     const applyGuestPageZoom = () => {
       const host = browserViewportRef.current;
-      const width = host?.getBoundingClientRect().width ?? 0;
-      applyBrowserWebviewPageZoom(
-        webview,
-        isFloatingMode ? resolveBrowserFloatingZoomFactor(width) : 1,
-      );
+      const rect = host?.getBoundingClientRect();
+      const presentation = resolveBrowserRuntimePresentation({
+        native: usesNativeRuntime,
+        floating: isFloatingMode,
+        rect: rect
+          ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+          : { x: 0, y: 0, width: 0, height: 0 },
+        desktopZoom: readDesktopZoomFactor(),
+      });
+      applyBrowserWebviewPageZoom(webview, presentation.pageZoomFactor);
     };
 
     // Subscribe before assigning src: a cached/blank page may begin loading
