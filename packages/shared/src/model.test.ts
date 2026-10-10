@@ -1133,14 +1133,16 @@ describe("getModelCapabilities Claude capability flags", () => {
     expect(caps("claude-opus-6[1m]")).toBe(caps("claude-opus-5-5"));
     expect(caps("claude-opus-5-6")).toBe(caps("claude-opus-5-5"));
     expect(caps("claude-fable-6")).toBe(caps("claude-fable-5-1"));
-    expect(caps("claude-sonnet-5-1")).toBe(caps("claude-sonnet-5"));
-    expect(caps("claude-haiku-5")).toBe(caps("claude-haiku-4-5"));
+    expect(caps("claude-sonnet-6")).toBe(caps("claude-sonnet-5-5"));
+    expect(caps("claude-haiku-6")).toBe(caps("claude-haiku-5-5"));
     expect(resolveNewestKnownClaudeFamilyModel("claude-opus-6[1m]")).toBe("claude-opus-5-5");
   });
 
   it("keeps older or unrecognized uncatalogued Claude ids on empty capabilities", () => {
     const caps = (slug: string) => getModelCapabilities("claudeAgent", slug);
     expect(caps("claude-opus-5-1")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("claude-haiku-5")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("claude-sonnet-5-1")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("claude-opus-4-1")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("claude-3-opus")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("us.anthropic.claude-opus-6-v1")).toBe(EMPTY_MODEL_CAPABILITIES);

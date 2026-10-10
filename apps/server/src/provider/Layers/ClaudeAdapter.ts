@@ -1116,7 +1116,7 @@ function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"
     ...(sdkOptions !== undefined
       ? {
           supportedReasoningEfforts: sdkOptions.map(({ value, label }) => ({ value, label })),
-          ...(staticDefault && sdkEfforts?.includes(staticDefault)
+          ...(staticDefault && sdkEfforts?.some((effort) => effort === staticDefault)
             ? { defaultReasoningEffort: staticDefault }
             : {}),
         }
