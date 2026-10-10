@@ -341,6 +341,7 @@ describe("buildAcpGatewayMcpServers", () => {
         env: [
           { name: "SYNARA_AGENT_GATEWAY_URL", value: connection.url },
           { name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: connection.bearerToken },
+          { name: "ELECTRON_RUN_AS_NODE", value: "1" },
         ],
       },
     ]);
