@@ -13573,6 +13573,58 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it.each(["send", "review"] as const)(
+    "waits for workspace restore before %s even after the baseline deadline",
+    async (mode) => {
+      const harness = await createHarness({
+        preTurnBaselineTimeout: Duration.millis(30),
+        checkpointStore: { isGitRepository: () => Effect.succeed(true) },
+      });
+      const acquired = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const restore = Effect.runFork(
+        harness.checkpointCoordinator.withWorkspaceLease(
+          "/tmp/provider-project",
+          Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      );
+      await Effect.runPromise(Deferred.await(acquired));
+      try {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`restore-gate-${mode}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            message: {
+              messageId: MessageId.makeUnsafe(`restore-gate-message-${mode}`),
+              role: "user",
+              text: "Start after restore",
+              attachments: [],
+            },
+            ...(mode === "review" ? { reviewTarget: { type: "uncommittedChanges" as const } } : {}),
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await waitFor(
+          async () =>
+            (await readHarnessThread(harness))?.activities.some(
+              (activity) => activity.kind === "checkpoint.baseline.skipped",
+            ) ?? false,
+        );
+        const dispatch = mode === "review" ? harness.startReview : harness.sendTurn;
+        expect(dispatch).not.toHaveBeenCalled();
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+        await waitFor(() => dispatch.mock.calls.length === 1);
+        await harness.drain();
+      } finally {
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+        await Effect.runPromise(Effect.exit(Fiber.join(restore)));
+      }
+    },
+  );
+
   it("does not report a missing baseline when capture publishes during timeout cleanup", async () => {
     const release = Deferred.makeUnsafe<void>();
     let published = false;
