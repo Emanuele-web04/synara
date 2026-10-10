@@ -6,8 +6,8 @@
 import type { MessageId, OrchestrationMessage, TurnId } from "@synara/contracts";
 
 /**
- * - `latest`: the fork point is the source's latest conversation point, so the
- *   provider may fork its native history as it stands.
+ * - `latest`: no explicit message was selected for this whole-thread fork, so
+ *   the provider may fork its native history as it stands.
  * - `turn`: native history must stop at the end of this source turn.
  * - `unavailable`: no native boundary matches the chosen point; the fork must
  *   be rebuilt from its imported transcript instead of forking at the latest point.
