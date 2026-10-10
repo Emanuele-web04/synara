@@ -228,8 +228,6 @@ interface TabToolExecution {
   readonly output: unknown;
   readonly openedTabId: string | null;
   readonly oauthPopup: boolean;
-  // Tabs that existed before the action; null when unknown.
-  readonly tabIdsBefore: ReadonlySet<string> | null;
 }
 
 function uncorrelatedExecution(output: unknown): TabToolExecution {
@@ -237,7 +235,6 @@ function uncorrelatedExecution(output: unknown): TabToolExecution {
     output,
     openedTabId: null,
     oauthPopup: false,
-    tabIdsBefore: null,
   };
 }
 
@@ -1087,9 +1084,6 @@ export class DesktopBrowserAutomationHost {
   ): Promise<TabToolExecution> {
     let openedTabId: string | null = null;
     let oauthPopup = false;
-    const tabIdsBefore = new Set(
-      this.browserManager.getState({ threadId: affinity.threadId }).tabs.map((tab) => tab.id),
-    );
     if (!BROWSER_TOOL_DEFINITIONS_BY_NAME[request.name].annotations.readOnlyHint) {
       this.options.vaultCapture?.noteAgentActivity(runtime);
     }
@@ -1146,7 +1140,7 @@ export class DesktopBrowserAutomationHost {
           browserHostError({ code: "BrowserInputUnsupported" });
       }
     });
-    return { output, openedTabId, oauthPopup, tabIdsBefore };
+    return { output, openedTabId, oauthPopup };
   }
 
   private reconcileTabToolExecution(
@@ -1171,13 +1165,10 @@ export class DesktopBrowserAutomationHost {
           }
         : result;
     const state = this.browserManager.getState({ threadId: affinity.threadId });
-    // The active-tab fallback only adopts a tab this action created: the user can
-    // now be working in another existing tab while the agent runs in its own.
-    const fallbackTabId =
-      state.activeTabId && !execution.tabIdsBefore?.has(state.activeTabId)
-        ? state.activeTabId
-        : null;
-    const openedTabId = execution.openedTabId ?? fallbackTabId;
+    // A human may create/select a new tab during this action without changing
+    // the agent tab's epoch. Only its source-runtime window-open correlation
+    // proves that a new page belongs to the agent.
+    const openedTabId = execution.openedTabId;
     if (
       !openedTabId ||
       openedTabId === targetTabId ||
@@ -1185,9 +1176,8 @@ export class DesktopBrowserAutomationHost {
     ) {
       return reconciledResult;
     }
-    // BrowserManager changes activeTabId without advancing the human epoch only
-    // for a new tab created inside the short-lived agent gesture lease. Adopt
-    // it after the human guard has successfully reconciled.
+    // The gesture lease has committed this reserved tab and the human guard
+    // has reconciled before session affinity is updated.
     affinity.tabId = openedTabId;
     return reconciledResult && typeof reconciledResult === "object"
       ? { ...reconciledResult, openedTabId: openedTabId as BrowserTabId }

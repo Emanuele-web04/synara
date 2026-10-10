@@ -98,6 +98,41 @@ describe("browser workspace persistence", () => {
     expect(restored.at(-1)!.threadId).toBe("thread-50");
   });
 
+  it.each(["界", "\u0000"])(
+    "keeps saved metadata readable when encoded fields exceed the file budget (%j)",
+    (character) => {
+      const prefix = "https://example.test/";
+      const url = prefix + character.repeat(4096 - prefix.length);
+      const title = character.repeat(512);
+      for (let index = 0; index < 50; index++) {
+        const state = workspace(index, 20);
+        for (const tab of state.tabs) {
+          tab.url = url;
+          tab.title = title;
+        }
+        persistence.update(state);
+      }
+      persistence.flush();
+
+      expect(FS.statSync(filePath).size).toBeLessThanOrEqual(8 * 1024 * 1024);
+      const restored = readBrowserWorkspaces(filePath);
+      expect(restored.length).toBeGreaterThan(0);
+      expect(restored.length).toBeLessThan(50);
+      expect(restored.map((state) => state.threadId)).toEqual(
+        Array.from(
+          { length: restored.length },
+          (_, index) => `thread-${50 - restored.length + index}`,
+        ),
+      );
+      expect(restored.at(-1)).toMatchObject({
+        threadId: "thread-49",
+        activeTabId: "tab-19",
+        tabs: Array.from({ length: 20 }, (_, index) => ({ id: `tab-${index}`, url, title })),
+      });
+      expect(new BrowserWorkspacePersistence(filePath).restoredWorkspaces()).toEqual(restored);
+    },
+  );
+
   it("debounces updates and ignores changes to transient runtime fields", () => {
     const state = workspace();
     persistence.update(state);

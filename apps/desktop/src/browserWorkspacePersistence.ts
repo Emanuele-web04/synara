@@ -128,14 +128,27 @@ export class BrowserWorkspacePersistence {
     this.timer = undefined;
     if (!this.dirty) return;
     try {
+      // Character limits do not bound UTF-8 or JSON escaping. Keep the newest
+      // complete workspaces within the reader's byte limit, or the next launch
+      // would reject the whole file and lose every saved tab.
+      const retained: PersistedBrowserWorkspace[] = [];
+      let fileBytes = Buffer.byteLength(JSON.stringify({ version: 1, workspaces: [] }), "utf8");
+      for (const state of [...this.workspaces.values()].toReversed()) {
+        const entryBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
+        const nextBytes = fileBytes + entryBytes + (retained.length > 0 ? 1 : 0);
+        if (nextBytes > MAX_FILE_BYTES) break;
+        retained.unshift(state);
+        fileBytes = nextBytes;
+      }
       FS.mkdirSync(Path.dirname(this.filePath), { recursive: true });
       const temporaryPath = `${this.filePath}.tmp`;
-      FS.writeFileSync(
-        temporaryPath,
-        JSON.stringify({ version: 1, workspaces: [...this.workspaces.values()] }),
-        { encoding: "utf8", mode: 0o600 },
-      );
+      FS.writeFileSync(temporaryPath, JSON.stringify({ version: 1, workspaces: retained }), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
       FS.renameSync(temporaryPath, this.filePath);
+      this.workspaces.clear();
+      for (const state of retained) this.workspaces.set(state.threadId, state);
       this.dirty = false;
     } catch {
       // Optional recovery metadata must never prevent browsing or quitting.

@@ -40,7 +40,7 @@ import {
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
-import { isProviderKind } from "@synara/shared/providerInstances";
+import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -66,6 +66,7 @@ import {
   AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
   resolveAgentGatewayTarget,
   type AgentGatewayProviderAvailability,
+  type AgentGatewayProviderInstanceAvailability,
 } from "../targetResolver.ts";
 import { mcpToolResultError, mcpToolResultJson } from "../protocol.ts";
 import { gatewayIsoNow as isoNow, stableGatewayDigest } from "../creationUtils.ts";
@@ -120,6 +121,25 @@ import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+
+const providerInstanceAvailability = (
+  instance: ReturnType<typeof deriveProviderInstances>[number],
+  status: ServerProviderStatus | undefined,
+): AgentGatewayProviderInstanceAvailability => {
+  const result = {
+    instanceId: instance.instanceId,
+    displayName: instance.displayName,
+    isDefault: instance.isDefault,
+    enabled: instance.enabled,
+  };
+  return status === undefined
+    ? result
+    : {
+        ...result,
+        available: status.available,
+        authStatus: status.authStatus,
+      };
+};
 
 // Providers already receive the versioned host policy exactly once in their
 // private prompt. MCP clients prepend initialize.instructions to every exposed
@@ -180,19 +200,32 @@ export const makeAgentGateway = Effect.gen(function* () {
       serverSettings.getSettings,
       providerHealth.getStatuses,
     ]);
-    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>();
+    const statusByInstance = new Map<string, ServerProviderStatus>();
     for (const status of statuses) {
       if (isProviderKind(status.driver)) {
-        statusByProvider.set(status.driver, status);
+        const instanceId = status.instanceId ?? status.provider;
+        statusByInstance.set(`${status.driver}\u0000${instanceId}`, status);
       }
+    }
+    const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
+    for (const instance of deriveProviderInstances(settings)) {
+      const instances = instancesByProvider.get(instance.driver) ?? [];
+      instancesByProvider.set(instance.driver, [...instances, instance]);
     }
     return new Map<ProviderKind, AgentGatewayProviderAvailability>(
       PROVIDER_KINDS.map((provider) => {
-        const status = statusByProvider.get(provider);
+        const status = statusByInstance.get(`${provider}\u0000${provider}`);
+        const instances = instancesByProvider.get(provider) ?? [];
         return [
           provider,
           {
             enabled: settings.providers[provider].enabled,
+            instances: instances.map((instance) =>
+              providerInstanceAvailability(
+                instance,
+                statusByInstance.get(`${instance.driver}\u0000${instance.instanceId}`),
+              ),
+            ),
             ...(status
               ? {
                   available: status.available,
@@ -462,6 +495,8 @@ export const makeAgentGateway = Effect.gen(function* () {
                 runtimeMode: {
                   type: "string",
                   enum: ["approval-required", "full-access"],
+                  description:
+                    "Omit to inherit the creating Hub coordinator's approval mode, including Approve for me. An explicit mode takes precedence.",
                 },
               },
               required: ["prompt", "target"],
@@ -521,6 +556,8 @@ export const makeAgentGateway = Effect.gen(function* () {
           runtimeMode: {
             type: "string",
             enum: ["approval-required", "full-access"],
+            description:
+              "Omit to inherit the creating Hub coordinator's approval mode, including Approve for me. An explicit mode takes precedence.",
           },
         },
         required: ["requestId", "prompt"],
