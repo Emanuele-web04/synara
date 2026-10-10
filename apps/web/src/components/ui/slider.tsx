@@ -26,6 +26,10 @@ type SliderProps = {
    *  off for continuous scales, where the lag would fight the pointer. */
   magnetic?: boolean;
   className?: string;
+  /** Extra classes for the filled part of the track (e.g. an animated fill effect). */
+  indicatorClassName?: string;
+  /** Hide the step marks the fill already covers, so a decorated fill reads clean. */
+  hideFilledMarks?: boolean;
   "aria-label": string;
   /** Spoken value for assistive tech; defaults to the numeric value. */
   getAriaValueText?: (value: number) => string;
@@ -77,6 +81,8 @@ function Slider({
   showStepMarks: showStepMarksProp,
   magnetic: magneticProp,
   className,
+  indicatorClassName,
+  hideFilledMarks,
   "aria-label": ariaLabel,
   getAriaValueText,
   onValueChange,
@@ -142,6 +148,7 @@ function Slider({
               magnetic && MAGNETIC_MOTION_CLASS,
               magnetic && "transition-[inset-inline-start,width,opacity]",
               valuePercent <= 0 && "opacity-0",
+              indicatorClassName,
             )}
             data-slot="slider-indicator"
           />
@@ -156,7 +163,9 @@ function Slider({
                   className={cn(
                     "absolute top-1/2 size-[var(--slider-mark-size)] -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-180 motion-reduce:transition-none",
                     percent <= valuePercent + Number.EPSILON
-                      ? "bg-white/55"
+                      ? hideFilledMarks
+                        ? "bg-transparent"
+                        : "bg-white/55"
                       : "bg-[color-mix(in_srgb,var(--color-text-foreground)_28%,transparent)]",
                   )}
                   style={{ left: `${percent}%` }}

@@ -165,6 +165,9 @@ export function FastModeToggle({
 }) {
   const tone = toneProp ?? "muted";
   const Icon = enabled ? FastModeIcon : FastModeOutlineIcon;
+  // Bumped on each user switch-on so the icon remounts and replays the zap; opening a
+  // menu with fast mode already on stays still.
+  const [zapKey, setZapKey] = useState(0);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -177,14 +180,19 @@ export function FastModeToggle({
               "flex shrink-0 cursor-pointer items-center justify-center transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60",
               tone === "accent" ? "size-6 rounded-lg" : "-my-1 size-5 rounded-md",
             )}
-            onClick={onToggle}
+            onClick={() => {
+              if (!enabled) setZapKey((key) => key + 1);
+              onToggle();
+            }}
           />
         }
       >
         <Icon
+          key={zapKey}
           aria-hidden="true"
           className={cn(
             "size-3.5",
+            enabled && zapKey > 0 && "fast-mode-icon-zap",
             enabled
               ? tone === "accent"
                 ? "text-[var(--color-text-accent)]"
