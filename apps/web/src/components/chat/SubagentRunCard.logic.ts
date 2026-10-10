@@ -601,7 +601,6 @@ function nestedRowsFor(input: {
         providerThreadId: providerThreadIdFromChildId(thread.id, input.rootThreadId),
         primaryLabel: presentation.nickname ?? presentation.primaryLabel,
         fullLabel: presentation.fullLabel,
-        accentColor: presentation.accentColor,
         role: presentation.role,
         accentColor: presentation.accentColor,
         modelLabel: formatSubagentModelLabel(thread.modelSelection.model),
