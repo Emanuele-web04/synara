@@ -65,6 +65,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [allowProjectRead, setAllowProjectRead] = useState(false);
+  const [allowUsageRead, setAllowUsageRead] = useState(false);
   const [allowLocal, setAllowLocal] = useState(false);
   const [allowFullAccess, setAllowFullAccess] = useState(false);
   const [allowComputerControl, setAllowComputerControl] = useState(false);
@@ -94,11 +95,12 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const capabilities = useMemo(() => {
     const next = [...CORE_CAPABILITIES];
     if (allowProjectRead) next.push("tasks:read-project");
+    if (allowUsageRead) next.push("usage:read");
     if (allowLocal) next.push("runtime:local");
     if (allowFullAccess) next.push("runtime:full-access");
     if (allowComputerControl) next.push("computer:control");
     return next;
-  }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead]);
+  }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead, allowUsageRead]);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -307,7 +309,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           </SettingsRow>
           <SettingsRow
             title="Advanced permissions"
-            description="Optional access for existing tasks, shared checkouts, or execution without approvals. The safe defaults are recommended."
+            description="Optional access to provider usage, existing tasks, shared checkouts, or execution without approvals. The safe defaults are recommended."
             control={
               <Button
                 size="xs"
@@ -324,6 +326,20 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               open={advancedOpen}
               contentClassName="mt-3 space-y-4 border-t border-border/70 pt-3"
             >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-ui leading-snug font-medium">Read provider usage</div>
+                  <div className="mt-0.5 text-ui-sm leading-relaxed text-muted-foreground">
+                    Read cached usage and quota limits for all provider accounts, including accounts
+                    used in other projects.
+                  </div>
+                </div>
+                <Switch
+                  aria-label="Read provider usage"
+                  checked={allowUsageRead}
+                  onCheckedChange={setAllowUsageRead}
+                />
+              </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-ui leading-snug font-medium">Read other project tasks</div>

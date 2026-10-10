@@ -13,7 +13,7 @@ import type {
 import { MessageId, ProjectId, TurnId } from "@synara/contracts";
 import { Effect, Fiber, Layer, Option, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentGatewayOperationRepositoryLive } from "../../agentGateway/Layers/AgentGatewayOperationRepository.ts";
 import { ServerConfig } from "../../config.ts";
@@ -24,6 +24,10 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import {
+  getCachedProviderInstanceUsageSnapshot,
+  getProviderInstanceUsageSnapshot,
+} from "../../providerUsage/index.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { serveExternalMcpStdio, writeExternalMcpClientCredential } from "../bridge.ts";
 import {
@@ -35,6 +39,13 @@ import { ExternalMcpService } from "../Services/ExternalMcpService.ts";
 import { ExternalMcpRepositoryLive } from "./ExternalMcpRepository.ts";
 import { ExternalMcpGatewayLive } from "./ExternalMcpGateway.ts";
 import { ExternalMcpServiceLive } from "./ExternalMcpService.ts";
+
+vi.mock("../../providerUsage/index.ts", () => ({
+  getCachedProviderInstanceUsageSnapshot: vi.fn(async () => null),
+  getProviderInstanceUsageSnapshot: vi.fn(async () => {
+    throw new Error("External usage must not refresh a provider.");
+  }),
+}));
 
 const temporaryDirectories: string[] = [];
 const NOW = "2026-07-20T12:00:00.000Z";
@@ -71,6 +82,15 @@ function emptyThreadDetail(shell: OrchestrationThreadShell): OrchestrationThread
 function toolPayload(response: Record<string, unknown>): Record<string, unknown> {
   const result = response.result as { readonly content?: ReadonlyArray<{ readonly text: string }> };
   return JSON.parse(result.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+}
+
+function usageRequest(id: string, args: Record<string, unknown> = {}) {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { name: "synara_get_usage", arguments: args },
+  };
 }
 
 function writeRuntimeState(baseDir: string): void {
@@ -311,6 +331,8 @@ describe("external MCP gateway stdio flow", () => {
     } as never);
     const configLayer = Layer.succeed(ServerConfig, {
       baseDir,
+      homeDir: baseDir,
+      stateDir: path.join(baseDir, "state"),
       worktreesDir,
       host: "127.0.0.1",
       publicUrl: undefined,
@@ -335,7 +357,19 @@ describe("external MCP gateway stdio flow", () => {
       Layer.provide(gitLayer),
       Layer.provide(providerDiscoveryLayer),
       Layer.provide(providerHealthLayer),
-      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(
+        ServerSettingsService.layerTest({
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Work álïçé@exämple.com",
+              environment: [{ name: "ACCOUNT_KEY", value: "external-usage-environment-marker" }],
+            },
+            codex_disabled: { driver: "codex", enabled: false },
+            omp_extra: { driver: "omp", enabled: true },
+          },
+        }),
+      ),
       Layer.provide(projectionTurnsLayer),
       Layer.provide(operationLayer),
       Layer.provide(configLayer),
@@ -434,6 +468,7 @@ describe("external MCP gateway stdio flow", () => {
           "synara_wait_for_task",
           "synara_read_task",
         ]);
+        expect(getCachedProviderInstanceUsageSnapshot).not.toHaveBeenCalled();
         const readTaskProperties = listedTools.find((tool) => tool.name === "synara_read_task")
           ?.inputSchema.properties;
         expect(readTaskProperties?.maxMessageChars).toMatchObject({
@@ -687,6 +722,129 @@ describe("external MCP gateway stdio flow", () => {
         `;
         expect(operationPlans).toHaveLength(1);
         expect(operationPlans[0]!.planJson).not.toContain(prompt);
+
+        const usageIssued = yield* service.createIntegration({
+          name: "Usage reader",
+          projectIds: [PROJECT_ID],
+          capabilities: ["usage:read"],
+        });
+        const usageCredential = "syn_mcp_v1_usage-reader-secret";
+        yield* service.pair(usageIssued.pairingCode, usageCredential);
+        const usageDenied = yield* gateway.handlePost({
+          authorizationHeader: `Bearer ${restrictedCredential}`,
+          body: usageRequest("usage-denied"),
+        });
+        expect(JSON.stringify(usageDenied.body)).toContain("capability_denied");
+        expect(getCachedProviderInstanceUsageSnapshot).not.toHaveBeenCalled();
+        const usageTools = yield* gateway.handlePost({
+          authorizationHeader: `Bearer ${usageCredential}`,
+          body: { jsonrpc: "2.0", id: "usage-tools", method: "tools/list", params: {} },
+        });
+        expect((usageTools.body as { result: { tools: unknown[] } }).result.tools).toEqual([
+          expect.objectContaining({
+            name: "synara_get_usage",
+            annotations: expect.objectContaining({ readOnlyHint: true, destructiveHint: false }),
+          }),
+        ]);
+        vi.mocked(getCachedProviderInstanceUsageSnapshot).mockImplementation(async (instance) =>
+          instance.instanceId === "codex_work"
+            ? {
+                provider: "codex",
+                status: "ok",
+                updatedAt: new Date().toISOString(),
+                limits: [{ window: "5h", usedPercent: 40 }],
+                usageLines: [],
+                source: "cached-codex-usage",
+              }
+            : null,
+        );
+        const readUsage = (id: string, args?: Record<string, unknown>) =>
+          gateway.handlePost({
+            authorizationHeader: `Bearer ${usageCredential}`,
+            body: usageRequest(id, args),
+          });
+        const allUsage = yield* readUsage("usage-all");
+        const usagePayload = toolPayload(allUsage.body as Record<string, unknown>);
+        expect(usagePayload.usage).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ instanceId: "codex", unavailableReason: "missing-snapshot" }),
+            expect.objectContaining({
+              instanceId: "codex_work",
+              displayName: "Work [account]",
+              availability: "available",
+              quotaWindows: [expect.objectContaining({ remainingPercent: 60 })],
+            }),
+            expect.objectContaining({
+              instanceId: "codex_disabled",
+              unavailableReason: "disabled",
+            }),
+            expect.objectContaining({ instanceId: "omp_extra", unavailableReason: "unsupported" }),
+          ]),
+        );
+        expect(JSON.stringify(usagePayload)).not.toMatch(/exämple\.com|environment-marker/);
+        vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
+        const oneUsage = yield* readUsage("usage-one", { instanceId: "codex_work" });
+        expect(toolPayload(oneUsage.body as Record<string, unknown>).usage).toEqual([
+          expect.objectContaining({ instanceId: "codex_work" }),
+        ]);
+        expect(getCachedProviderInstanceUsageSnapshot).toHaveBeenCalledTimes(1);
+        vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
+        const invalidUsage = yield* readUsage("usage-invalid", { refresh: true });
+        expect(JSON.stringify(invalidUsage.body)).toContain("Invalid provider usage query");
+        expect(getCachedProviderInstanceUsageSnapshot).not.toHaveBeenCalled();
+
+        const usageAudit = yield* sql<{
+          readonly outcome: string;
+          readonly createdTaskIds: string;
+        }>`
+          SELECT outcome, created_task_ids_json AS "createdTaskIds"
+          FROM external_mcp_audit_log
+          WHERE integration_id = ${usageIssued.integration.integrationId}
+          ORDER BY created_at, audit_id
+        `;
+        expect(usageAudit.map((row) => row.outcome).toSorted()).toEqual([
+          "error",
+          "success",
+          "success",
+        ]);
+        expect(usageAudit.every((row) => row.createdTaskIds === "[]")).toBe(true);
+        const usageOperations = yield* sql`
+          SELECT operation_id FROM external_mcp_operations
+          WHERE integration_id = ${usageIssued.integration.integrationId}
+        `;
+        expect(usageOperations).toHaveLength(0);
+        expect(getProviderInstanceUsageSnapshot).not.toHaveBeenCalled();
+
+        yield* sql`
+          UPDATE external_mcp_integrations SET rate_limit_per_minute = 1
+          WHERE integration_id = ${usageIssued.integration.integrationId}
+        `;
+        const rateLimitedUsage = yield* readUsage("usage-rate-limited");
+        expect(JSON.stringify(rateLimitedUsage.body)).toContain("rate_limited");
+        expect(getCachedProviderInstanceUsageSnapshot).not.toHaveBeenCalled();
+        yield* sql`
+          UPDATE external_mcp_integrations SET rate_limit_per_minute = 60
+          WHERE integration_id = ${usageIssued.integration.integrationId}
+        `;
+        const verifiedUsageClient = yield* service.verifyCredential(usageCredential);
+        vi.mocked(getCachedProviderInstanceUsageSnapshot).mockImplementationOnce(async () => {
+          await Effect.runPromise(service.revokeIntegration(usageIssued.integration.integrationId));
+          return null;
+        });
+        const revokedWhileReading = yield* readUsage("usage-revoked-during-read", {
+          instanceId: "codex_work",
+        });
+        expect(JSON.stringify(revokedWhileReading.body)).toContain("external_credential_inactive");
+        expect(toolPayload(revokedWhileReading.body as Record<string, unknown>)).not.toHaveProperty(
+          "usage",
+        );
+        vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
+        const revokedUsage = yield* gateway.handleVerifiedPost({
+          client: verifiedUsageClient,
+          body: usageRequest("usage-revoked"),
+        });
+        expect(JSON.stringify(revokedUsage.body)).toContain("external_credential_inactive");
+        expect(getCachedProviderInstanceUsageSnapshot).not.toHaveBeenCalled();
 
         yield* sql`
           CREATE TRIGGER reject_external_mcp_gateway_audit_finish

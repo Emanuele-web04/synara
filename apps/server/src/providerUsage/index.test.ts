@@ -8,18 +8,22 @@ import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
+import { deriveProviderInstances } from "@synara/shared/providerInstances";
 
 import { ServerConfig } from "../config";
 import { ServerSettingsService } from "../serverSettings";
 import {
   __resetProviderUsageCacheForTests,
   collectProviderUsageSnapshots,
+  getCachedProviderInstanceUsageSnapshot,
+  getProviderInstanceUsageSnapshot,
   listProviderUsage,
 } from "./index";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "./types";
+import { makeProviderAccountUsageReader } from "./agentReader";
 
 const fetchMock = vi.fn<(ctx: ProviderUsageContext) => Promise<ServerProviderUsageSnapshot>>();
-const cacheKeyMock = vi.fn<(ctx: ProviderUsageContext) => Promise<string>>();
+const cacheKeyMock = vi.fn<(ctx: ProviderUsageContext) => Promise<string | null>>();
 const localUsageLinesMock = vi.fn();
 
 vi.mock("../providerUsageSnapshot", () => ({
@@ -264,6 +268,136 @@ function usageTestLayer() {
   return Layer.mergeAll(NodeServices.layer, configLayer, ServerSettingsService.layerTest());
 }
 
+function accountCacheArgs() {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsService;
+      const settings = yield* service.getSettings;
+      const config = yield* ServerConfig;
+      const instance = deriveProviderInstances(settings).find(
+        (entry) => entry.instanceId === "codex",
+      )!;
+      return [
+        instance,
+        {
+          homeDir: config.homeDir,
+          env: process.env,
+          platform: process.platform,
+          nowMs: NOW_MS,
+          claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          codexBinaryPath: settings.providers.codex.binaryPath,
+        },
+        config.stateDir,
+        config.baseDir,
+      ] as const;
+    }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+  );
+}
+
+describe("getCachedProviderInstanceUsageSnapshot", () => {
+  it("never fetches or joins an in-flight observation or refresh", async () => {
+    const args = await accountCacheArgs();
+    expect(await getCachedProviderInstanceUsageSnapshot(...args)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const first = Promise.withResolvers<ServerProviderUsageSnapshot>();
+    fetchMock.mockReturnValueOnce(first.promise);
+    const loading = getProviderInstanceUsageSnapshot(...args);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(await getCachedProviderInstanceUsageSnapshot(...args)).toBeNull();
+    first.resolve(okSnapshot(NOW_MS, "cached"));
+    await loading;
+
+    const next = Promise.withResolvers<ServerProviderUsageSnapshot>();
+    fetchMock.mockReturnValueOnce(next.promise);
+    const refreshing = getProviderInstanceUsageSnapshot(...args, true);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await getCachedProviderInstanceUsageSnapshot(...args)).toMatchObject({
+      source: "cached",
+    });
+    expect(localUsageLinesMock).toHaveBeenCalledTimes(1);
+    next.resolve(okSnapshot(NOW_MS, "refreshed"));
+    await refreshing;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects changed credentials, launch contexts, and non-cacheable authentication", async () => {
+    const [instance, ctx, stateDir, baseDir] = await accountCacheArgs();
+    fetchMock.mockResolvedValue(okSnapshot(NOW_MS));
+    await getProviderInstanceUsageSnapshot(instance, ctx, stateDir, baseDir);
+
+    cacheKeyMock.mockResolvedValue("another-account");
+    expect(
+      await getCachedProviderInstanceUsageSnapshot(instance, ctx, stateDir, baseDir),
+    ).toBeNull();
+    cacheKeyMock.mockResolvedValue("account-a");
+    expect(
+      await getCachedProviderInstanceUsageSnapshot(
+        instance,
+        { ...ctx, codexBinaryPath: "/another/codex" },
+        stateDir,
+        baseDir,
+      ),
+    ).toBeNull();
+    cacheKeyMock.mockResolvedValue(null);
+    expect(
+      await getCachedProviderInstanceUsageSnapshot(instance, ctx, stateDir, baseDir),
+    ).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot return an invalidated observation after asynchronous identity verification", async () => {
+    const args = await accountCacheArgs();
+    fetchMock.mockResolvedValue(okSnapshot(NOW_MS));
+    await getProviderInstanceUsageSnapshot(...args);
+    const identity = Promise.withResolvers<string>();
+    cacheKeyMock.mockReturnValueOnce(identity.promise);
+    const reading = getCachedProviderInstanceUsageSnapshot(...args);
+    await vi.waitFor(() => expect(cacheKeyMock).toHaveBeenCalledTimes(3));
+    __resetProviderUsageCacheForTests();
+    await getProviderInstanceUsageSnapshot(...args);
+    identity.resolve("account-a");
+    expect(await reading).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["ok", "error"] as const)(
+    "returns expired %s snapshots as stale without extending their cache lifetime",
+    async (status) => {
+      const [instance, ctx, stateDir, baseDir] = await accountCacheArgs();
+      const ttl = status === "ok" ? 300_000 : 60_000;
+      fetchMock.mockImplementation(async (context) => ({ ...okSnapshot(context.nowMs), status }));
+      await getProviderInstanceUsageSnapshot(instance, ctx, stateDir, baseDir);
+      const fresh = await getCachedProviderInstanceUsageSnapshot(
+        instance,
+        { ...ctx, nowMs: NOW_MS + ttl - 1 },
+        stateDir,
+        baseDir,
+      );
+      expect(fresh?.stale).not.toBe(true);
+      const stale = await getCachedProviderInstanceUsageSnapshot(
+        instance,
+        { ...ctx, nowMs: NOW_MS + ttl },
+        stateDir,
+        baseDir,
+      );
+      expect(stale).toMatchObject({
+        status,
+        stale: true,
+        updatedAt: new Date(NOW_MS).toISOString(),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await getProviderInstanceUsageSnapshot(
+        instance,
+        { ...ctx, nowMs: NOW_MS + ttl },
+        stateDir,
+        baseDir,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
 describe("listProviderUsage account routing", () => {
   it.each(["same-source", "environment-only"] as const)(
     "reads the private Codex account overlay for a %s account",
@@ -341,7 +475,14 @@ describe("listProviderUsage account routing", () => {
         });
         const first = yield* listProviderUsage({});
         const cached = yield* listProviderUsage({});
-        return { first, cached };
+        const config = yield* ServerConfig;
+        const agents = yield* makeProviderAccountUsageReader({
+          getSettings: settings.getSettings,
+          context: { homeDir: config.homeDir, env: process.env, platform: process.platform },
+          stateDir: config.stateDir,
+          baseDir: config.baseDir,
+        })({ provider: "codex" });
+        return { first, cached, agents };
       }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
     );
 
@@ -356,6 +497,14 @@ describe("listProviderUsage account routing", () => {
       },
     ]);
     expect(result.cached).toEqual(result.first);
+    expect(
+      result.agents.map((account) => ({
+        instanceId: account.instanceId,
+        limits: account.snapshot?.limits,
+      })),
+    ).toEqual(
+      result.first.map((account) => ({ instanceId: account.instanceId, limits: account.limits })),
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(localUsageLinesMock).toHaveBeenCalledWith({
       provider: "codex",

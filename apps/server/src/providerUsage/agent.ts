@@ -13,15 +13,51 @@ import type {
 
 export const AGENT_PROVIDER_USAGE_MAX_AGE_MS = 5 * 60 * 1000;
 
-const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[\w.]+/;
-const EMAIL_PATTERN_GLOBAL = new RegExp(EMAIL_PATTERN.source, "g");
+const EMAIL_PATTERN = /[\p{L}\p{N}_.+-]+@[\p{L}\p{N}_-]+\.[\p{L}\p{N}_.]+/u;
+const EMAIL_PATTERN_GLOBAL = new RegExp(EMAIL_PATTERN.source, "gu");
 
-// Identity metadata is for Settings; agents only get quota and informational lines.
+export const redactProviderUsageAccountText = (value: string): string =>
+  value.replace(EMAIL_PATTERN_GLOBAL, "[account]");
+
+// Agents can address configured accounts by their safe instance IDs, without account emails.
 function scrubAccountMetadata(snapshot: ServerProviderUsageSnapshot): ServerProviderUsageSnapshot {
   return {
     ...snapshot,
-    detail: snapshot.detail?.replace(EMAIL_PATTERN_GLOBAL, "[account]"),
-    planName: snapshot.planName?.replace(EMAIL_PATTERN_GLOBAL, "[account]"),
+    detail:
+      snapshot.detail === undefined ? undefined : redactProviderUsageAccountText(snapshot.detail),
+    planName:
+      snapshot.planName === undefined
+        ? undefined
+        : redactProviderUsageAccountText(snapshot.planName),
+    source: redactProviderUsageAccountText(snapshot.source),
+    limits: snapshot.limits.map((limit) => ({
+      ...limit,
+      window: redactProviderUsageAccountText(limit.window),
+    })),
+    ...(snapshot.resetCredits
+      ? {
+          resetCredits: {
+            ...snapshot.resetCredits,
+            ...(snapshot.resetCredits.accountId === undefined
+              ? {}
+              : { accountId: redactProviderUsageAccountText(snapshot.resetCredits.accountId) }),
+            ...(snapshot.resetCredits.credits === undefined
+              ? {}
+              : {
+                  credits: snapshot.resetCredits.credits.map((credit) => ({
+                    ...credit,
+                    id: redactProviderUsageAccountText(credit.id),
+                    ...(credit.title === undefined
+                      ? {}
+                      : { title: redactProviderUsageAccountText(credit.title) }),
+                    ...(credit.description === undefined
+                      ? {}
+                      : { description: redactProviderUsageAccountText(credit.description) }),
+                  })),
+                }),
+          },
+        }
+      : {}),
     usageLines: snapshot.usageLines.filter(
       (line) =>
         line.label.trim().toLowerCase() !== "account" &&
@@ -53,6 +89,7 @@ function unavailableResult(input: {
   reason: AgentProviderUsageUnavailableReason;
   snapshot: ServerProviderUsageSnapshot | null;
   ageMs?: number;
+  stale?: boolean;
 }): ServerAgentProviderUsage {
   return {
     provider: input.provider,
@@ -60,7 +97,7 @@ function unavailableResult(input: {
     unavailableReason: input.reason,
     checkedAt: input.checkedAt,
     freshness: {
-      stale: input.reason === "stale" || input.snapshot === null,
+      stale: input.stale === true || input.reason === "stale" || input.snapshot === null,
       ageMs: input.ageMs ?? 0,
       maxAgeMs: AGENT_PROVIDER_USAGE_MAX_AGE_MS,
     },
@@ -75,7 +112,7 @@ export function summarizeProviderUsageForAgent(input: {
   enabled: boolean;
   snapshot: ServerProviderUsageSnapshot | null;
   checkedAtMs?: number;
-  unavailableReason?: "timed-out" | "provider-error";
+  unavailableReason?: "timed-out" | "provider-error" | "unsupported";
 }): ServerAgentProviderUsage {
   const checkedAtMs = input.checkedAtMs ?? Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
@@ -111,11 +148,16 @@ export function summarizeProviderUsageForAgent(input: {
     ...originalSnapshot,
     usageLines: originalSnapshot.usageLines.map((line) => ({
       ...line,
-      source: line.source ?? originalSnapshot.source,
+      source: redactProviderUsageAccountText(line.source ?? originalSnapshot.source),
       observedAt: line.observedAt ?? originalSnapshot.updatedAt,
     })),
   };
   const statusReason = snapshotUnavailableReason(snapshot);
+  const stale =
+    snapshot.stale === true ||
+    !Number.isFinite(observedAtMs) ||
+    observedAtMs > checkedAtMs ||
+    ageMs > AGENT_PROVIDER_USAGE_MAX_AGE_MS;
   if (statusReason) {
     return unavailableResult({
       provider: input.provider,
@@ -123,14 +165,10 @@ export function summarizeProviderUsageForAgent(input: {
       reason: statusReason,
       snapshot,
       ageMs,
+      stale,
     });
   }
-  if (
-    snapshot.stale === true ||
-    !Number.isFinite(observedAtMs) ||
-    observedAtMs > checkedAtMs ||
-    ageMs > AGENT_PROVIDER_USAGE_MAX_AGE_MS
-  ) {
+  if (stale) {
     return unavailableResult({
       provider: input.provider,
       checkedAt,

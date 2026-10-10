@@ -385,6 +385,23 @@ export const ServerAgentProviderUsage = Schema.Struct({
 });
 export type ServerAgentProviderUsage = typeof ServerAgentProviderUsage.Type;
 
+export const AgentProviderUsageQuery = Schema.Struct({
+  provider: Schema.optional(ProviderKind),
+  instanceId: Schema.optional(ProviderInstanceId),
+}).annotate({ parseOptions: { onExcessProperty: "error" } });
+export type AgentProviderUsageQuery = typeof AgentProviderUsageQuery.Type;
+
+// Keep account identity even when no snapshot exists. Only these display fields are exposed;
+// provider instance configuration, environment, and credential identities stay on the server.
+export const ServerAgentProviderAccountUsage = Schema.Struct({
+  ...ServerAgentProviderUsage.fields,
+  instanceId: ProviderInstanceId,
+  displayName: TrimmedNonEmptyString,
+  isDefault: Schema.Boolean,
+  enabled: Schema.Boolean,
+});
+export type ServerAgentProviderAccountUsage = typeof ServerAgentProviderAccountUsage.Type;
+
 export const ServerGetProviderUsageSnapshotInput = Schema.Struct({
   provider: ProviderKind,
   homePath: Schema.optional(TrimmedNonEmptyString),

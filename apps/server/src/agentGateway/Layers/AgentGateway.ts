@@ -39,7 +39,6 @@ import {
   type ServerProviderStatus,
   type TurnDispatchMode,
 } from "@synara/contracts";
-import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
@@ -62,13 +61,12 @@ import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts"
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
-import { readProviderUsageForAgents } from "../../providerUsage/agentReader.ts";
-import { getProviderInstanceUsageSnapshot } from "../../providerUsage/index.ts";
-import { summarizeProviderUsageForAgent } from "../../providerUsage/agent.ts";
 import {
-  deriveProviderInstances,
-  resolveModelSelectionInstanceId,
-} from "@synara/shared/providerInstances";
+  makeProviderAccountUsageReader,
+  ProviderUsageAccountNotFoundError,
+} from "../../providerUsage/agentReader.ts";
+import { summarizeProviderUsageForAgent } from "../../providerUsage/agent.ts";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
@@ -214,70 +212,40 @@ export const makeAgentGateway = Effect.gen(function* () {
       }),
     );
   });
-  const loadProviderUsage = (provider?: ProviderKind, callerThreadId?: string) =>
+  const loadProviderUsage = makeProviderAccountUsageReader({
+    getSettings: serverSettings.getSettings,
+    context: {
+      homeDir: serverConfig.homeDir,
+      env: process.env,
+      platform: process.platform,
+    },
+    stateDir: serverConfig.stateDir,
+    baseDir: serverConfig.baseDir,
+  });
+  const loadCallerProviderUsage = (provider: ProviderKind, callerThreadId?: string) =>
     Effect.gen(function* () {
-      const settings = yield* serverSettings.getSettings.pipe(Effect.timeout("3 seconds"));
-      const supported = new Set<ProviderKind>(PROVIDER_USAGE_PROVIDERS);
-      let instances = deriveProviderInstances(settings).filter(
-        (instance) => instance.enabled && supported.has(instance.driver),
-      );
-      if (provider !== undefined) {
-        const caller = callerThreadId
-          ? yield* snapshotQuery
-              .getThreadShellById(ThreadId.makeUnsafe(callerThreadId))
-              .pipe(Effect.timeout("3 seconds"), Effect.map(Option.getOrUndefined))
-          : undefined;
-        // Never substitute another account when the caller's selection disappeared
-        // or changed provider during a handoff.
-        const instanceId =
-          caller?.modelSelection.provider === provider
-            ? resolveModelSelectionInstanceId(caller.modelSelection)
-            : callerThreadId
-              ? undefined
-              : provider;
-        instances = instances.filter(
-          (instance) => instance.driver === provider && instance.instanceId === instanceId,
-        );
-        if (instances.length === 0) {
-          return [summarizeProviderUsageForAgent({ provider, enabled: false, snapshot: null })];
-        }
-      }
-      const results = yield* Effect.forEach(
-        instances,
-        (instance) =>
-          readProviderUsageForAgents({
-            providers: [instance.driver],
-            enabledProviders: new Set([instance.driver]),
-            loadSnapshot: () =>
-              Effect.promise(() =>
-                getProviderInstanceUsageSnapshot(
-                  instance,
-                  {
-                    homeDir: serverConfig.homeDir,
-                    env: process.env,
-                    platform: process.platform,
-                    nowMs: Date.now(),
-                    claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
-                    codexBinaryPath: settings.providers.codex.binaryPath,
-                  },
-                  serverConfig.stateDir,
-                  serverConfig.baseDir,
-                ),
-              ),
-          }),
-        { concurrency: "unbounded" },
-      );
-      // A fast account can expire while another account is still loading.
-      const checkedAtMs = Date.now();
-      return results.flat().map((result) =>
-        result.snapshot
-          ? summarizeProviderUsageForAgent({
-              provider: result.provider,
-              enabled: true,
-              snapshot: result.snapshot,
-              checkedAtMs,
-            })
-          : result,
+      const caller = callerThreadId
+        ? yield* snapshotQuery
+            .getThreadShellById(ThreadId.makeUnsafe(callerThreadId))
+            .pipe(Effect.timeout("3 seconds"), Effect.map(Option.getOrUndefined))
+        : undefined;
+      // Compact context remains exact to its caller even though the explicit tool lists accounts.
+      const instanceId =
+        caller?.modelSelection.provider === provider
+          ? resolveModelSelectionInstanceId(caller.modelSelection)
+          : callerThreadId
+            ? undefined
+            : provider;
+      const unavailable = () => [
+        summarizeProviderUsageForAgent({ provider, enabled: false, snapshot: null }),
+      ];
+      if (instanceId === undefined) return unavailable();
+      return yield* loadProviderUsage({ provider, instanceId }).pipe(
+        Effect.catch((error) =>
+          error instanceof ProviderUsageAccountNotFoundError
+            ? Effect.succeed(unavailable())
+            : Effect.fail(error),
+        ),
       );
     });
 
@@ -389,7 +357,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       homeDir: serverConfig.homeDir,
       chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
     },
-    loadProviderUsage,
+    loadProviderUsage: loadCallerProviderUsage,
   });
   const diagnosticTools = makeThreadDiagnosticTools({
     snapshotQuery,

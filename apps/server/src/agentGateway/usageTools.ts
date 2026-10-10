@@ -1,49 +1,39 @@
 // FILE: agentGateway/usageTools.ts
-// Purpose: Expose cached, normalized provider quota through caller-scoped read-only MCP tools.
+// Purpose: Expose cached, normalized provider quota through account-addressable read-only MCP tools.
 // Fetching and quota interpretation stay in providerUsage; gateway code only applies authority.
 
-import type { ProviderKind, ServerAgentProviderUsage } from "@synara/contracts";
+import type { ServerAgentProviderAccountUsage } from "@synara/contracts";
 import { Effect } from "effect";
 
-import { summarizeProviderUsageForAgent } from "../providerUsage/agent.ts";
+import { PROVIDER_ACCOUNT_USAGE_INPUT_SCHEMA } from "../providerUsage/agentReader.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
 import { errorText } from "./toolInput.ts";
 import { READ_ONLY_TOOL_ANNOTATIONS, type ToolEntry } from "./toolRuntime.ts";
 
 export interface AgentGatewayUsageToolsInput {
   readonly loadProviderUsage: (
-    provider?: ProviderKind,
-    callerThreadId?: string,
-  ) => Effect.Effect<ReadonlyArray<ServerAgentProviderUsage>, unknown, never>;
+    query?: unknown,
+  ) => Effect.Effect<ReadonlyArray<ServerAgentProviderAccountUsage>, unknown, never>;
 }
 
 export function makeAgentGatewayUsageTools(
   input: AgentGatewayUsageToolsInput,
 ): ReadonlyArray<ToolEntry> {
+  const handler: ToolEntry["handler"] = (args) =>
+    input.loadProviderUsage(args).pipe(
+      Effect.map((usage) => mcpToolResultJson({ usage })),
+      Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),
+    );
   const getUsage: ToolEntry = {
     requiredCapability: "usage:read",
     definition: {
       name: "synara_get_usage",
       description:
-        "Read current provider account quota for your own provider. Actionable remaining percentages appear only for fresh authoritative quota windows; unavailable, stale, token, and spend data are never treated as remaining quota.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        "Read cached quota for every configured provider account, or filter by provider and instanceId. This does not refresh providers: missing, stale, disabled, and unsupported accounts remain explicit. Only fresh authoritative quota windows have actionable remaining percentages; token and spend lines are informational.",
+      inputSchema: PROVIDER_ACCOUNT_USAGE_INPUT_SCHEMA,
       annotations: { title: "Get provider usage", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (_args, context) =>
-      input.loadProviderUsage(context.callerProvider, context.callerThreadId).pipe(
-        Effect.map((results) =>
-          mcpToolResultJson({
-            usage:
-              results[0] ??
-              summarizeProviderUsageForAgent({
-                provider: context.callerProvider,
-                enabled: true,
-                snapshot: null,
-              }),
-          }),
-        ),
-        Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),
-      ),
+    handler,
   };
 
   const listUsage: ToolEntry = {
@@ -51,15 +41,11 @@ export function makeAgentGatewayUsageTools(
     definition: {
       name: "synara_list_provider_usage",
       description:
-        "List current account-quota snapshots for enabled providers. Each provider and quota window carries provenance, freshness, and explicit unavailable states. Informational token or spend lines are not account quota.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        "Alias for synara_get_usage: list cached quota for every configured account, optionally filtered by provider and instanceId. Each account retains its identity, freshness, and explicit unavailable state.",
+      inputSchema: PROVIDER_ACCOUNT_USAGE_INPUT_SCHEMA,
       annotations: { title: "List provider usage", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: () =>
-      input.loadProviderUsage().pipe(
-        Effect.map((usage) => mcpToolResultJson({ usage })),
-        Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),
-      ),
+    handler,
   };
 
   return [getUsage, listUsage];

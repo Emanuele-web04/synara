@@ -30,19 +30,29 @@ describe("summarizeProviderUsageForAgent", () => {
       checkedAtMs: NOW_MS,
       snapshot: snapshot({
         planName: "Team for alice@example.com",
-        detail: "alice@example.com and bob@example.com",
+        detail: "alice@example.com and bob@example.com and álïçé@exämple.com",
+        source: "Usage for alice@example.com",
+        limits: [{ window: "Weekly bob@example.com", usedPercent: 40 }],
+        resetCredits: {
+          accountId: "alice@example.com",
+          availableCount: 1,
+          credits: [
+            { id: "credit-1", title: "bob@example.com", description: "For alice@example.com" },
+          ],
+        },
         usageLines: [
           { label: "Account", value: "Alice" },
           { label: "alice@example.com", value: "10 tokens" },
           { label: "Tokens", value: "20", subtitle: "bob@example.com" },
-          { label: "24h", value: "10K tokens" },
+          { label: "24h", value: "10K tokens", source: "alice@example.com" },
         ],
       }),
     });
     expect(JSON.stringify(result)).not.toContain("alice@example.com");
     expect(JSON.stringify(result)).not.toContain("bob@example.com");
+    expect(JSON.stringify(result)).not.toContain("álïçé@exämple.com");
     expect(result.snapshot?.usageLines).toHaveLength(1);
-    expect(result.snapshot?.detail).toBe("[account] and [account]");
+    expect(result.snapshot?.detail).toBe("[account] and [account] and [account]");
   });
 
   it("keeps quota windows separate and derives remaining percent with provenance", () => {
@@ -155,6 +165,28 @@ describe("summarizeProviderUsageForAgent", () => {
 
     expect(result.availability).toBe("unavailable");
     expect(result.unavailableReason).toBe("stale");
+    expect(result.quotaWindows).toEqual([]);
+  });
+
+  it.each([
+    [{ status: "needs-auth" as const, stale: true }, "needs-auth"],
+    [
+      {
+        status: "error" as const,
+        updatedAt: new Date(NOW_MS - AGENT_PROVIDER_USAGE_MAX_AGE_MS - 1).toISOString(),
+      },
+      "provider-error",
+    ],
+  ])("preserves stale freshness for unavailable snapshot %j", (overrides, reason) => {
+    const result = summarizeProviderUsageForAgent({
+      provider: "codex",
+      enabled: true,
+      snapshot: snapshot(overrides),
+      checkedAtMs: NOW_MS,
+    });
+
+    expect(result.unavailableReason).toBe(reason);
+    expect(result.freshness.stale).toBe(true);
     expect(result.quotaWindows).toEqual([]);
   });
 
