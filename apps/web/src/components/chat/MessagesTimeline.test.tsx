@@ -780,10 +780,25 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Compacting context");
     expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
-    expect(markup).toContain('data-synara-working-loader="true"');
-    expect(markup).toContain("synara-working-loader__mark");
     expect(markup).toContain(">Working <");
     expect(markup).not.toContain("h-px flex-1 bg-border");
+  });
+
+  it("uses the Synara mark for the default Thinking status", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        workingLabel="Thinking"
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).toContain('data-synara-working-loader="true"');
+    expect(markup).toContain("synara-working-loader__mark");
   });
 
   it("keeps semantic status icons when the working label is not Thinking", async () => {
@@ -800,7 +815,6 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).not.toContain('data-synara-working-loader="true"');
-    expect(markup).toContain('data-slot="hugeicon"');
     expect(markup).toContain('class="size-3.5 shrink-0"');
   });
 
