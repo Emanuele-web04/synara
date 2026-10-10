@@ -92,6 +92,7 @@ import {
   claudeCacheForModel,
 } from "../claudeCacheObservation.ts";
 import { compareSemverVersions } from "../providerMaintenance.ts";
+import { isImageGenerationToolName } from "../imageGenerationTool.ts";
 import { redactSensitiveJsonFields } from "../../sensitiveKeys.ts";
 import {
   Cause,
@@ -1183,6 +1184,14 @@ function hasActiveClaudeCompactionWork(context: ClaudeSessionContext): boolean {
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.toLowerCase();
+  // Claude SDK qualifies MCP tools as mcp__<server>__<tool>. Match the exact
+  // terminal tool name before server names and broad edit/image checks interfere.
+  const mcpSeparator = toolName.startsWith("mcp__") ? toolName.indexOf("__", "mcp__".length) : -1;
+  const nativeToolName =
+    mcpSeparator > "mcp__".length ? toolName.slice(mcpSeparator + 2) : toolName;
+  if (isImageGenerationToolName(nativeToolName)) {
+    return "image_generation";
+  }
   if (
     normalized === "todowrite" ||
     normalized.includes("todo") ||
@@ -1354,6 +1363,8 @@ function titleForTool(itemType: CanonicalItemType): string {
       return "Web search";
     case "image_view":
       return "Image view";
+    case "image_generation":
+      return "Image generation";
     case "dynamic_tool_call":
       return "Tool call";
     default:

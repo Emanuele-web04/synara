@@ -2068,6 +2068,119 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
+  it.effect("classifies exact image generation tools while preserving other tool kinds", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Exercise image tool classification",
+        attachments: [],
+      });
+      const cases = [
+        ["generate_image", "image_generation"],
+        ["image_gen", "image_generation"],
+        ["image_edit", "image_generation"],
+        ["mcp__visuals__generate_image", "image_generation"],
+        ["mcp__agent_image__image_edit", "image_generation"],
+        ["mcp__image_gen__view_image", "mcp_tool_call"],
+        ["mcp__visuals__render__generate_image", "mcp_tool_call"],
+        ["view_image", "image_view"],
+        ["generate_image_thumbnail", "image_view"],
+        ["Edit", "file_change"],
+        ["Bash", "command_execution"],
+      ] as const;
+      const input = { prompt: "Generate an image", path: "/tmp/example.png" };
+      for (const [index, [name]] of cases.entries()) {
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-image-kinds",
+          uuid: `stream-image-kind-${index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_start",
+            index,
+            content_block: { type: "tool_use", id: `image-kind-${index}`, name, input },
+          },
+        } as unknown as SDKMessage);
+      }
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-image-kinds",
+        uuid: "assistant-image-kinds",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-image-kinds",
+          content: cases.map(([name], index) => ({
+            type: "tool_use",
+            id: `image-kind-${index}`,
+            name,
+            input,
+          })),
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-image-kinds",
+        uuid: "user-image-kinds",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: cases.map(([name], index) => ({
+            type: "tool_result",
+            tool_use_id: `image-kind-${index}`,
+            content: name === "image_edit" ? "Image edit failed" : "Tool finished",
+            is_error: name === "image_edit",
+          })),
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-image-kinds",
+        uuid: "result-image-kinds",
+      } as unknown as SDKMessage);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      for (const [index, [name, itemType]] of cases.entries()) {
+        const toolEvents = events.filter(
+          (event) =>
+            (event.type === "item.started" || event.type === "item.completed") &&
+            event.itemId === `image-kind-${index}`,
+        );
+        assert.lengthOf(toolEvents, 2, name);
+        for (const event of toolEvents) {
+          if (event.type !== "item.started" && event.type !== "item.completed") {
+            assert.fail("expected a tool lifecycle event");
+            continue;
+          }
+          assert.equal(event.payload.itemType, itemType, name);
+          assert.deepInclude(event.payload.data, { toolName: name, input });
+          if (itemType === "image_generation") {
+            assert.equal(event.payload.title, "Image generation");
+          }
+          if (event.type === "item.completed") {
+            assert.equal(event.payload.status, name === "image_edit" ? "failed" : "completed");
+          }
+        }
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("maps Claude stream/runtime messages to canonical provider runtime events", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -7821,9 +7934,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect(
-    "keeps later command prompts supervised after always allowing a tool for the session",
-    () => {
+  it.effect.each(["mcp__docs__search", "image_edit", "mcp__visuals__generate_image"])(
+    "keeps later command prompts supervised after always allowing %s for the session",
+    (toolName) => {
       const harness = makeHarness();
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
@@ -7845,13 +7958,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         const toolSuggestions: PermissionUpdate[] = [
           {
             type: "addRules",
-            rules: [{ toolName: "mcp__docs__search" }],
+            rules: [{ toolName }],
             behavior: "allow",
             destination: "session",
           },
         ];
         const toolPermissionPromise = canUseTool(
-          "mcp__docs__search",
+          toolName,
           { query: "release notes" },
           {
             signal: new AbortController().signal,

@@ -731,7 +731,7 @@ describe("Antigravity CLI integration helpers", () => {
             Stream.filter(
               (event) => event.type === "item.started" || event.type === "item.completed",
             ),
-            Stream.take(4),
+            Stream.take(6),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -757,6 +757,8 @@ describe("Antigravity CLI integration helpers", () => {
                 'post-tool\t{"stepIdx":7,"error":"super-secret-error"}',
                 'pre-tool\t{"stepIdx":8,"toolCall":{"name":"write_to_file","args":{"content":"super-secret-content"}}}',
                 'post-tool\t{"stepIdx":8,"error":""}',
+                'pre-tool\t{"stepIdx":9,"toolCall":{"name":"generate_image","args":{"Prompt":"Draw a diagram","ImageName":"diagram"}}}',
+                'post-tool\t{"stepIdx":9,"error":"Image generation failed"}',
                 "",
               ].join("\n"),
             ),
@@ -765,8 +767,10 @@ describe("Antigravity CLI integration helpers", () => {
           const events = Array.from(
             yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events).toHaveLength(4);
+          expect(events).toHaveLength(6);
           expect(events.map((event) => event.type)).toEqual([
+            "item.started",
+            "item.completed",
             "item.started",
             "item.completed",
             "item.started",
@@ -821,6 +825,31 @@ describe("Antigravity CLI integration helpers", () => {
                 input: { content: "super-secret-content" },
                 rawInput: { content: "super-secret-content" },
                 rawOutput: "",
+              },
+            },
+            {
+              itemType: "image_generation",
+              status: "inProgress",
+              title: "generate_image",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-2`,
+                toolName: "generate_image",
+                arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                input: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawInput: { Prompt: "Draw a diagram", ImageName: "diagram" },
+              },
+            },
+            {
+              itemType: "image_generation",
+              status: "failed",
+              title: "generate_image",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-2`,
+                toolName: "generate_image",
+                arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                input: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawInput: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawOutput: "Image generation failed",
               },
             },
           ]);
@@ -1908,7 +1937,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
                 event.type === "content.delta" ||
                 event.type === "item.completed",
             ),
-            Stream.take(8),
+            Stream.take(10),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -1952,7 +1981,13 @@ describe("Antigravity turn settle on cancel (#465)", () => {
                   step_index: 1,
                   type: "PLANNER_RESPONSE",
                   thinking: "Analyzing problem requirements...",
-                  tool_calls: [{ name: "run_command", args: { CommandLine: "echo test" } }],
+                  tool_calls: [
+                    { name: "run_command", args: { CommandLine: "echo test" } },
+                    {
+                      name: "generate_image",
+                      args: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                    },
+                  ],
                 }),
                 JSON.stringify({
                   step_index: 2,
@@ -1967,7 +2002,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           const events = Array.from(
             yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events).toHaveLength(8);
+          expect(events).toHaveLength(10);
           // Reasoning item: started -> delta -> completed
           expect(events[0]?.payload).toMatchObject({
             itemType: "reasoning",
@@ -1986,7 +2021,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           });
           // Tool call from the transcript body surfaces as a tool lifecycle
           // item even though no pre/post-tool hook event fired: reasoning ->
-          // run_command -> assistant. (#antigravity tool calls are displayed)
+          // run_command -> generate_image -> assistant.
           expect(events[3]?.payload).toMatchObject({
             itemType: "command_execution",
             status: "inProgress",
@@ -2007,17 +2042,35 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               arguments: { CommandLine: "echo test" },
             },
           });
-          // Assistant message: started -> delta -> completed
           expect(events[5]?.payload).toMatchObject({
+            itemType: "image_generation",
+            status: "inProgress",
+            title: "generate_image",
+            data: {
+              toolName: "generate_image",
+              arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+            },
+          });
+          expect(events[6]?.payload).toMatchObject({
+            itemType: "image_generation",
+            status: "completed",
+            title: "generate_image",
+            data: {
+              toolName: "generate_image",
+              arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+            },
+          });
+          // Assistant message: started -> delta -> completed
+          expect(events[7]?.payload).toMatchObject({
             itemType: "assistant_message",
             status: "inProgress",
             title: "Assistant",
           });
-          expect(events[6]?.payload).toMatchObject({
+          expect(events[8]?.payload).toMatchObject({
             streamKind: "assistant_text",
             delta: "Here is the solution.",
           });
-          expect(events[7]?.payload).toMatchObject({
+          expect(events[9]?.payload).toMatchObject({
             itemType: "assistant_message",
             status: "completed",
             title: "Assistant",
