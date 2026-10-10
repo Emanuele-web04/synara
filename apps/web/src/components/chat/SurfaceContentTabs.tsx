@@ -2,8 +2,8 @@
 // Purpose: Browser-style content tabs shared by the open-thread strip in the chat header
 //          and the right dock's pane strip. Tabs are comfortable while few are open, shrink
 //          together as more open, and scroll behind an edge fade once they reach their
-//          minimum width. Dragging a tab reorders it; holding it near an edge scrolls the
-//          hidden tabs in.
+//          minimum width. Tabs scrolled out of view are listed in an overflow menu. Dragging
+//          a tab reorders it; holding it near an edge scrolls the hidden tabs in.
 // Layer: Chat surface UI primitive
 // Depends on: the shared SurfaceTabStrip + SurfaceTabChip and dnd-kit's sortable preset.
 
@@ -16,22 +16,32 @@ import {
   type CSSProperties,
   type PointerEvent,
   type ReactNode,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 
-import { DragHandleIcon } from "~/lib/icons";
+import { ChevronDownIcon, DragHandleIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-import { SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
+import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
+import {
+  DOCK_HEADER_ICON_BUTTON_CLASS,
+  SurfaceTabChip,
+  SurfaceTabStrip,
+} from "./chatHeaderControls";
+import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
+import { findHiddenSurfaceTabIndexes } from "./surfaceContentTabs.logic";
 
 // Tab width in `em` of the chip's own UI font, so it scales with the font size chosen in
 // Settings: every tab starts at a comfortable basis and shrinks evenly with the rest down
-// to a floor that still fits the icon, a few characters, and the close button. Past the
-// floor the strip scrolls instead of crushing the tabs further. The floor never exceeds
-// the strip itself, so a strip squeezed by a narrow window still shows one whole tab.
+// to a floor that still fits the icon, a readable title (two short words), and the close
+// button. Past the floor the strip scrolls instead of crushing the tabs further, and the
+// overflow menu lists what scrolled away. The floor never exceeds the strip itself, so a
+// strip squeezed by a narrow window still shows one whole tab.
 // Width also supplies the strip's intrinsic size; the basis still drives tab shrinking.
-const CONTENT_TAB_SIZE_CLASS_NAME = "w-[18em] min-w-[min(9em,100%)] grow-0 shrink basis-[18em]";
+const CONTENT_TAB_SIZE_CLASS_NAME = "w-[18em] min-w-[min(12em,100%)] grow-0 shrink basis-[18em]";
 const CONTENT_TAB_FROZEN_SIZE_CLASS_NAME =
   "w-[var(--surface-tab-frozen-width)] min-w-0 grow-0 shrink-0 basis-[var(--surface-tab-frozen-width)]";
 // The strip sits on the rail's shell band, above the card it belongs to (the chat, or the
@@ -130,6 +140,46 @@ export function SurfaceContentTabs<Key extends string>(props: {
   // pointer leaves the strip (like browser tabs), so the next X lands under the cursor
   // instead of the widened neighbour's title.
   const [frozenTabWidthPx, setFrozenTabWidthPx] = useState<number | null>(null);
+  // Indexes of tabs scrolled (even partly) out of the strip, listed in the overflow menu.
+  const [hiddenTabIndexes, setHiddenTabIndexes] = useState<readonly number[]>([]);
+  const tabCount = tabs.length;
+  useLayoutEffect(() => {
+    const strip = navRef.current?.querySelector<HTMLElement>(".surface-content-tabs");
+    if (!strip) return;
+    let frame: number | null = null;
+    const measure = () => {
+      frame = null;
+      const stripRect = strip.getBoundingClientRect();
+      const next = findHiddenSurfaceTabIndexes(
+        { left: stripRect.left, right: stripRect.right },
+        Array.from(strip.querySelectorAll<HTMLElement>("[data-surface-tab]"), (tab) => {
+          const rect = tab.getBoundingClientRect();
+          return { left: rect.left, right: rect.right };
+        }),
+      );
+      setHiddenTabIndexes((previous) =>
+        previous.length === next.length && previous.every((index, i) => index === next[i])
+          ? previous
+          : next,
+      );
+    };
+    const schedule = () => {
+      if (frame === null) frame = window.requestAnimationFrame(measure);
+    };
+    schedule();
+    const resizeObserver = new ResizeObserver(schedule);
+    resizeObserver.observe(strip);
+    strip.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      strip.removeEventListener("scroll", schedule);
+    };
+  }, [tabCount]);
+  const hiddenTabs = hiddenTabIndexes.flatMap((index) => {
+    const tab = tabs[index];
+    return tab ? [tab] : [];
+  });
 
   const freezeTabWidths = () => {
     const nav = navRef.current;
@@ -217,6 +267,38 @@ export function SurfaceContentTabs<Key extends string>(props: {
       ) : (
         strip
       )}
+      {hiddenTabs.length > 0 ? (
+        <Menu modal={false}>
+          <MenuTrigger
+            render={
+              <Button
+                variant="chrome"
+                size="icon-xs"
+                aria-label={`${hiddenTabs.length} more ${hiddenTabs.length === 1 ? "tab" : "tabs"}`}
+                title="Show hidden tabs"
+                className={cn(DOCK_HEADER_ICON_BUTTON_CLASS, "ms-0.5 self-center")}
+              />
+            }
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="end" side="bottom" className="w-64 min-w-48">
+            {hiddenTabs.map((tab) => (
+              <MenuItem
+                key={tab.key}
+                disabled={!tab.onSelect}
+                onClick={() => tab.onSelect?.()}
+                data-active={tab.key === activeKey ? "" : undefined}
+              >
+                <span className="flex size-3.5 shrink-0 items-center justify-center">
+                  {tab.icon}
+                </span>
+                <span className="min-w-0 truncate">{tab.title}</span>
+              </MenuItem>
+            ))}
+          </ComposerPickerMenuPopup>
+        </Menu>
+      ) : null}
     </nav>
   );
 }
