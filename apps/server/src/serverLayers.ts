@@ -33,6 +33,7 @@ import { DeviceServiceLive } from "./device/Layers/DeviceService";
 import type { DeviceService } from "./device/Services/DeviceService";
 import { ComputerServiceLive } from "./computer/Layers/ComputerService";
 import { KeybindingsLive } from "./keybindings";
+import { MindServiceLive } from "./mind/Layers/MindService";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
 import { TerminalLayerLive } from "./terminal/runtimeLayer";
@@ -63,6 +64,7 @@ import { TodoServiceLive } from "./todo/Layers/TodoService";
 import { ProjectAgentRepositoryLive } from "./persistence/Layers/ProjectAgentRepository";
 import { ProjectAgentReactorLive } from "./projectAgent/Layers/ProjectAgentReactor";
 import { ProjectAgentServiceLive } from "./projectAgent/Layers/ProjectAgentService";
+import { MindRepositoryLive } from "./persistence/Layers/MindRepository";
 import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
@@ -212,6 +214,8 @@ export function makeServerRuntimeServicesLayer(
     serverAuthLayer,
   );
   const todoServiceLayer = TodoServiceLive.pipe(Layer.provideMerge(TodoRepositoryLive));
+  // Mind domain service over its repository; the SQL client is provided upstream.
+  const mindServiceLayer = MindServiceLive.pipe(Layer.provideMerge(MindRepositoryLive));
   const automationSchedulerLayer = AutomationSchedulerLive.pipe(
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(AutomationRepositoryLive),
@@ -250,7 +254,8 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ManagedAttachmentRepositoryLive),
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
-    Layer.provideMerge(projectAgentServiceLayer),
+    // Share both project coordination and project memory with the gateway.
+    Layer.provideMerge(Layer.mergeAll(projectAgentServiceLayer, mindServiceLayer)),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
@@ -298,6 +303,7 @@ export function makeServerRuntimeServicesLayer(
     ProjectAgentRepositoryLive,
     projectAgentServiceLayer,
     projectAgentReactorLayer,
+    mindServiceLayer,
     managedAttachmentCleanupLayer,
     AutomationRepositoryLive,
     AgentGatewayOperationRepositoryLive,

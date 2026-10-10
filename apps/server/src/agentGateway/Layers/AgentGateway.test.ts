@@ -40,6 +40,7 @@ import { AutomationService } from "../../automation/Services/AutomationService.t
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
+import { MindServiceLive } from "../../mind/Layers/MindService.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -48,6 +49,7 @@ import {
   ProjectionThreadRepository,
 } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { MindRepositoryLive } from "../../persistence/Layers/MindRepository.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEngineLive } from "../../orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../../orchestration/Layers/ProjectionPipeline.ts";
@@ -1339,7 +1341,15 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
-    Layer.provide(projectAgentLayer),
+    Layer.provide(
+      Layer.mergeAll(
+        projectAgentLayer,
+        MindServiceLive.pipe(
+          Layer.provideMerge(MindRepositoryLive),
+          Layer.provideMerge(SqlitePersistenceMemory),
+        ),
+      ),
+    ),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),

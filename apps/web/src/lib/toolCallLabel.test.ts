@@ -98,6 +98,105 @@ describe("deriveSynaraMcpToolTitle", () => {
     ).toBe("Snapshot browser page");
   });
 
+  it("has intentional running and completed copy for every Synara gateway action", () => {
+    const cases = [
+      ["synara_context", "Synara is checking its context", "Synara checked its context"],
+      [
+        "synara_capabilities",
+        "Synara is checking available agents",
+        "Synara checked available agents",
+      ],
+      ["synara_list_projects", "Synara is listing projects", "Synara listed projects"],
+      ["synara_list_threads", "Synara is listing threads", "Synara listed threads"],
+      ["synara_read_thread", "Synara is reading a thread", "Synara read a thread"],
+      [
+        "synara_read_thread_activity",
+        "Synara is reading thread activity",
+        "Synara read thread activity",
+      ],
+      ["synara_read_thread_events", "Synara is reading thread events", "Synara read thread events"],
+      [
+        "synara_read_thread_runtime_events",
+        "Synara is reading thread runtime events",
+        "Synara read thread runtime events",
+      ],
+      ["synara_diagnose_thread", "Synara is diagnosing a thread", "Synara diagnosed a thread"],
+      ["synara_create_thread", "Synara is creating a thread", "Synara created a thread"],
+      ["synara_create_threads", "Synara is creating threads", "Synara created threads"],
+      [
+        "synara_wait_for_threads",
+        "Synara is waiting for threads",
+        "Synara finished waiting for threads",
+      ],
+      ["synara_send_message", "Synara is sending a message", "Synara sent a message"],
+      ["synara_interrupt_thread", "Synara is interrupting a thread", "Synara interrupted a thread"],
+      ["synara_set_thread_title", "Synara is renaming a thread", "Synara renamed a thread"],
+      ["synara_set_thread_archived", "Synara is updating a thread", "Synara updated a thread"],
+      [
+        "synara_create_automation",
+        "Synara is creating an automation",
+        "Synara created an automation",
+      ],
+      ["synara_list_automations", "Synara is listing automations", "Synara listed automations"],
+      [
+        "synara_cancel_automation",
+        "Synara is stopping an automation",
+        "Synara stopped an automation",
+      ],
+      ["synara_overview", "Synara is gathering an overview", "Synara gathered an overview"],
+      [
+        "synara_list_allowed_projects",
+        "Synara is listing allowed projects",
+        "Synara listed allowed projects",
+      ],
+      ["synara_create_task", "Synara is creating a task", "Synara created a task"],
+      [
+        "synara_wait_for_task",
+        "Synara is waiting for a task",
+        "Synara finished waiting for a task",
+      ],
+      ["synara_read_task", "Synara is reading a task", "Synara read a task"],
+      ["synara_remember", "Synara is saving to Mind", "Synara saved to Mind"],
+      ["synara_recall_memories", "Synara is recalling from Mind", "Synara recalled from Mind"],
+      ["synara_confirm_memory", "Synara is confirming a memory", "Synara confirmed a memory"],
+      ["synara_forget_memory", "Synara is forgetting a memory", "Synara forgot a memory"],
+      ["synara_memory_status", "Synara is checking Mind", "Synara checked Mind"],
+    ] as const;
+
+    for (const [toolName, running, completed] of cases) {
+      expect(deriveSynaraMcpToolTitle({ toolName, status: "running" })).toBe(running);
+      expect(deriveSynaraMcpToolTitle({ toolName, status: "completed" })).toBe(completed);
+    }
+
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "synara_create_threads",
+        status: "failed",
+      }),
+    ).toBe("Synara couldn't create threads");
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "synara_create_thread",
+        status: "cancelled",
+      }),
+    ).toBe("Synara stopped creating a thread");
+  });
+
+  it("turns provider-specific create-thread identifiers into activity sentences", () => {
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "Synara__synara_create_thread",
+        status: "running",
+      }),
+    ).toBe("Synara is creating a thread");
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "mcp__synara__synara_create_thread",
+        status: "completed",
+      }),
+    ).toBe("Synara created a thread");
+  });
+
   it("recognizes bare and already-humanized Synara tool names", () => {
     expect(deriveSynaraMcpToolTitle({ toolName: "synara_send_message", status: "running" })).toBe(
       "Synara is sending a message",
