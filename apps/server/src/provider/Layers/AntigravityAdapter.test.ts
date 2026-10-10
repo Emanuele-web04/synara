@@ -9,7 +9,9 @@ import { PassThrough } from "node:stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
 import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import * as processTeardown from "../supervisedProcessTeardown";
 
 import { ServerConfig } from "../../config";
 import { computerToolInstructions } from "../../agentGateway/computerGuidance";
@@ -24,6 +26,8 @@ import {
   buildAntigravityCaptureCommand,
   buildAntigravityHookConfig,
   buildAntigravityTurnProcessEnvironment,
+  createBoundedProcessOutput,
+  ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES,
   buildAntigravityTurnPrompt,
   detectAntigravityBackgroundTaskStart,
   ensureCapturePlugin,
@@ -193,6 +197,42 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
 });
 
 describe("Antigravity CLI integration helpers", () => {
+  it("caps combined stdout and stderr diagnostics by UTF-8 byte length", () => {
+    const output = createBoundedProcessOutput(16);
+
+    output.append("stdout", "😀".repeat(4));
+    output.append("stderr", "x".repeat(16));
+
+    const snapshot = output.snapshot();
+    expect(output.byteLength).toBeLessThanOrEqual(16);
+    expect(
+      Buffer.byteLength(snapshot.stdout, "utf8") + Buffer.byteLength(snapshot.stderr, "utf8"),
+    ).toBeLessThanOrEqual(16);
+    expect(snapshot.stdout).toBe("");
+    expect(snapshot.stderr).toBe("x".repeat(16));
+  });
+
+  it.each([16, ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES])(
+    "retains valid UTF-8 within the %i-byte diagnostic budget when a chunk crosses it",
+    (budget) => {
+      const output = createBoundedProcessOutput(budget);
+      output.append("stdout", "€".repeat(Math.ceil(budget / 3) + 1));
+      expect(output.snapshot()).toEqual({
+        stdout: "€".repeat(Math.floor(budget / 3)),
+        stderr: "",
+      });
+      expect(output.byteLength).toBeLessThanOrEqual(budget);
+    },
+  );
+
+  it("evicts complete UTF-8 characters when the combined pipe budget cuts an older chunk", () => {
+    const output = createBoundedProcessOutput(16);
+    output.append("stdout", "😀".repeat(4));
+    output.append("stderr", "x");
+    expect(output.snapshot()).toEqual({ stdout: "😀".repeat(3), stderr: "x" });
+    expect(output.byteLength).toBe(13);
+  });
+
   it("rotates the gateway lease per print turn and rejects a retained prior bootstrap", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-turn-lease-"));
     const liveTokens = new Set<string>();
@@ -1354,6 +1394,74 @@ describe("Antigravity CLI integration helpers", () => {
     ).rejects.toThrow("Antigravity helper timed out after 50ms");
   });
 
+  it("waits for timeout teardown proof even when the root closes first", async () => {
+    let observed!: (child: ChildProcess) => void;
+    const started = new Promise<ChildProcess>((resolve) => {
+      observed = resolve;
+    });
+    let finishTeardown!: () => void;
+    const teardown = new Promise<processTeardown.SupervisedProcessTeardownResult>((resolve) => {
+      finishTeardown = () => resolve({ escalated: false, signalErrors: [] });
+    });
+    const spy = vi
+      .spyOn(processTeardown, "teardownChildProcessTree")
+      .mockImplementation((child) => {
+        observed(child as ChildProcess);
+        return teardown;
+      });
+    let child: ChildProcess | undefined;
+    let settled = false;
+    const operation = runAntigravityHelperProcess(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        timeoutMs: 30,
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    const rejection = expect(operation).rejects.toThrow("Antigravity helper timed out after 30ms");
+    try {
+      child = await started;
+      const closed = new Promise<void>((resolve) => child!.once("close", () => resolve()));
+      child.kill("SIGKILL");
+      await closed;
+      expect(settled).toBe(false);
+      finishTeardown();
+      await rejection;
+    } finally {
+      finishTeardown();
+      child?.kill("SIGKILL");
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["resolved signal error", "rejected teardown"])(
+    "reports unproven timeout cleanup after %s",
+    async (failure) => {
+      const spy = vi
+        .spyOn(processTeardown, "teardownChildProcessTree")
+        .mockImplementation(async (child) => {
+          const owned = child as ChildProcess;
+          const closed = new Promise<void>((resolve) => owned.once("close", () => resolve()));
+          owned.kill("SIGKILL");
+          await closed;
+          const cause = new Error("helper signal failed");
+          if (failure === "rejected teardown") throw cause;
+          return { escalated: true, signalErrors: [cause] };
+        });
+      try {
+        await expect(
+          runAntigravityHelperProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+            timeoutMs: 30,
+          }),
+        ).rejects.toThrow("teardown was unproven: helper signal failed");
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
   it("reports expected versus minted gateway capabilities when the turn bootstrap is unavailable", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-bootstrap-detail-"));
     const leasedCapabilities: Array<ReadonlyArray<string> | undefined> = [];
@@ -1715,6 +1823,26 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     { name: "exact timeout", expected: "completed" },
     { name: "stderr timeout", expected: "completed", stderrOnly: true },
     { name: "unrelated stderr", expected: "failed", stderr: "quota exceeded" },
+    {
+      name: "evicted earlier stderr error",
+      expected: "failed",
+      stderrChunks: [
+        "quota exceeded\n",
+        " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES),
+        "Error: timeout waiting for response\n",
+      ],
+    },
+    {
+      name: "evicted stderr error before whitespace",
+      expected: "failed",
+      stderrChunks: ["quota exceeded\n", " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES)],
+    },
+    {
+      name: "split stderr timeout",
+      expected: "completed",
+      stderrOnly: true,
+      stderrChunks: ["Error: timeout waiting ", "for response\n"],
+    },
     { name: "unrelated stream error", expected: "failed", streamError: "quota exceeded" },
     { name: "earlier stream error", expected: "failed", earlierStreamError: true },
     { name: "earlier terminal error", expected: "failed", earlierResultError: true },
@@ -1808,10 +1936,11 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               ...(scenario.malformed ? ['{"event":invalid}'] : []),
             ].join("\n"),
           );
-          children[0]!.stderr!.emit(
-            "data",
+          for (const chunk of scenario.stderrChunks ?? [
             `${scenario.stderr ?? "Error: timeout waiting for response"}\n`,
-          );
+          ]) {
+            children[0]!.stderr!.emit("data", chunk);
+          }
           if (scenario.background) {
             yield* Effect.promise(() =>
               fs.writeFile(
