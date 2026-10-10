@@ -67,6 +67,10 @@ Servers that omit that confirmation trigger an authoritative snapshot fallback a
 Existing user-stop/failure queue pause markers remain in the composer draft and survive cache
 verification until their ordinary explicit Resume behavior clears them.
 
+Cached running or streaming detail does not count as observed live work. If confirmation shows
+that the turn already finished, it opens folded without replaying a completion animation. Once
+a running turn is authoritative, its later live completion keeps the existing disclosure motion.
+
 A genuine server process identity change discards old display detail and resume cursors atomically,
 and keeps actions blocked until the new process supplies a snapshot. Old namespace records are
 never hydrated for the new process and remain subject to the global storage limits.
