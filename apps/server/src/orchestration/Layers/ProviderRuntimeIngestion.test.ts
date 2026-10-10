@@ -8362,9 +8362,9 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(runner.sourceThreadId).toBe("subagent:thread-1:codex-survey");
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
-    expect(
-      readModel.threads.some((thread) => thread.id === "subagent:thread-1:codex-root"),
-    ).toBe(false);
+    expect(readModel.threads.some((thread) => thread.id === "subagent:thread-1:codex-root")).toBe(
+      false,
+    );
   });
 
   it("publishes the native subagent cap notice once across distinct overflowing events", async () => {

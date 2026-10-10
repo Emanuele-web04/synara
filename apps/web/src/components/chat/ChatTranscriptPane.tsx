@@ -43,7 +43,10 @@ import {
   SubagentRunContext,
   type SubagentRunContextValue,
 } from "./subagentRunContext";
-import { CHAT_COLUMN_FRAME_CLASS_NAME, CHAT_COLUMN_GUTTER_CLASS_NAME } from "./composerPickerStyles";
+import {
+  CHAT_COLUMN_FRAME_CLASS_NAME,
+  CHAT_COLUMN_GUTTER_CLASS_NAME,
+} from "./composerPickerStyles";
 import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
 
 interface ChatTranscriptPaneProps {
@@ -386,100 +389,100 @@ export function ChatTranscriptPane({
           inert={agentDetailOpen}
         >
           <SubagentRunContext.Provider value={subagentRunContextValue}>
-          <MessagesTimeline
-            key={activeThreadId}
-            subagentThread={subagentThread ?? null}
-            historyHeader={
-              importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
-                <ImportedHistoryButton history={importedHistory} />
-              ) : subagentThread ? (
-                <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
-              ) : undefined
-            }
-            hasMessages={hasMessages}
-            isWorking={isWorking}
-            {...(workingLabel ? { workingLabel } : {})}
-            worktreeSetup={worktreeSetup}
-            worktreeSetupPendingAction={worktreeSetupPendingAction ?? null}
-            {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
-            activeTurnId={activeTurnId ?? null}
-            activeTurnInProgress={activeTurnInProgress}
-            subagentsRunning={subagentsRunning === true}
-            collapseFinishedTurns={collapseFinishedTurns !== false}
-            activeTurnStartedAt={activeTurnStartedAt}
-            listRef={listRef}
-            {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}
-            {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
-            canPinMessage={canActOnMessage}
-            {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
-            {...(onForkFromMessage ? { onForkFromMessage } : {})}
-            {...(goalAchievements ? { goalAchievements } : {})}
-            {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
-            tailAnchorMessageId={tailAnchorMessageId ?? null}
-            {...(tailAnchorScrollInFlightRef ? { tailAnchorScrollInFlightRef } : {})}
-            {...(crossTaskOrigin ? { crossTaskOrigin } : {})}
-            {...(forkSource ? { forkSource } : {})}
-            isTemporaryThread={isTemporaryThread ?? false}
-            timelineEntries={visibleTimelineEntries}
-            {...(recoverableTurnId !== undefined ? { recoverableTurnId } : {})}
-            {...(turnRecoveryDisabled !== undefined ? { turnRecoveryDisabled } : {})}
-            {...(onContinueFailedTurn ? { onContinueFailedTurn } : {})}
-            {...(onChangeRecoveryModel ? { onChangeRecoveryModel } : {})}
-            hubWorkItemsByMessageId={hubWorkItemsByMessageId}
-            messageChangeSignal={messageChangeSignal ?? timelineEntries}
-            turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-            turnTimingByTurnId={turnTimingByTurnId}
-            conversationOnly={conversationOnly === true}
-            onOpenTurnDiff={onOpenTurnDiff}
-            onOpenThread={onOpenThread}
-            {...(onOpenAutomation ? { onOpenAutomation } : {})}
-            {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
-            {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
-            revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-            onRevertUserMessage={onRevertUserMessage}
-            {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
-            {...(onEditUserMessage ? { onEditUserMessage } : {})}
-            {...(onRespondToAsyncUserInput ? { onRespondToAsyncUserInput } : {})}
-            editableUserMessageId={editableUserMessageId ?? null}
-            isRevertingCheckpoint={isRevertingCheckpoint}
-            onImageExpand={onExpandTimelineImage}
-            followLiveOutput={followLiveOutput}
-            {...(animateTailAnchorSlide !== undefined ? { animateTailAnchorSlide } : {})}
-            onIsAtEndChange={onIsAtEndChange}
-            {...(onNavigate ? { onNavigate } : {})}
-            onTrailHighlightsChange={activeTrailStore.set}
-            onMessagesScroll={onMessagesScroll}
-            onMessagesClickCapture={onMessagesClickCapture}
-            onMessagesMouseUp={onMessagesMouseUp}
-            onMessagesWheel={onMessagesWheel}
-            onMessagesPointerDown={onMessagesPointerDown}
-            onMessagesPointerUp={onMessagesPointerUp}
-            onMessagesPointerCancel={onMessagesPointerCancel}
-            onMessagesTouchStart={onMessagesTouchStart}
-            onMessagesTouchMove={onMessagesTouchMove}
-            onMessagesTouchEnd={onMessagesTouchEnd}
-            markdownCwd={markdownCwd}
-            resolvedTheme={resolvedTheme}
-            chatFontSizePx={chatFontSizePx}
-            timestampFormat={timestampFormat}
-            workspaceRoot={workspaceRoot}
-            {...(keybindings ? { keybindings } : {})}
-            {...(availableEditors ? { availableEditors } : {})}
-            contentInsetRightPx={contentInsetRightPx}
-            contentInsetBottomPx={contentInsetBottomPx}
-            contentInsetBottomClearancePx={contentInsetBottomClearancePx}
-            {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-            findHighlight={findHighlight}
-            emptyStateContent={
-              emptyStateContent === undefined ? (
-                <ChatEmptyStateHero projectName={emptyStateProjectName} />
-              ) : (
-                emptyStateContent
-              )
-            }
-            {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
-            {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
-          />
+            <MessagesTimeline
+              key={activeThreadId}
+              subagentThread={subagentThread ?? null}
+              historyHeader={
+                importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
+                  <ImportedHistoryButton history={importedHistory} />
+                ) : subagentThread ? (
+                  <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
+                ) : undefined
+              }
+              hasMessages={hasMessages}
+              isWorking={isWorking}
+              {...(workingLabel ? { workingLabel } : {})}
+              worktreeSetup={worktreeSetup}
+              worktreeSetupPendingAction={worktreeSetupPendingAction ?? null}
+              {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
+              activeTurnId={activeTurnId ?? null}
+              activeTurnInProgress={activeTurnInProgress}
+              subagentsRunning={subagentsRunning === true}
+              collapseFinishedTurns={collapseFinishedTurns !== false}
+              activeTurnStartedAt={activeTurnStartedAt}
+              listRef={listRef}
+              {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}
+              {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
+              canPinMessage={canActOnMessage}
+              {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
+              {...(onForkFromMessage ? { onForkFromMessage } : {})}
+              {...(goalAchievements ? { goalAchievements } : {})}
+              {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
+              tailAnchorMessageId={tailAnchorMessageId ?? null}
+              {...(tailAnchorScrollInFlightRef ? { tailAnchorScrollInFlightRef } : {})}
+              {...(crossTaskOrigin ? { crossTaskOrigin } : {})}
+              {...(forkSource ? { forkSource } : {})}
+              isTemporaryThread={isTemporaryThread ?? false}
+              timelineEntries={visibleTimelineEntries}
+              {...(recoverableTurnId !== undefined ? { recoverableTurnId } : {})}
+              {...(turnRecoveryDisabled !== undefined ? { turnRecoveryDisabled } : {})}
+              {...(onContinueFailedTurn ? { onContinueFailedTurn } : {})}
+              {...(onChangeRecoveryModel ? { onChangeRecoveryModel } : {})}
+              hubWorkItemsByMessageId={hubWorkItemsByMessageId}
+              messageChangeSignal={messageChangeSignal ?? timelineEntries}
+              turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+              turnTimingByTurnId={turnTimingByTurnId}
+              conversationOnly={conversationOnly === true}
+              onOpenTurnDiff={onOpenTurnDiff}
+              onOpenThread={onOpenThread}
+              {...(onOpenAutomation ? { onOpenAutomation } : {})}
+              {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+              {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
+              revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+              onRevertUserMessage={onRevertUserMessage}
+              {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
+              {...(onEditUserMessage ? { onEditUserMessage } : {})}
+              {...(onRespondToAsyncUserInput ? { onRespondToAsyncUserInput } : {})}
+              editableUserMessageId={editableUserMessageId ?? null}
+              isRevertingCheckpoint={isRevertingCheckpoint}
+              onImageExpand={onExpandTimelineImage}
+              followLiveOutput={followLiveOutput}
+              {...(animateTailAnchorSlide !== undefined ? { animateTailAnchorSlide } : {})}
+              onIsAtEndChange={onIsAtEndChange}
+              {...(onNavigate ? { onNavigate } : {})}
+              onTrailHighlightsChange={activeTrailStore.set}
+              onMessagesScroll={onMessagesScroll}
+              onMessagesClickCapture={onMessagesClickCapture}
+              onMessagesMouseUp={onMessagesMouseUp}
+              onMessagesWheel={onMessagesWheel}
+              onMessagesPointerDown={onMessagesPointerDown}
+              onMessagesPointerUp={onMessagesPointerUp}
+              onMessagesPointerCancel={onMessagesPointerCancel}
+              onMessagesTouchStart={onMessagesTouchStart}
+              onMessagesTouchMove={onMessagesTouchMove}
+              onMessagesTouchEnd={onMessagesTouchEnd}
+              markdownCwd={markdownCwd}
+              resolvedTheme={resolvedTheme}
+              chatFontSizePx={chatFontSizePx}
+              timestampFormat={timestampFormat}
+              workspaceRoot={workspaceRoot}
+              {...(keybindings ? { keybindings } : {})}
+              {...(availableEditors ? { availableEditors } : {})}
+              contentInsetRightPx={contentInsetRightPx}
+              contentInsetBottomPx={contentInsetBottomPx}
+              contentInsetBottomClearancePx={contentInsetBottomClearancePx}
+              {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+              findHighlight={findHighlight}
+              emptyStateContent={
+                emptyStateContent === undefined ? (
+                  <ChatEmptyStateHero projectName={emptyStateProjectName} />
+                ) : (
+                  emptyStateContent
+                )
+              }
+              {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
+              {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
+            />
           </SubagentRunContext.Provider>
         </div>
         {agentActivityDetail && onCloseAgentActivityDetail ? (
@@ -541,7 +544,9 @@ export function ChatTranscriptPane({
             )}
             style={scrollButtonFrameStyle}
           >
-            <div className={cn(CHAT_COLUMN_FRAME_CLASS_NAME, CHAT_COLUMN_GUTTER_CLASS_NAME, "flex")}>
+            <div
+              className={cn(CHAT_COLUMN_FRAME_CLASS_NAME, CHAT_COLUMN_GUTTER_CLASS_NAME, "flex")}
+            >
               <SubagentRunningChip
                 runningCount={runningSubagentRun.runningCount}
                 direction={runningCardPlacement === "below" ? "below" : "above"}

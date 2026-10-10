@@ -98,9 +98,7 @@ export function foldSubagentRunWorkEntries(
       // A resume starts another invocation in its launching turn. State-only
       // reports may arrive in later parent turns and still settle the last run.
       const runKey = runKeyForEntry(entry);
-      const knownRun = stateOnly
-        ? runs.get(runKeyBySubagentKey.get(key) ?? "")
-        : runs.get(runKey);
+      const knownRun = stateOnly ? runs.get(runKeyBySubagentKey.get(key) ?? "") : runs.get(runKey);
       if (knownRun?.subagentByKey.has(key)) {
         const previous = knownRun.subagentByKey.get(key);
         knownRun.subagentByKey.set(
@@ -118,7 +116,12 @@ export function foldSubagentRunWorkEntries(
       }
       let run = runs.get(runKey);
       if (!run) {
-        run = { anchorIndex: index, anchor: entry, subagentByKey: new Map(), memberByKey: new Map() };
+        run = {
+          anchorIndex: index,
+          anchor: entry,
+          subagentByKey: new Map(),
+          memberByKey: new Map(),
+        };
         runs.set(runKey, run);
       }
       run.subagentByKey.set(key, subagent);
@@ -206,7 +209,14 @@ export function isSubagentRunWorkEntry(
 
 // ── Card model ────────────────────────────────────────────────────────────────
 
-export type SubagentRunPhase = "starting" | "running" | "waiting" | "done" | "failed" | "stopped" | "interrupted";
+export type SubagentRunPhase =
+  | "starting"
+  | "running"
+  | "waiting"
+  | "done"
+  | "failed"
+  | "stopped"
+  | "interrupted";
 
 export interface SubagentRunAction {
   /** The shell command the subagent is (or was last) running. */
@@ -408,7 +418,9 @@ function directRowPhase(input: {
   if (background) {
     return "running";
   }
-  const threadPhase = thread ? phaseFromStatusKind(resolveSubagentThreadStatusKind(thread), null) : null;
+  const threadPhase = thread
+    ? phaseFromStatusKind(resolveSubagentThreadStatusKind(thread), null)
+    : null;
   if (threadPhase) {
     return threadPhase;
   }
@@ -459,7 +471,8 @@ function rowTiming(
     : null;
   return {
     startedAtMs,
-    endedAtMs: startedAtMs !== null && endedAtMs !== null && endedAtMs < startedAtMs ? null : endedAtMs,
+    endedAtMs:
+      startedAtMs !== null && endedAtMs !== null && endedAtMs < startedAtMs ? null : endedAtMs,
   };
 }
 
@@ -490,8 +503,7 @@ function nestedRowsFor(input: {
       const statusKind = resolveSubagentThreadStatusKind(thread);
       const nested = nestedRowsFor({ ...input, spawningThreadId: thread.id });
       const ownPhase =
-        phaseFromStatusKind(statusKind, null) ??
-        (input.launchTurnLive ? "running" : "done");
+        phaseFromStatusKind(statusKind, null) ?? (input.launchTurnLive ? "running" : "done");
       const phase = ownPhase === "running" && nested.some(isRowLive) ? "waiting" : ownPhase;
       const presentation = resolveSubagentPresentationForThread({ thread, threads: input.threads });
       const statusLabel = humanizeSubagentStatus(statusKind);
@@ -529,6 +541,17 @@ function isRowLive(row: SubagentRunRow): boolean {
 
 function flattenRows(rows: ReadonlyArray<SubagentRunRow>): SubagentRunRow[] {
   return rows.flatMap((row) => [row, ...flattenRows(row.nested)]);
+}
+
+function taskEndForLaunch(end: SubagentTaskEnd | undefined, launchedAt: string | undefined) {
+  const launchedAtMs = parseTimeMs(launchedAt);
+  if (launchedAtMs === null) return end;
+  let matching: SubagentTaskEnd | undefined;
+  for (let candidate = end; candidate; candidate = candidate.previous) {
+    const endedAtMs = parseTimeMs(candidate.endedAt);
+    if (endedAtMs !== null && endedAtMs >= launchedAtMs) matching = candidate;
+  }
+  return matching;
 }
 
 export function deriveSubagentRunCard(input: {
@@ -573,7 +596,10 @@ export function deriveSubagentRunCard(input: {
           launchTurnLive,
         })
       : [];
-    const taskEnd = input.taskEndByToolUseId?.get(subagent.providerThreadId ?? key);
+    const taskEnd = taskEndForLaunch(
+      input.taskEndByToolUseId?.get(subagent.providerThreadId ?? key),
+      member?.launchedAt,
+    );
     const ownPhase =
       directRowPhase({
         subagent,
@@ -588,7 +614,9 @@ export function deriveSubagentRunCard(input: {
     return {
       key,
       item,
-      threadId: thread?.id ?? (subagent.resolvedThreadId ? ThreadId.makeUnsafe(subagent.resolvedThreadId) : null),
+      threadId:
+        thread?.id ??
+        (subagent.resolvedThreadId ? ThreadId.makeUnsafe(subagent.resolvedThreadId) : null),
       phase,
       ...rowTiming(
         phase,
@@ -803,6 +831,32 @@ export function findLatestRunningSubagentRun(input: {
     if (counts.running > 0) {
       return { entryId: entry.id, runningCount: counts.running };
     }
+  }
+  return null;
+}
+
+/** A child's own view shares the outcome and clock its launching card reports. */
+export function findLatestSubagentThreadRun(
+  input: Parameters<typeof findLatestRunningSubagentRun>[0] & { childThreadId: ThreadId },
+): SubagentRunRow | null {
+  for (let index = input.entries.length - 1; index >= 0; index -= 1) {
+    const entry = input.entries[index]!;
+    if (!entry.subagentRun) continue;
+    const card = deriveSubagentRunCard({
+      subagents: entry.subagents ?? [],
+      run: entry.subagentRun,
+      threads: input.threads,
+      parentThreadId: input.parentThreadId,
+      launchTurnLive: isLaunchTurnLive(entry, input.liveTurnId),
+      ...(input.taskEndByToolUseId ? { taskEndByToolUseId: input.taskEndByToolUseId } : {}),
+      ...(input.backgroundedProviderThreadIds
+        ? { backgroundedProviderThreadIds: input.backgroundedProviderThreadIds }
+        : {}),
+    });
+    const row = flattenRows(card.rows).find(
+      (candidate) => candidate.threadId === input.childThreadId,
+    );
+    if (row) return row;
   }
   return null;
 }

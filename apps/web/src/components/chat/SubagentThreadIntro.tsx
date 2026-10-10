@@ -71,7 +71,9 @@ export function SubagentThreadIntro({
   const nowMs = useNowMs(live);
   const stateLabel = subagentThreadStateLabel(
     subagent.statusKind,
-    durationMs(subagent.startedAt, live ? null : subagent.endedAt, nowMs),
+    live || subagent.endedAt
+      ? durationMs(subagent.startedAt, live ? null : subagent.endedAt, nowMs)
+      : null,
   );
   return (
     <div
@@ -107,7 +109,9 @@ export function SubagentThreadIntro({
           <span aria-hidden="true">·</span>
         ) : null}
         {stateLabel ? (
-          <span className={cn("tabular-nums", subagentOutcomeTextToneClassName(subagent.statusKind))}>
+          <span
+            className={cn("tabular-nums", subagentOutcomeTextToneClassName(subagent.statusKind))}
+          >
             {stateLabel}
           </span>
         ) : null}

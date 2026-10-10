@@ -331,7 +331,10 @@ import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./chat/composerStackedPa
 import { ComposerPullRequestAutoFixHint } from "./chat/ComposerPullRequestAutoFixHint";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import { findLatestRunningSubagentRun } from "./chat/SubagentRunCard.logic";
+import {
+  findLatestRunningSubagentRun,
+  subagentRunPhaseStatusKind,
+} from "./chat/SubagentRunCard.logic";
 import type { SubagentThreadPresentation } from "./chat/SubagentThreadIntro";
 import {
   collectForegroundRunningSubagentStripItems,
@@ -1467,6 +1470,7 @@ export default function ChatView({
     subagentRunThreads,
     backgroundedSubagentToolUseIds,
     subagentTaskEnds,
+    subagentThreadRunRow,
     composerSubagentStripItems,
     stripSourceThreadId,
     workflowRunState,
@@ -1477,7 +1481,7 @@ export default function ChatView({
   });
   // The newest transcript card with subagents still at work, for the floating
   // "N running" chip that brings it back into view.
-  const runningSubagentRunParentId = activeThread?.id ?? null;
+  const runningSubagentRunParentId = activeThread?.parentThreadId ?? activeThread?.id ?? null;
   const subagentRunLiveTurnId = latestTurnLive ? activeLatestTurnId : null;
   const runningSubagentRun = useMemo(
     () =>
@@ -1882,17 +1886,22 @@ export default function ChatView({
       : crossTaskSourceThread.title
     : null;
   const subagentStartedAt =
+    (subagentThreadRunRow?.startedAtMs != null
+      ? new Date(subagentThreadRunRow.startedAtMs).toISOString()
+      : null) ??
     serverThread?.messages.find((message) => message.dispatchOrigin === "agent")?.createdAt ??
     serverThread?.createdAt ??
     null;
   const subagentStatusKind = serverThread?.parentThreadId
-    ? latestTurnLive
-      ? "running"
-      : resolveSubagentThreadStatusKind({
-          error: serverThread.error,
-          session: serverThread.session,
-          latestTurn: serverThread.latestTurn,
-        })
+    ? subagentThreadRunRow
+      ? subagentRunPhaseStatusKind(subagentThreadRunRow.phase)
+      : latestTurnLive
+        ? "running"
+        : resolveSubagentThreadStatusKind({
+            error: serverThread.error,
+            session: serverThread.session,
+            latestTurn: serverThread.latestTurn,
+          })
     : null;
   const subagentThread = useMemo<SubagentThreadPresentation | null>(
     () =>
@@ -1905,7 +1914,10 @@ export default function ChatView({
             provider: serverThread.modelSelection.provider,
             statusKind: subagentStatusKind,
             startedAt: subagentStartedAt,
-            endedAt: serverThread.latestTurn?.completedAt ?? null,
+            endedAt:
+              subagentThreadRunRow?.endedAtMs != null
+                ? new Date(subagentThreadRunRow.endedAtMs).toISOString()
+                : (serverThread.latestTurn?.completedAt ?? null),
           }
         : null,
     [
@@ -1918,6 +1930,7 @@ export default function ChatView({
       subagentParentTitle,
       subagentStartedAt,
       subagentStatusKind,
+      subagentThreadRunRow?.endedAtMs,
     ],
   );
   const resolvedCrossTaskOrigin = useMemo(
@@ -5152,7 +5165,7 @@ export default function ChatView({
     () =>
       activeThreadIdForSubagentRuns
         ? {
-            parentThreadId: activeThreadIdForSubagentRuns,
+            parentThreadId: runningSubagentRunParentId,
             liveTurnId: subagentRunLiveTurnId,
             threads: subagentRunThreads,
             backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
@@ -5164,6 +5177,7 @@ export default function ChatView({
         : null,
     [
       activeThreadIdForSubagentRuns,
+      runningSubagentRunParentId,
       subagentRunLiveTurnId,
       subagentTaskEnds,
       backgroundedSubagentToolUseIds,

@@ -12,6 +12,7 @@ import {
   describeSubagentRunHeader,
   describeSubagentRunRow,
   findLatestRunningSubagentRun,
+  findLatestSubagentThreadRun,
   firstLinePreview,
   foldSubagentRunWorkEntries,
   type SubagentRunThread,
@@ -28,7 +29,12 @@ function entry(
     createdAt: "2026-10-10T00:00:00.000Z",
     label: "Tool",
     tone: "tool",
-    turnId: turnId === undefined ? TurnId.makeUnsafe("turn-1") : turnId ? TurnId.makeUnsafe(turnId) : null,
+    turnId:
+      turnId === undefined
+        ? TurnId.makeUnsafe("turn-1")
+        : turnId
+          ? TurnId.makeUnsafe(turnId)
+          : null,
     ...rest,
   };
 }
@@ -45,10 +51,7 @@ function spawn(id: string, createdAt: string, subagents: WorkLogSubagent[], turn
   });
 }
 
-function childThread(
-  id: string,
-  overrides: Partial<SubagentRunThread> = {},
-): SubagentRunThread {
+function childThread(id: string, overrides: Partial<SubagentRunThread> = {}): SubagentRunThread {
   return {
     id: ThreadId.makeUnsafe(id),
     title: "Child",
@@ -93,9 +96,17 @@ describe("foldSubagentRunWorkEntries", () => {
   it("anchors a resumed subagent in its new launching turn and keeps late progress in the original card", () => {
     const folded = foldSubagentRunWorkEntries([
       spawn("first", launchedAtIso, [{ threadId: "a", rawStatus: "completed" }]),
-      spawn("resume", "2026-10-10T00:01:00.000Z", [{ threadId: "a", rawStatus: "running" }], "turn-2"),
+      spawn(
+        "resume",
+        "2026-10-10T00:01:00.000Z",
+        [{ threadId: "a", rawStatus: "running" }],
+        "turn-2",
+      ),
       entry({
-        id: "late-progress", tone: "info", turnId: "turn-1", detail: "Read README.md",
+        id: "late-progress",
+        tone: "info",
+        turnId: "turn-1",
+        detail: "Read README.md",
         subagentProgress: { toolUseId: "a", title: "Read", outcome: "completed" },
       }),
     ]);
@@ -165,10 +176,7 @@ describe("foldSubagentRunWorkEntries", () => {
       }),
     ]);
 
-    expect(folded.map((item) => item.id)).toEqual([
-      "subagent-run:spawn-1",
-      "subagent-run:spawn-2",
-    ]);
+    expect(folded.map((item) => item.id)).toEqual(["subagent-run:spawn-1", "subagent-run:spawn-2"]);
     expect(folded[0]!.subagents).toEqual([{ threadId: "agent-1", rawStatus: "completed" }]);
     expect(folded[1]!.subagents?.map((subagent) => subagent.threadId)).toEqual(["agent-2"]);
   });
@@ -236,6 +244,37 @@ describe("foldSubagentRunWorkEntries", () => {
 
 describe("deriveSubagentRunCard", () => {
   const launchedAt = "2026-10-10T00:00:00.000Z";
+
+  it("uses the completion of the matching invocation instead of a later resume", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", launchedAt, [{ threadId: "a" }]),
+      spawn("resume", "2026-10-10T00:01:00.000Z", [{ threadId: "a" }], "turn-2"),
+    ]);
+    const taskEndByToolUseId = new Map([
+      [
+        "a",
+        {
+          outcome: "failed" as const,
+          endedAt: "2026-10-10T00:01:03.000Z",
+          previous: { outcome: "completed" as const, endedAt: "2026-10-10T00:00:08.000Z" },
+        },
+      ],
+    ]);
+    const cards = folded.map((work) =>
+      deriveSubagentRunCard({
+        subagents: work.subagents ?? [],
+        run: work.subagentRun!,
+        threads: [],
+        parentThreadId: PARENT,
+        launchTurnLive: false,
+        taskEndByToolUseId,
+      }),
+    );
+    expect(cards.map((model) => model.rows[0]!.phase)).toEqual(["done", "failed"]);
+    expect(cards.map((model) => model.rows[0]!.endedAtMs! - model.rows[0]!.startedAtMs!)).toEqual([
+      8000, 3000,
+    ]);
+  });
 
   function card(
     subagents: WorkLogSubagent[],
@@ -328,7 +367,11 @@ describe("deriveSubagentRunCard", () => {
           latestTurn: completedTurn(launchedAt, "2026-10-10T00:00:21.000Z", "interrupted" as never),
         }),
       ],
-      [{ key: "a" }, { key: "b" }, { key: "c", latestStep: "Running sleep 60", outcome: "stopped" }],
+      [
+        { key: "a" },
+        { key: "b" },
+        { key: "c", latestStep: "Running sleep 60", outcome: "stopped" },
+      ],
     );
 
     expect(model.isLive).toBe(false);
@@ -363,9 +406,7 @@ describe("deriveSubagentRunCard", () => {
       [{ key: "a" }, { key: "b" }],
     );
     expect(model.allStopped).toBe(true);
-    expect(describeSubagentRunHeader(model, 0).segments).toEqual([
-      { text: "stopped", tone: null },
-    ]);
+    expect(describeSubagentRunHeader(model, 0).segments).toEqual([{ text: "stopped", tone: null }]);
     expect(describeSubagentRunRow(model.rows[0]!, { nowMs: 0, allStopped: true }).word).toBe(
       "Stopped",
     );
@@ -374,8 +415,12 @@ describe("deriveSubagentRunCard", () => {
   it("keeps a provider interruption distinct from a stopped subagent", () => {
     const model = card([{ threadId: "a", rawStatus: "interrupted" }], [], [{ key: "a" }]);
     expect(model.rows[0]!.phase).toBe("interrupted");
-    expect(describeSubagentRunRow(model.rows[0]!, { nowMs: 0, allStopped: false }).word).toBe("Interrupted");
-    expect(describeSubagentRunHeader(model, 0).segments).toEqual([{ text: "1 interrupted", tone: null }]);
+    expect(describeSubagentRunRow(model.rows[0]!, { nowMs: 0, allStopped: false }).word).toBe(
+      "Interrupted",
+    );
+    expect(describeSubagentRunHeader(model, 0).segments).toEqual([
+      { text: "1 interrupted", tone: null },
+    ]);
   });
 
   it("nests subagents under the subagent that launched them", () => {
@@ -418,7 +463,12 @@ describe("findLatestRunningSubagentRun", () => {
   it("points at the newest card that still has a subagent at work", () => {
     const folded = foldSubagentRunWorkEntries([
       spawn("old", "2026-10-10T00:00:00.000Z", [{ threadId: "x", isActive: true }], "turn-1"),
-      spawn("new", "2026-10-10T00:01:00.000Z", [{ threadId: "y", rawStatus: "completed" }], "turn-2"),
+      spawn(
+        "new",
+        "2026-10-10T00:01:00.000Z",
+        [{ threadId: "y", rawStatus: "completed" }],
+        "turn-2",
+      ),
     ]);
     expect(
       findLatestRunningSubagentRun({
@@ -439,6 +489,31 @@ describe("findLatestRunningSubagentRun", () => {
         liveTurnId: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("findLatestSubagentThreadRun", () => {
+  it("gives a sessionless Codex child the status and duration reported by its parent", () => {
+    const entries = foldSubagentRunWorkEntries([
+      spawn("launch", launchedAtIso, [{ threadId: "a" }]),
+      entry({
+        id: "settled",
+        createdAt: "2026-10-10T00:00:08.000Z",
+        itemType: "collab_agent_tool_call",
+        subagentAction: { tool: "subAgentSettled", status: "completed", summaryText: "Settled" },
+        subagents: [{ threadId: "a", rawStatus: "completed" }],
+      }),
+    ]);
+    const threadId = ThreadId.makeUnsafe("subagent:parent:a");
+    const row = findLatestSubagentThreadRun({
+      entries,
+      threads: [childThread(threadId)],
+      parentThreadId: PARENT,
+      liveTurnId: null,
+      childThreadId: threadId,
+    });
+    expect(row?.phase).toBe("done");
+    expect(row!.endedAtMs! - row!.startedAtMs!).toBe(8000);
   });
 });
 

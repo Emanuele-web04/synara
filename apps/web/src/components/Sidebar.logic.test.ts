@@ -1265,6 +1265,49 @@ describe("resolveProjectStatusIndicator", () => {
 });
 
 describe("buildProjectThreadTree", () => {
+  it("shows the open parent's children under the subagent that launched them", () => {
+    const parent = ThreadId.makeUnsafe("parent");
+    const outer = ThreadId.makeUnsafe("outer");
+    const inner = ThreadId.makeUnsafe("inner");
+    const threads = [
+      makeThread({ id: parent }),
+      makeThread({ id: outer, parentThreadId: parent }),
+      makeThread({ id: inner, parentThreadId: parent, sourceThreadId: outer }),
+    ];
+    for (const active of [parent, inner]) {
+      expect(
+        buildProjectThreadTree({ threads, forceVisibleThreadId: active }).map((row) => [
+          row.thread.id,
+          row.depth,
+        ]),
+      ).toEqual([
+        [parent, 0],
+        [outer, 1],
+        [inner, 2],
+      ]);
+    }
+  });
+
+  it("keeps a child reachable under its root when its launching subagent is missing", () => {
+    const parent = ThreadId.makeUnsafe("parent");
+    const child = ThreadId.makeUnsafe("child");
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({ id: parent }),
+        makeThread({
+          id: child,
+          parentThreadId: parent,
+          sourceThreadId: ThreadId.makeUnsafe("missing"),
+        }),
+      ],
+      forceVisibleThreadId: parent,
+    });
+    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
+      [parent, 0],
+      [child, 1],
+    ]);
+  });
+
   it("keeps inactive child threads out of the sidebar", () => {
     const rows = buildProjectThreadTree({
       threads: [

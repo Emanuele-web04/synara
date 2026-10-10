@@ -316,19 +316,22 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
   useEffect(() => {
     const element = rootRef.current;
     if (!element || !visibility || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver((observed) => {
-      const last = observed.at(-1);
-      if (!last) return;
-      const viewportTop = last.rootBounds?.top ?? 0;
-      visibility.set(
-        entryId,
-        last.isIntersecting
-          ? "visible"
-          : last.boundingClientRect.bottom <= viewportTop
-            ? "above"
-            : "below",
-      );
-    });
+    const observer = new IntersectionObserver(
+      (observed) => {
+        const last = observed.at(-1);
+        if (!last) return;
+        const viewportTop = last.rootBounds?.top ?? 0;
+        visibility.set(
+          entryId,
+          last.isIntersecting
+            ? "visible"
+            : last.boundingClientRect.bottom <= viewportTop
+              ? "above"
+              : "below",
+        );
+      },
+      { root: element.closest('[data-chat-scroll-container="true"]') },
+    );
     observer.observe(element);
     return () => {
       observer.disconnect();
@@ -340,7 +343,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
     ? null
     : card.counts.failed > 0
       ? CircleAlertIcon
-      : card.allStopped
+      : card.allStopped || (card.counts.interrupted > 0 && card.counts.done === 0)
         ? null
         : CircleCheckIcon;
 
@@ -410,7 +413,9 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
               </>
             ) : null}
           </span>
-          {expanded ? null : <DisclosureChevron open={false} className="text-muted-foreground/55" />}
+          {expanded ? null : (
+            <DisclosureChevron open={false} className="text-muted-foreground/55" />
+          )}
         </button>
         {card.isLive && liveItems.length > 0 && onStop ? (
           <Button
