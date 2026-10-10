@@ -26,7 +26,6 @@ import { externalMcpLauncher, externalMcpShellCommand } from "../launcher.ts";
 const DEFAULT_EXPIRY_DAYS = 30;
 const PAIRING_TTL_MS = 10 * 60 * 1_000;
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 60;
-const DEFAULT_ACTIVE_TASK_LIMIT = 2;
 const CREDENTIAL_PREFIX = "syn_mcp_v1_";
 const PAIRING_PREFIX = "syn_pair_v1_";
 const AUDIT_RETENTION_MS = 30 * 86_400_000;
@@ -205,7 +204,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
           expiresAt,
           pairingExpiresAt,
           rateLimitPerMinute: DEFAULT_RATE_LIMIT_PER_MINUTE,
-          concurrencyLimit: DEFAULT_ACTIVE_TASK_LIMIT,
+          concurrencyLimit: input.concurrencyLimit ?? null,
         })
         .pipe(
           Effect.mapError((cause) =>
@@ -252,6 +251,38 @@ export const makeExternalMcpService = Effect.gen(function* () {
             ),
       ),
     );
+
+  const updateIntegration: ExternalMcpServiceShape["updateIntegration"] = (input) =>
+    Effect.gen(function* () {
+      const updated = yield* repository
+        .updateConcurrencyLimit({
+          ...input,
+          now: new Date().toISOString(),
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            toExternalMcpError("repository_error", "Could not update the integration.", 500, cause),
+          ),
+        );
+      if (!updated) {
+        return yield* toExternalMcpError(
+          "integration_unavailable",
+          "Only an active integration can be updated.",
+          409,
+        );
+      }
+      const record = yield* repository
+        .getIntegrationById(input.integrationId)
+        .pipe(
+          Effect.mapError((cause) =>
+            toExternalMcpError("repository_error", "Could not read the integration.", 500, cause),
+          ),
+        );
+      if (!record) {
+        return yield* toExternalMcpError("integration_unavailable", "Integration not found.", 404);
+      }
+      return toView(record, yield* loadProjectsById());
+    });
 
   const revokeIntegration: ExternalMcpServiceShape["revokeIntegration"] = (integrationId) =>
     repository
@@ -548,6 +579,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
 
   return {
     createIntegration,
+    updateIntegration,
     listIntegrations,
     revokeIntegration,
     refreshPairing,
