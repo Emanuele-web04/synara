@@ -6107,19 +6107,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   it.effect("discovers Claude model capabilities before a session starts", () => {
     const query = new FakeClaudeQuery();
     let createQueryCalls = 0;
-    (
-      query as unknown as {
-        supportedModels: () => Promise<
-          Array<{
-            value: string;
-            resolvedModel: string;
-            displayName: string;
-            description: string;
-            supportsAutoMode: boolean;
-          }>
-        >;
-      }
-    ).supportedModels = async () => {
+    (query as { supportedModels: () => Promise<Array<ModelInfo>> }).supportedModels = async () => {
       assert.ok(query.iteratorNextCalls > 0, "model discovery must drive the SDK handshake");
       return [
         {
@@ -6128,6 +6116,16 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           displayName: "Fable",
           description: "Claude Fable 5",
           supportsAutoMode: true,
+        },
+        {
+          value: "haiku",
+          resolvedModel: "claude-haiku-5-5",
+          displayName: "Haiku 5.5",
+          description: "Claude Haiku 5.5",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+          supportsAdaptiveThinking: true,
+          supportsAutoMode: false,
         },
       ];
     };
@@ -6154,7 +6152,22 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
       assert.equal(discovered.source, "sdk");
       assert.equal(discovered.cached, false);
-      assert.lengthOf(discovered.models, 1);
+      assert.lengthOf(discovered.models, 2);
+      const haiku = discovered.models[1]!;
+      assert.deepEqual(
+        haiku.supportedReasoningEfforts?.map((effort) => effort.value),
+        ["low", "medium", "high", "xhigh", "max"],
+      );
+      assert.equal(haiku.defaultReasoningEffort, "medium");
+      const effort = haiku.optionDescriptors?.find((option) => option.id === "effort");
+      assert.equal(effort?.type, "select");
+      if (effort?.type === "select") {
+        assert.equal(effort.currentValue, "medium");
+        assert.deepEqual(
+          effort.options.map((option) => option.id),
+          ["low", "medium", "high", "xhigh", "max"],
+        );
+      }
       const { optionDescriptors, ...model } = discovered.models[0]!;
       assert.deepEqual(model, {
         slug: "claude-fable-5[1m]",

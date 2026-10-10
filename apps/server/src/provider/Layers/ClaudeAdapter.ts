@@ -70,6 +70,7 @@ import {
 import {
   applyClaudePromptEffortPrefix,
   getClaudeContextWindowSuffix,
+  getDefaultEffort,
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
@@ -1062,14 +1063,61 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
-  const optionDescriptors = getProviderOptionDescriptors({
-    provider: PROVIDER,
-    caps: getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value),
+  const staticCapabilities = getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value);
+  // The SDK knows about new model releases ahead of Synara's static catalog.
+  // Explicit no-effort support and an advertised effort ladder are authoritative;
+  // only missing SDK metadata falls back to the curated static capabilities.
+  const sdkEfforts =
+    model.supportsEffort === false
+      ? []
+      : Array.isArray(model.supportedEffortLevels)
+        ? [...new Set(model.supportedEffortLevels)].filter(
+            (level) =>
+              level === "low" ||
+              level === "medium" ||
+              level === "high" ||
+              level === "xhigh" ||
+              level === "max",
+          )
+        : undefined;
+  const staticDefault = getDefaultEffort(staticCapabilities);
+  const sdkOptions = sdkEfforts?.map((value) => {
+    const known = staticCapabilities.reasoningEffortLevels.find((option) => option.value === value);
+    return {
+      value,
+      label:
+        known?.label ??
+        (value === "xhigh" ? "Extra High" : value[0]!.toUpperCase() + value.slice(1)),
+      controlSource: "api-effort" as const,
+      ...(value === staticDefault ? { isDefault: true as const } : {}),
+    };
   });
+  const capabilities =
+    sdkOptions === undefined
+      ? staticCapabilities
+      : {
+          ...staticCapabilities,
+          reasoningEffortLevels: [
+            ...sdkOptions,
+            // Synara-only modes (e.g. Ultracode) are not SDK API effort values.
+            ...staticCapabilities.reasoningEffortLevels.filter(
+              (option) => option.controlSource !== "api-effort",
+            ),
+          ],
+        };
+  const optionDescriptors = getProviderOptionDescriptors({ provider: PROVIDER, caps: capabilities });
   return {
     slug: model.value,
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     name: model.displayName,
+    ...(sdkOptions !== undefined
+      ? {
+          supportedReasoningEfforts: sdkOptions.map(({ value, label }) => ({ value, label })),
+          ...(staticDefault && sdkEfforts?.includes(staticDefault)
+            ? { defaultReasoningEffort: staticDefault }
+            : {}),
+        }
+      : {}),
     ...(optionDescriptors.length > 0 ? { optionDescriptors } : {}),
     ...(typeof model.supportsAutoMode === "boolean"
       ? { supportsAutoMode: model.supportsAutoMode }
