@@ -12,6 +12,7 @@ import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { ServerConfig } from "../config";
 import { ServerSettingsService } from "../serverSettings";
 import {
+  __enrichWithLocalUsageForTests,
   __resetProviderUsageCacheForTests,
   collectProviderUsageSnapshots,
   listProviderUsage,
@@ -23,7 +24,7 @@ const cacheKeyMock = vi.fn<(ctx: ProviderUsageContext) => Promise<string>>();
 const localUsageLinesMock = vi.fn();
 
 vi.mock("../providerUsageSnapshot", () => ({
-  loadLocalProviderUsageLines: (input: unknown) => localUsageLinesMock(input),
+  loadLocalProviderUsageSnapshot: (input: unknown) => localUsageLinesMock(input),
 }));
 
 vi.mock("./registry", () => ({
@@ -64,7 +65,7 @@ beforeEach(() => {
   cacheKeyMock.mockReset();
   cacheKeyMock.mockImplementation(async (ctx) => ctx.env.TEST_USAGE_ACCOUNT ?? "account-a");
   localUsageLinesMock.mockReset();
-  localUsageLinesMock.mockResolvedValue([]);
+  localUsageLinesMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -328,7 +329,9 @@ describe("listProviderUsage account routing", () => {
       limits: [{ window: "5h", usedPercent: ctx.env.CODEX_HOME === "/accounts/work" ? 72 : 21 }],
       resetCredits: { availableCount: 1, canUse: true },
     }));
-    localUsageLinesMock.mockResolvedValue([{ label: "Tokens", value: "default total" }]);
+    localUsageLinesMock.mockResolvedValue({
+      usageLines: [{ label: "Tokens", value: "default total" }],
+    });
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -357,11 +360,13 @@ describe("listProviderUsage account routing", () => {
     ]);
     expect(result.cached).toEqual(result.first);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(localUsageLinesMock).toHaveBeenCalledWith({
-      provider: "codex",
-      homeDir: expect.any(String),
-      homePath: "/accounts/personal",
-    });
+    expect(localUsageLinesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        homeDir: expect.any(String),
+        homePath: "/accounts/personal",
+      }),
+    );
   });
 
   it("retains enabled siblings when the default account is disabled", async () => {
