@@ -22,12 +22,10 @@ import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory
 export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
 
 /**
- * Absolute upper bound on a single turn. Past this the turn is settled even
- * when the live runtime still claims to be running, because every other signal
- * this planner trusts (a settled session, a missing session, a failed binding)
- * can be absent when a provider wedges mid-turn. `thread.updatedAt` advances on
- * every appended message, so a legitimately long-running turn keeps resetting
- * this clock and is never affected.
+ * Maximum age before recovering a stale projection with no identifiable live
+ * turn. A provider session that still reports a concrete running turn always
+ * wins, regardless of age; this bound is for abandoned starts and missing or
+ * otherwise unidentifiable runtime turns.
  */
 // A silent tool can legitimately run for hours. Specific providers have their
 // own process/transport wedge detection; do not infer death after 45 minutes.
@@ -240,7 +238,11 @@ export function planProviderRuntimeReconciliation(input: {
     const projectedTurnId = projectedInFlightTurnId(thread);
     const liveTurnId = turnIdOrNull(liveSession?.activeTurnId);
 
-    if (liveSession?.status === "running" && liveTurnId !== null && !abandoned) {
+    // A live provider turn is the strongest evidence available, even when the
+    // event stream has been silent for hours. Never abandon work the runtime
+    // still reports as active; the age fuse is only for sessions with no
+    // identifiable live turn.
+    if (liveSession?.status === "running" && liveTurnId !== null) {
       if (liveTurnId === projectedTurnId) continue;
       plans.push({
         action: "align-running-turn",

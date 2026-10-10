@@ -1465,7 +1465,7 @@ describe("OrchestrationEngine", () => {
         });
         expect(after.runtimeMode).toBe("approval-required");
         expect(after.interactionMode).toBe("default");
-        expect(after.session?.status).toBe(running ? "running" : "starting");
+        expect(after.session?.status).toBe(running ? "running" : "ready");
       } finally {
         await system.dispose();
       }

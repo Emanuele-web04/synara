@@ -134,7 +134,7 @@ describe("checkpoint revert decider", () => {
       );
     }
     expect(readModel.threads[0]?.session).toMatchObject({
-      status: "starting",
+      status: "ready",
       activeTurnId: null,
     });
 
