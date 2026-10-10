@@ -1089,6 +1089,13 @@ describe("normalizeAntigravityModelOptions", () => {
       normalizeAntigravityModelOptions("Gemini 3.8 Flash", undefined, runtimeCapabilities),
     ).toEqual({ reasoningEffort: "medium" });
     expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.8 Flash",
+        { reasoningEffort: " " },
+        runtimeCapabilities,
+      ),
+    ).toEqual({ reasoningEffort: "medium" });
+    expect(
       normalizeAntigravityModelOptions("Unknown model", { reasoningEffort: "high" }),
     ).toBeUndefined();
   });
