@@ -138,6 +138,7 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
+import { deriveContinuousHandoffPath } from "../lib/continuousHandoffPath";
 import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -183,7 +184,7 @@ import {
 } from "../lib/threadEnvironment";
 import {
   canCreateThreadHandoff,
-  canContinueThreadHandoff,
+  resolveContinueThreadHandoffTargets,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   type ThreadHandoffTarget,
@@ -2463,19 +2464,22 @@ export default function ChatView({
   );
   const continueHandoffTargets = useMemo(
     () =>
-      handoffTargets.filter(
-        (target) =>
-          activeThreadProvider !== null &&
-          canContinueThreadHandoff({
+      activeThreadProvider !== null
+        ? resolveContinueThreadHandoffTargets({
+            enabled: settings.enableSameThreadHandoffs,
             sourceProvider: activeThreadProvider,
-            targetProvider: target.provider,
-          }),
-      ),
-    [activeThreadProvider, handoffTargets],
+            targets: handoffTargets,
+          })
+        : [],
+    [activeThreadProvider, handoffTargets, settings.enableSameThreadHandoffs],
   );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
     [handoffTargets],
+  );
+  const providerHandoffPath = useMemo(
+    () => deriveContinuousHandoffPath(activeThread?.activities ?? []),
+    [activeThread?.activities],
   );
 
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
@@ -4170,7 +4174,7 @@ export default function ChatView({
   });
 
   const onContinueHandoffInThread = useStableCallback(async (target: ThreadHandoffTarget) => {
-    if (!activeThread || handoffDisabled) {
+    if (!settings.enableSameThreadHandoffs || !activeThread || handoffDisabled) {
       return;
     }
 
@@ -6372,6 +6376,8 @@ export default function ChatView({
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
           continueHandoffActionTargets={continueHandoffTargets}
+          enableSameThreadHandoffs={settings.enableSameThreadHandoffs}
+          providerHandoffPath={providerHandoffPath}
           showHandoffAction={handoffAvailability.providerHandoff}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
