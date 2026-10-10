@@ -442,7 +442,7 @@ type BoundedOutputChunk = {
 /**
  * Keep diagnostics bounded across both pipes while preserving their original
  * stream labels. A provider can write to stdout and stderr concurrently, so
- * separate per-stream caps still allow unbounded aggregate retention.
+ * separate per-stream caps would exceed the shared retention budget.
  */
 export function createBoundedProcessOutput(maxBytes = ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES) {
   const chunks: BoundedOutputChunk[] = [];
@@ -2653,6 +2653,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         // events; applying that cap to the response would silently truncate a
         // valid provider answer.
         const responseStdout: string[] = [];
+        // Recovery needs evidence from the whole stderr stream, even when its
+        // diagnostic tail evicts an earlier failure. Keep a short prefix plus
+        // an overflow marker; the exact benign timeout is much shorter than it.
+        let stderrEvidence = "";
+        let stderrEvidenceOverflow = false;
         const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
@@ -2662,7 +2667,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           outputParser.write(text);
           output.append("stdout", chunk);
         });
-        child.stderr.on("data", (chunk) => output.append("stderr", chunk));
+        child.stderr.on("data", (chunk) => {
+          output.append("stderr", chunk);
+          if (stderrEvidenceOverflow) return;
+          const evidence = (stderrEvidence + String(chunk)).trimStart();
+          stderrEvidenceOverflow = evidence.trimEnd().length > 128;
+          stderrEvidence = evidence.slice(0, 129);
+        });
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
         }, POLL_INTERVAL_MS);
@@ -2715,6 +2726,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               return;
             }
             const { stdout: boundedStdout, stderr } = output.snapshot();
+            const hasStderrEvidence = stderrEvidenceOverflow || stderrEvidence.trim().length > 0;
+            const stderrOnlyExactTimeout =
+              !stderrEvidenceOverflow && isAntigravityPostResponseTimeout(stderrEvidence);
             const printResult = outputParser.finish();
             const responseText = printResult?.response ?? responseStdout.join("").trim();
             if (!context.sawAssistant && responseText) {
@@ -2741,7 +2755,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               context.stopTeardownRequested === true &&
               printResult?.completedResponse === true &&
               context.sawAssistant &&
-              !stderr.trim() &&
+              !hasStderrEvidence &&
               context.pendingTools.length === 0 &&
               context.pendingBackgroundTasks.size === 0 &&
               context.pendingAnonymousBackgroundTasks.length === 0;
@@ -2749,7 +2763,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               isAntigravityPostResponseTimeout(printResult?.terminalError) ||
               (printResult?.hasExplicitResultError !== true &&
                 printResult?.terminalError === undefined &&
-                isAntigravityPostResponseTimeout(stderr));
+                stderrOnlyExactTimeout);
             const benignPostResponseTimeout =
               context.stopTeardownPromise !== undefined &&
               !context.interrupted &&
@@ -2758,7 +2772,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               (printResult?.resultStatus === undefined || printResult.resultStatus === "ERROR") &&
               (printResult?.streamError === undefined ||
                 isAntigravityPostResponseTimeout(printResult.streamError)) &&
-              (!stderr.trim() || isAntigravityPostResponseTimeout(stderr)) &&
+              (!hasStderrEvidence || stderrOnlyExactTimeout) &&
               exactPostResponseTimeout &&
               printResult?.hasCompleteAssistantResponse === true &&
               context.sawAssistant &&

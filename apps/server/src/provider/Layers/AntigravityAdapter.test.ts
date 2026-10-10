@@ -1823,6 +1823,26 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     { name: "exact timeout", expected: "completed" },
     { name: "stderr timeout", expected: "completed", stderrOnly: true },
     { name: "unrelated stderr", expected: "failed", stderr: "quota exceeded" },
+    {
+      name: "evicted earlier stderr error",
+      expected: "failed",
+      stderrChunks: [
+        "quota exceeded\n",
+        " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES),
+        "Error: timeout waiting for response\n",
+      ],
+    },
+    {
+      name: "evicted stderr error before whitespace",
+      expected: "failed",
+      stderrChunks: ["quota exceeded\n", " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES)],
+    },
+    {
+      name: "split stderr timeout",
+      expected: "completed",
+      stderrOnly: true,
+      stderrChunks: ["Error: timeout waiting ", "for response\n"],
+    },
     { name: "unrelated stream error", expected: "failed", streamError: "quota exceeded" },
     { name: "earlier stream error", expected: "failed", earlierStreamError: true },
     { name: "earlier terminal error", expected: "failed", earlierResultError: true },
@@ -1916,10 +1936,11 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               ...(scenario.malformed ? ['{"event":invalid}'] : []),
             ].join("\n"),
           );
-          children[0]!.stderr!.emit(
-            "data",
+          for (const chunk of scenario.stderrChunks ?? [
             `${scenario.stderr ?? "Error: timeout waiting for response"}\n`,
-          );
+          ]) {
+            children[0]!.stderr!.emit("data", chunk);
+          }
           if (scenario.background) {
             yield* Effect.promise(() =>
               fs.writeFile(
