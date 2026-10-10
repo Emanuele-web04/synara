@@ -416,7 +416,7 @@ describe("OpenCode V2 client boundary", () => {
     });
     const recovered = (await server.client.session.messages({ sessionID: session.id })).data!;
     expect(recovered.map((entry) => entry.info.id)).toEqual(["msg_user", "msg_reply"]);
-    expect(recovered[1]?.parts[0]).toMatchObject({ id: "msg_reply:part:0", text: "Hello back" });
+    expect(recovered[1]?.parts[0]).toMatchObject({ id: "msg_reply:text:0", text: "Hello back" });
     expect(server.calls.at(-1)?.url.searchParams.has("order")).toBe(false);
     server.outcome = "failed";
     expect(
@@ -495,7 +495,7 @@ describe("OpenCode V2 client boundary", () => {
       event.type === "message.part.updated" ? [event.properties.part] : [],
     );
     expect(parts).toContainEqual(
-      expect.objectContaining({ id: "msg_reply:part:0", text: "Hello back" }),
+      expect.objectContaining({ id: "msg_reply:text:0", text: "Hello back" }),
     );
     expect(parts).toContainEqual(
       expect.objectContaining({
