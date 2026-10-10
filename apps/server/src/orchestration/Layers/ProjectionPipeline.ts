@@ -1277,6 +1277,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             payload: event.payload.activity.payload,
             // The orchestration log is durable and monotonic across provider
             // restarts, unlike provider-local counters that may reset to zero.
+            // A server-created activity has no provider sequence and falls back
+            // to its own append event's sequence; the snapshot query reports
+            // that source so clients never compare it with provider sequences.
             sequence: event.payload.activity.sequence ?? event.sequence,
             createdAt: event.payload.activity.createdAt,
           });
@@ -1630,14 +1633,19 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const isProviderDiffPlaceholder =
             event.payload.status === "missing" &&
             event.payload.checkpointRef.startsWith("provider-diff:");
+          // The session is the lifecycle authority: a checkpoint captured after
+          // an interrupt or failure describes files, not how the turn ended.
+          const sessionSettledState = Option.match(existingTurn, {
+            onNone: () => null,
+            onSome: (turn) =>
+              turn.state === "interrupted" || turn.state === "error" ? turn.state : null,
+          });
           const nextState = isProviderDiffPlaceholder
             ? Option.match(existingTurn, {
                 onNone: () => "running" as const,
                 onSome: (turn) => turn.state,
               })
-            : event.payload.status === "error"
-              ? "error"
-              : "completed";
+            : (sessionSettledState ?? (event.payload.status === "error" ? "error" : "completed"));
           yield* projectionTurnRepository.clearCheckpointTurnConflict({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
