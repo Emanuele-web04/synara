@@ -1466,6 +1466,66 @@ describe("resolveDevinStartModel", () => {
     });
   });
 
+  it("passes a pinned variant through after validating it against discovery", async () => {
+    const effectiveModel = await Effect.runPromise(
+      resolveDevinStartModel({
+        explicitModel: undefined,
+        modelSelection: {
+          model: "fusion",
+          options: { modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2" },
+        },
+        discoverModels: () =>
+          Effect.succeed({
+            source: "devin-cli",
+            cached: false,
+            models: [
+              {
+                slug: "fusion",
+                name: "Fusion",
+                modelVariants: [
+                  { model: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium" },
+                  { model: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2" },
+                ],
+              },
+            ],
+          }),
+      }),
+    );
+
+    expect(effectiveModel).toBe("fusion-gpt-6-sol-xhigh-sidekick-glm-5-2");
+  });
+
+  it("falls back to the family slug when the pinned variant belongs to another model", async () => {
+    const effectiveModel = await Effect.runPromise(
+      resolveDevinStartModel({
+        explicitModel: undefined,
+        modelSelection: {
+          model: "swe-2",
+          options: { modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2" },
+        },
+        discoverModels: () =>
+          Effect.succeed({
+            source: "devin-cli",
+            cached: false,
+            models: [
+              {
+                slug: "swe-2",
+                name: "SWE-2",
+                modelVariants: [{ model: "swe-2-medium" }, { model: "swe-2-high" }],
+              },
+              {
+                slug: "fusion",
+                name: "Fusion",
+                modelVariants: [{ model: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2" }],
+              },
+            ],
+          }),
+      }),
+    );
+
+    expect(effectiveModel).toBe("swe-2");
+  });
+
   it("resolves traits when the stored model is already a concrete variant", async () => {
     const effectiveModel = await Effect.runPromise(
       resolveDevinStartModel({
@@ -1579,6 +1639,7 @@ describe("Devin CLI model discovery", () => {
     expect(model.contextWindowOptions?.map((option) => option.value)).toEqual(["200k", "1m"]);
     expect(model.modelVariants).toContainEqual({
       model: "gpt-5-6-sol-medium-priority",
+      label: "GPT-5.6 Sol Medium Priority",
       reasoningEffort: "medium",
       contextWindow: "1m",
       fastMode: true,
@@ -1681,11 +1742,13 @@ describe("Devin CLI model discovery", () => {
     expect(model.contextWindowOptions?.map((option) => option.value)).toEqual(["200k", "1m"]);
     expect(model.modelVariants).toContainEqual({
       model: "claude-opus-4-6-thinking-1m",
+      label: "Claude Opus 4.6 Thinking 1M",
       contextWindow: "1m",
       thinking: true,
     });
     expect(model.modelVariants).toContainEqual({
       model: "claude-opus-4-6",
+      label: "Claude Opus 4.6",
       contextWindow: "200k",
       thinking: false,
     });
