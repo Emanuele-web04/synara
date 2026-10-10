@@ -313,45 +313,83 @@ layer("ProfileLifecycleService", (it) => {
     });
   });
 
-  it.effect("counts only sessions that actually stopped on quarantine", () => {
-    const okThreadId = ThreadId.makeUnsafe("thread-stop-ok");
-    const failThreadId = ThreadId.makeUnsafe("thread-stop-fail");
-    return Effect.gen(function* () {
-      const lifecycle = yield* ProfileLifecycleService;
-      const service = yield* AgentProfileService;
-      const created = yield* service.createProfile(
-        createProfileInput({
-          name: "Stop counting",
-          displayName: "Stop counting",
-          command: "stopcount",
-          provenanceSource: "legacy-settings-acp",
-        }),
-      );
-      testContext.failStopThreads.add(failThreadId);
-      const session = {
-        threadId: okThreadId,
-        provider: "claudeAgent" as const,
-        status: "running" as const,
-        runtimeMode: "full-access" as const,
-        resumeCursor: { profileId: created.profile.profileId } as unknown,
-        createdAt: now(),
-        updatedAt: now(),
-      } as const;
-      const sessionFail = {
-        ...session,
-        threadId: failThreadId,
-      } as const;
-      testContext.sessions.value = [session, sessionFail];
-      const stoppedBefore = [...testContext.stoppedThreads];
+  it.effect(
+    "surfaces stop failures after all cleanup and keeps quarantined profiles disabled",
+    () =>
+      Effect.gen(function* () {
+        const lifecycle = yield* ProfileLifecycleService;
+        const service = yield* AgentProfileService;
+        const evidence = yield* CapabilityEvidenceService;
+        for (const operation of ["quarantine", "recertify"] as const) {
+          const okThreadId = ThreadId.makeUnsafe(`thread-${operation}-stop-ok`);
+          const failThreadId = ThreadId.makeUnsafe(`thread-${operation}-stop-fail`);
+          const secondFailThreadId = ThreadId.makeUnsafe(`thread-${operation}-stop-fail-2`);
+          const created = yield* service.createProfile(
+            createProfileInput({
+              name: `Stop failure ${operation}`,
+              displayName: `Stop failure ${operation}`,
+            }),
+          );
+          if (operation === "recertify") {
+            yield* evidence.record({
+              namespace: profileEvidenceNamespace(
+                created.profile.profileId,
+                created.revision.revisionId,
+              ),
+              capabilityId: "prompt",
+              source: "synthetic-conformance",
+              outcome: "fail",
+              attribution: "agent",
+              runtime: { agentName: "Cline" },
+              verifier: { verifierId: "verifier:prompt" },
+              policy: { version: "2026-08-16.1", params: {} },
+              observedAt: now(),
+            });
+          }
+          testContext.failStopThreads.add(failThreadId);
+          testContext.failStopThreads.add(secondFailThreadId);
+          const session = {
+            threadId: failThreadId,
+            provider: "claudeAgent" as const,
+            status: "running" as const,
+            runtimeMode: "full-access" as const,
+            resumeCursor: { profileId: created.profile.profileId } as unknown,
+            createdAt: now(),
+            updatedAt: now(),
+          } as const;
+          testContext.sessions.value = [
+            session,
+            { ...session, threadId: okThreadId },
+            { ...session, threadId: secondFailThreadId },
+          ];
+          const stoppedBefore = [...testContext.stoppedThreads];
 
-      const result = yield* lifecycle.quarantineProfile(created.profile.profileId);
-      // Only the successful stop is counted and recorded; the failed stop is
-      // logged (and in this mock path the Error is surfaced) without inflating
-      // the success count or the recorded thread list.
-      assert.strictEqual(result.stoppedSessions, 1);
-      assert.deepEqual(testContext.stoppedThreads, [...stoppedBefore, okThreadId]);
-    });
-  });
+          const failure = yield* Effect.flip(
+            operation === "quarantine"
+              ? lifecycle.quarantineProfile(created.profile.profileId).pipe(Effect.asVoid)
+              : lifecycle.recertifyProfile(created.profile.profileId).pipe(Effect.asVoid),
+          );
+          assert.instanceOf(failure, ProfileLifecycleError);
+          assert.strictEqual(failure.code, "quarantine-stop-failed");
+          assert.instanceOf(failure.cause, AggregateError);
+          assert.deepEqual((failure.cause as AggregateError).errors.map(String), [
+            `Error: stopSession failed for ${failThreadId}`,
+            `Error: stopSession failed for ${secondFailThreadId}`,
+          ]);
+          assert.deepEqual(testContext.stoppedThreads, [...stoppedBefore, okThreadId]);
+
+          const detail = yield* service.getProfile(created.profile.profileId);
+          assert.strictEqual(detail.profile.status, "quarantined");
+          const launchFailure = yield* Effect.flip(
+            service.resolveSessionLaunch({
+              profileId: created.profile.profileId,
+              revisionId: created.revision.revisionId,
+            }),
+          );
+          assert.strictEqual(launchFailure.code, "profile-quarantined");
+        }
+      }),
+  );
 
   it.effect("unknown evidence cannot lift quarantine or inherit another revision's verdict", () =>
     Effect.gen(function* () {

@@ -262,7 +262,8 @@ const makeProfileLifecycleService = Effect.gen(function* () {
       }
       // Surface only actual stop failures; a session that fails to stop is a
       // safety miss (its runtime may still run after quarantine). Log the
-      // failure while keeping the count to successes only.
+      // failure after attempting every stop, leaving the persisted profile
+      // quarantined even when cleanup cannot be proven successful.
       if (stopFailures.length > 0) {
         yield* Effect.logError("Failed to stop sessions bound to an external agent profile").pipe(
           Effect.annotateLogs({
@@ -271,6 +272,12 @@ const makeProfileLifecycleService = Effect.gen(function* () {
               (failure) => `${failure.threadId}: ${String(failure.cause)}`,
             ),
           }),
+        );
+        return yield* Effect.fail(
+          new AggregateError(
+            stopFailures.map((failure) => failure.cause),
+            `Failed to stop ${stopFailures.length} sessions bound to external agent profile "${profileId}".`,
+          ),
         );
       }
       return stopped;
