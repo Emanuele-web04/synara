@@ -5726,7 +5726,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const progressRun = progressOwner.run;
             yield* offerRuntimeEvent(progressOwner.target, {
               ...baseFor(progressOwner.target),
-              ...(progressOwner.target === context ? taskTurnIdField(context, message.task_id) : {}),
+              ...(progressOwner.target === context
+                ? taskTurnIdField(context, message.task_id)
+                : {}),
               type: "task.progress",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -5781,7 +5783,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             );
             yield* offerRuntimeEvent(completedOwner.target, {
               ...baseFor(completedOwner.target),
-              ...(completedOwner.target === context ? taskTurnIdField(context, message.task_id) : {}),
+              ...(completedOwner.target === context
+                ? taskTurnIdField(context, message.task_id)
+                : {}),
               type: "task.completed",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
