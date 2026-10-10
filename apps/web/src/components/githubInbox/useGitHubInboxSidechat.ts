@@ -102,6 +102,7 @@ function enqueueItemQuestion(input: {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    workItems: [],
     pullRequestContexts: [createGitHubItemContextDraft(input.target.source, { checkedOut: false })],
     skills: [],
     mentions: [],

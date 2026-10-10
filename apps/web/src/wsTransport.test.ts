@@ -1166,6 +1166,28 @@ describe("WsTransport", () => {
     }
   });
 
+  it("rejects optional work-item calls without breaking older server connections", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+    );
+    const transport = new WsTransport();
+    try {
+      await waitForSockets(1);
+      sockets[0]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await expect(
+        transport.request(WS_METHODS.workItemsSearch, { cwd: "/repo", query: "", limit: 20 }),
+      ).rejects.toMatchObject({ code: "WS_WORK_ITEMS_UNAVAILABLE", retryable: false });
+      expect(transport.getState()).toBe("open");
+      expect(
+        sockets[0]!.sent.some((frame) => String(frame).includes('"tag":"workItems.search"')),
+      ).toBe(false);
+    } finally {
+      await transport.dispose();
+    }
+  });
+
   it("shares one stream per watched file and stops it after the last listener leaves", async () => {
     const { transport, internals } = makeBareTransport();
     const input = { cwd: "/repo", relativePath: "src/app.ts" };

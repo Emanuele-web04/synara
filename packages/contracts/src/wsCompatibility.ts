@@ -43,6 +43,7 @@ export const WS_PROJECT_FILE_WATCH_CAPABILITY = "projects.file-watch";
 export const WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY = "orchestration.turn-dispatch-settlement";
 export const WS_SERVER_RUNTIME_STATUS_CAPABILITY = "server.runtime-status";
 export const WS_GIT_ACTION_RECOVERY_CAPABILITY = "git.action-recovery";
+export const WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY = "workItems.composer-attach";
 
 // Capabilities the current client refuses to run without. Kept separate from
 // the advertised server list so a newer client can still negotiate with an
@@ -59,6 +60,7 @@ export const WS_CLIENT_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const WS_SERVER_CAPABILITIES = [
+  WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY,
   ...WS_CLIENT_REQUIRED_CAPABILITIES,
   // Optional feature capability: older servers may omit it without making the
   // rest of a newer client unusable during a staggered rollout.

@@ -1,4 +1,10 @@
-import type { OrchestrationProject, PullRequestDetail } from "@synara/contracts";
+import { GitHubCliError } from "../../git/Errors";
+import type {
+  OrchestrationProject,
+  PullRequestDetail,
+  WorkItemAuthStatus,
+  WorkItemSearchResult,
+} from "@synara/contracts";
 import { Effect, Layer, Scope } from "effect";
 
 import { GitHubCli, type GitHubCliShape } from "../../git/Services/GitHubCli";
@@ -78,6 +84,19 @@ export const makePullRequestService = (
         ),
       );
 
+    const workItemSearchCache = yield* makeKeyedSingleFlightCache<
+      WorkItemSearchResult,
+      GitHubCliError
+    >({
+      maxEntries: 128,
+      // Unavailable and degraded results must not pin the failure for the full
+      // TTL: a user who runs `gh auth login` mid-session would otherwise keep
+      // seeing the cached unavailable state. TTL 0 still lets concurrent
+      // identical searches join one gh round trip, but the next request
+      // immediately hits gh fresh.
+      ttlMs: (result) => (result.available && result.errorHint === null ? 30_000 : 0),
+    });
+
     const operations = makePullRequestOperations({
       github: dependencies.github,
       pins: dependencies.pins,
@@ -95,7 +114,54 @@ export const makePullRequestService = (
       finalizeMutationCaches,
     });
 
-    return operations satisfies PullRequestServiceShape;
+    const searchWorkItems: PullRequestServiceShape["searchWorkItems"] = (input) => {
+      const query = input.query ?? "";
+      const limit = input.limit ?? 20;
+      // One cache entry per repository+query+limit: repeat composer searches within
+      // the TTL reuse the same gh result, and concurrent identical searches join a
+      // single gh round trip instead of racing duplicate subprocesses.
+      const cacheKey = `${input.cwd}\u0000${input.repository.trim().toLowerCase()}\u0000${query}\u0000${limit}`;
+      return workItemSearchCache.get(
+        cacheKey,
+        dependencies.inbox.withGitHubRead(
+          dependencies.github.searchWorkItems({
+            ...input,
+            query,
+            limit,
+          }),
+        ),
+      );
+    };
+
+    const workItemsAuthStatus: PullRequestServiceShape["workItemsAuthStatus"] = (input) =>
+      dependencies.inbox
+        .withGitHubRead(dependencies.github.getViewerLogin({ cwd: input.cwd }))
+        .pipe(
+          Effect.map(() => ({ status: "ready" as const, hint: null })),
+          Effect.catch((error: unknown) =>
+            Effect.succeed(
+              ((): WorkItemAuthStatus => {
+                if (error instanceof GitHubCliError) {
+                  if (error.reason === "not-installed") {
+                    return { status: "gh-not-installed", hint: error.detail };
+                  }
+                  if (error.reason === "not-authenticated") {
+                    return { status: "gh-not-authenticated", hint: error.detail };
+                  }
+                }
+                // Unclassifiable probe failures must not hide the menu item: the
+                // search dialog surfaces the real error with a retry when it runs.
+                return { status: "ready", hint: null };
+              })(),
+            ),
+          ),
+        );
+
+    return {
+      searchWorkItems,
+      workItemsAuthStatus,
+      ...operations,
+    } satisfies PullRequestServiceShape;
   });
 
 export const PullRequestServiceLive = Layer.effect(

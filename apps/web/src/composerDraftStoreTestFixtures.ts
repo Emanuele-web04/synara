@@ -140,6 +140,7 @@ export function makeQueuedChatTurn(
     fileComments: [],
     pastedTexts: [],
     pullRequestContexts: [],
+    workItems: [],
     skills: [{ name: "check-code", path: "/skills/check-code" }],
     mentions: [{ name: "repo", path: "/mentions/repo" }],
     selectedProvider: "codex",

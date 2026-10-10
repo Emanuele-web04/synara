@@ -22,6 +22,7 @@ import {
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
+  WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
   WS_SERVER_RUNTIME_STATUS_CAPABILITY,
@@ -127,7 +128,8 @@ export class WsTransportRequestInterruptedError extends Data.TaggedError(
     | "WS_REQUEST_TIMEOUT"
     | "WS_REQUEST_ABORTED"
     | "WS_REQUEST_RECONNECTED"
-    | "WS_TURN_SETTLEMENT_UNAVAILABLE";
+    | "WS_TURN_SETTLEMENT_UNAVAILABLE"
+    | "WS_WORK_ITEMS_UNAVAILABLE";
   readonly method: string;
   readonly timeoutMs?: number;
   readonly cause?: unknown;
@@ -1044,6 +1046,18 @@ export class WsTransport {
       }
 
       const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+      if (
+        (method === WS_METHODS.workItemsSearch || method === WS_METHODS.workItemsAvailability) &&
+        !this.compatibility?.capabilities.includes(WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY)
+      ) {
+        throw new WsTransportRequestInterruptedError({
+          message: "Update the server to attach GitHub issues and pull requests.",
+          code: "WS_WORK_ITEMS_UNAVAILABLE",
+          method,
+          retryable: false,
+        });
+      }
+
       if (
         method === ORCHESTRATION_WS_METHODS.settleTurnDispatch &&
         !this.compatibility?.capabilities.includes(WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY)

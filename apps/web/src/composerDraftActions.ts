@@ -57,6 +57,7 @@ import {
   normalizePastedTexts,
   normalizeTerminalContextForThread,
   normalizeTerminalContextsForThread,
+  normalizeWorkItems,
   projectDraftThreadMappingKey,
   projectIdFromDraftThreadMappingKey,
   removeProjectDraftMappingsForThread,
@@ -75,6 +76,7 @@ import {
   stripNonStickyModelOptions,
 } from "./composerDraftModels";
 import { isComposerAppSnapCaptureSource } from "./lib/composerImageSource";
+import { WORK_ITEM_ATTACHMENT_LIMIT, workItemKey } from "./lib/composerWorkItems";
 import {
   BROWSER_ANNOTATION_MAX_COUNT,
   nextBrowserAnnotationOrdinal,
@@ -638,6 +640,7 @@ export const createComposerDraftStoreState =
                 fileComments: [],
                 pastedTexts: [],
                 pullRequestContexts: [],
+                workItems: [],
                 skills: [],
                 mentions: [],
               }
@@ -685,6 +688,7 @@ export const createComposerDraftStoreState =
           fileComments: normalizeFileComments(savedDraft.fileComments),
           pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
           pullRequestContexts: normalizePullRequestContexts(savedDraft.pullRequestContexts),
+          workItems: normalizeWorkItems(savedDraft.workItems),
           skills: [...savedDraft.skills],
           mentions: [...savedDraft.mentions],
         };
@@ -1871,6 +1875,61 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    addWorkItem: (threadId, item) => {
+      if (threadId.length === 0) {
+        return false;
+      }
+      let added = false;
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        const nextWorkItems = normalizeWorkItems(
+          [...existing.workItems, item],
+          WORK_ITEM_ATTACHMENT_LIMIT,
+        );
+        if (nextWorkItems.length === existing.workItems.length) {
+          return state;
+        }
+        added = true;
+        const nextDraft: ComposerThreadDraftState = {
+          ...existing,
+          workItems: nextWorkItems,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+      return added;
+    },
+    removeWorkItem: (threadId, itemKey) => {
+      if (threadId.length === 0 || itemKey.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current) {
+          return state;
+        }
+        const nextWorkItems = current.workItems.filter((item) => workItemKey(item) !== itemKey);
+        if (nextWorkItems.length === current.workItems.length) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          workItems: nextWorkItems,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
     addPullRequestContext: (threadId, context) => {
       if (threadId.length === 0) {
         return false;
@@ -2174,6 +2233,7 @@ export const createComposerDraftStoreState =
           fileComments: [],
           pastedTexts: [],
           pullRequestContexts: [],
+          workItems: [],
           skills: [],
           mentions: [],
           restoredSourceProposedPlan: null,

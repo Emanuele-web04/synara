@@ -1,3 +1,4 @@
+import { appendWorkItemsToPrompt } from "../../lib/composerWorkItems";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
 import { projectFoldersSessionIssue } from "@synara/shared/projectFolders";
@@ -129,6 +130,7 @@ export function useChatTurnSubmission({
   composerTerminalContexts,
   composerPastedTexts,
   composerPullRequestContexts,
+  composerWorkItems,
   restoredQueuedSourceProposedPlanRef,
   enqueueQueuedComposerTurn,
   setComposerDraftPrompt,
@@ -150,6 +152,7 @@ export function useChatTurnSubmission({
   composerTerminalContextsRef,
   composerPastedTextsRef,
   composerPullRequestContextsRef,
+
   setPrompt,
   addComposerImagesToDraft,
   addComposerFilesToDraft,
@@ -388,6 +391,7 @@ export function useChatTurnSubmission({
       const composerTerminalContextsForSend =
         queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
       const composerPastedTextsForSend = queuedChatTurn?.pastedTexts ?? composerPastedTexts;
+      const composerWorkItemsForSend = queuedChatTurn?.workItems ?? composerWorkItems;
       const composerPullRequestContextsForSend =
         queuedChatTurn?.pullRequestContexts ?? composerPullRequestContexts;
       const selectedComposerSkillsForSend =
@@ -420,6 +424,7 @@ export function useChatTurnSubmission({
         terminalContexts: composerTerminalContextsForSend,
         pastedTexts: composerPastedTextsForSend,
         pullRequestContexts: composerPullRequestContextsForSend,
+        workItemCount: composerWorkItemsForSend.length,
       });
       let trimmedPromptForSend = trimmed;
       const restoredQueuedPlanDraftSource =
@@ -437,6 +442,8 @@ export function useChatTurnSubmission({
         showPlanFollowUpPrompt &&
         activeProposedPlan !== null;
       const hasStructuredPlanFollowUpContent =
+        composerWorkItemsForSend.length > 0 ||
+        sendableComposerPullRequestContexts.length > 0 ||
         composerImagesForSend.length > 0 ||
         composerFilesForSend.length > 0 ||
         composerAssistantSelectionsForSend.length > 0 ||
@@ -483,6 +490,8 @@ export function useChatTurnSubmission({
         }
       }
       const hasNoStructuredComposerContext =
+        composerWorkItemsForSend.length === 0 &&
+        sendableComposerPullRequestContexts.length === 0 &&
         composerImagesForSend.length === 0 &&
         composerFilesForSend.length === 0 &&
         composerAssistantSelectionsForSend.length === 0 &&
@@ -663,6 +672,7 @@ export function useChatTurnSubmission({
             fileComments: composerFileCommentsForSend,
             pastedTexts: sendableComposerPastedTexts,
             pullRequestContexts: sendableComposerPullRequestContexts,
+            workItems: composerWorkItemsForSend,
           }),
           prompt: promptForSend,
           images: queuedImagesForPersistence,
@@ -673,6 +683,7 @@ export function useChatTurnSubmission({
           terminalContexts: sendableComposerTerminalContexts,
           pastedTexts: sendableComposerPastedTexts,
           pullRequestContexts: sendableComposerPullRequestContexts,
+          workItems: composerWorkItemsForSend,
           skills: selectedComposerSkillsForSend,
           mentions: selectedComposerMentionsForSend,
           selectedProvider: selectedProviderForSend,
@@ -770,6 +781,7 @@ export function useChatTurnSubmission({
       const composerFileCommentsSnapshot = [...composerFileCommentsForSend];
       const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
       const composerPastedTextsSnapshot = [...sendableComposerPastedTexts];
+      const composerWorkItemsSnapshot = [...composerWorkItemsForSend];
       const composerPullRequestContextsSnapshot = [...sendableComposerPullRequestContexts];
       const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
       const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
@@ -778,21 +790,24 @@ export function useChatTurnSubmission({
       // browser annotations (outermost). The display extractors unwrap them in the
       // reverse order.
       const messageTextForSend = appendBrowserAnnotationsToPrompt(
-        appendPullRequestContextsToPrompt(
-          appendPastedTextsToPrompt(
-            appendFileCommentsToPrompt(
-              appendTerminalContextsToPrompt(
-                appendAssistantSelectionsToPrompt(
-                  promptForSend,
-                  composerAssistantSelectionsSnapshot,
+        appendWorkItemsToPrompt(
+          appendPullRequestContextsToPrompt(
+            appendPastedTextsToPrompt(
+              appendFileCommentsToPrompt(
+                appendTerminalContextsToPrompt(
+                  appendAssistantSelectionsToPrompt(
+                    promptForSend,
+                    composerAssistantSelectionsSnapshot,
+                  ),
+                  composerTerminalContextsSnapshot,
                 ),
-                composerTerminalContextsSnapshot,
+                composerFileCommentsSnapshot,
               ),
-              composerFileCommentsSnapshot,
+              composerPastedTextsSnapshot,
             ),
-            composerPastedTextsSnapshot,
+            composerPullRequestContextsSnapshot,
           ),
-          composerPullRequestContextsSnapshot,
+          composerWorkItemsSnapshot,
         ),
         composerBrowserAnnotationsSnapshot,
         messageIdForSend,
@@ -959,6 +974,7 @@ export function useChatTurnSubmission({
         composerTerminalContextsSnapshot,
         composerPastedTextsSnapshot,
         composerPullRequestContextsSnapshot,
+        composerWorkItemsSnapshot,
         composerSkillsSnapshot,
         composerMentionsSnapshot,
       });
@@ -1022,6 +1038,7 @@ export function useChatTurnSubmission({
       composerTerminalContexts,
       composerPastedTexts,
       composerPullRequestContexts,
+      composerWorkItems,
       restoredQueuedSourceProposedPlanRef,
       enqueueQueuedComposerTurn,
       setComposerDraftPrompt,

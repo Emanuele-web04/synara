@@ -58,6 +58,7 @@ interface ChatQueuedTurnsInput {
   addComposerPastedTextsToDraft: ReturnType<
     typeof useChatComposerDraft
   >["addComposerPastedTextsToDraft"];
+  addComposerWorkItemToDraft: ReturnType<typeof useChatComposerDraft>["addComposerWorkItemToDraft"];
   addComposerPullRequestContextsToDraft: ReturnType<
     typeof useChatComposerDraft
   >["addComposerPullRequestContextsToDraft"];
@@ -122,6 +123,7 @@ export function useChatQueuedTurns({
   addComposerTerminalContextsToDraft,
   addComposerPastedTextsToDraft,
   addComposerPullRequestContextsToDraft,
+  addComposerWorkItemToDraft,
   updateSelectedComposerSkills,
   updateSelectedComposerMentions,
   setRestoredQueuedSourceProposedPlan,
@@ -228,6 +230,7 @@ export function useChatQueuedTurns({
           addComposerPastedTextsToDraft(queuedTurn.pastedTexts);
         }
         addComposerPullRequestContextsToDraft(queuedTurn.pullRequestContexts);
+        for (const item of queuedTurn.workItems) addComposerWorkItemToDraft(item);
         updateSelectedComposerSkills(queuedTurn.skills);
         updateSelectedComposerMentions(queuedTurn.mentions);
       } else {
@@ -272,6 +275,7 @@ export function useChatQueuedTurns({
       addComposerTerminalContextsToDraft,
       addComposerPastedTextsToDraft,
       addComposerPullRequestContextsToDraft,
+      addComposerWorkItemToDraft,
       clearComposerDraftContent,
       scheduleComposerFocus,
       setDraftThreadContext,

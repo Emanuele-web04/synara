@@ -190,6 +190,12 @@ import type {
   GitHubIssueDetailInput,
 } from "./githubInbox";
 import type {
+  WorkItemAvailabilityInput,
+  WorkItemAvailabilityResult,
+  WorkItemSearchInput,
+  WorkItemSearchResult,
+} from "./workItems";
+import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
@@ -1267,6 +1273,10 @@ export interface NativeApi {
     setPinned: (input: PullRequestSetPinnedInput) => Promise<PullRequestSetPinnedResult>;
     getAutoFix: (input: PullRequestAutoFixGetInput) => Promise<PullRequestAutoFixListResult>;
     setAutoFix: (input: PullRequestAutoFixSetInput) => Promise<PullRequestAutoFixResult>;
+  };
+  workItems: {
+    search: (input: WorkItemSearchInput) => Promise<WorkItemSearchResult>;
+    availability: (input: WorkItemAvailabilityInput) => Promise<WorkItemAvailabilityResult>;
   };
   contextMenu: {
     show: <T extends string>(

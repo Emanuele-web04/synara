@@ -1,3 +1,4 @@
+import type { WorkItemDraft } from "../../lib/composerWorkItems";
 import {
   type BrowserAnnotationDraft,
   type ComposerFileAttachment,
@@ -23,6 +24,7 @@ export function buildQueuedComposerPreviewText(input: {
   fileComments: ReadonlyArray<FileCommentDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
   pullRequestContexts: ReadonlyArray<PullRequestContextDraft>;
+  workItems?: ReadonlyArray<WorkItemDraft>;
 }): string {
   if (input.trimmedPrompt.length > 0) {
     return input.trimmedPrompt;
@@ -54,6 +56,8 @@ export function buildQueuedComposerPreviewText(input: {
   if (pastedTitle) {
     return pastedTitle;
   }
+  if (input.workItems?.length)
+    return input.workItems.map((item) => `#${item.number} ${item.title}`).join(", ");
   const pullRequestTitle = formatPullRequestContextTitleSeed(input.pullRequestContexts);
   if (pullRequestTitle) {
     return pullRequestTitle;
