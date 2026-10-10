@@ -233,6 +233,9 @@ export interface ProviderServiceShape {
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
+  /** Apply a new idle window to idle runtimes; 0 disables, undefined restores the server default. */
+  readonly configureRuntimeIdleStopMs?: (runtimeIdleStopMs: number | undefined) => void;
+
   /**
    * Whether provider-native background tasks are currently keeping the
    * thread's runtime alive. Restart-oriented recovery paths must check this

@@ -10,6 +10,7 @@
  * @module ProviderServiceLive
  */
 import {
+  DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
   defaultInstanceIdForDriver,
   EventId,
   ProviderCompactThreadInput,
@@ -157,7 +158,7 @@ export interface ProviderServiceLiveOptions {
   ) => Effect.Effect<boolean, ProviderValidationError>;
 }
 
-const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
+const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES * 60_000;
 export const PROVIDER_RUNTIME_EVENT_BUFFER_CAPACITY = 2_048;
 export const PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES = 16 * 1024;
 const configuredProviderRuntimeIdleStopMs = process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS;
@@ -1002,6 +1003,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     );
     const runtimeEventProducerScope = yield* Scope.make("sequential");
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
+    // Keep eligible runtimes while auto-stop is disabled so enabling it needs no new event.
+    const runtimeIdleCandidates = new Set<ThreadId>();
     const liveRuntimeTaskIds = new Map<ThreadId, Set<string>>();
     const runtimeTaskSettlementWaiters = new Map<ThreadId, Set<() => void>>();
     // Fired idle callbacks outlive their timer map entry, so use generations to
@@ -1012,10 +1015,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const runtimeIdleSensitiveWorkInFlight = new Map<ThreadId, number>();
     const providerInterruptionFences = new Map<ThreadId, ProviderInterruptionFence>();
     const targetedChildInterruptTombstones = new Map<string, TargetedChildInterruptTombstone>();
-    const runtimeIdleStopMs = Math.max(
+    const initialRuntimeIdleStopMs = Math.max(
       0,
       options?.runtimeIdleStopMs ?? PROVIDER_RUNTIME_IDLE_STOP_MS,
     );
+    let runtimeIdleStopMs = initialRuntimeIdleStopMs;
     let fireIdleRuntimeStop:
       | ((threadId: ThreadId, generation: symbol, cleanupStarted?: boolean) => void)
       | null = null;
@@ -1034,11 +1038,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       if (generation === undefined || isRuntimeIdleGenerationCurrent(threadId, generation)) {
         runtimeIdleGenerations.delete(threadId);
         runtimeIdleCleanupGenerations.delete(threadId);
+        runtimeIdleCandidates.delete(threadId);
       }
     };
 
     const clearRuntimeIdleTimer = (threadId: ThreadId) => {
       invalidateRuntimeIdleGeneration(threadId);
+      runtimeIdleCandidates.delete(threadId);
       const timer = runtimeIdleTimers.get(threadId);
       if (!timer) {
         return;
@@ -1057,9 +1063,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
       if (runtimeIdleStopMs <= 0) {
         retireRuntimeIdleGeneration(threadId);
+        runtimeIdleCandidates.add(threadId);
         return;
       }
 
+      runtimeIdleCandidates.add(threadId);
       const generation = invalidateRuntimeIdleGeneration(threadId);
       const timer = setTimeout(() => {
         runtimeIdleTimers.delete(threadId);
@@ -1067,6 +1075,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }, runtimeIdleStopMs);
       timer.unref();
       runtimeIdleTimers.set(threadId, timer);
+    };
+
+    const configureRuntimeIdleStopMs: NonNullable<
+      ProviderServiceShape["configureRuntimeIdleStopMs"]
+    > = (nextRuntimeIdleStopMs) => {
+      const next = Math.max(0, nextRuntimeIdleStopMs ?? initialRuntimeIdleStopMs);
+      if (next === runtimeIdleStopMs) return;
+      runtimeIdleStopMs = next;
+      // Rescheduling deletes and re-adds candidates, so iterate a snapshot.
+      const candidates = [...runtimeIdleCandidates];
+      for (const threadId of candidates) {
+        // An admitted teardown owns its cleanup barrier and retries even after
+        // auto-stop is disabled. Only timers/probes awaiting admission are reset.
+        if (runtimeIdleCleanupGenerations.has(threadId)) continue;
+        scheduleRuntimeIdleStop(threadId);
+      }
     };
 
     const markRuntimeTaskLive = (threadId: ThreadId, taskId: string): void => {
@@ -1293,7 +1317,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ),
         );
         const existingIdleStop = runtimeIdleStopsInFlight.get(threadId);
-        const displacedIdleStop = existingIdleStop !== undefined || runtimeIdleTimers.has(threadId);
+        const displacedIdleStop =
+          existingIdleStop !== undefined ||
+          runtimeIdleTimers.has(threadId) ||
+          runtimeIdleCandidates.has(threadId);
         const waitForExistingIdleStop =
           existingIdleStop !== undefined ? Effect.promise(() => existingIdleStop) : Effect.void;
         return waitForInterruptionFence.pipe(
@@ -4704,7 +4731,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ),
                 );
               }
-              const displacedTimer = runtimeIdleTimers.has(threadId);
+              const displacedTimer =
+                runtimeIdleTimers.has(threadId) || runtimeIdleCandidates.has(threadId);
               clearRuntimeIdleTimer(threadId);
               const generation = invalidateRuntimeIdleGeneration(threadId);
               let resolveStop!: () => void;
@@ -5167,6 +5195,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             clearTimeout(timer);
           }
           runtimeIdleTimers.clear();
+          runtimeIdleCandidates.clear();
           for (const threadId of new Set([
             ...liveRuntimeTaskIds.keys(),
             ...runtimeTaskSettlementWaiters.keys(),
@@ -5220,6 +5249,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       stopRuntimeSession,
       stopIdleRuntimeSession,
+      configureRuntimeIdleStopMs,
       hasLiveRuntimeTasks,
       clearSessionResumeCursor,
       listSessions,
