@@ -695,7 +695,9 @@ export function parseAntigravityModelLines(output: string): ProviderListModelsRe
         (rightIndex < 0 ? EFFORT_ORDER.length : rightIndex)
       );
     });
-    const defaultEffort = DEFAULT_EFFORT_BY_MODEL[model] ?? efforts[0];
+    const preferredEffort = DEFAULT_EFFORT_BY_MODEL[model];
+    const defaultEffort =
+      preferredEffort && efforts.includes(preferredEffort) ? preferredEffort : efforts[0];
     return {
       slug: model,
       name: model,
