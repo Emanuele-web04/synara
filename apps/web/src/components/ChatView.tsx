@@ -174,11 +174,7 @@ import {
 } from "../lib/runtimeMode";
 import { addSelectionToSide, startSelectionChat } from "../lib/selectionChat";
 import { waitForSidechatCreator } from "../lib/sidechatCreatorRegistry";
-import {
-  formatSubagentModelLabel,
-  resolveSubagentPresentationForThread,
-  resolveSubagentThreadStatusKind,
-} from "../lib/subagentPresentation";
+import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import {
   insertInlineTerminalContextPlaceholder,
   type TerminalContextSelection,
@@ -277,7 +273,7 @@ import {
   shouldStartActiveTurnLayoutGrace,
   type PendingFileUndo,
 } from "./ChatView.logic";
-import { createThreadLineageSelector, localSubagentThreadId } from "./ChatView.selectors";
+import { createThreadLineageSelector } from "./ChatView.selectors";
 import { ComposerPromptEditor } from "./ComposerPromptEditor";
 import PlanSidebar from "./PlanSidebar";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -335,15 +331,11 @@ import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./chat/composerStackedPa
 import { ComposerPullRequestAutoFixHint } from "./chat/ComposerPullRequestAutoFixHint";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import {
-  findLatestRunningSubagentRun,
-  subagentRunPhaseStatusKind,
-} from "./chat/SubagentRunCard.logic";
-import type { SubagentThreadPresentation } from "./chat/SubagentThreadIntro";
+import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
+import { useSubagentRunControls } from "./chat/useSubagentRunControls";
 import {
   collectForegroundRunningSubagentStripItems,
   collectRunningSubagentStripItems,
-  type ComposerSubagentStripItem,
 } from "./chat/ComposerSubagentStrip.logic";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ExpandedImageOverlay } from "./chat/ExpandedImageOverlay";
@@ -819,6 +811,7 @@ export default function ChatView({
 
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
+  const [subagentStripCompact, setSubagentStripCompact] = useState(false);
   const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
@@ -1512,11 +1505,8 @@ export default function ChatView({
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const {
     workLogEntries,
-    subagentRunThreads,
-    backgroundedSubagentToolUseIds,
-    subagentTaskEnds,
-    subagentThreadRunRow,
     composerSubagentStripItems,
+    subagentRoster,
     stripSourceThreadId,
     workflowRunState,
   } = useChatWorkLog({
@@ -1524,29 +1514,6 @@ export default function ChatView({
     latestTurnSettled,
     latestTurnLive,
   });
-  // The newest transcript card with subagents still at work, for the floating
-  // "N running" chip that brings it back into view.
-  const runningSubagentRunParentId = activeThread?.parentThreadId ?? activeThread?.id ?? null;
-  const subagentRunLiveTurnId = latestTurnLive ? activeLatestTurnId : null;
-  const runningSubagentRun = useMemo(
-    () =>
-      findLatestRunningSubagentRun({
-        entries: workLogEntries,
-        threads: subagentRunThreads,
-        parentThreadId: runningSubagentRunParentId,
-        liveTurnId: subagentRunLiveTurnId,
-        taskEndByToolUseId: subagentTaskEnds,
-        backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
-      }),
-    [
-      backgroundedSubagentToolUseIds,
-      runningSubagentRunParentId,
-      subagentRunLiveTurnId,
-      subagentRunThreads,
-      subagentTaskEnds,
-      workLogEntries,
-    ],
-  );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
     () => deriveAgentActivityTimelineState(workLogEntries),
@@ -1939,76 +1906,12 @@ export default function ChatView({
       ? (composerThreadProjects.find((project) => project.id === crossTaskSourceThread?.projectId)
           ?.name ?? null)
       : null;
-  // A subagent's own thread says whose subagent it is (the launching agent:
-  // the main thread, or for a nested one the subagent that launched it), its
-  // role · model · state, and shows the brief as a card from that agent.
-  const subagentParentThreadId = serverThread?.parentThreadId
-    ? (crossTaskSourceThreadId ?? serverThread.parentThreadId)
-    : null;
-  const subagentParentTitle = crossTaskSourceThread
-    ? crossTaskSourceThread.parentThreadId
-      ? resolveSubagentPresentationForThread({ thread: crossTaskSourceThread }).primaryLabel
-      : crossTaskSourceThread.title
-    : null;
-  const subagentStartedAt =
-    (subagentThreadRunRow?.startedAtMs != null
-      ? new Date(subagentThreadRunRow.startedAtMs).toISOString()
-      : null) ??
-    serverThread?.messages.find((message) => message.dispatchOrigin === "agent")?.createdAt ??
-    serverThread?.createdAt ??
-    null;
-  const subagentStatusKind = serverThread?.parentThreadId
-    ? subagentThreadRunRow
-      ? subagentRunPhaseStatusKind(subagentThreadRunRow.phase)
-      : latestTurnLive
-        ? "running"
-        : resolveSubagentThreadStatusKind({
-            error: serverThread.error,
-            session: serverThread.session,
-            latestTurn: serverThread.latestTurn,
-          })
-    : null;
-  const subagentRole = serverThread?.subagentRole ?? null;
-  const subagentModelLabel = formatSubagentModelLabel(serverThread?.modelSelection.model) ?? null;
-  const subagentProvider = serverThread?.modelSelection.provider ?? null;
-  const subagentEndedAt =
-    subagentThreadRunRow?.endedAtMs != null
-      ? new Date(subagentThreadRunRow.endedAtMs).toISOString()
-      : (serverThread?.latestTurn?.completedAt ?? null);
-  const subagentThread = useMemo<SubagentThreadPresentation | null>(
-    () =>
-      subagentParentThreadId && subagentProvider
-        ? {
-            parentThreadId: subagentParentThreadId,
-            parentTitle: subagentParentTitle ?? "the parent thread",
-            role: subagentRole,
-            modelLabel: subagentModelLabel,
-            provider: subagentProvider,
-            statusKind: subagentStatusKind,
-            startedAt: subagentStartedAt,
-            endedAt: subagentEndedAt,
-          }
-        : null,
-    [
-      subagentEndedAt,
-      subagentModelLabel,
-      subagentParentThreadId,
-      subagentParentTitle,
-      subagentProvider,
-      subagentRole,
-      subagentStartedAt,
-      subagentStatusKind,
-    ],
-  );
   const resolvedCrossTaskOrigin = useMemo(
     () =>
-      // The subagent intro already names the launching agent and links to it.
-      subagentThread
-        ? null
-        : crossTaskOrigin && crossTaskOriginGroupName
-          ? { ...crossTaskOrigin, coordinatorGroupName: crossTaskOriginGroupName }
-          : crossTaskOrigin,
-    [crossTaskOrigin, crossTaskOriginGroupName, subagentThread],
+      crossTaskOrigin && crossTaskOriginGroupName
+        ? { ...crossTaskOrigin, coordinatorGroupName: crossTaskOriginGroupName }
+        : crossTaskOrigin,
+    [crossTaskOrigin, crossTaskOriginGroupName],
   );
   const [coordinatorSettingsOpen, setCoordinatorSettingsOpen] = useState(false);
   const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
@@ -3849,46 +3752,16 @@ export default function ChatView({
     });
   }, [activeThread, workflowRunState]);
 
-  const onBackgroundSubagentStripItem = useCallback(
-    async (item: ComposerSubagentStripItem) => {
-      const api = readNativeApi();
-      // The Task tool_use lives on the strip source thread (the parent while a
-      // subagent thread is open), so route the command there.
-      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
-        return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.task.background",
-        commandId: newCommandId(),
-        threadId: stripSourceThreadId,
-        toolUseId: item.providerThreadId,
-        createdAt: new Date().toISOString(),
-      });
-    },
-    [stripSourceThreadId],
-  );
+  const {
+    backgroundSubagent: onBackgroundSubagentStripItem,
+    stopSubagent: onStopSubagentStripItem,
+  } = useSubagentRunControls(stripSourceThreadId);
 
-  // Stop goes through the interrupt seam: on a subagent thread the reactor
-  // resolves the tool_use_id and stops that task instead of the whole turn.
-  // Target the canonical child id derived from the strip source thread —
-  // item.threadId can still be the raw tool_use_id while client-side thread
-  // resolution lags, which the server would reject as an unknown thread.
-  const onStopSubagentStripItem = useCallback(
-    async (item: ComposerSubagentStripItem) => {
-      const api = readNativeApi();
-      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
-        return;
-      const childThreadId = localSubagentThreadId(stripSourceThreadId, item.providerThreadId);
-      if (isThreadDetailAwaitingVerification(childThreadId)) return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.interrupt",
-        requestedBy: "user",
-        commandId: newCommandId(),
-        threadId: childThreadId,
-        createdAt: new Date().toISOString(),
-      });
-    },
-    [stripSourceThreadId],
-  );
+  // Stop-all fans out through the same per-row stop so both paths share one seam.
+  const onStopAllSubagentStripItems = useCallback(async () => {
+    const running = collectRunningSubagentStripItems(composerSubagentStripItems);
+    await Promise.all(running.map((item) => onStopSubagentStripItem(item)));
+  }, [composerSubagentStripItems, onStopSubagentStripItem]);
 
   // Ctrl+B parity with the native CLI: send every foreground running subagent to
   // the background at once, fanning through the same per-row background dispatch.
@@ -3896,6 +3769,7 @@ export default function ChatView({
     const foreground = collectForegroundRunningSubagentStripItems(composerSubagentStripItems);
     await Promise.all(foreground.map((item) => onBackgroundSubagentStripItem(item)));
   }, [composerSubagentStripItems, onBackgroundSubagentStripItem]);
+
   // Pause is the same stop command; the persisted flag makes the settled card
   // read as paused (with a resume affordance) instead of plain stopped, across
   // reloads too.
@@ -5299,35 +5173,6 @@ export default function ChatView({
       }),
     [isEditorRail, navigate],
   );
-  // What the transcript's subagent cards read from this chat. Stop and
-  // background go through the same per-row dispatches the keyboard uses.
-  const activeThreadIdForSubagentRuns = activeThread?.id ?? null;
-  const subagentRunContext = useMemo(
-    () =>
-      activeThreadIdForSubagentRuns
-        ? {
-            parentThreadId: runningSubagentRunParentId,
-            liveTurnId: subagentRunLiveTurnId,
-            threads: subagentRunThreads,
-            backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
-            taskEndByToolUseId: subagentTaskEnds,
-            onOpenThread: onNavigateToThread,
-            onStop: onStopSubagentStripItem,
-            onBackground: onBackgroundSubagentStripItem,
-          }
-        : null,
-    [
-      activeThreadIdForSubagentRuns,
-      runningSubagentRunParentId,
-      subagentRunLiveTurnId,
-      subagentTaskEnds,
-      backgroundedSubagentToolUseIds,
-      onBackgroundSubagentStripItem,
-      onNavigateToThread,
-      onStopSubagentStripItem,
-      subagentRunThreads,
-    ],
-  );
   const onOpenAutomation = useCallback(
     (automationId: string) => {
       void navigate({
@@ -5881,6 +5726,7 @@ export default function ChatView({
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
     sidechats: environmentSidechats,
+    subagentRoster,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
     branchToolbar: activeThreadIsSidechat ? null : branchToolbarProps,
@@ -5968,6 +5814,7 @@ export default function ChatView({
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
   const showComposerWorkflowRunCard = workflowRunState !== null;
+  const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
   const showComposerComputerControlEffortHint = shouldShowComputerControlEffortHint({
@@ -6075,6 +5922,22 @@ export default function ChatView({
                 attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
               />
             ) : null}
+            {showComposerSubagentStrip ? (
+              <ComposerSubagentStrip
+                items={composerSubagentStripItems}
+                compact={subagentStripCompact}
+                onCompactChange={setSubagentStripCompact}
+                onOpenThread={onNavigateToThread}
+                onBackgroundItem={onBackgroundSubagentStripItem}
+                onStopItem={onStopSubagentStripItem}
+                onStopAll={onStopAllSubagentStripItems}
+                attachedToPrevious={
+                  showComposerLiveChangesHeader ||
+                  showComposerActiveTaskListCard ||
+                  showComposerWorkflowRunCard
+                }
+              />
+            ) : null}
             <ComposerQueuedHeader
               queuedTurns={queuedComposerTurns}
               onSteer={onSteerQueuedComposerTurn}
@@ -6087,7 +5950,8 @@ export default function ChatView({
               attachedToPrevious={
                 showComposerLiveChangesHeader ||
                 showComposerActiveTaskListCard ||
-                showComposerWorkflowRunCard
+                showComposerWorkflowRunCard ||
+                showComposerSubagentStrip
               }
             />
             {showComposerGoalHeader && activeThread ? (
@@ -6105,6 +5969,7 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
+                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0
                 }
               />
@@ -6117,6 +5982,7 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
+                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader
                 }
@@ -6140,6 +6006,7 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
+                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader ||
                   showComposerComputerControlEffortHint
@@ -6154,6 +6021,7 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
+                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader ||
                   showComposerComputerControlEffortHint ||
@@ -6170,6 +6038,7 @@ export default function ChatView({
                 showComposerLiveChangesHeader ||
                 showComposerActiveTaskListCard ||
                 showComposerWorkflowRunCard ||
+                showComposerSubagentStrip ||
                 queuedComposerTurns.length > 0 ||
                 showComposerGoalHeader ||
                 showComposerComputerControlEffortHint ||
@@ -6431,7 +6300,7 @@ export default function ChatView({
                         : showPlanFollowUpPrompt && activeProposedPlan
                           ? "Add feedback to refine the plan, or leave this blank to implement it"
                           : activeThread?.parentThreadId
-                            ? "Message this subagent"
+                            ? "Message this subagent while it works"
                             : hasLiveTurn
                               ? "Ask for follow-up changes"
                               : standaloneSidechatContext
@@ -6848,9 +6717,6 @@ export default function ChatView({
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     subagentsRunning={hasRunningSubagents}
-                    subagentRun={subagentRunContext}
-                    runningSubagentRun={runningSubagentRun}
-                    subagentThread={subagentThread}
                     collapseFinishedTurns={settings.collapseFinishedTurns}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}

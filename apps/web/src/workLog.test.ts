@@ -705,7 +705,7 @@ describe("deriveWorkLogEntries", () => {
             kind: "task.updated",
             createdAt: "2026-10-10T00:10:00.000Z",
             turnId: "turn-bg",
-            payload: { taskId: "task-1", taskType: "local_bash", isBackgrounded: true },
+            payload: { taskId: "task-1", isBackgrounded: true },
           }),
         ],
         undefined,
@@ -793,36 +793,81 @@ describe("deriveWorkLogEntries", () => {
       expect(entries[0]?.backgroundTask?.description).toBe("Build docs");
     });
 
-    it("keeps the notice for subagents moved to the background", () => {
-      const entries = deriveWorkLogEntries(
-        [
-          launchCall("launch", "toolu_1", "sleep 20", "2026-10-10T00:09:57.641Z"),
-          notice("moved", [["task-1", "Sleep"]], "2026-10-10T00:09:57.642Z"),
-          taskStarted("task-1", "toolu_1", "2026-10-10T00:09:57.643Z"),
-          makeActivity({
-            id: "moved-agent",
-            createdAt: "2026-10-10T00:10:00.000Z",
-            kind: "runtime.warning",
-            summary: "Moved to background",
-            tone: "info",
-            turnId: "turn-bg",
-            payload: {
-              message: "Research",
-              nativeEventType: "background_tasks_changed",
-              data: {
-                tasks: [
-                  { task_id: "task-1", task_type: "local_bash", description: "Sleep" },
-                  { task_id: "agent-1", task_type: "local_agent", description: "Research" },
-                ],
+    it.each(["update-first", "notice-first", "start-last"])(
+      "keeps manually backgrounded subagents and their notice (%s)",
+      (order) => {
+        const entries = deriveWorkLogEntries(
+          [
+            launchCall("launch", "toolu_1", "sleep 20", "2026-10-10T00:09:57.641Z"),
+            notice("moved", [["task-1", "Sleep"]], "2026-10-10T00:09:57.642Z"),
+            taskStarted("task-1", "toolu_1", "2026-10-10T00:09:57.643Z"),
+            makeActivity({
+              id: "launch-agent",
+              createdAt: "2026-10-10T00:09:58.000Z",
+              kind: "tool.completed",
+              turnId: "turn-bg",
+              payload: {
+                itemType: "collab_agent_tool_call",
+                status: "completed",
+                data: {
+                  toolCallId: "toolu_agent",
+                  toolName: "Agent",
+                  receiverThreadId: "toolu_agent",
+                  nickname: "Research",
+                  agentStates: { toolu_agent: { status: "running" } },
+                },
               },
-            },
-          }),
-        ],
-        undefined,
-        options,
-      );
-      expect(entries.map((entry) => entry.id)).toEqual(["launch", "moved-agent"]);
-    });
+            }),
+            makeActivity({
+              id: "agent-started",
+              createdAt:
+                order === "start-last" ? "2026-10-10T00:10:01.000Z" : "2026-10-10T00:09:58.001Z",
+              kind: "task.started",
+              turnId: "turn-bg",
+              payload: { taskId: "agent-1", taskType: "local_agent", toolUseId: "toolu_agent" },
+            }),
+            makeActivity({
+              id: "manual-agent-background",
+              createdAt:
+                order === "notice-first" ? "2026-10-10T00:10:01.000Z" : "2026-10-10T00:09:59.000Z",
+              kind: "task.updated",
+              turnId: "turn-bg",
+              // The runtime activity projection does not repeat taskType here.
+              payload: { taskId: "agent-1", toolUseId: "toolu_agent", isBackgrounded: true },
+            }),
+            makeActivity({
+              id: "moved-agent",
+              createdAt: "2026-10-10T00:10:00.000Z",
+              kind: "runtime.warning",
+              summary: "Moved to background",
+              tone: "info",
+              turnId: "turn-bg",
+              payload: {
+                message: "Research",
+                nativeEventType: "background_tasks_changed",
+                data: {
+                  tasks: [
+                    { task_id: "task-1", task_type: "local_bash", description: "Sleep" },
+                    { task_id: "agent-1", task_type: "local_agent", description: "Research" },
+                  ],
+                },
+              },
+            }),
+          ],
+          undefined,
+          options,
+        );
+        expect(entries[1]?.subagents).toMatchObject([
+          { threadId: "toolu_agent", rawStatus: "running" },
+        ]);
+        expect(entries.map((entry) => entry.id)).toEqual(["launch", "launch-agent", "moved-agent"]);
+        expect(
+          entries
+            .filter((entry) => entry.backgroundTask)
+            .map((entry) => entry.backgroundTask?.taskId),
+        ).toEqual(["task-1"]);
+      },
+    );
   });
 
   it("keeps a stopped turn's late subagent completions in that turn", () => {
