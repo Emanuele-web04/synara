@@ -46,6 +46,11 @@ async function seedStableHome(root: string): Promise<string> {
   writeFileSync(join(stableState, "secrets", "token.json"), JSON.stringify({ token: "x" }));
   writeFileSync(join(stableState, "logs", "server.log"), "log line\n");
   writeFileSync(join(stableState, "server-runtime.json"), JSON.stringify({ pid: 1234 }));
+  writeFileSync(join(stableState, "environment-id"), "stable-environment");
+  writeFileSync(
+    join(stableState, "device-boot-ownership.json"),
+    JSON.stringify({ version: 1, pid: 1234, udids: ["stable-device"] }),
+  );
 
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(join(stableState, "state.sqlite"));
@@ -123,6 +128,8 @@ describe("runBetaImportIfRequested", () => {
     expect(existsSync(join(betaState, "secrets", "token.json"))).toBe(true);
     expect(existsSync(join(betaState, "logs"))).toBe(false);
     expect(existsSync(join(betaState, "server-runtime.json"))).toBe(false);
+    expect(existsSync(join(betaState, "environment-id"))).toBe(false);
+    expect(existsSync(join(betaState, "device-boot-ownership.json"))).toBe(false);
   });
 
   it("keeps the existing Beta database and settings if a Stable secret is linked", async () => {
@@ -176,18 +183,25 @@ describe("runBetaImportIfRequested", () => {
     },
   );
 
-  it("preserves Beta-only entries inside a directory while re-copying Stable data", async () => {
+  it("preserves Beta runtime identity and Beta-only entries while re-copying Stable data", async () => {
     const stableHome = await seedStableHome(makeRoot());
     const betaHome = join(stableHome, "..", ".synara-beta");
     const betaState = join(betaHome, "userdata");
     mkdirSync(join(betaState, "secrets"), { recursive: true });
     writeFileSync(join(betaState, "secrets", "beta-only.json"), "beta-only");
+    writeFileSync(join(betaState, "environment-id"), "beta-environment");
+    const betaBootOwnership = JSON.stringify({ version: 1, pid: 5678, udids: ["beta-device"] });
+    writeFileSync(join(betaState, "device-boot-ownership.json"), betaBootOwnership);
     writeMarker(betaHome, stableHome);
 
     const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
     expect(outcome).toEqual({ consumed: true, ok: true });
     expect(readFileSync(join(betaState, "secrets", "beta-only.json"), "utf8")).toBe("beta-only");
     expect(existsSync(join(betaState, "secrets", "token.json"))).toBe(true);
+    expect(readFileSync(join(betaState, "environment-id"), "utf8")).toBe("beta-environment");
+    expect(readFileSync(join(betaState, "device-boot-ownership.json"), "utf8")).toBe(
+      betaBootOwnership,
+    );
   });
 
   it("never carries database sidecars or lifecycle locks into the beta home", async () => {
