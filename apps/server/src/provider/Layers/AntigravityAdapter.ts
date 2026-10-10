@@ -73,6 +73,7 @@ import {
   type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
+import { capHistoryBytes } from "../../terminal/terminalHistory.ts";
 
 const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
@@ -448,7 +449,7 @@ export function createBoundedProcessOutput(maxBytes = ANTIGRAVITY_PROCESS_OUTPUT
     if (text.length === 0 || maxBytes <= 0) return;
     const bytes = Buffer.byteLength(text, "utf8");
     if (bytes > maxBytes) {
-      const tail = Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
+      const tail = capHistoryBytes(text, maxBytes, 0);
       chunks.push({ stream, text: tail, bytes: Buffer.byteLength(tail, "utf8") });
       byteLength += chunks[chunks.length - 1]!.bytes;
     } else {
@@ -463,7 +464,7 @@ export function createBoundedProcessOutput(maxBytes = ANTIGRAVITY_PROCESS_OUTPUT
         byteLength -= first.bytes;
         continue;
       }
-      const retained = Buffer.from(first.text, "utf8").subarray(overflow).toString("utf8");
+      const retained = capHistoryBytes(first.text, first.bytes - overflow, 0);
       chunks[0] = { ...first, text: retained, bytes: Buffer.byteLength(retained, "utf8") };
       byteLength -= first.bytes - chunks[0].bytes;
       break;
@@ -524,12 +525,17 @@ export async function runAntigravityHelperProcess(
       // root exit and verified captured descendants are gone. A direct signal
       // can leave an updater/helper descendant alive on Windows.
       void teardownChildProcessTree(child).then(
-        () =>
+        (result) =>
           finish(() =>
             reject(
-              new Error(
-                `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
-              ),
+              result.signalErrors.length > 0
+                ? new Error(
+                    `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${result.signalErrors.map((error) => error.message).join("; ")}`,
+                    { cause: result.signalErrors[0] },
+                  )
+                : new Error(
+                    `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+                  ),
             ),
           ),
         (cause) =>
