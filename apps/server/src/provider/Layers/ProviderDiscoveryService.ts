@@ -460,10 +460,8 @@ const make = Effect.gen(function* () {
           isolateMalformedModelDescriptors({ provider: resolved.provider, result }),
         ),
       );
-      // OMP re-resolves file-backed modelRoles per request, so a shared fresh
-      // window would freeze role/config edits for up to 30 minutes and persist
-      // them across restarts. `omp models` is a cheap subprocess — bypass the
-      // shared cache so every picker read reflects the live catalog.
+      // OMP owns a five-minute CLI catalog cache. Do not layer the shared
+      // thirty-minute fresh window or persisted catalogs over that cadence.
       if (resolved.provider === "omp") {
         return yield* discover;
       }
