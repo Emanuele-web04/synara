@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createAntigravityPrintResultParser,
+  isAntigravityPostResponseTimeout,
   parseAntigravityPrintResult,
 } from "./antigravityPrintResult";
 
@@ -33,6 +34,7 @@ describe("Antigravity print result", () => {
     );
     expect(result).toMatchObject({
       state: "failed",
+      hasCompleteAssistantResponse: true,
       completedResponse: false,
       response: "Finished",
     });
@@ -124,10 +126,21 @@ describe("Antigravity print result", () => {
       { event: "result", result: { status: "ERROR", error: "timeout waiting for response" } },
     ];
     expect(parseAntigravityPrintResult(encode(updates))).toMatchObject({
+      hasCompleteAssistantResponse: true,
       completedResponse: false,
       state: "failed",
       response: "Finished",
+      terminalError: "timeout waiting for response",
     });
+  });
+
+  it("matches only the exact provider timeout used after a durable response", () => {
+    expect(isAntigravityPostResponseTimeout("timeout waiting for response")).toBe(true);
+    expect(isAntigravityPostResponseTimeout("Error: timeout waiting for response")).toBe(true);
+    expect(isAntigravityPostResponseTimeout("quota exceeded; timeout waiting for response")).toBe(
+      false,
+    );
+    expect(isAntigravityPostResponseTimeout("timeout waiting for response: retrying")).toBe(false);
   });
 
   it("does not turn a malformed first protocol line into legacy text", () => {

@@ -9,7 +9,9 @@ import { PassThrough } from "node:stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
 import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import * as processTeardown from "../supervisedProcessTeardown";
 
 import { ServerConfig } from "../../config";
 import { computerToolInstructions } from "../../agentGateway/computerGuidance";
@@ -24,6 +26,8 @@ import {
   buildAntigravityCaptureCommand,
   buildAntigravityHookConfig,
   buildAntigravityTurnProcessEnvironment,
+  createBoundedProcessOutput,
+  ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES,
   buildAntigravityTurnPrompt,
   detectAntigravityBackgroundTaskStart,
   ensureCapturePlugin,
@@ -193,6 +197,42 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
 });
 
 describe("Antigravity CLI integration helpers", () => {
+  it("caps combined stdout and stderr diagnostics by UTF-8 byte length", () => {
+    const output = createBoundedProcessOutput(16);
+
+    output.append("stdout", "😀".repeat(4));
+    output.append("stderr", "x".repeat(16));
+
+    const snapshot = output.snapshot();
+    expect(output.byteLength).toBeLessThanOrEqual(16);
+    expect(
+      Buffer.byteLength(snapshot.stdout, "utf8") + Buffer.byteLength(snapshot.stderr, "utf8"),
+    ).toBeLessThanOrEqual(16);
+    expect(snapshot.stdout).toBe("");
+    expect(snapshot.stderr).toBe("x".repeat(16));
+  });
+
+  it.each([16, ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES])(
+    "retains valid UTF-8 within the %i-byte diagnostic budget when a chunk crosses it",
+    (budget) => {
+      const output = createBoundedProcessOutput(budget);
+      output.append("stdout", "€".repeat(Math.ceil(budget / 3) + 1));
+      expect(output.snapshot()).toEqual({
+        stdout: "€".repeat(Math.floor(budget / 3)),
+        stderr: "",
+      });
+      expect(output.byteLength).toBeLessThanOrEqual(budget);
+    },
+  );
+
+  it("evicts complete UTF-8 characters when the combined pipe budget cuts an older chunk", () => {
+    const output = createBoundedProcessOutput(16);
+    output.append("stdout", "😀".repeat(4));
+    output.append("stderr", "x");
+    expect(output.snapshot()).toEqual({ stdout: "😀".repeat(3), stderr: "x" });
+    expect(output.byteLength).toBe(13);
+  });
+
   it("rotates the gateway lease per print turn and rejects a retained prior bootstrap", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-turn-lease-"));
     const liveTokens = new Set<string>();
@@ -731,7 +771,7 @@ describe("Antigravity CLI integration helpers", () => {
             Stream.filter(
               (event) => event.type === "item.started" || event.type === "item.completed",
             ),
-            Stream.take(4),
+            Stream.take(6),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -757,6 +797,8 @@ describe("Antigravity CLI integration helpers", () => {
                 'post-tool\t{"stepIdx":7,"error":"super-secret-error"}',
                 'pre-tool\t{"stepIdx":8,"toolCall":{"name":"write_to_file","args":{"content":"super-secret-content"}}}',
                 'post-tool\t{"stepIdx":8,"error":""}',
+                'pre-tool\t{"stepIdx":9,"toolCall":{"name":"generate_image","args":{"Prompt":"Draw a diagram","ImageName":"diagram"}}}',
+                'post-tool\t{"stepIdx":9,"error":"Image generation failed"}',
                 "",
               ].join("\n"),
             ),
@@ -765,8 +807,10 @@ describe("Antigravity CLI integration helpers", () => {
           const events = Array.from(
             yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events).toHaveLength(4);
+          expect(events).toHaveLength(6);
           expect(events.map((event) => event.type)).toEqual([
+            "item.started",
+            "item.completed",
             "item.started",
             "item.completed",
             "item.started",
@@ -821,6 +865,31 @@ describe("Antigravity CLI integration helpers", () => {
                 input: { content: "super-secret-content" },
                 rawInput: { content: "super-secret-content" },
                 rawOutput: "",
+              },
+            },
+            {
+              itemType: "image_generation",
+              status: "inProgress",
+              title: "generate_image",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-2`,
+                toolName: "generate_image",
+                arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                input: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawInput: { Prompt: "Draw a diagram", ImageName: "diagram" },
+              },
+            },
+            {
+              itemType: "image_generation",
+              status: "failed",
+              title: "generate_image",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-2`,
+                toolName: "generate_image",
+                arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                input: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawInput: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawOutput: "Image generation failed",
               },
             },
           ]);
@@ -1325,6 +1394,74 @@ describe("Antigravity CLI integration helpers", () => {
     ).rejects.toThrow("Antigravity helper timed out after 50ms");
   });
 
+  it("waits for timeout teardown proof even when the root closes first", async () => {
+    let observed!: (child: ChildProcess) => void;
+    const started = new Promise<ChildProcess>((resolve) => {
+      observed = resolve;
+    });
+    let finishTeardown!: () => void;
+    const teardown = new Promise<processTeardown.SupervisedProcessTeardownResult>((resolve) => {
+      finishTeardown = () => resolve({ escalated: false, signalErrors: [] });
+    });
+    const spy = vi
+      .spyOn(processTeardown, "teardownChildProcessTree")
+      .mockImplementation((child) => {
+        observed(child as ChildProcess);
+        return teardown;
+      });
+    let child: ChildProcess | undefined;
+    let settled = false;
+    const operation = runAntigravityHelperProcess(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        timeoutMs: 30,
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    const rejection = expect(operation).rejects.toThrow("Antigravity helper timed out after 30ms");
+    try {
+      child = await started;
+      const closed = new Promise<void>((resolve) => child!.once("close", () => resolve()));
+      child.kill("SIGKILL");
+      await closed;
+      expect(settled).toBe(false);
+      finishTeardown();
+      await rejection;
+    } finally {
+      finishTeardown();
+      child?.kill("SIGKILL");
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["resolved signal error", "rejected teardown"])(
+    "reports unproven timeout cleanup after %s",
+    async (failure) => {
+      const spy = vi
+        .spyOn(processTeardown, "teardownChildProcessTree")
+        .mockImplementation(async (child) => {
+          const owned = child as ChildProcess;
+          const closed = new Promise<void>((resolve) => owned.once("close", () => resolve()));
+          owned.kill("SIGKILL");
+          await closed;
+          const cause = new Error("helper signal failed");
+          if (failure === "rejected teardown") throw cause;
+          return { escalated: true, signalErrors: [cause] };
+        });
+      try {
+        await expect(
+          runAntigravityHelperProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+            timeoutMs: 30,
+          }),
+        ).rejects.toThrow("teardown was unproven: helper signal failed");
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
   it("reports expected versus minted gateway capabilities when the turn bootstrap is unavailable", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-bootstrap-detail-"));
     const leasedCapabilities: Array<ReadonlyArray<string> | undefined> = [];
@@ -1682,6 +1819,193 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     },
   );
 
+  it.each([
+    { name: "exact timeout", expected: "completed" },
+    { name: "stderr timeout", expected: "completed", stderrOnly: true },
+    { name: "unrelated stderr", expected: "failed", stderr: "quota exceeded" },
+    {
+      name: "evicted earlier stderr error",
+      expected: "failed",
+      stderrChunks: [
+        "quota exceeded\n",
+        " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES),
+        "Error: timeout waiting for response\n",
+      ],
+    },
+    {
+      name: "evicted stderr error before whitespace",
+      expected: "failed",
+      stderrChunks: ["quota exceeded\n", " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES)],
+    },
+    {
+      name: "split stderr timeout",
+      expected: "completed",
+      stderrOnly: true,
+      stderrChunks: ["Error: timeout waiting ", "for response\n"],
+    },
+    { name: "unrelated stream error", expected: "failed", streamError: "quota exceeded" },
+    { name: "earlier stream error", expected: "failed", earlierStreamError: true },
+    { name: "earlier terminal error", expected: "failed", earlierResultError: true },
+    { name: "interrupt result", expected: "interrupted", status: "INTERRUPTED" },
+    { name: "incomplete assistant", expected: "failed", responseState: "ACTIVE" },
+    { name: "signal exit", expected: "failed", signal: "SIGKILL" as const },
+    { name: "unproven teardown", expected: "failed", teardownFailure: true },
+    { name: "teardown signal error", expected: "failed", teardownSignalError: true },
+    { name: "late descendant capture", expected: "failed", lateCapture: true },
+    { name: "unobserved cleanup", expected: "failed", noStopHook: true },
+    { name: "malformed record", expected: "failed", malformed: true },
+    { name: "pending tool", expected: "failed", pendingTool: true },
+    { name: "pending background task", expected: "failed", background: true },
+    { name: "nonterminal status", expected: "failed", status: "WAITING" },
+    { name: "explicit malformed error", expected: "failed", malformedError: true },
+  ])("settles post-response timeout safely: $name", async (scenario) => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "synara-antigravity-post-response-timeout-"),
+    );
+    const children: ChildProcess[] = [];
+    let observeTeardown!: () => void;
+    const teardownObserved = new Promise<void>((resolve) => {
+      observeTeardown = resolve;
+    });
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-post-response-timeout");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* adapter.sendTurn({ threadId, input: "follow-up", attachments: [] });
+          children[0]!.stdout!.emit(
+            "data",
+            [
+              JSON.stringify({
+                event: "step_update",
+                step_update: {
+                  step_index: 1,
+                  state: scenario.responseState ?? "DONE",
+                  step_type: "agent_response",
+                  text_delta: "Finished",
+                },
+              }),
+              ...(scenario.earlierResultError
+                ? [
+                    JSON.stringify({
+                      event: "result",
+                      result: { status: "ERROR", error: "quota exceeded" },
+                    }),
+                  ]
+                : []),
+              ...(scenario.earlierStreamError
+                ? [
+                    JSON.stringify({ event: "error", message: "quota exceeded" }),
+                    JSON.stringify({ event: "error", message: "timeout waiting for response" }),
+                  ]
+                : []),
+              JSON.stringify({
+                event: "result",
+                result: {
+                  status: scenario.status ?? "ERROR",
+                  ...(scenario.stderrOnly
+                    ? {}
+                    : { error: scenario.malformedError ? {} : "timeout waiting for response" }),
+                },
+              }),
+              ...(scenario.streamError
+                ? [{ event: "error", message: scenario.streamError }].map((event) =>
+                    JSON.stringify(event),
+                  )
+                : []),
+              ...(scenario.pendingTool
+                ? [
+                    JSON.stringify({
+                      event: "step_update",
+                      step_update: { step_index: 2, state: "ACTIVE", step_type: "tool" },
+                    }),
+                  ]
+                : []),
+              ...(scenario.malformed ? ['{"event":invalid}'] : []),
+            ].join("\n"),
+          );
+          for (const chunk of scenario.stderrChunks ?? [
+            `${scenario.stderr ?? "Error: timeout waiting for response"}\n`,
+          ]) {
+            children[0]!.stderr!.emit("data", chunk);
+          }
+          if (scenario.background) {
+            yield* Effect.promise(() =>
+              fs.writeFile(
+                (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command"},"toolOutput":"Task id \'task-pending\' is now running in the background"}\n',
+              ),
+            );
+          }
+          if (!scenario.noStopHook) {
+            yield* Effect.promise(() =>
+              fs.appendFile(
+                (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                "stop\t{}\n",
+              ),
+            );
+            if (!scenario.background) yield* Effect.promise(() => teardownObserved);
+          }
+          children[0]!.emit("close", scenario.signal ? null : 1, scenario.signal ?? null);
+          const events = Array.from(
+            yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          if (scenario.expected === "completed") {
+            expect(events.find((event) => event.type === "runtime.error")).toBeUndefined();
+          }
+          expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+            state: scenario.expected,
+            stopReason:
+              scenario.expected === "completed"
+                ? "model_stop"
+                : scenario.expected === "interrupted"
+                  ? "interrupted"
+                  : "error",
+          });
+          expect(
+            events.filter((event) => event.type === "content.delta").map((event) => event.payload),
+          ).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess: makeSpawnProcess(children),
+              teardownProcessTree: async () => {
+                observeTeardown();
+                if (scenario.teardownFailure) throw new Error("helper exit unproven");
+                return {
+                  escalated: false,
+                  capturedBeforeRootExit: scenario.lateCapture !== true,
+                  signalErrors: scenario.teardownSignalError ? [new Error("signal denied")] : [],
+                };
+              },
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-post-response-timeout-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("unlocks Cancel without letting a late close settle the follow-up", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-interrupt-hung-"));
     const children: ChildProcess[] = [];
@@ -1908,7 +2232,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
                 event.type === "content.delta" ||
                 event.type === "item.completed",
             ),
-            Stream.take(8),
+            Stream.take(10),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -1952,7 +2276,13 @@ describe("Antigravity turn settle on cancel (#465)", () => {
                   step_index: 1,
                   type: "PLANNER_RESPONSE",
                   thinking: "Analyzing problem requirements...",
-                  tool_calls: [{ name: "run_command", args: { CommandLine: "echo test" } }],
+                  tool_calls: [
+                    { name: "run_command", args: { CommandLine: "echo test" } },
+                    {
+                      name: "generate_image",
+                      args: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                    },
+                  ],
                 }),
                 JSON.stringify({
                   step_index: 2,
@@ -1967,7 +2297,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           const events = Array.from(
             yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events).toHaveLength(8);
+          expect(events).toHaveLength(10);
           // Reasoning item: started -> delta -> completed
           expect(events[0]?.payload).toMatchObject({
             itemType: "reasoning",
@@ -1986,7 +2316,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           });
           // Tool call from the transcript body surfaces as a tool lifecycle
           // item even though no pre/post-tool hook event fired: reasoning ->
-          // run_command -> assistant. (#antigravity tool calls are displayed)
+          // run_command -> generate_image -> assistant.
           expect(events[3]?.payload).toMatchObject({
             itemType: "command_execution",
             status: "inProgress",
@@ -2007,17 +2337,35 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               arguments: { CommandLine: "echo test" },
             },
           });
-          // Assistant message: started -> delta -> completed
           expect(events[5]?.payload).toMatchObject({
+            itemType: "image_generation",
+            status: "inProgress",
+            title: "generate_image",
+            data: {
+              toolName: "generate_image",
+              arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+            },
+          });
+          expect(events[6]?.payload).toMatchObject({
+            itemType: "image_generation",
+            status: "completed",
+            title: "generate_image",
+            data: {
+              toolName: "generate_image",
+              arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+            },
+          });
+          // Assistant message: started -> delta -> completed
+          expect(events[7]?.payload).toMatchObject({
             itemType: "assistant_message",
             status: "inProgress",
             title: "Assistant",
           });
-          expect(events[6]?.payload).toMatchObject({
+          expect(events[8]?.payload).toMatchObject({
             streamKind: "assistant_text",
             delta: "Here is the solution.",
           });
-          expect(events[7]?.payload).toMatchObject({
+          expect(events[9]?.payload).toMatchObject({
             itemType: "assistant_message",
             status: "completed",
             title: "Assistant",
