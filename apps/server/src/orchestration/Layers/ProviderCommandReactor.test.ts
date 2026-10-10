@@ -8807,6 +8807,127 @@ describe("ProviderCommandReactor", () => {
     }
   });
 
+  describe("fork from an earlier turn", () => {
+    async function seedSourceTurns(harness: Awaited<ReturnType<typeof createHarness>>) {
+      const now = new Date().toISOString();
+      for (const word of ["apple", "banana"]) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.message.assistant.complete",
+            commandId: CommandId.makeUnsafe(`cmd-source-${word}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            messageId: MessageId.makeUnsafe(`assistant:${word}`),
+            turnId: asTurnId(`turn-${word}`),
+            createdAt: now,
+          }),
+        );
+      }
+    }
+
+    async function forkAndSend(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      throughMessageId: string,
+    ) {
+      const now = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-fork-from-turn");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe("cmd-fork-from-turn"),
+          threadId,
+          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+          projectId: asProjectId("project-1"),
+          title: "Words",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          throughMessageId: MessageId.makeUnsafe(throughMessageId),
+          importedMessages: [
+            {
+              messageId: asMessageId("fork-imported-user"),
+              role: "user",
+              text: "Remember the word APPLE.",
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              messageId: asMessageId("fork-imported-assistant"),
+              role: "assistant",
+              text: "ok",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-fork-from-turn-start"),
+          threadId,
+          message: {
+            messageId: asMessageId("fork-from-turn-user"),
+            role: "user",
+            text: "Which words do I want you to remember?",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      return threadId;
+    }
+
+    it("asks the provider to fork only through the chosen turn", async () => {
+      const harness = await createHarness();
+      await seedSourceTurns(harness);
+      const threadId = await forkAndSend(harness, "assistant:apple");
+
+      expect(harness.forkThread).toHaveBeenCalledTimes(1);
+      expect(harness.forkThread.mock.calls[0]?.[0]).toMatchObject({
+        sourceThreadId: "thread-1",
+        threadId,
+        throughTurnId: "turn-apple",
+      });
+      // The provider could not cut there, so the fork is rebuilt from its
+      // imported transcript and the user is told why.
+      const input = (harness.sendTurn.mock.calls[0]?.[0] as { input?: string }).input;
+      expect(input).toContain("<thread_context>");
+      expect(input).toContain("Remember the word APPLE.");
+      await waitFor(async () => {
+        const readModel = await Effect.runPromise(harness.engine.getReadModel());
+        return (
+          readModel.threads
+            .find((thread) => thread.id === threadId)
+            ?.activities.some((activity) => activity.kind === "provider.context.changed") === true
+        );
+      });
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const notice = readModel.threads
+        .find((thread) => thread.id === threadId)
+        ?.activities.find((activity) => activity.kind === "provider.context.changed");
+      expect(notice).toMatchObject({
+        tone: "info",
+        payload: { restartReason: "fork-from-earlier-turn", recapInjected: true },
+      });
+    });
+
+    it("pins the chosen latest message even if native history advances before fork", async () => {
+      const harness = await createHarness();
+      await seedSourceTurns(harness);
+      await forkAndSend(harness, "assistant:banana");
+
+      expect(harness.forkThread).toHaveBeenCalledTimes(1);
+      expect(harness.forkThread.mock.calls[0]?.[0]).toHaveProperty("throughTurnId", "turn-banana");
+    });
+  });
+
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -13569,6 +13690,58 @@ describe("ProviderCommandReactor", () => {
       } finally {
         await Effect.runPromise(Deferred.succeed(release, undefined));
         vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each(["send", "review"] as const)(
+    "waits for workspace restore before %s even after the baseline deadline",
+    async (mode) => {
+      const harness = await createHarness({
+        preTurnBaselineTimeout: Duration.millis(30),
+        checkpointStore: { isGitRepository: () => Effect.succeed(true) },
+      });
+      const acquired = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const restore = Effect.runFork(
+        harness.checkpointCoordinator.withWorkspaceLease(
+          "/tmp/provider-project",
+          Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      );
+      await Effect.runPromise(Deferred.await(acquired));
+      try {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`restore-gate-${mode}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            message: {
+              messageId: MessageId.makeUnsafe(`restore-gate-message-${mode}`),
+              role: "user",
+              text: "Start after restore",
+              attachments: [],
+            },
+            ...(mode === "review" ? { reviewTarget: { type: "uncommittedChanges" as const } } : {}),
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await waitFor(
+          async () =>
+            (await readHarnessThread(harness))?.activities.some(
+              (activity) => activity.kind === "checkpoint.baseline.skipped",
+            ) ?? false,
+        );
+        const dispatch = mode === "review" ? harness.startReview : harness.sendTurn;
+        expect(dispatch).not.toHaveBeenCalled();
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+        await waitFor(() => dispatch.mock.calls.length === 1);
+        await harness.drain();
+      } finally {
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+        await Effect.runPromise(Effect.exit(Fiber.join(restore)));
       }
     },
   );

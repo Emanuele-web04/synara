@@ -5,6 +5,7 @@ import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
 import { ComputerService } from "../../computer/Services/ComputerService";
 import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
+import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -412,6 +413,7 @@ const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 
 type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
+  | "fork-from-earlier-turn"
   | "fresh-session"
   | "interrupt-escalation"
   | "native-history-unavailable"
@@ -458,6 +460,11 @@ function recapTailPreview(recapText: string): string {
 }
 
 function providerContextLifecycleSummary(evidence: ProviderContextLifecycleEvidence): string {
+  if (evidence.reason === "fork-from-earlier-turn") {
+    return evidence.recapText !== null
+      ? "This fork starts from an earlier turn, so the model continues from the transcript up to that turn."
+      : "This fork starts from an earlier turn without the source session's history.";
+  }
   if (evidence.reason === "interrupt-escalation") {
     return evidence.recapText !== null
       ? "The turn could not be stopped cleanly, so the session was restarted and your message included a summary."
@@ -1083,6 +1090,9 @@ const make = Effect.gen(function* () {
   // Fresh sessions that cannot inherit native conversation state need one
   // transcript bootstrap (fork fallbacks and non-resumable Droid model changes).
   const freshSessionContextBootstrapThreadIds = new Set<string>();
+  // Fork-from-turn threads whose native fork could not stop at the chosen
+  // turn; their fresh-session notice explains the deliberate transcript rebuild.
+  const forkFromEarlierTurnContextThreadIds = new Set<string>();
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
@@ -1147,7 +1157,10 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       activity: {
         id: EventId.makeUnsafe(`provider-context-lifecycle:${activityKey}`),
-        tone: input.nativeHistory === "unavailable" ? "error" : "info",
+        tone:
+          input.nativeHistory === "unavailable" && input.restartReason !== "fork-from-earlier-turn"
+            ? "error"
+            : "info",
         kind: PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND,
         summary: input.summary,
         payload: {
@@ -1298,6 +1311,7 @@ const make = Effect.gen(function* () {
   const clearPendingContextBootstraps = (threadId: string) => {
     sidechatContextBootstrapThreadIds.delete(threadId);
     freshSessionContextBootstrapThreadIds.delete(threadId);
+    forkFromEarlierTurnContextThreadIds.delete(threadId);
     rollbackContextBootstrapThreadIds.delete(threadId);
     pendingContextBootstrapAttempts.delete(threadId);
   };
@@ -1311,6 +1325,7 @@ const make = Effect.gen(function* () {
     }
     if (attempt.clearFreshSessionTranscript) {
       freshSessionContextBootstrapThreadIds.delete(threadId);
+      forkFromEarlierTurnContextThreadIds.delete(threadId);
     }
     if (attempt.clearRollbackTranscript) {
       rollbackContextBootstrapThreadIds.delete(threadId);
@@ -2599,12 +2614,38 @@ const make = Effect.gen(function* () {
             ),
           )
         : (options?.enableComputerControl ?? false);
-      const forked = yield* providerService.forkThread({
-        ...providerSessionOptions,
-        sourceThreadId: thread.forkSourceThreadId,
-        enableComputerControl: forkComputerControl,
-        ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
+      // "Fork from this turn" must not hand the model source turns the
+      // imported transcript left out. Without a native boundary for the chosen
+      // point, skip the native fork and rebuild from the imported transcript.
+      const forkCutoff = resolveForkSourceCutoff({
+        throughMessageId: thread.forkSourceMessageId,
+        sourceMessages: thread.forkSourceMessageId
+          ? (yield* resolveThread(thread.forkSourceThreadId))?.messages
+          : undefined,
       });
+      if (forkCutoff.kind === "unavailable") {
+        yield* Effect.logInfo(
+          "provider native fork skipped because the fork point has no boundary",
+          {
+            threadId,
+            sourceThreadId: thread.forkSourceThreadId,
+            reason: forkCutoff.reason,
+          },
+        );
+      }
+      const forked =
+        forkCutoff.kind === "unavailable"
+          ? null
+          : yield* providerService.forkThread({
+              ...providerSessionOptions,
+              sourceThreadId: thread.forkSourceThreadId,
+              ...(forkCutoff.kind === "turn" ? { throughTurnId: forkCutoff.turnId } : {}),
+              enableComputerControl: forkComputerControl,
+              ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
+            });
+      if (!forked && forkCutoff.kind !== "latest") {
+        forkFromEarlierTurnContextThreadIds.add(threadId);
+      }
       if (forked) {
         if (
           shouldRegisterContextBootstrap &&
@@ -2874,14 +2915,18 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     effect: Effect.Effect<A, E, R>,
     cancellation: Deferred.Deferred<void> | undefined,
-  ) =>
-    cancellation
+    workspaceCwd?: string,
+  ) => {
+    const withLease = <B, F, S>(owned: Effect.Effect<B, F, S>) =>
+      workspaceCwd
+        ? turnCheckpointCoordinator.withWorkspaceActivationLease(workspaceCwd, owned)
+        : withProviderSessionLease(threadId, owned);
+    return cancellation
       ? Effect.gen(function* () {
           const acquired = yield* Deferred.make<void>();
           const released = yield* Deferred.make<void>();
           const leaseFiber = yield* Effect.forkChild(
-            withProviderSessionLease(
-              threadId,
+            withLease(
               Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(released))),
             ),
             { startImmediately: true },
@@ -2910,7 +2955,8 @@ const make = Effect.gen(function* () {
             ),
           );
         })
-      : withProviderSessionLease(threadId, effect);
+      : withLease(effect);
+  };
 
   const dispatchTurnForThreadCore = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -3400,7 +3446,9 @@ const make = Effect.gen(function* () {
         : rollbackContextBootstrapThreadIds.has(input.threadId)
           ? "conversation-rebuilt"
           : freshSessionContextBootstrapThreadIds.has(input.threadId)
-            ? "fresh-session"
+            ? forkFromEarlierTurnContextThreadIds.has(input.threadId)
+              ? "fork-from-earlier-turn"
+              : "fresh-session"
             : "native-history-unavailable";
     const followsProviderHandoff = providerHandoffContextThreadIds.delete(input.threadId);
     let providerContextLifecycleEvidence: ProviderContextLifecycleEvidence | null =
@@ -3541,57 +3589,73 @@ const make = Effect.gen(function* () {
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
+    const providerWorkspaceCwd =
+      activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
+    // Baseline capture may time out, but provider execution must never bypass
+    // an Undo that still owns this checkout. Keep the activation wait outside
+    // the baseline deadline and release it after provider admission/cleanup.
+    const withProviderWorkspaceLease = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      providerWorkspaceCwd
+        ? withCancelableClaudeCompactionLease(
+            input.threadId,
+            effect,
+            input.claudeCompactionCancellation,
+            providerWorkspaceCwd,
+          )
+        : effect;
     const sendQueuedProviderTurn = (messageText: string | undefined) =>
-      Effect.gen(function* () {
-        if (input.acceptedCacheReview && input.completionEventSequence !== undefined) {
-          const response = pendingClaudeCacheResponses.get(input.completionEventSequence);
-          if (response) {
-            yield* cancelClaudeCompactionFromJournal(
-              input.threadId,
-              input.completionEventSequence,
-              response.cancelled,
-            );
-            if (yield* Deferred.isDone(response.cancelled)) {
-              return yield* new ProviderAdapterValidationError({
-                provider: selectedProvider,
-                operation: "thread.turn.start",
-                issue: "The saved send was cancelled before delivery.",
-              });
+      withProviderWorkspaceLease(
+        Effect.gen(function* () {
+          if (input.acceptedCacheReview && input.completionEventSequence !== undefined) {
+            const response = pendingClaudeCacheResponses.get(input.completionEventSequence);
+            if (response) {
+              yield* cancelClaudeCompactionFromJournal(
+                input.threadId,
+                input.completionEventSequence,
+                response.cancelled,
+              );
+              if (yield* Deferred.isDone(response.cancelled)) {
+                return yield* new ProviderAdapterValidationError({
+                  provider: selectedProvider,
+                  operation: "thread.turn.start",
+                  issue: "The saved send was cancelled before delivery.",
+                });
+              }
             }
           }
-        }
-        if (
-          input.acceptedCacheReview &&
-          !(yield* isClaudeReviewAuthorized(
-            input.threadId,
-            input.acceptedCacheReview.reviewId,
-            "responding",
-          ))
-        ) {
-          return yield* new ProviderAdapterValidationError({
-            provider: selectedProvider,
-            operation: "thread.turn.start",
-            issue: "The saved send was cancelled before delivery.",
-          });
-        }
-        if (input.claudeCompactionCancellation) {
-          yield* cancelClaudeCompactionFromJournal(
-            input.threadId,
-            input.sourceEventSequence,
-            input.claudeCompactionCancellation,
-          );
-          yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
-        }
-        const turnInput = {
-          ...providerTurnInput,
-          ...(messageText ? { input: messageText } : {}),
-        };
-        return yield* input.claudeCompactionCancellation
-          ? providerService.sendTurn(turnInput, {
-              claudeCompactionCancellation: input.claudeCompactionCancellation,
-            })
-          : providerService.sendTurn(turnInput);
-      });
+          if (
+            input.acceptedCacheReview &&
+            !(yield* isClaudeReviewAuthorized(
+              input.threadId,
+              input.acceptedCacheReview.reviewId,
+              "responding",
+            ))
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: selectedProvider,
+              operation: "thread.turn.start",
+              issue: "The saved send was cancelled before delivery.",
+            });
+          }
+          if (input.claudeCompactionCancellation) {
+            yield* cancelClaudeCompactionFromJournal(
+              input.threadId,
+              input.sourceEventSequence,
+              input.claudeCompactionCancellation,
+            );
+            yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
+          }
+          const turnInput = {
+            ...providerTurnInput,
+            ...(messageText ? { input: messageText } : {}),
+          };
+          return yield* input.claudeCompactionCancellation
+            ? providerService.sendTurn(turnInput, {
+                claudeCompactionCancellation: input.claudeCompactionCancellation,
+              })
+            : providerService.sendTurn(turnInput);
+        }),
+      );
 
     let baselineFailure: string | undefined;
     let checkpointPreparation: "captured" | "not-applicable" | "unavailable" = "unavailable";
@@ -3750,30 +3814,36 @@ const make = Effect.gen(function* () {
 
     if (input.reviewTarget !== undefined) {
       yield* capturePreTurnBaselines;
-      startedTurn = yield* providerService
-        .startReview({
-          threadId: input.threadId,
-          target: input.reviewTarget,
-        })
-        .pipe(Effect.onError(() => cancelPendingHubBaseline));
+      startedTurn = yield* withProviderWorkspaceLease(
+        Effect.suspend(() =>
+          providerService.startReview({
+            threadId: input.threadId,
+            target: input.reviewTarget!,
+          }),
+        ),
+      ).pipe(Effect.onError(() => cancelPendingHubBaseline));
     } else if (input.dispatchMode === "steer") {
-      if (input.claudeCompactionCancellation) {
-        yield* cancelClaudeCompactionFromJournal(
-          input.threadId,
-          input.sourceEventSequence,
-          input.claudeCompactionCancellation,
-        );
-        yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
-      }
-      const turnInput = {
-        ...providerTurnInput,
-        ...(normalizedInput ? { input: normalizedInput } : {}),
-      };
-      startedTurn = yield* input.claudeCompactionCancellation
-        ? providerService.steerTurn(turnInput, {
-            claudeCompactionCancellation: input.claudeCompactionCancellation,
-          })
-        : providerService.steerTurn(turnInput);
+      startedTurn = yield* withProviderWorkspaceLease(
+        Effect.gen(function* () {
+          if (input.claudeCompactionCancellation) {
+            yield* cancelClaudeCompactionFromJournal(
+              input.threadId,
+              input.sourceEventSequence,
+              input.claudeCompactionCancellation,
+            );
+            yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
+          }
+          const turnInput = {
+            ...providerTurnInput,
+            ...(normalizedInput ? { input: normalizedInput } : {}),
+          };
+          return yield* input.claudeCompactionCancellation
+            ? providerService.steerTurn(turnInput, {
+                claudeCompactionCancellation: input.claudeCompactionCancellation,
+              })
+            : providerService.steerTurn(turnInput);
+        }),
+      );
     } else {
       yield* awaitClaudeCompactionPreparation(
         capturePreTurnBaselines,
@@ -4024,6 +4094,7 @@ const make = Effect.gen(function* () {
       }
       if (durableCompletionSucceeded) {
         freshSessionContextBootstrapThreadIds.delete(input.threadId);
+        forkFromEarlierTurnContextThreadIds.delete(input.threadId);
         if (retiresPriorTranscriptBootstrap) {
           rollbackContextBootstrapThreadIds.delete(input.threadId);
         }
