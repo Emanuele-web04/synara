@@ -17,6 +17,11 @@ export interface TurnCheckpointCoordinatorShape {
     cwd: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
+  /** Shared provider admission; concurrent starts exclude destructive workspace mutations. */
+  readonly withWorkspaceActivationLease: <A, E, R>(
+    cwd: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
   /** Reuse an identity resolved with the physical Git checkout policy above; never invent one. */
   readonly withWorkspaceIdentityLease: <A, E, R>(
     identity: string,
