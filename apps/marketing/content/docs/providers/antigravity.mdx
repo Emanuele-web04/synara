@@ -127,6 +127,10 @@ Launch `agy` directly. Check whether the operating-system keyring is unlocked an
 
 Update Antigravity, confirm the account can see the expected models in the CLI, then refresh provider status in Synara. Availability can depend on the account and runtime release.
 
+### A completed reply ends with a timeout
+
+Synara can recover the exact `timeout waiting for response` error after a complete assistant reply when all tools and background tasks have settled and stop-hook cleanup captured the process tree before its parent exited and verified cleanup. Other provider errors, incomplete output, and interrupted turns remain failures or interruptions. A visible reply alone does not guarantee completion.
+
 ### Antigravity reports an updater lock
 
 Follow Antigravity’s updater troubleshooting guidance. A stale updater lock, read-only install directory, or competing update process can prevent the runtime from refreshing.

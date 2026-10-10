@@ -387,6 +387,112 @@ describe("AcpRuntimeModel", () => {
     });
   });
 
+  it.each([
+    ["image_gen", "_toolName"],
+    ["image_edit", "toolName"],
+    ["generate_image", "tool_name"],
+  ])(
+    "classifies the exact %s image tool from %s without changing its approval kind",
+    (toolName, nameField) => {
+      const rawInput = { [nameField]: toolName, prompt: "Draw a diagram" };
+      const parsed = parseSessionUpdateEvent({
+        sessionId: "session-images",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "image-tool",
+          title: "Tool",
+          kind: "other",
+          status: "pending",
+          rawInput,
+        },
+      });
+      const started = parsed.events[0];
+      expect(started).toMatchObject({
+        _tag: "ToolCallUpdated",
+        toolCall: {
+          kind: "image_generation",
+          data: { kind: "image_generation", rawInput },
+        },
+      });
+      const completed = parseSessionUpdateEvent({
+        sessionId: "session-images",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "image-tool",
+          title: "Tool",
+          kind: "other",
+          status: "completed",
+          rawOutput: { path: "/tmp/generated.png" },
+        },
+      }).events[0];
+      if (started?._tag !== "ToolCallUpdated" || completed?._tag !== "ToolCallUpdated") {
+        throw new Error("expected image tool lifecycle updates");
+      }
+      expect(mergeToolCallState(started.toolCall, completed.toolCall)).toMatchObject({
+        kind: "image_generation",
+        status: "completed",
+        data: {
+          kind: "image_generation",
+          rawInput,
+          rawOutput: { path: "/tmp/generated.png" },
+        },
+      });
+      const namedUpdate = parseSessionUpdateEvent({
+        sessionId: "session-images",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "image-tool",
+          kind: "other",
+          rawInput: { _toolName: "view_image" },
+        },
+      }).events[0];
+      if (namedUpdate?._tag !== "ToolCallUpdated") {
+        throw new Error("expected a named tool update");
+      }
+      expect(mergeToolCallState(started.toolCall, namedUpdate.toolCall).kind).toBe("other");
+      for (const kind of ["other", "edit", "execute"] as const) {
+        const request = parsePermissionRequest({
+          sessionId: "session-images",
+          options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+          toolCall: { toolCallId: "image-tool", title: toolName, kind, rawInput },
+        });
+        expect(request.kind).toBe(kind);
+        expect(request.toolCall?.kind).toBe("image_generation");
+      }
+    },
+  );
+
+  it.each([
+    { title: "image_gen", kind: undefined, expected: "image_generation" },
+    { title: "image_edit", kind: "other", expected: "image_generation" },
+    { title: "generate_image", kind: "other", expected: "image_generation" },
+    { title: "generate_image", kind: "execute", expected: "execute" },
+    { title: "image_edit", kind: "edit", expected: "edit" },
+    { title: "view_image", kind: "read", expected: "read" },
+    { title: "generate_image_thumbnail", kind: "other", expected: "other" },
+    { title: "mcp__images__generate_image", kind: "other", expected: "other" },
+    { title: "Generate an image", kind: "other", expected: "other" },
+    { title: "generate_image", kind: "other", nativeToolName: "view_image", expected: "other" },
+  ] as const)("uses exact image titles only for generic ACP kinds: $title/$kind", (testCase) => {
+    const parsed = parseSessionUpdateEvent({
+      sessionId: "session-images",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "image-tool",
+        title: testCase.title,
+        ...(testCase.kind ? { kind: testCase.kind } : {}),
+        rawInput: {
+          prompt: "generate_image",
+          ...("nativeToolName" in testCase ? { _toolName: testCase.nativeToolName } : {}),
+        },
+      },
+    });
+    expect(parsed.events[0]).toMatchObject({
+      _tag: "ToolCallUpdated",
+      toolCall: { kind: testCase.expected },
+    });
+  });
+
   it("keeps inferred Cursor action titles when completion updates only contain generic Tool", () => {
     const pending = parseSessionUpdateEvent({
       sessionId: "session-1",
