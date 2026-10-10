@@ -52,7 +52,6 @@ export function normalizeBrowserPageZoomFactor(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 1;
 }
 
-
 // Dedicated auth hosts are safe popup signals. Multi-purpose hosts such as github.com need
 // path checks below so ordinary _blank links still open as tabs.
 const OAUTH_HOST_PATTERNS: readonly RegExp[] = [

@@ -23,7 +23,7 @@ import {
   isBrowserPanelBoundsHiddenKey,
   resolveBrowserRendererGuestSlotStyle,
   shouldAssignBrowserWebviewSrc,
-  resolveBrowserRuntimePresentation
+  resolveBrowserRuntimePresentation,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";

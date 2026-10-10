@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampFloatingBrowserPanelRect,
   floatingBrowserComposerClearancePx,
+  initialFloatingBrowserPanelRect,
   moveFloatingBrowserPanelRect,
   resizeFloatingBrowserPanelRect,
   restoreFloatingBrowserPanelRect,

@@ -22,7 +22,15 @@ const synaraHome = process.env.SYNARA_HOME;
 const annotationPreloadPath = process.env.SYNARA_E2E_BROWSER_ANNOTATION_PRELOAD;
 const floatingChromePreloadPath = process.env.SYNARA_E2E_FLOATING_CHROME_PRELOAD;
 
-if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annotationPreloadPath || !floatingChromePreloadPath) {
+if (
+  !pipePath ||
+  !capability ||
+  !shellPath ||
+  !threadId ||
+  !synaraHome ||
+  !annotationPreloadPath ||
+  !floatingChromePreloadPath
+) {
   throw new Error("The visible-browser Electron fixture requires its isolated E2E environment.");
 }
 

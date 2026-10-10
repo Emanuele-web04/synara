@@ -88,6 +88,66 @@ class FakeWebContents extends EventEmitter {
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it("invalidates annotation readiness on same-URL reloads and recovers after a failed load", () => {
+    const manager = new DesktopBrowserManager();
+    const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+    const tabId = state.activeTabId!;
+    const guest = Object.assign(new FakeWebContents(401), {
+      getType: () => "webview",
+      hostWebContents: { id: 41 },
+      session: browserSession,
+      send: vi.fn(),
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: guest.id }, 41);
+    const input = {
+      threadId: THREAD_ID,
+      tabId,
+      theme: {
+        mode: "light" as const,
+        accent: "rgb(82, 111, 255)",
+        surface: "rgb(255, 255, 255)",
+        text: "rgb(23, 23, 23)",
+        mutedText: "rgb(113, 113, 122)",
+        border: "rgb(212, 212, 216)",
+        focusBorder: "rgb(82, 111, 255)",
+        primary: "rgb(23, 23, 23)",
+        primaryText: "rgb(255, 255, 255)",
+      },
+    };
+    const ready = (documentToken: string) =>
+      manager.handleAnnotationGuestMessage(guest as unknown as WebContents, {
+        version: 1,
+        kind: "ready",
+        documentToken,
+        source: { url: guest.getURL(), pageTitle: "Example" },
+      });
+
+    try {
+      ready("before-reload");
+      manager.startAnnotation(input);
+      guest.emit("did-start-navigation", {}, guest.getURL(), true, true);
+      guest.emit("did-start-navigation", {}, guest.getURL(), false, false);
+      expect(manager.isAnnotationInteractive(THREAD_ID)).toBe(true);
+
+      guest.emit("did-start-navigation", {}, guest.getURL(), false, true);
+      expect(manager.isAnnotationInteractive(THREAD_ID)).toBe(false);
+      expect(() => manager.startAnnotation(input)).toThrow(/not ready/i);
+
+      guest.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", guest.getURL(), true);
+      expect(guest.send).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ kind: "refresh-document", documentToken: "before-reload" }),
+      );
+      expect(() => manager.startAnnotation(input)).toThrow(/not ready/i);
+
+      ready("after-reload");
+      expect(manager.startAnnotation(input).document.token).toBe("after-reload");
+    } finally {
+      manager.dispose();
+    }
+  });
+
   it.each([false, true])(
     "keeps opaque native-view backdrops current through theme changes and reuse (initial dark: %s)",
     (initialDark) => {
@@ -2143,5 +2203,4 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     );
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(1);
   });
-
 });

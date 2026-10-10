@@ -3130,21 +3130,15 @@ export class DesktopBrowserManager {
 
     const didStartNavigation = (
       _event: Electron.Event,
-      url: string,
+      _url: string,
       isInPlace: boolean,
       isMainFrame: boolean,
     ) => {
       if (!isMainFrame || isInPlace) {
         return;
       }
-      const state = this.states.get(threadId);
-      const tab = state ? this.getTab(state, tabId) : null;
-      const committedUrl = tab ? normalizeUrlInput(tab.lastCommittedUrl ?? tab.url) : "";
-      // Zoom and webview reparent can emit a main-frame start for the current
-      // URL. Invalidating then would leave annotate stuck until a real load.
-      if (committedUrl !== "" && normalizeUrlInput(url) === committedUrl) {
-        return;
-      }
+      // A reload replaces the document even when its URL has not changed.
+      // Same-guest attachment refreshes readiness separately from navigation.
       this.annotations.handleNavigation(threadId, tabId, webContents.id);
     };
     webContents.on("did-start-navigation", didStartNavigation);

@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   Suspense,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -191,7 +192,11 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
 
   const closeIntentRef = useRef<"close" | "handoff">("handoff");
   const startDragFromClientRef = useRef<
-    (x: number, y: number, options: { reopenMenuOnRelease: boolean; expandOnClick?: boolean }) => void
+    (
+      x: number,
+      y: number,
+      options: { reopenMenuOnRelease: boolean; expandOnClick?: boolean },
+    ) => void
   >(() => {});
 
   const handleClose = useCallback(() => {
@@ -282,10 +287,19 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
       }
       if (closeIntentRef.current === "close") {
         floatingBrowserChromePark.flush(props.threadId);
-        browserPanelRendererHandoff.flushParkedGuest(props.threadId);
         return;
       }
       floatingBrowserChromePark.park(props.threadId);
+    };
+  }, [props.threadId]);
+
+  useEffect(() => {
+    return () => {
+      if (isElectron && closeIntentRef.current === "close") {
+        // Child layout cleanup parks the guest after the parent's layout cleanup.
+        // Dispose only once that park has completed; a handoff keeps its lease.
+        browserPanelRendererHandoff.flushParkedGuest(props.threadId);
+      }
     };
   }, [props.threadId]);
 
@@ -446,7 +460,10 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    startDragFromClient(event.clientX, event.clientY, { reopenMenuOnRelease: !expandOnClick, expandOnClick });
+    startDragFromClient(event.clientX, event.clientY, {
+      reopenMenuOnRelease: !expandOnClick,
+      expandOnClick,
+    });
   };
 
   useLayoutEffect(() => {

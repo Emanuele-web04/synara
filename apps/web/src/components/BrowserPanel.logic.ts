@@ -22,6 +22,7 @@ import type {
 import type { BrowserHistoryEntry } from "../browserStateStore";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
 import { resolveDesktopDipRectFromCssRect } from "@synara/shared/desktopChrome";
+import { DISCLOSURE_TRANSITION_MS } from "../lib/disclosureMotion";
 
 export function resolveBrowserRuntimePresentation(input: {
   native: boolean;
@@ -549,7 +550,7 @@ export const FLOATING_BROWSER_CHROME_SRCDOC = `<!doctype html>
         gap: 2px;
         width: 0;
         overflow: hidden;
-        transition: width 220ms ease-out;
+        transition: width ${DISCLOSURE_TRANSITION_MS}ms ease-out;
       }
       body.open .actions { width: 50px; }
       @media (prefers-reduced-motion: reduce) {

@@ -1372,7 +1372,8 @@ export function BrowserPanel({
         rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
         desktopZoom: readDesktopZoomFactor(),
       });
-      const bounds = obscuredByOverlay || rect.width <= 0 || rect.height <= 0 ? null : presentation.bounds;
+      const bounds =
+        obscuredByOverlay || rect.width <= 0 || rect.height <= 0 ? null : presentation.bounds;
       const surface = presentation.surface;
       const pageZoomFactor = presentation.pageZoomFactor;
       applyBrowserWebviewPageZoom(webview, pageZoomFactor);
@@ -2183,67 +2184,67 @@ export function BrowserPanel({
   return (
     <div className="contents" data-browser-panel="true">
       <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
-      <div className="flex min-h-0 flex-1 flex-col">
-        {!isFloatingMode ? (
-          <BrowserTabStrip
-            tabs={threadBrowserState?.tabs ?? []}
-            activeTabId={activeTabId}
-            status={browserChromeStatus}
-            dragRegion={isElectron && mode !== "sheet"}
-            onSelectTab={(tabId) => void onSelectTab(tabId)}
-            onCloseTab={onCloseTab}
-            onCreateTab={onCreateTab}
-          />
-        ) : null}
-        <div className="relative min-h-0 flex-1 bg-transparent">
-          {!isLiveRuntime ? (
-            <BrowserRuntimePreview
-              title={activeTab?.title || "Browser is sleeping"}
-              detail={activeTab?.lastCommittedUrl ?? activeTab?.url ?? "Restoring cached browser"}
-            />
-          ) : !workspaceReady ? (
-            <div className="absolute inset-0 z-10">
-              <DiffPanelLoadingState label="Starting browser..." />
-            </div>
-          ) : null}
-          {isLiveRuntime ? (
-            <div
-              ref={browserViewportRef}
-              data-floating-browser-viewport={isFloatingMode ? "true" : undefined}
-              className={cn(
-                "absolute overflow-hidden",
-                isFloatingMode ? "bg-transparent" : "bg-[#0d0d0d]",
-                isFloatingMode && "rounded-xl [clip-path:inset(0_round_12px)]",
-                "inset-0",
-              )}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {!isFloatingMode ? (
+            <BrowserTabStrip
+              tabs={threadBrowserState?.tabs ?? []}
+              activeTabId={activeTabId}
+              status={browserChromeStatus}
+              dragRegion={isElectron && mode !== "sheet"}
+              onSelectTab={(tabId) => void onSelectTab(tabId)}
+              onCloseTab={onCloseTab}
+              onCreateTab={onCreateTab}
             />
           ) : null}
-          {isLiveRuntime && browserPageError ? (
-            <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
-          ) : null}
-          {(isFloatingMode || isBrowserSurfaceOccluded) &&
-          usesNativeRuntime &&
-          !showLocalServersHome &&
-          !browserPageError &&
-          previewFrame?.tabId === activeTabId ? (
-            <img
-              src={previewFrame.src}
-              alt="Browser preview"
-              draggable={false}
-              className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
-            />
-          ) : null}
-          {showLocalServersHome ? (
-            <BrowserLocalServersHome
-              activeTabId={activeTab?.id ?? null}
-              loading={localServersQuery.isLoading || localServersQuery.isFetching}
-              onNavigate={onOpenLocalServer}
-              onRefresh={() => void localServersQuery.refetch()}
-              servers={localServersQuery.data?.servers ?? []}
-            />
-          ) : null}
+          <div className="relative min-h-0 flex-1 bg-transparent">
+            {!isLiveRuntime ? (
+              <BrowserRuntimePreview
+                title={activeTab?.title || "Browser is sleeping"}
+                detail={activeTab?.lastCommittedUrl ?? activeTab?.url ?? "Restoring cached browser"}
+              />
+            ) : !workspaceReady ? (
+              <div className="absolute inset-0 z-10">
+                <DiffPanelLoadingState label="Starting browser..." />
+              </div>
+            ) : null}
+            {isLiveRuntime ? (
+              <div
+                ref={browserViewportRef}
+                data-floating-browser-viewport={isFloatingMode ? "true" : undefined}
+                className={cn(
+                  "absolute overflow-hidden",
+                  isFloatingMode ? "bg-transparent" : "bg-[#0d0d0d]",
+                  isFloatingMode && "rounded-xl [clip-path:inset(0_round_12px)]",
+                  "inset-0",
+                )}
+              />
+            ) : null}
+            {isLiveRuntime && browserPageError ? (
+              <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
+            ) : null}
+            {(isFloatingMode || isBrowserSurfaceOccluded) &&
+            usesNativeRuntime &&
+            !showLocalServersHome &&
+            !browserPageError &&
+            previewFrame?.tabId === activeTabId ? (
+              <img
+                src={previewFrame.src}
+                alt="Browser preview"
+                draggable={false}
+                className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
+              />
+            ) : null}
+            {showLocalServersHome ? (
+              <BrowserLocalServersHome
+                activeTabId={activeTab?.id ?? null}
+                loading={localServersQuery.isLoading || localServersQuery.isFetching}
+                onNavigate={onOpenLocalServer}
+                onRefresh={() => void localServersQuery.refetch()}
+                servers={localServersQuery.data?.servers ?? []}
+              />
+            ) : null}
+          </div>
         </div>
-      </div>
       </DiffPanelShell>
     </div>
   );
