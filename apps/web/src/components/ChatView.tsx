@@ -341,7 +341,10 @@ import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { useExpandedImagePreview } from "./chat/useExpandedImagePreview";
 import { ExpiredSidechatNotice } from "./chat/ExpiredSidechatNotice";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
-import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
+import {
+  buildTurnDiffSummaryByAssistantMessageId,
+  deriveTurnTimingByTurnId,
+} from "./chat/MessagesTimeline.logic";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
@@ -2103,6 +2106,16 @@ export default function ChatView({
       messages: messagesForDiffAnchoring,
     });
   }, [inferredCheckpointTurnCountByTurnId, turnDiffSummaries, timelineMessages]);
+  const activeLatestTurnForTiming = activeThread?.latestTurn ?? null;
+  const turnTimingByTurnId = useMemo(
+    () =>
+      deriveTurnTimingByTurnId({
+        turnDiffSummaries,
+        latestTurn: activeLatestTurnForTiming,
+        activities: threadActivities,
+      }),
+    [activeLatestTurnForTiming, threadActivities, turnDiffSummaries],
+  );
   const revertTurnCountByUserMessageId = useMemo(() => {
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
@@ -6646,6 +6659,7 @@ export default function ChatView({
                     timelineEntries={timelineEntries}
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                    turnTimingByTurnId={turnTimingByTurnId}
                     conversationOnly={isCoordinatorConversation}
                     hubWorkItemsByMessageId={hubWorkItemsByMessageId}
                     threadError={activeThread?.error ?? null}

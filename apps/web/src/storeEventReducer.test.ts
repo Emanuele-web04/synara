@@ -665,6 +665,420 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
   });
 
+  it("keeps the turn running when a settled message arrives while the session runs it", () => {
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const runningTurn = {
+      turnId,
+      state: "running" as const,
+      requestedAt: "2026-02-27T00:01:00.000Z",
+      startedAt: "2026-02-27T00:01:01.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    };
+    const next = applyOrchestrationEvents(
+      makeState(
+        makeThread({
+          latestTurn: runningTurn,
+          session: {
+            provider: "claudeAgent",
+            status: "running",
+            orchestrationStatus: "running",
+            activeTurnId: turnId,
+            createdAt: "2026-02-27T00:01:00.000Z",
+            updatedAt: "2026-02-27T00:01:01.000Z",
+          },
+        }),
+      ),
+      [
+        makeDomainEvent("thread.message-sent", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: MessageId.makeUnsafe("assistant-preamble"),
+          role: "assistant",
+          text: "Launching two subagents.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-02-27T00:01:02.000Z",
+          updatedAt: "2026-02-27T00:01:03.000Z",
+          attachments: [],
+          source: "native",
+        }),
+      ],
+    );
+
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
+      turnId,
+      state: "running",
+      completedAt: null,
+      assistantMessageId: MessageId.makeUnsafe("assistant-preamble"),
+    });
+  });
+
+  it("binds a queued request to the turn the session starts for it", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const firstTurn = TurnId.makeUnsafe("turn-1");
+    const queuedTurn = TurnId.makeUnsafe("turn-2");
+    const queuedId = MessageId.makeUnsafe("queued-request");
+    const runningSession = (activeTurnId: TurnId, updatedAt: string) =>
+      makeDomainEvent("thread.session-set", {
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "full-access",
+          activeTurnId,
+          lastError: null,
+          updatedAt,
+        },
+      });
+    const turnStartRequested = makeDomainEvent("thread.turn-start-requested", {
+      threadId,
+      messageId: queuedId,
+      runtimeMode: "full-access",
+      interactionMode: DEFAULT_INTERACTION_MODE,
+      dispatchMode: "queue",
+      createdAt: "2026-02-27T00:01:05.000Z",
+    });
+    const initial = makeState(
+      makeThread({
+        messages: [
+          {
+            id: MessageId.makeUnsafe("first-request"),
+            role: "user",
+            text: "Run the slow task",
+            turnId: firstTurn,
+            createdAt: "2026-02-27T00:01:00.000Z",
+            streaming: false,
+            source: "native",
+          },
+          {
+            id: queuedId,
+            role: "user",
+            text: "Then summarize",
+            turnId: null,
+            dispatchMode: "queue",
+            startsNewTurn: true,
+            createdAt: "2026-02-27T00:01:05.000Z",
+            streaming: false,
+            source: "native",
+          },
+        ],
+        latestTurn: {
+          turnId: firstTurn,
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    // A session update for the turn that is already running does not bind it.
+    const stillFirstTurn = applyOrchestrationEvents(initial, [
+      turnStartRequested,
+      runningSession(firstTurn, "2026-02-27T00:01:06.000Z"),
+    ]);
+    expect(threadsOf(stillFirstTurn)[0]?.messages[1]?.turnId).toBeNull();
+    expect(threadsOf(stillFirstTurn)[0]?.pendingTurnStartMessageId).toBeNull();
+
+    const started = applyOrchestrationEvents(stillFirstTurn, [
+      turnStartRequested,
+      runningSession(queuedTurn, "2026-02-27T00:01:20.000Z"),
+    ]);
+    expect(threadsOf(started)[0]?.messages[1]?.turnId).toBe(queuedTurn);
+    expect(threadsOf(started)[0]?.pendingTurnStartMessageId).toBeNull();
+    expect(threadsOf(started)[0]?.latestTurn?.turnId).toBe(queuedTurn);
+
+    // The shell stream can advance latestTurn to the new turn before the
+    // detail stream's session update arrives; the request still binds.
+    const shellFirst = applyOrchestrationEvents(
+      makeState({
+        ...threadsOf(stillFirstTurn)[0]!,
+        latestTurn: {
+          turnId: queuedTurn,
+          state: "running",
+          requestedAt: "2026-02-27T00:01:20.000Z",
+          startedAt: "2026-02-27T00:01:20.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+      [turnStartRequested, runningSession(queuedTurn, "2026-02-27T00:01:20.000Z")],
+    );
+    expect(threadsOf(shellFirst)[0]?.messages[1]?.turnId).toBe(queuedTurn);
+  });
+
+  it("keeps held requests out of native compaction and resumes only the saved request", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("held-request");
+    const compactionTurnId = TurnId.makeUnsafe("native-compaction");
+    const resumedTurnId = TurnId.makeUnsafe("resumed-request");
+    const createdAt = "2026-09-16T10:00:00.000Z";
+    const request = {
+      id: messageId,
+      role: "user" as const,
+      text: "Continue the saved task",
+      turnId: null,
+      streaming: false,
+      source: "native" as const,
+      createdAt,
+      updatedAt: createdAt,
+      attachments: [],
+    };
+    const messages = [request, { ...request, id: MessageId.makeUnsafe("later-request") }];
+    const review: PendingClaudeCacheReview = {
+      reviewId: "cache-review",
+      messageId,
+      sourceEventSequence: 10,
+      assessment: {
+        observedAt: createdAt,
+        contextTokens: 800_000,
+        state: "likely-expired",
+        source: "session-start",
+      },
+      status: "compacting",
+      compactionTurnId,
+      createdAt,
+    };
+    const running = (activeTurnId: TurnId, sequence: number) =>
+      makeDomainEvent(
+        "thread.session-set",
+        {
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+        },
+        { sequence },
+      );
+
+    for (const reduce of [applyOrchestrationEvents, applyOrchestrationEventsHotPath]) {
+      let state = reduce(makeState(makeThread({ messages })), [
+        makeDomainEvent(
+          "thread.turn-start-requested",
+          {
+            threadId,
+            messageId,
+            runtimeMode: "full-access",
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            dispatchMode: "queue",
+            createdAt,
+          },
+          { sequence: 10 },
+        ),
+        makeDomainEvent(
+          "thread.claude-cache-set",
+          { threadId, review, updatedAt: createdAt },
+          {
+            sequence: 11,
+          },
+        ),
+        running(compactionTurnId, 12),
+      ]);
+      expect(threadsOf(state)[0]?.messages.map((message) => message.turnId)).toEqual([null, null]);
+      expect(threadsOf(state)[0]?.pendingTurnStartMessageId).toBeNull();
+
+      const snapshot = makeReadModelThread({ messages, claudeCacheReview: review });
+      state = syncServerThreadDetailHotPath(state, { ...snapshot, title: "Compacting detail" }, 13);
+      state = applyShellEvent(state, {
+        kind: "thread-upserted",
+        thread: { ...snapshot, title: "Compacting shell" },
+        sequence: 14,
+      });
+      expect(threadsOf(state)[0]?.pendingTurnStartMessageId).toBeNull();
+
+      const pendingReview = { ...review, status: "pending" as const };
+      state = reduce(state, [
+        makeDomainEvent(
+          "thread.claude-cache-set",
+          { threadId, review: pendingReview, updatedAt: createdAt },
+          { sequence: 15 },
+        ),
+        makeDomainEvent(
+          "thread.claude-cache-response-requested",
+          { threadId, review: pendingReview, decision: "continue", createdAt },
+          { sequence: 16 },
+        ),
+        // An update for the old compaction cannot consume the resumed claim.
+        running(compactionTurnId, 17),
+      ]);
+      expect(threadsOf(state)[0]?.pendingTurnStartMessageId).toBe(messageId);
+      expect(threadsOf(state)[0]?.messages.map((message) => message.turnId)).toEqual([null, null]);
+      state = reduce(state, [running(resumedTurnId, 18)]);
+      expect(threadsOf(state)[0]?.messages.map((message) => message.turnId)).toEqual([
+        resumedTurnId,
+        null,
+      ]);
+      expect(threadsOf(state)[0]?.pendingTurnStartMessageId).toBeNull();
+    }
+  });
+
+  it("keeps cancelled requests unbound through warm and cold shell/detail hydration", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("cancelled-request");
+    const createdAt = "2026-09-16T10:00:00.000Z";
+    const message = {
+      id: messageId,
+      role: "user" as const,
+      text: "Do not send this request",
+      turnId: null,
+      streaming: false,
+      source: "native" as const,
+      createdAt,
+      updatedAt: createdAt,
+      attachments: [],
+    };
+    const review: PendingClaudeCacheReview = {
+      reviewId: "cancelled-review",
+      messageId,
+      sourceEventSequence: 10,
+      assessment: {
+        observedAt: createdAt,
+        contextTokens: 800_000,
+        state: "likely-expired",
+        source: "session-start",
+      },
+      status: "pending",
+      createdAt,
+    };
+    const cancellations = [
+      makeDomainEvent(
+        "thread.claude-cache-response-requested",
+        { threadId, review, decision: "cancel", createdAt },
+        { sequence: 11 },
+      ),
+      makeDomainEvent("thread.session-stop-requested", { threadId, createdAt }, { sequence: 11 }),
+      makeDomainEvent(
+        "thread.archived",
+        { threadId, archivedAt: createdAt, updatedAt: createdAt },
+        { sequence: 11 },
+      ),
+    ];
+    for (const reduce of [applyOrchestrationEvents, applyOrchestrationEventsHotPath]) {
+      for (const cancellation of cancellations) {
+        for (const observedRequest of [false, true]) {
+          for (const coldReload of [false, true]) {
+            let state = reduce(
+              makeState(
+                makeThread({
+                  messages: [message],
+                  ...(observedRequest ? { pendingTurnStartMessageId: messageId } : {}),
+                }),
+              ),
+              [cancellation],
+            );
+            const snapshot = makeReadModelThread({ messages: [message], claudeCacheReview: null });
+            // A new app store has no memory of the cancellation event. Hydration
+            // must not infer that this unanswered message owns a later turn.
+            if (coldReload) state = makeState(makeThread({ messages: [] }));
+            state = applyShellEvent(state, {
+              kind: "thread-upserted",
+              thread: { ...snapshot, title: "After cancellation shell" },
+              sequence: 12,
+            });
+            state = syncServerThreadDetailHotPath(
+              state,
+              { ...snapshot, title: "After cancellation detail" },
+              13,
+            );
+            state = reduce(state, [
+              makeDomainEvent(
+                "thread.session-set",
+                {
+                  threadId,
+                  session: {
+                    threadId,
+                    status: "running",
+                    providerName: "claudeAgent",
+                    runtimeMode: "full-access",
+                    activeTurnId: TurnId.makeUnsafe("unrelated-turn"),
+                    lastError: null,
+                    updatedAt: createdAt,
+                  },
+                },
+                { sequence: 14 },
+              ),
+            ]);
+            expect(threadsOf(state)[0]?.messages[0]?.turnId).toBeNull();
+            expect(threadsOf(state)[0]?.pendingTurnStartMessageId).toBe(
+              coldReload ? undefined : null,
+            );
+          }
+        }
+      }
+    }
+  });
+
+  it("waits for authoritative request links when the turn start request was not observed", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const request = (id: string, createdAt: string) => ({
+      id: MessageId.makeUnsafe(id),
+      role: "user" as const,
+      text: id,
+      turnId: null,
+      createdAt,
+      streaming: false,
+      source: "native" as const,
+    });
+    const runningSession = makeDomainEvent("thread.session-set", {
+      threadId,
+      session: {
+        threadId,
+        status: "running",
+        providerName: "claudeAgent",
+        runtimeMode: "full-access",
+        activeTurnId: turnId,
+        lastError: null,
+        updatedAt: "2026-02-27T00:01:02.000Z",
+      },
+    });
+
+    const single = applyOrchestrationEvents(
+      makeState(makeThread({ messages: [request("first-send", "2026-02-27T00:01:00.000Z")] })),
+      [runningSession],
+    );
+    expect(threadsOf(single)[0]?.messages[0]?.turnId).toBeNull();
+    const linked = syncServerThreadDetailHotPath(
+      single,
+      makeReadModelThread({
+        messages: [
+          {
+            ...request("first-send", "2026-02-27T00:01:00.000Z"),
+            updatedAt: "2026-02-27T00:01:00.000Z",
+            turnId,
+          },
+        ],
+      }),
+      10,
+    );
+    expect(threadsOf(linked)[0]?.messages[0]?.turnId).toBe(turnId);
+
+    // Two unanswered requests are ambiguous; the snapshot links them later.
+    const ambiguous = applyOrchestrationEvents(
+      makeState(
+        makeThread({
+          messages: [
+            request("first", "2026-02-27T00:01:00.000Z"),
+            request("second", "2026-02-27T00:01:01.000Z"),
+          ],
+        }),
+      ),
+      [runningSession],
+    );
+    expect(threadsOf(ambiguous)[0]?.messages.map((message) => message.turnId)).toEqual([
+      null,
+      null,
+    ]);
+  });
+
   it("does not adopt runtime/interaction modes from automation-dispatched turns", () => {
     const initialState = makeState(makeThread({ runtimeMode: "approval-required" }));
 
