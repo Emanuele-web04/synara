@@ -174,7 +174,11 @@ import {
 } from "../lib/runtimeMode";
 import { addSelectionToSide, startSelectionChat } from "../lib/selectionChat";
 import { waitForSidechatCreator } from "../lib/sidechatCreatorRegistry";
-import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
+import {
+  formatSubagentModelLabel,
+  resolveSubagentPresentationForThread,
+  resolveSubagentThreadStatusKind,
+} from "../lib/subagentPresentation";
 import {
   insertInlineTerminalContextPlaceholder,
   type TerminalContextSelection,
@@ -815,7 +819,6 @@ export default function ChatView({
 
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
-  const [subagentStripCompact, setSubagentStripCompact] = useState(false);
   const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
@@ -2000,10 +2003,13 @@ export default function ChatView({
   );
   const resolvedCrossTaskOrigin = useMemo(
     () =>
-      crossTaskOrigin && crossTaskOriginGroupName
-        ? { ...crossTaskOrigin, coordinatorGroupName: crossTaskOriginGroupName }
-        : crossTaskOrigin,
-    [crossTaskOrigin, crossTaskOriginGroupName],
+      // The subagent intro already names the launching agent and links to it.
+      subagentThread
+        ? null
+        : crossTaskOrigin && crossTaskOriginGroupName
+          ? { ...crossTaskOrigin, coordinatorGroupName: crossTaskOriginGroupName }
+          : crossTaskOrigin,
+    [crossTaskOrigin, crossTaskOriginGroupName, subagentThread],
   );
   const [coordinatorSettingsOpen, setCoordinatorSettingsOpen] = useState(false);
   const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
@@ -3849,19 +3855,12 @@ export default function ChatView({
     stopSubagent: onStopSubagentStripItem,
   } = useSubagentRunControls(stripSourceThreadId);
 
-  // Stop-all fans out through the same per-row stop so both paths share one seam.
-  const onStopAllSubagentStripItems = useCallback(async () => {
-    const running = collectRunningSubagentStripItems(composerSubagentStripItems);
-    await Promise.all(running.map((item) => onStopSubagentStripItem(item)));
-  }, [composerSubagentStripItems, onStopSubagentStripItem]);
-
   // Ctrl+B parity with the native CLI: send every foreground running subagent to
   // the background at once, fanning through the same per-row background dispatch.
   const onBackgroundAllForegroundSubagentStripItems = useCallback(async () => {
     const foreground = collectForegroundRunningSubagentStripItems(composerSubagentStripItems);
     await Promise.all(foreground.map((item) => onBackgroundSubagentStripItem(item)));
   }, [composerSubagentStripItems, onBackgroundSubagentStripItem]);
-
   // Pause is the same stop command; the persisted flag makes the settled card
   // read as paused (with a resume affordance) instead of plain stopped, across
   // reloads too.
@@ -5265,6 +5264,35 @@ export default function ChatView({
       }),
     [isEditorRail, navigate],
   );
+  // What the transcript's subagent cards read from this chat. Stop and
+  // background go through the same per-row dispatches the keyboard uses.
+  const activeThreadIdForSubagentRuns = activeThread?.id ?? null;
+  const subagentRunContext = useMemo(
+    () =>
+      activeThreadIdForSubagentRuns
+        ? {
+            parentThreadId: runningSubagentRunParentId,
+            liveTurnId: subagentRunLiveTurnId,
+            threads: subagentRunThreads,
+            backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+            taskEndByToolUseId: subagentTaskEnds,
+            onOpenThread: onNavigateToThread,
+            onStop: onStopSubagentStripItem,
+            onBackground: onBackgroundSubagentStripItem,
+          }
+        : null,
+    [
+      activeThreadIdForSubagentRuns,
+      runningSubagentRunParentId,
+      subagentRunLiveTurnId,
+      subagentTaskEnds,
+      backgroundedSubagentToolUseIds,
+      onBackgroundSubagentStripItem,
+      onNavigateToThread,
+      onStopSubagentStripItem,
+      subagentRunThreads,
+    ],
+  );
   const onOpenAutomation = useCallback(
     (automationId: string) => {
       void navigate({
@@ -5906,7 +5934,6 @@ export default function ChatView({
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
   const showComposerWorkflowRunCard = workflowRunState !== null;
-  const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
   const showComposerComputerControlEffortHint = shouldShowComputerControlEffortHint({
@@ -6014,22 +6041,6 @@ export default function ChatView({
                 attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
               />
             ) : null}
-            {showComposerSubagentStrip ? (
-              <ComposerSubagentStrip
-                items={composerSubagentStripItems}
-                compact={subagentStripCompact}
-                onCompactChange={setSubagentStripCompact}
-                onOpenThread={onNavigateToThread}
-                onBackgroundItem={onBackgroundSubagentStripItem}
-                onStopItem={onStopSubagentStripItem}
-                onStopAll={onStopAllSubagentStripItems}
-                attachedToPrevious={
-                  showComposerLiveChangesHeader ||
-                  showComposerActiveTaskListCard ||
-                  showComposerWorkflowRunCard
-                }
-              />
-            ) : null}
             <ComposerQueuedHeader
               queuedTurns={queuedComposerTurns}
               onSteer={onSteerQueuedComposerTurn}
@@ -6042,8 +6053,7 @@ export default function ChatView({
               attachedToPrevious={
                 showComposerLiveChangesHeader ||
                 showComposerActiveTaskListCard ||
-                showComposerWorkflowRunCard ||
-                showComposerSubagentStrip
+                showComposerWorkflowRunCard
               }
             />
             {showComposerGoalHeader && activeThread ? (
@@ -6061,7 +6071,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0
                 }
               />
@@ -6074,7 +6083,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader
                 }
@@ -6098,7 +6106,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader ||
                   showComposerComputerControlEffortHint
@@ -6113,7 +6120,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader ||
                   showComposerComputerControlEffortHint ||
@@ -6130,7 +6136,6 @@ export default function ChatView({
                 showComposerLiveChangesHeader ||
                 showComposerActiveTaskListCard ||
                 showComposerWorkflowRunCard ||
-                showComposerSubagentStrip ||
                 queuedComposerTurns.length > 0 ||
                 showComposerGoalHeader ||
                 showComposerComputerControlEffortHint ||
@@ -6392,7 +6397,7 @@ export default function ChatView({
                         : showPlanFollowUpPrompt && activeProposedPlan
                           ? "Add feedback to refine the plan, or leave this blank to implement it"
                           : activeThread?.parentThreadId
-                            ? "Message this subagent while it works"
+                            ? "Message this subagent"
                             : hasLiveTurn
                               ? "Ask for follow-up changes"
                               : standaloneSidechatContext
@@ -6809,6 +6814,9 @@ export default function ChatView({
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     subagentsRunning={hasRunningSubagents}
+                    subagentRun={subagentRunContext}
+                    runningSubagentRun={runningSubagentRun}
+                    subagentThread={subagentThread}
                     collapseFinishedTurns={settings.collapseFinishedTurns}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}

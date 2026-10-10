@@ -472,7 +472,6 @@ export function ChatTranscriptPane({
               activeTurnId={activeTurnId ?? null}
               activeTurnInProgress={activeTurnInProgress}
               allowLiveTurnTransitions={nativeHistory.detailAuthoritative}
-              {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
               subagentsRunning={subagentsRunning === true}
               collapseFinishedTurns={collapseFinishedTurns !== false}
               activeTurnStartedAt={activeTurnStartedAt}

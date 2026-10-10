@@ -2486,11 +2486,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               className="inline-flex min-w-0 items-center text-left transition-colors duration-200 hover:text-foreground"
                             >
                               {content}
-                              {collapsedSubagentCount > 0 ? (
-                                <span className="ml-1 text-muted-foreground">
-                                  {` · ${collapsedSubagentCount} subagent${collapsedSubagentCount === 1 ? "" : "s"}`}
-                                </span>
-                              ) : null}
                             </CollapsibleTrigger>
                           ),
                         }}
