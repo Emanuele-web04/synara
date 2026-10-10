@@ -800,7 +800,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).not.toContain('data-synara-working-loader="true"');
-    expect(markup).toContain("MessageSearch01Icon");
+    expect(markup).toContain('data-slot="hugeicon"');
+    expect(markup).toContain('class="size-3.5 shrink-0"');
   });
 
   it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
