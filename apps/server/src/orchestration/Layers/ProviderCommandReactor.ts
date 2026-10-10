@@ -2874,14 +2874,18 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     effect: Effect.Effect<A, E, R>,
     cancellation: Deferred.Deferred<void> | undefined,
-  ) =>
-    cancellation
+    workspaceCwd?: string,
+  ) => {
+    const withLease = <B, F, S>(owned: Effect.Effect<B, F, S>) =>
+      workspaceCwd
+        ? turnCheckpointCoordinator.withWorkspaceActivationLease(workspaceCwd, owned)
+        : withProviderSessionLease(threadId, owned);
+    return cancellation
       ? Effect.gen(function* () {
           const acquired = yield* Deferred.make<void>();
           const released = yield* Deferred.make<void>();
           const leaseFiber = yield* Effect.forkChild(
-            withProviderSessionLease(
-              threadId,
+            withLease(
               Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(released))),
             ),
             { startImmediately: true },
@@ -2910,7 +2914,8 @@ const make = Effect.gen(function* () {
             ),
           );
         })
-      : withProviderSessionLease(threadId, effect);
+      : withLease(effect);
+  };
 
   const dispatchTurnForThreadCore = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -3541,57 +3546,73 @@ const make = Effect.gen(function* () {
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
+    const providerWorkspaceCwd =
+      activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
+    // Baseline capture may time out, but provider execution must never bypass
+    // an Undo that still owns this checkout. Keep the activation wait outside
+    // the baseline deadline and release it after provider admission/cleanup.
+    const withProviderWorkspaceLease = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      providerWorkspaceCwd
+        ? withCancelableClaudeCompactionLease(
+            input.threadId,
+            effect,
+            input.claudeCompactionCancellation,
+            providerWorkspaceCwd,
+          )
+        : effect;
     const sendQueuedProviderTurn = (messageText: string | undefined) =>
-      Effect.gen(function* () {
-        if (input.acceptedCacheReview && input.completionEventSequence !== undefined) {
-          const response = pendingClaudeCacheResponses.get(input.completionEventSequence);
-          if (response) {
-            yield* cancelClaudeCompactionFromJournal(
-              input.threadId,
-              input.completionEventSequence,
-              response.cancelled,
-            );
-            if (yield* Deferred.isDone(response.cancelled)) {
-              return yield* new ProviderAdapterValidationError({
-                provider: selectedProvider,
-                operation: "thread.turn.start",
-                issue: "The saved send was cancelled before delivery.",
-              });
+      withProviderWorkspaceLease(
+        Effect.gen(function* () {
+          if (input.acceptedCacheReview && input.completionEventSequence !== undefined) {
+            const response = pendingClaudeCacheResponses.get(input.completionEventSequence);
+            if (response) {
+              yield* cancelClaudeCompactionFromJournal(
+                input.threadId,
+                input.completionEventSequence,
+                response.cancelled,
+              );
+              if (yield* Deferred.isDone(response.cancelled)) {
+                return yield* new ProviderAdapterValidationError({
+                  provider: selectedProvider,
+                  operation: "thread.turn.start",
+                  issue: "The saved send was cancelled before delivery.",
+                });
+              }
             }
           }
-        }
-        if (
-          input.acceptedCacheReview &&
-          !(yield* isClaudeReviewAuthorized(
-            input.threadId,
-            input.acceptedCacheReview.reviewId,
-            "responding",
-          ))
-        ) {
-          return yield* new ProviderAdapterValidationError({
-            provider: selectedProvider,
-            operation: "thread.turn.start",
-            issue: "The saved send was cancelled before delivery.",
-          });
-        }
-        if (input.claudeCompactionCancellation) {
-          yield* cancelClaudeCompactionFromJournal(
-            input.threadId,
-            input.sourceEventSequence,
-            input.claudeCompactionCancellation,
-          );
-          yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
-        }
-        const turnInput = {
-          ...providerTurnInput,
-          ...(messageText ? { input: messageText } : {}),
-        };
-        return yield* input.claudeCompactionCancellation
-          ? providerService.sendTurn(turnInput, {
-              claudeCompactionCancellation: input.claudeCompactionCancellation,
-            })
-          : providerService.sendTurn(turnInput);
-      });
+          if (
+            input.acceptedCacheReview &&
+            !(yield* isClaudeReviewAuthorized(
+              input.threadId,
+              input.acceptedCacheReview.reviewId,
+              "responding",
+            ))
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: selectedProvider,
+              operation: "thread.turn.start",
+              issue: "The saved send was cancelled before delivery.",
+            });
+          }
+          if (input.claudeCompactionCancellation) {
+            yield* cancelClaudeCompactionFromJournal(
+              input.threadId,
+              input.sourceEventSequence,
+              input.claudeCompactionCancellation,
+            );
+            yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
+          }
+          const turnInput = {
+            ...providerTurnInput,
+            ...(messageText ? { input: messageText } : {}),
+          };
+          return yield* input.claudeCompactionCancellation
+            ? providerService.sendTurn(turnInput, {
+                claudeCompactionCancellation: input.claudeCompactionCancellation,
+              })
+            : providerService.sendTurn(turnInput);
+        }),
+      );
 
     let baselineFailure: string | undefined;
     let checkpointPreparation: "captured" | "not-applicable" | "unavailable" = "unavailable";
@@ -3750,30 +3771,36 @@ const make = Effect.gen(function* () {
 
     if (input.reviewTarget !== undefined) {
       yield* capturePreTurnBaselines;
-      startedTurn = yield* providerService
-        .startReview({
-          threadId: input.threadId,
-          target: input.reviewTarget,
-        })
-        .pipe(Effect.onError(() => cancelPendingHubBaseline));
+      startedTurn = yield* withProviderWorkspaceLease(
+        Effect.suspend(() =>
+          providerService.startReview({
+            threadId: input.threadId,
+            target: input.reviewTarget!,
+          }),
+        ),
+      ).pipe(Effect.onError(() => cancelPendingHubBaseline));
     } else if (input.dispatchMode === "steer") {
-      if (input.claudeCompactionCancellation) {
-        yield* cancelClaudeCompactionFromJournal(
-          input.threadId,
-          input.sourceEventSequence,
-          input.claudeCompactionCancellation,
-        );
-        yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
-      }
-      const turnInput = {
-        ...providerTurnInput,
-        ...(normalizedInput ? { input: normalizedInput } : {}),
-      };
-      startedTurn = yield* input.claudeCompactionCancellation
-        ? providerService.steerTurn(turnInput, {
-            claudeCompactionCancellation: input.claudeCompactionCancellation,
-          })
-        : providerService.steerTurn(turnInput);
+      startedTurn = yield* withProviderWorkspaceLease(
+        Effect.gen(function* () {
+          if (input.claudeCompactionCancellation) {
+            yield* cancelClaudeCompactionFromJournal(
+              input.threadId,
+              input.sourceEventSequence,
+              input.claudeCompactionCancellation,
+            );
+            yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
+          }
+          const turnInput = {
+            ...providerTurnInput,
+            ...(normalizedInput ? { input: normalizedInput } : {}),
+          };
+          return yield* input.claudeCompactionCancellation
+            ? providerService.steerTurn(turnInput, {
+                claudeCompactionCancellation: input.claudeCompactionCancellation,
+              })
+            : providerService.steerTurn(turnInput);
+        }),
+      );
     } else {
       yield* awaitClaudeCompactionPreparation(
         capturePreTurnBaselines,
