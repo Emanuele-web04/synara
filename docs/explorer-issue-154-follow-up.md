@@ -40,13 +40,24 @@ cases use isolated real Git repositories, including binary moves and unresolved
 merge indexes. Browser tests use a mocked native API, not a live provider or
 production Synara state.
 
+## Issue #154 acceptance status
+
+The original core explorer pane, lazy directory loading, directory-first sorting,
+and exclusion rules predate this follow-up; this PR adds lazy single-child path
+compaction, authoritative Git change types, and grouped copy actions. Existing
+keyboard navigation is retained. The one advanced acceptance item still not
+implemented is virtualized rendering: no large-project measurement has shown a
+need for it. Live filesystem watching, drag-and-drop import, create/rename/delete,
+and user-configurable exclusions are explicitly deferred. These are remaining
+scope gaps, not functionality this PR claims to deliver.
+
 ## Handoff verification (2026-10-10)
 
 | Check                                                                   | Exact result                                                                                                                                              |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/server/src/git/gitStatusParsing.test.ts`                          | **41 passed**, final metadata-retention fix included                                                                                                      |
 | Focused `apps/server/src/git/Layers/GitCore.test.ts`                    | **9 passed, 126 skipped**, final fix included: opaque paths, untracked counts, move totals, zero-count files, staged rename/copy, type changes, conflicts |
-| Full GitCore + parser + GitStatusBroadcaster files                      | **182 passed before** the final zero-count retention fix; not rerun after it                                                                              |
+| Full GitCore + parser + GitStatusBroadcaster files                      | **186 passed** on the integrated head, including the final zero-count retention fix; 4 credentialed live tests skipped                                    |
 | `packages/contracts/src/git.test.ts`                                    | **12 passed**                                                                                                                                             |
 | Explorer logic, context menu, navigation, clipboard, UI font-size files | **55 passed**                                                                                                                                             |
 | Explorer + dock + dock autosave Chromium files                          | **22 passed** (13 explorer, 9 dock/autosave); parent-owned dock selector changes preserved                                                                |
@@ -75,12 +86,13 @@ caused 12 failures in an earlier unisolated full GitCore run; the clean-config,
 C-locale full run passed without changing user configuration. The first combined
 browser attempt timed out; the subsequent combined run passed all 22 tests.
 
-**Remaining verification:** parent owns final repository-wide formatting, lint,
-typecheck, and combined suites, including a full rerun after the last server fix.
-No live provider/production instance or packaged Windows validation was performed;
-the real symlink/type-change fixture cases are Linux-tested and skip Windows.
-No unresolved focused-test failure remains, but the full final tree is not yet
-verified. No publishing or checkout commit was performed here.
+**Integrated-head verification:** focused explorer/server/contracts/browser tests,
+repository formatting, lint, typecheck, and the full GitCore/parser/broadcaster
+set were rerun after integrating current main. Lint passed with 871 warnings and
+no errors; the server synchronous-filesystem budget passed; all seven packages
+typechecked. No live provider/production instance or packaged Windows validation
+was performed; real symlink/type-change fixture cases are Linux-tested and skip
+Windows. The broader workspace test suite was not rerun here.
 
 Existing `StatusDot`, disclosure components, keyboard navigation, context-menu
 grouping, clipboard helpers, and Git/project query APIs are reused. The new lazy
