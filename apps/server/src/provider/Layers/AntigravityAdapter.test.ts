@@ -189,6 +189,9 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
     expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", undefined, "low")).toBe(
       "Gemini 4 Pro (Low)",
     );
+    expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", { reasoningEffort: " " }, "low")).toBe(
+      "Gemini 4 Pro (Low)",
+    );
   });
 });
 
