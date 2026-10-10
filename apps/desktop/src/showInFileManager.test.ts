@@ -38,9 +38,11 @@ describe("showInFileManager", () => {
     expect(shell.showItemInFolder).not.toHaveBeenCalled();
   });
 
-  it("preserves empty-string success semantics for a whitespace response", async () => {
+  it("preserves existing whitespace-only openPath success behavior", async () => {
     const shell = makeShell("   ");
-    await expect(showInFileManager("/Users/me/code", true, "darwin", shell)).resolves.toBeUndefined();
+    await expect(
+      showInFileManager("/Users/me/code", true, "darwin", shell),
+    ).resolves.toBeUndefined();
     expect(shell.openPath).toHaveBeenCalledExactlyOnceWith("/Users/me/code");
     expect(shell.showItemInFolder).not.toHaveBeenCalled();
   });

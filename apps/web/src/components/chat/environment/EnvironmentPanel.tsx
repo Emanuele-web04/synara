@@ -35,7 +35,6 @@ import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
-import { resolveFileManagerActionLabel } from "~/lib/fileManagerNaming";
 import { ChangesIcon, ExternalLinkIcon, GitHubIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
