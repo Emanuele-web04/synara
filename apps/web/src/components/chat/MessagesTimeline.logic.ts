@@ -641,7 +641,8 @@ export function deriveMessagesTimelineRows(input: {
   const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
     entry.kind === "message"
       ? [entry.message]
-      : entry.kind === "work" && entry.entry.backgroundTaskCompletion
+      : entry.kind === "work" &&
+          (entry.entry.backgroundTaskCompletion || entry.entry.monitorNotification)
         ? [{ id: entry.id, role: "user", createdAt: entry.createdAt }]
         : [],
   );
@@ -725,7 +726,8 @@ export function deriveMessagesTimelineRows(input: {
           });
         } else if (
           isStandaloneWorkEntry(runEntry.entry) ||
-          runEntry.entry.backgroundTaskCompletion
+          runEntry.entry.backgroundTaskCompletion ||
+          runEntry.entry.monitorNotification
         ) {
           flushPendingWorkGroup();
           nextRows.push({
@@ -883,7 +885,10 @@ function findLiveTurnHeaderInsertIndex(rows: ReadonlyArray<MessagesTimelineRow>)
 // Returns the terminal assistant only when it is still the transcript tail.
 // A newer user message means the next turn has begun but has not produced text yet.
 function isBackgroundTaskCompletionRow(row: MessagesTimelineRow): boolean {
-  return row.kind === "work" && row.groupedEntries.some((entry) => entry.backgroundTaskCompletion);
+  return (
+    row.kind === "work" &&
+    row.groupedEntries.some((entry) => entry.backgroundTaskCompletion || entry.monitorNotification)
+  );
 }
 
 function findTailTerminalAssistantMessageId(

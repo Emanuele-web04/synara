@@ -860,7 +860,10 @@ export function projectProviderRuntimeActivities(
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: "info",
+          tone:
+            isMonitorEvent && asObject(event.payload.detail)?.outcome === "failed"
+              ? "error"
+              : "info",
           kind: "runtime.warning",
           summary: isPiInfoNotification
             ? "Pi extension"

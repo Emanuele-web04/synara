@@ -10081,7 +10081,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         turnId: syntheticTurnId,
         payload: {
           message: "CI checks — Lint: pass",
-          detail: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+          detail: {
+            type: "system",
+            subtype: "monitor_event",
+            task_id: "bu336ro2k",
+            notificationId: "notification-1",
+            name: "CI checks",
+            output: "Lint: pass",
+            outcome: "updated",
+          },
         },
       });
     }).pipe(

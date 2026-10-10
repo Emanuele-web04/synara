@@ -56,11 +56,32 @@ describe("parseClaudeMonitorEventNotification", () => {
   it("reads the monitor name and event lines", () => {
     expect(parseClaudeMonitorEventNotification(MONITOR_EVENT)).toEqual({
       taskId: "bu336ro2k",
+      name: "CI checks on PR #1699",
+      output: "Collect PR targets: pass\nDetect code changes: pass",
+      outcome: "updated",
       message: "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass",
     });
     expect(parseClaudeMonitorEventNotification(MONITOR_ENDED)).toEqual({
       taskId: "bu336ro2k",
+      name: "CI checks on PR #1699",
+      output: "ALL DONE",
+      outcome: "completed",
       message: "CI checks on PR #1699 stream ended — ALL DONE",
+    });
+  });
+
+  it("distinguishes a failed Monitor from an intermediate update without flattening its output", () => {
+    const failed = MONITOR_ENDED.replace("completed", "failed").replace(
+      "ALL DONE",
+      "first line\nsecond line",
+    );
+    expect(parseClaudeMonitorEventNotification(failed)).toMatchObject({
+      name: "CI checks on PR #1699",
+      outcome: "failed",
+      output: "first line\nsecond line",
+    });
+    expect(parseClaudeMonitorEventNotification(MONITOR_EVENT)).toMatchObject({
+      outcome: "updated",
     });
   });
 
@@ -112,6 +133,9 @@ describe("readClaudeMonitorEvents", () => {
             id: "event-1",
             createdAt: "2026-10-09T15:03:38.414Z",
             taskId: "bu336ro2k",
+            name: "CI checks on PR #1699",
+            output: "Collect PR targets: pass\nDetect code changes: pass",
+            outcome: "updated",
             message: "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass",
           },
         ]);
