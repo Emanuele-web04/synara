@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { basenameOfPath } from "~/file-icons";
 import type { LucideIcon } from "~/lib/icons";
 import {
+  BotIcon,
   DeviceMobileIcon,
   DiffIcon,
   FileIcon,
@@ -46,6 +47,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   sidechat: { label: "Side chats", Icon: SidechatIcon },
   git: { label: "Git", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
+  subagents: { label: "Subagents", Icon: BotIcon },
 };
 
 // Neutral fallback for any pane kind we no longer recognize (e.g. stale

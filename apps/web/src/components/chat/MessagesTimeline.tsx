@@ -129,6 +129,7 @@ import {
   resolveAssistantMessageDisplayText,
   resolveThreadFindJumpTarget,
   type StableMessagesTimelineRowsState,
+  type TurnTiming,
 } from "./MessagesTimeline.logic";
 import { rewriteThreadIdsAsMarkdownLinks } from "./project/projectPanel.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
@@ -469,6 +470,8 @@ interface MessagesTimelineProps {
   messageChangeSignal?: unknown;
   hubWorkItemsByMessageId?: ReadonlyMap<MessageId, readonly HubWorkItem[]> | undefined;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  /** Real start/end/outcome per turn for settled "Worked for" headers. */
+  turnTimingByTurnId?: ReadonlyMap<TurnId, TurnTiming> | undefined;
   /** Coordinator/bot chats hide tool rows and keep a text conversation. */
   conversationOnly?: boolean;
   recoverableTurnId?: TurnId | null;
@@ -574,6 +577,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   messageChangeSignal: messageChangeSignalProp,
   hubWorkItemsByMessageId,
   turnDiffSummaryByAssistantMessageId,
+  turnTimingByTurnId,
   conversationOnly: conversationOnlyProp,
   recoverableTurnId,
   turnRecoveryDisabled,
@@ -812,6 +816,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
+        ...(turnTimingByTurnId ? { turnTimingByTurnId } : {}),
         conversationOnly,
       }),
     [
@@ -825,6 +830,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
+      turnTimingByTurnId,
       conversationOnly,
     ],
   );
@@ -2307,9 +2313,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
                       <span>
-                        {row.collapsedWorkElapsed
-                          ? `Worked for ${row.collapsedWorkElapsed}`
-                          : "Details"}
+                        {row.collapsedWorkInterrupted
+                          ? row.collapsedWorkElapsed
+                            ? `Stopped after ${row.collapsedWorkElapsed}`
+                            : "Stopped"
+                          : row.collapsedWorkElapsed
+                            ? `Worked for ${row.collapsedWorkElapsed}`
+                            : "Details"}
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
@@ -2698,6 +2708,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           labelStyle={chatMessageFooterStyle}
         />
       )}
+
+      {(row.kind === "work" || row.kind === "message") &&
+        row.stoppedTurnElapsed !== undefined &&
+        !conversationOnly && (
+          // Same quiet label as the settled "Worked for" header, for a stopped
+          // turn that has no header of its own to say so.
+          <div
+            className={cn("-ml-0.5 pt-1", MUTED_LABEL_TEXT_CLASS_NAME)}
+            style={{ fontSize: chatTypographyStyle.fontSize }}
+            data-stopped-turn="true"
+          >
+            {row.stoppedTurnElapsed ? `Stopped after ${row.stoppedTurnElapsed}` : "Stopped"}
+          </div>
+        )}
 
       {row.kind === "working-header" && !conversationOnly && (
         <div>
