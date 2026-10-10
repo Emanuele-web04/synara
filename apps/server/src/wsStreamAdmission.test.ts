@@ -188,7 +188,6 @@ describe("WsStreamAdmission", () => {
         clients: 2,
         active: 2,
         admittedTotal: 2,
-        replacedDuplicateTotal: 0,
       });
 
       // Each holder's release detaches; the shared lease survives until its
