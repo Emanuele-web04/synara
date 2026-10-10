@@ -37,7 +37,7 @@ function DialogViewport({ className, ...props }: DialogPrimitive.Viewport.Props)
   return (
     <DialogPrimitive.Viewport
       className={cn(
-        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_3fr] justify-items-center p-4",
+        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_1fr] justify-items-center p-4",
         className,
       )}
       data-slot="dialog-viewport"
@@ -46,21 +46,18 @@ function DialogViewport({ className, ...props }: DialogPrimitive.Viewport.Props)
   );
 }
 
-const dialogPopupClassName =
-  "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
-
 /**
- * Opt-in clean surface: a fully opaque popover fill, a generously rounded shell,
+ * Single dialog surface: a fully opaque popover fill, a generously rounded shell,
  * and a soft lift shadow — mirrors the command-palette / composer aesthetic.
- * The default `--composer-surface` is intentionally translucent (frosted chrome),
- * but it has no backdrop blur on the dialog, so over the dark backdrop it reads
- * muddy/dark. Content-heavy dialogs (e.g. the kanban task composer) opt into this
- * to match the clean, deeply rounded sheet look. */
-const dialogPopupSolidSurfaceClassName =
-  "rounded-3xl border-[color:var(--color-border-light)] bg-popover shadow-[0_16px_50px_-12px_rgba(0,0,0,0.34)] dark:shadow-[0_16px_50px_-12px_rgba(0,0,0,0.7)]";
+ * Dialogs have no backdrop blur, so a translucent fill reads muddy over the dark
+ * backdrop; keep this surface opaque. */
+const dialogPopupClassName =
+  "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-3xl border border-[color:var(--color-border-light)] bg-popover text-[var(--color-text-foreground)] shadow-[0_16px_50px_-12px_rgba(0,0,0,0.34)] dark:shadow-[0_16px_50px_-12px_rgba(0,0,0,0.7)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
 
+// Capsule-shaped buttons (class contains `rounded-full`) keep their own pill
+// geometry in footers, so they are excluded from the sizing override.
 const dialogFooterButtonSlotSelector =
-  "[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]";
+  "[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7']):not([class*='rounded-full'])]";
 
 const dialogFooterButtonClassName = dialogActionButtonClassName
   .split(/\s+/)
@@ -68,22 +65,24 @@ const dialogFooterButtonClassName = dialogActionButtonClassName
   .map((className) => `${dialogFooterButtonSlotSelector}:${className.replace(/!/g, "\\!")}`)
   .join(" ");
 
+/** Shared label style for form fields inside dialogs (SpaceEditorDialog, CreateProjectDialog). */
+const dialogFieldLabelClassName = "text-ui-sm font-medium text-foreground/80";
+
 const dialogPanelFieldClassName =
   "[&_[data-slot=textarea-control]]:min-h-24 [&_[data-slot=textarea-control]_[data-slot=textarea]]:px-2.5 [&_[data-slot=textarea-control]_[data-slot=textarea]]:py-2";
 
 function DialogPopup({
   className,
   children,
-  showCloseButton = true,
-  bottomStickOnMobile = true,
-  surface = "composer",
+  showCloseButton: showCloseButtonProp,
+  bottomStickOnMobile: bottomStickOnMobileProp,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
-  /** "composer" (default) keeps the translucent frosted chrome; "solid" is a clean opaque sheet. */
-  surface?: "composer" | "solid";
 }) {
+  const showCloseButton = showCloseButtonProp ?? true;
+  const bottomStickOnMobile = bottomStickOnMobileProp ?? true;
   return (
     <DialogPortal>
       <DialogBackdrop />
@@ -93,7 +92,6 @@ function DialogPopup({
         <DialogPrimitive.Popup
           className={cn(
             dialogPopupClassName,
-            surface === "solid" && dialogPopupSolidSurfaceClassName,
             bottomStickOnMobile &&
               "max-sm:max-w-none max-sm:rounded-none max-sm:border-x-0 max-sm:border-t max-sm:border-b-0 max-sm:opacity-[calc(1-min(var(--nested-dialogs),1))] max-sm:data-ending-style:translate-y-4 max-sm:data-starting-style:translate-y-4",
             className,
@@ -132,11 +130,12 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
 
 function DialogFooter({
   className,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: React.ComponentProps<"div"> & {
   variant?: "default" | "bare";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <div
       className={cn(
@@ -167,7 +166,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
 function DialogDescription({ className, ...props }: DialogPrimitive.Description.Props) {
   return (
     <DialogPrimitive.Description
-      className={cn("text-muted-foreground text-sm leading-snug", className)}
+      className={cn("text-muted-foreground text-ui leading-snug", className)}
       data-slot="dialog-description"
       {...props}
     />
@@ -176,9 +175,10 @@ function DialogDescription({ className, ...props }: DialogPrimitive.Description.
 
 function DialogPanel({
   className,
-  scrollFade = true,
+  scrollFade: scrollFadeProp,
   ...props
 }: React.ComponentProps<"div"> & { scrollFade?: boolean }) {
+  const scrollFade = scrollFadeProp ?? true;
   return (
     <ScrollArea scrollFade={scrollFade}>
       <div
@@ -195,15 +195,15 @@ function DialogPanel({
 }
 
 export {
+  dialogFieldLabelClassName,
+  dialogFooterButtonClassName,
   DialogCreateHandle,
   Dialog,
   DialogTrigger,
   DialogPortal,
   DialogClose,
   DialogBackdrop,
-  DialogBackdrop as DialogOverlay,
   DialogPopup,
-  DialogPopup as DialogContent,
   DialogHeader,
   DialogFooter,
   DialogTitle,

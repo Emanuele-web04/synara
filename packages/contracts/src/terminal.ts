@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ProviderInstanceId } from "./providerInstance";
 import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
 
 export const DEFAULT_TERMINAL_ID = "default";
@@ -41,6 +42,8 @@ export type TerminalSessionInput = Schema.Codec.Encoded<typeof TerminalSessionIn
 export const TerminalOpenInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   cwd: TrimmedNonEmptyStringSchema,
+  // Runs only the server-selected authentication entry point for this account.
+  providerAuthInstanceId: Schema.optional(ProviderInstanceId),
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),
@@ -55,6 +58,8 @@ export type TerminalOpenInput = Schema.Codec.Encoded<typeof TerminalOpenInput>;
 export const TerminalWriteInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   data: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
+  // Navigation commands must not become input to a running program.
+  onlyIfIdle: Schema.optional(Schema.Boolean),
 });
 export type TerminalWriteInput = Schema.Codec.Encoded<typeof TerminalWriteInput>;
 
@@ -87,6 +92,9 @@ export const TerminalCloseInput = Schema.Struct({
   ...TerminalThreadInput.fields,
   terminalId: Schema.optional(TerminalIdSchema),
   deleteHistory: Schema.optional(Schema.Boolean),
+  // Automatic replacement/retirement must verify inactivity on the server.
+  // Requires a terminalId; an unavailable process snapshot rejects the close.
+  onlyIfIdle: Schema.optional(Schema.Boolean),
 });
 export type TerminalCloseInput = Schema.Codec.Encoded<typeof TerminalCloseInput>;
 
@@ -154,7 +162,13 @@ const TerminalActivityEvent = Schema.Struct({
   ...TerminalEventBaseSchema.fields,
   type: Schema.Literal("activity"),
   hasRunningSubprocess: Schema.Boolean,
-  cliKind: Schema.NullOr(Schema.Union([Schema.Literal("codex"), Schema.Literal("claude")])),
+  cliKind: Schema.NullOr(
+    Schema.Union([
+      Schema.Literal("codex"),
+      Schema.Literal("claude"),
+      Schema.Literal("antigravity"),
+    ]),
+  ),
   agentState: Schema.NullOr(
     Schema.Union([
       Schema.Literal("running"),

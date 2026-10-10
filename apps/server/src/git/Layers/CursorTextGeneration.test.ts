@@ -6,18 +6,35 @@ import { fileURLToPath } from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
-import { expect } from "vitest";
+import { expect, test } from "vitest";
 
 import { TextGenerationError } from "../Errors.ts";
+import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
-import { CursorTextGenerationLive } from "./CursorTextGeneration.ts";
+import { CursorTextGenerationLive, resolveCursorSettings } from "./CursorTextGeneration.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
 
 const CursorTextGenerationTestLayer = CursorTextGenerationLive.pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(
+    Layer.succeed(ServerConfig, {
+      homeDir: os.homedir(),
+      stateDir: path.join(os.tmpdir(), "synara-cursor-text-state"),
+    } as any),
+  ),
 );
+
+test("routes an empty-config nondefault Cursor text-generation account", () => {
+  expect(
+    resolveCursorSettings(undefined, { homeDir: "/home/user", stateDir: "/state" }, "cursor_work"),
+  ).toEqual({
+    homeDir: "/home/user",
+    isolationRootDir: "/state",
+    instanceId: "cursor_work",
+  });
+});
 
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -36,7 +53,7 @@ function makeAcpAgentWrapper(dir: string, env: Record<string, string>): string {
       '  printf "%s\\n" "unexpected args: $*" >&2',
       "  exit 11",
       "fi",
-      `exec bun ${JSON.stringify(mockAgentPath)}`,
+      `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockAgentPath)}`,
       "",
     ].join("\n"),
     "utf8",
@@ -51,7 +68,7 @@ function withFakeAcpAgent<A, E, R>(
 ): Effect.Effect<A, E, R> {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
-      const tempDir = mkdtempSync(path.join(os.tmpdir(), "dpcode-cursor-text-acp-"));
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-cursor-text-acp-"));
       return {
         tempDir,
         agentPath: makeAcpAgentWrapper(tempDir, env),
@@ -65,16 +82,22 @@ function withFakeAcpAgent<A, E, R>(
   );
 }
 
-function waitForFileContent(filePath: string): Effect.Effect<string> {
+function waitForFileContent(filePath: string, containing?: string): Effect.Effect<string> {
   return Effect.promise(async () => {
     const deadline = Date.now() + 5_000;
     for (;;) {
       try {
-        return readFileSync(filePath, "utf8");
+        const content = readFileSync(filePath, "utf8");
+        if (containing === undefined || content.includes(containing)) {
+          return content;
+        }
       } catch (error) {
         if (Date.now() >= deadline) {
           throw error instanceof Error ? error : new Error(String(error));
         }
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for file content: ${filePath}`);
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -83,13 +106,13 @@ function waitForFileContent(filePath: string): Effect.Effect<string> {
 
 it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("uses ACP model config options instead of raw CLI model ids", () => {
-    const requestLogDir = mkdtempSync(path.join(os.tmpdir(), "dpcode-cursor-text-log-"));
+    const requestLogDir = mkdtempSync(path.join(os.tmpdir(), "synara-cursor-text-log-"));
     const requestLogPath = path.join(requestLogDir, "requests.ndjson");
 
     return withFakeAcpAgent(
       {
-        T3_ACP_REQUEST_LOG_PATH: requestLogPath,
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+        SYNARA_ACP_REQUEST_LOG_PATH: requestLogPath,
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
           subject: "Add generated commit message",
           body: "- verify cursor acp model config path",
         }),
@@ -175,7 +198,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("accepts json objects with extra assistant text around them", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT:
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT:
           'Sure, here is the JSON:\n```json\n{\n  "subject": "Update README dummy comment with attribution and date",\n  "body": ""\n}\n```\nDone.',
       },
       (agentPath) =>
@@ -207,7 +230,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("generates diff summaries through Cursor ACP text generation", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
           summary: "## Summary\n- Route git summaries through Cursor.",
         }),
       },
@@ -234,10 +257,40 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
     ),
   );
 
+  it.effect("passes provider-instance environment to Cursor ACP text generation", () =>
+    withFakeAcpAgent({}, (agentPath) =>
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const generated = yield* textGeneration.generateDiffSummary({
+          cwd: process.cwd(),
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: {
+            provider: "cursor",
+            instanceId: "cursor_work",
+            model: "composer-2",
+          },
+          providerOptions: {
+            cursor: {
+              binaryPath: agentPath,
+              environment: {
+                ACP_MOCK_PROMPT_RESPONSE_TEXT: JSON.stringify({
+                  summary: "## Summary\n- Used the provider instance env.",
+                }),
+              },
+            },
+          },
+        });
+
+        expect(generated.summary).toBe("## Summary\n- Used the provider instance env.");
+      }),
+    ),
+  );
+
   it.effect("falls back to raw text when Cursor replies without JSON for a thread title", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT: "Sidebar Thread Row Spacing",
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: "Sidebar Thread Row Spacing",
       },
       (agentPath) =>
         Effect.gen(function* () {
@@ -265,7 +318,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("recovers a thread title from a wrong-key JSON payload", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ name: "Reconnect Backoff Fix" }),
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ name: "Reconnect Backoff Fix" }),
       },
       (agentPath) =>
         Effect.gen(function* () {
@@ -293,7 +346,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("rejects sentence-length prose instead of using it as a title", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT:
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT:
           "I'm sorry, but I cannot generate a concise title for this particular request right now.",
       },
       (agentPath) =>
@@ -333,13 +386,13 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   );
 
   it.effect("closes the ACP child process after text generation completes", () => {
-    const exitLogDir = mkdtempSync(path.join(os.tmpdir(), "dpcode-cursor-text-exit-log-"));
+    const exitLogDir = mkdtempSync(path.join(os.tmpdir(), "synara-cursor-text-exit-log-"));
     const exitLogPath = path.join(exitLogDir, "exit.log");
 
     return withFakeAcpAgent(
       {
-        T3_ACP_EXIT_LOG_PATH: exitLogPath,
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+        SYNARA_ACP_EXIT_LOG_PATH: exitLogPath,
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
           title: '"Trim reconnect spinner status after resume."',
         }),
       },
@@ -361,9 +414,9 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             },
           });
 
-          expect(generated.title).toBe("Trim reconnect spinner status");
+          expect(generated.title).toBe("Trim reconnect spinner status after resume");
 
-          const exitLog = yield* waitForFileContent(exitLogPath);
+          const exitLog = yield* waitForFileContent(exitLogPath, "exit:0");
           expect(exitLog).toContain("exit:0");
 
           rmSync(exitLogDir, { recursive: true, force: true });

@@ -1,225 +1,110 @@
 // FILE: store.test.ts
-// Purpose: Exercises the web store's pure state transitions for orchestration snapshots/events.
-// Exports: Vitest coverage for thread/project projection, sidebar summaries, and local UI state.
+// Purpose: Exercises the public store facade, persistence, and simple UI actions.
 
 import {
-  ApprovalRequestId,
-  CheckpointRef,
-  EventId,
-  MessageId,
-  OrchestrationProposedPlanId,
   ProjectId,
+  SpaceId,
   ThreadId,
-  ThreadMarkerId,
   TurnId,
-  type OrchestrationEvent,
   type OrchestrationReadModel,
-  type OrchestrationShellStreamEvent,
-  type OrchestrationThreadActivity,
-  type ThreadMarker,
-} from "@t3tools/contracts";
+  type OrchestrationShellSnapshot,
+} from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  applyShellEvent,
-  applyOrchestrationEvents,
-  applyOrchestrationEventsHotPath,
+  applySpaceOrder,
   collapseProjectsExcept,
   markThreadUnread,
   renameProjectLocally,
-  removeDeletedThreadFromClientState,
   reorderProjects,
   setThreadWorkspace,
   setAllProjectsExpanded,
   syncServerReadModel,
-  syncServerThreadDetailHotPath,
-  type AppState,
+  syncServerShellSnapshot,
+  useStore,
 } from "./store";
-import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import type { AppState } from "./storeState";
+import { PERSISTED_STATE_KEY } from "./storePersistence";
+import {
+  makeThread,
+  makeState,
+  makeProject,
+  makeReadModelThread,
+  makeReadModel,
+  makeReadModelProject,
+  makeFakeWindow,
+  threadsOf,
+} from "./storeTestFixtures";
 
-function makeThread(overrides: Partial<Thread> = {}): Thread {
-  return {
-    id: ThreadId.makeUnsafe("thread-1"),
-    codexThreadId: null,
-    projectId: ProjectId.makeUnsafe("project-1"),
-    title: "Thread",
-    modelSelection: {
-      provider: "codex",
-      model: "gpt-5-codex",
-    },
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    interactionMode: DEFAULT_INTERACTION_MODE,
-    session: null,
-    messages: [],
-    turnDiffSummaries: [],
-    activities: [],
-    proposedPlans: [],
-    error: null,
-    createdAt: "2026-02-13T00:00:00.000Z",
-    latestTurn: null,
-    latestUserMessageAt: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-    envMode: "local",
-    branch: null,
-    worktreePath: null,
-    forkSourceThreadId: null,
-    sidechatSourceThreadId: null,
-    handoff: null,
-    ...overrides,
-  };
-}
+const makeProjectsReadModel = (
+  projects: OrchestrationReadModel["projects"],
+): OrchestrationReadModel => ({
+  snapshotSequence: 1,
+  updatedAt: "2026-02-27T00:00:00.000Z",
+  spaces: [],
+  projects,
+  threads: [],
+});
 
-function makeDomainEvent<TType extends OrchestrationEvent["type"]>(
-  type: TType,
-  payload: Extract<OrchestrationEvent, { type: TType }>["payload"],
-  overrides: Partial<Omit<Extract<OrchestrationEvent, { type: TType }>, "type" | "payload">> = {},
-): Extract<OrchestrationEvent, { type: TType }> {
-  const aggregateId = "threadId" in payload ? payload.threadId : ProjectId.makeUnsafe("project-1");
-  return {
-    type,
-    payload,
-    sequence: overrides.sequence ?? 1,
-    eventId: overrides.eventId ?? EventId.makeUnsafe(`event-${crypto.randomUUID()}`),
-    aggregateKind: overrides.aggregateKind ?? "thread",
-    aggregateId,
-    occurredAt: overrides.occurredAt ?? "2026-02-27T00:00:00.000Z",
-    commandId: overrides.commandId ?? null,
-    causationEventId: overrides.causationEventId ?? null,
-    correlationId: overrides.correlationId ?? null,
-    metadata: overrides.metadata ?? {},
-    ...overrides,
-  } as Extract<OrchestrationEvent, { type: TType }>;
-}
+describe("store facade", () => {
+  it("frees a batch of thread details in a single store write", () => {
+    // Dropping several leases at once must not cost one update per thread: every
+    // update re-runs the retention reconcile that decides what to evict next.
+    const first = ThreadId.makeUnsafe("thread-batch-1");
+    const second = ThreadId.makeUnsafe("thread-batch-2");
+    const kept = ThreadId.makeUnsafe("thread-batch-kept");
+    const initialState = useStore.getState();
+    useStore.setState({
+      messageIdsByThreadId: { [first]: [], [second]: [], [kept]: [] },
+      messageByThreadId: { [first]: {}, [second]: {}, [kept]: {} },
+    });
 
-function makeActivity(overrides: {
-  id?: string;
-  createdAt?: string;
-  kind?: string;
-  summary?: string;
-  tone?: OrchestrationThreadActivity["tone"];
-  payload?: OrchestrationThreadActivity["payload"];
-  turnId?: string;
-  sequence?: number;
-}): OrchestrationThreadActivity {
-  return {
-    id: EventId.makeUnsafe(overrides.id ?? crypto.randomUUID()),
-    createdAt: overrides.createdAt ?? "2026-02-23T00:00:00.000Z",
-    kind: overrides.kind ?? "tool.started",
-    summary: overrides.summary ?? "Tool call",
-    tone: overrides.tone ?? "tool",
-    payload: overrides.payload ?? {},
-    turnId: overrides.turnId ? TurnId.makeUnsafe(overrides.turnId) : null,
-    ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
-  };
-}
+    const updates = vi.fn();
+    const unsubscribe = useStore.subscribe(updates);
+    try {
+      useStore.getState().evictThreadDetails([first, second]);
+    } finally {
+      unsubscribe();
+    }
 
-function makeState(thread: Thread): AppState {
-  return {
-    projects: [makeProject()],
-    threads: [thread],
-    sidebarThreadSummaryById: {},
-    threadsHydrated: true,
-  };
-}
+    const state = useStore.getState();
+    expect(updates).toHaveBeenCalledTimes(1);
+    expect(state.messageByThreadId?.[first]).toBeUndefined();
+    expect(state.messageByThreadId?.[second]).toBeUndefined();
+    expect(state.messageByThreadId?.[kept]).toBeDefined();
 
-function makeProject(
-  overrides: Partial<AppState["projects"][number]> = {},
-): AppState["projects"][number] {
-  return {
-    id: ProjectId.makeUnsafe("project-1"),
-    kind: "project",
-    name: "Project",
-    remoteName: "Project",
-    folderName: "project",
-    localName: null,
-    cwd: "/tmp/project",
-    defaultModelSelection: {
-      provider: "codex",
-      model: "gpt-5-codex",
-    },
-    expanded: true,
-    scripts: [],
-    ...overrides,
-  };
-}
+    useStore.setState(initialState);
+  });
 
-function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"][number]>) {
-  return {
-    id: ThreadId.makeUnsafe("thread-1"),
-    projectId: ProjectId.makeUnsafe("project-1"),
-    title: "Thread",
-    modelSelection: {
-      provider: "codex",
-      model: "gpt-5.3-codex",
-    },
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    interactionMode: DEFAULT_INTERACTION_MODE,
-    envMode: "local",
-    branch: null,
-    worktreePath: null,
-    forkSourceThreadId: null,
-    sidechatSourceThreadId: null,
-    latestTurn: null,
-    createdAt: "2026-02-27T00:00:00.000Z",
-    updatedAt: "2026-02-27T00:00:00.000Z",
-    deletedAt: null,
-    handoff: null,
-    messages: [],
-    activities: [],
-    proposedPlans: [],
-    checkpoints: [],
-    session: null,
-    ...overrides,
-  } satisfies OrchestrationReadModel["threads"][number];
-}
-
-function makeReadModel(thread: OrchestrationReadModel["threads"][number]): OrchestrationReadModel {
-  return {
-    snapshotSequence: 1,
-    updatedAt: "2026-02-27T00:00:00.000Z",
-    projects: [
+  it("applies a Space order immediately for optimistic drag feedback", () => {
+    const workSpaceId = SpaceId.makeUnsafe("space-work");
+    const sideSpaceId = SpaceId.makeUnsafe("space-side");
+    const state = makeState(makeThread());
+    state.spaces = [
       {
-        id: ProjectId.makeUnsafe("project-1"),
-        kind: "project",
-        title: "Project",
-        workspaceRoot: "/tmp/project",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:00:00.000Z",
-        deletedAt: null,
-        scripts: [],
+        id: workSpaceId,
+        name: "Work",
+        icon: "bag",
+        sortOrder: 0,
+        createdAt: "2026-07-15T10:00:00.000Z",
+        updatedAt: "2026-07-15T10:00:00.000Z",
       },
-    ],
-    threads: [thread],
-  };
-}
+      {
+        id: sideSpaceId,
+        name: "Side",
+        icon: "rocket",
+        sortOrder: 1,
+        createdAt: "2026-07-15T10:00:00.000Z",
+        updatedAt: "2026-07-15T10:00:00.000Z",
+      },
+    ];
 
-function makeReadModelProject(
-  overrides: Partial<OrchestrationReadModel["projects"][number]>,
-): OrchestrationReadModel["projects"][number] {
-  return {
-    id: ProjectId.makeUnsafe("project-1"),
-    kind: "project",
-    title: "Project",
-    workspaceRoot: "/tmp/project",
-    defaultModelSelection: {
-      provider: "codex",
-      model: "gpt-5.3-codex",
-    },
-    createdAt: "2026-02-27T00:00:00.000Z",
-    updatedAt: "2026-02-27T00:00:00.000Z",
-    deletedAt: null,
-    scripts: [],
-    ...overrides,
-  };
-}
+    const reordered = applySpaceOrder(state, [sideSpaceId, workSpaceId]);
 
-describe("store pure functions", () => {
+    expect(reordered.spaces.map((space) => space.id)).toEqual([sideSpaceId, workSpaceId]);
+    expect(reordered.spaces.map((space) => space.sortOrder)).toEqual([0, 1]);
+  });
+
   it("markThreadUnread moves lastVisitedAt before completion for a completed thread", () => {
     const latestTurnCompletedAt = "2026-02-25T12:30:00.000Z";
     const initialState = makeState(
@@ -238,7 +123,7 @@ describe("store pure functions", () => {
 
     const next = markThreadUnread(initialState, ThreadId.makeUnsafe("thread-1"));
 
-    const updatedThread = next.threads[0];
+    const updatedThread = threadsOf(next)[0];
     expect(updatedThread).toBeDefined();
     expect(updatedThread?.lastVisitedAt).toBe("2026-02-25T12:29:59.999Z");
     expect(Date.parse(updatedThread?.lastVisitedAt ?? "")).toBeLessThan(
@@ -259,76 +144,6 @@ describe("store pure functions", () => {
     expect(next).toEqual(initialState);
   });
 
-  it("preserves a semantic branch when a temp worktree branch arrives from the read model", () => {
-    const initialThread = makeThread({
-      branch: "feature/semantic-branch",
-      updatedAt: "2026-02-27T00:00:00.000Z",
-    });
-
-    const next = syncServerReadModel(
-      makeState(initialThread),
-      makeReadModel(
-        makeReadModelThread({
-          branch: "synara/abc123ef",
-          updatedAt: "2026-02-27T00:05:00.000Z",
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
-  });
-
-  it("preserves message mention references from read-model snapshots", () => {
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          messages: [
-            {
-              id: MessageId.makeUnsafe("message-with-plugin-mention"),
-              role: "user",
-              text: "Use @linear",
-              attachments: [],
-              mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
-              turnId: null,
-              streaming: false,
-              source: "native",
-              createdAt: "2026-02-27T00:00:00.000Z",
-              updatedAt: "2026-02-27T00:00:00.000Z",
-            },
-          ],
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
-      { name: "linear", path: "plugin://linear@openai-curated" },
-    ]);
-  });
-
-  it("preserves plugin mention references from live thread.message-sent events", () => {
-    const messageId = MessageId.makeUnsafe("message-with-plugin-mention");
-    const next = applyOrchestrationEvents(makeState(makeThread()), [
-      makeDomainEvent("thread.message-sent", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId,
-        role: "user",
-        text: "Use @linear",
-        attachments: [],
-        mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
-        turnId: null,
-        streaming: false,
-        source: "native",
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:00:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
-      { name: "linear", path: "plugin://linear@openai-curated" },
-    ]);
-  });
-
   it("does not regress a semantic branch when local workspace patches only report a temp branch", () => {
     const state = makeState(
       makeThread({
@@ -340,7 +155,7 @@ describe("store pure functions", () => {
       branch: "synara/abc123ef",
     });
 
-    expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+    expect(threadsOf(next)[0]?.branch).toBe("feature/semantic-branch");
   });
 
   it("preserves optimistic createBranchFlowCompleted during stale read-model syncs", () => {
@@ -349,11 +164,11 @@ describe("store pure functions", () => {
       makeState(
         makeThread({
           envMode: "worktree",
-          branch: "dpcode/tmp-working",
+          branch: "synara/tmp-working",
           worktreePath: "/tmp/project/.worktrees/tmp-working",
           associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
-          associatedWorktreeBranch: "dpcode/tmp-working",
-          associatedWorktreeRef: "dpcode/tmp-working",
+          associatedWorktreeBranch: "synara/tmp-working",
+          associatedWorktreeRef: "synara/tmp-working",
         }),
       ),
       threadId,
@@ -367,1360 +182,19 @@ describe("store pure functions", () => {
       makeReadModel(
         makeReadModelThread({
           envMode: "worktree",
-          branch: "dpcode/tmp-working",
+          branch: "synara/tmp-working",
           worktreePath: "/tmp/project/.worktrees/tmp-working",
           associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
-          associatedWorktreeBranch: "dpcode/tmp-working",
-          associatedWorktreeRef: "dpcode/tmp-working",
+          associatedWorktreeBranch: "synara/tmp-working",
+          associatedWorktreeRef: "synara/tmp-working",
           createBranchFlowCompleted: false,
           updatedAt: "2026-02-27T00:05:00.000Z",
         }),
       ),
     );
 
-    expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
+    expect(threadsOf(next)[0]?.createBranchFlowCompleted).toBe(true);
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
-  });
-
-  it("resets createBranchFlowCompleted when the branch context changes", () => {
-    const next = syncServerReadModel(
-      makeState(
-        makeThread({
-          envMode: "worktree",
-          branch: "feature/old-name",
-          worktreePath: "/tmp/project/.worktrees/old-name",
-          associatedWorktreePath: "/tmp/project/.worktrees/old-name",
-          associatedWorktreeBranch: "feature/old-name",
-          associatedWorktreeRef: "feature/old-name",
-          createBranchFlowCompleted: true,
-        }),
-      ),
-      makeReadModel(
-        makeReadModelThread({
-          envMode: "worktree",
-          branch: "feature/new-name",
-          worktreePath: "/tmp/project/.worktrees/new-name",
-          associatedWorktreePath: "/tmp/project/.worktrees/new-name",
-          associatedWorktreeBranch: "feature/new-name",
-          associatedWorktreeRef: "feature/new-name",
-          createBranchFlowCompleted: false,
-          updatedAt: "2026-02-27T00:05:00.000Z",
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.branch).toBe("feature/new-name");
-    expect(next.threads[0]?.createBranchFlowCompleted).toBe(false);
-  });
-
-  it("stores server-provided sidebar metadata on hydrated threads", () => {
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          latestUserMessageAt: "2026-02-27T00:03:00.000Z",
-          hasPendingApprovals: true,
-          hasPendingUserInput: true,
-          hasActionableProposedPlan: true,
-          updatedAt: "2026-02-27T00:05:00.000Z",
-        }),
-      ),
-    );
-
-    expect(next.threads[0]).toMatchObject({
-      latestUserMessageAt: "2026-02-27T00:03:00.000Z",
-      hasPendingApprovals: true,
-      hasPendingUserInput: true,
-      hasActionableProposedPlan: true,
-    });
-    expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
-      latestUserMessageAt: "2026-02-27T00:03:00.000Z",
-      hasPendingApprovals: true,
-      hasPendingUserInput: true,
-      hasActionableProposedPlan: true,
-    });
-  });
-
-  it("falls back to local derivation when server summary metadata is absent", () => {
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          messages: [
-            {
-              id: "message-user" as Thread["messages"][number]["id"],
-              role: "user",
-              text: "hello",
-              turnId: null,
-              streaming: false,
-              source: "native",
-              createdAt: "2026-02-27T00:03:00.000Z",
-              updatedAt: "2026-02-27T00:03:00.000Z",
-            },
-          ],
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.latestUserMessageAt).toBeUndefined();
-    expect(next.sidebarThreadSummaryById["thread-1"]?.latestUserMessageAt).toBe(
-      "2026-02-27T00:03:00.000Z",
-    );
-  });
-
-  it("updates thread error and marks the running latest turn failed from session-set events", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.session-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "error",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: "provider crashed",
-          updatedAt: "2026-02-27T00:02:00.000Z",
-        },
-      }),
-    ]);
-
-    expect(next.threads[0]?.error).toBe("provider crashed");
-    expect(next.threads[0]?.latestTurn).toMatchObject({
-      turnId: TurnId.makeUnsafe("turn-running"),
-      state: "error",
-      completedAt: "2026-02-27T00:02:00.000Z",
-    });
-  });
-
-  it("adds projects immediately from live project.created events", () => {
-    const next = applyOrchestrationEvents(
-      {
-        projects: [],
-        threads: [],
-        sidebarThreadSummaryById: {},
-        threadsHydrated: false,
-      },
-      [
-        makeDomainEvent(
-          "project.created",
-          {
-            projectId: ProjectId.makeUnsafe("project-live"),
-            title: "Live Project",
-            workspaceRoot: "/tmp/live-project",
-            defaultModelSelection: {
-              provider: "codex",
-              model: "gpt-5-codex",
-            },
-            scripts: [],
-            createdAt: "2026-02-27T00:00:00.000Z",
-            updatedAt: "2026-02-27T00:00:00.000Z",
-          },
-          { aggregateKind: "project" },
-        ),
-      ],
-    );
-
-    expect(next.projects).toHaveLength(1);
-    expect(next.projects[0]).toMatchObject({
-      id: ProjectId.makeUnsafe("project-live"),
-      name: "Live Project",
-      remoteName: "Live Project",
-      folderName: "live-project",
-      cwd: "/tmp/live-project",
-      createdAt: "2026-02-27T00:00:00.000Z",
-      updatedAt: "2026-02-27T00:00:00.000Z",
-    });
-  });
-
-  it("updates existing projects immediately from live project.meta-updated events", () => {
-    const initialState: AppState = {
-      projects: [
-        makeProject({
-          id: ProjectId.makeUnsafe("project-live"),
-          name: "Local Name",
-          remoteName: "Original Name",
-          localName: "Local Name",
-          folderName: "original-project",
-          cwd: "/tmp/original-project",
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ],
-      threads: [],
-      sidebarThreadSummaryById: {},
-      threadsHydrated: true,
-    };
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent(
-        "project.meta-updated",
-        {
-          projectId: ProjectId.makeUnsafe("project-live"),
-          title: "Renamed Remotely",
-          workspaceRoot: "/tmp/renamed-project",
-          defaultModelSelection: null,
-          scripts: [
-            {
-              id: "lint",
-              name: "Lint",
-              command: "bun lint",
-              icon: "lint",
-              runOnWorktreeCreate: false,
-            },
-          ],
-          updatedAt: "2026-02-27T00:05:00.000Z",
-        },
-        { aggregateKind: "project" },
-      ),
-    ]);
-
-    expect(next.projects[0]).toMatchObject({
-      id: ProjectId.makeUnsafe("project-live"),
-      name: "Local Name",
-      remoteName: "Renamed Remotely",
-      folderName: "renamed-project",
-      localName: "Local Name",
-      cwd: "/tmp/renamed-project",
-      defaultModelSelection: null,
-      updatedAt: "2026-02-27T00:05:00.000Z",
-      scripts: [
-        {
-          id: "lint",
-          name: "Lint",
-          command: "bun lint",
-          icon: "lint",
-          runOnWorktreeCreate: false,
-        },
-      ],
-    });
-  });
-
-  it("removes projects immediately from live project.deleted events", () => {
-    const next = applyOrchestrationEvents(
-      {
-        projects: [makeProject({ id: ProjectId.makeUnsafe("project-live") })],
-        threads: [],
-        sidebarThreadSummaryById: {},
-        threadsHydrated: true,
-      },
-      [
-        makeDomainEvent(
-          "project.deleted",
-          {
-            projectId: ProjectId.makeUnsafe("project-live"),
-            deletedAt: "2026-02-27T00:06:00.000Z",
-          },
-          { aggregateKind: "project" },
-        ),
-      ],
-    );
-
-    expect(next.projects).toEqual([]);
-  });
-
-  it("reuses the existing project slot for shell upserts that keep the same workspace root", () => {
-    const initialState: AppState = {
-      projects: [
-        makeProject({
-          id: ProjectId.makeUnsafe("project-old"),
-          name: "Local Name",
-          remoteName: "Old Name",
-          localName: "Local Name",
-          cwd: "/tmp/shared-root",
-        }),
-      ],
-      threads: [],
-      sidebarThreadSummaryById: {},
-      threadsHydrated: true,
-    };
-
-    const next = applyShellEvent(initialState, {
-      kind: "project-upserted",
-      sequence: 2,
-      project: {
-        id: ProjectId.makeUnsafe("project-new"),
-        title: "Server Name",
-        workspaceRoot: "/tmp/shared-root",
-        defaultModelSelection: null,
-        scripts: [],
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      },
-    } satisfies OrchestrationShellStreamEvent);
-
-    expect(next.projects).toHaveLength(1);
-    expect(next.projects[0]).toMatchObject({
-      id: ProjectId.makeUnsafe("project-new"),
-      name: "Local Name",
-      remoteName: "Server Name",
-      localName: "Local Name",
-      cwd: "/tmp/shared-root",
-    });
-  });
-
-  it("drops descendant thread state when a shell project removal arrives", () => {
-    const initialThread = makeThread({
-      id: ThreadId.makeUnsafe("thread-project-1"),
-      projectId: ProjectId.makeUnsafe("project-shell"),
-    });
-    const untouchedThread = makeThread({
-      id: ThreadId.makeUnsafe("thread-project-2"),
-      projectId: ProjectId.makeUnsafe("project-other"),
-    });
-    const initialState = syncServerReadModel(
-      {
-        projects: [
-          makeProject({
-            id: ProjectId.makeUnsafe("project-shell"),
-            cwd: "/tmp/project-shell",
-          }),
-          makeProject({
-            id: ProjectId.makeUnsafe("project-other"),
-            cwd: "/tmp/project-other",
-          }),
-        ],
-        threads: [initialThread, untouchedThread],
-        sidebarThreadSummaryById: {},
-        threadsHydrated: true,
-      },
-      {
-        snapshotSequence: 1,
-        updatedAt: "2026-02-27T00:00:00.000Z",
-        projects: [
-          makeReadModelProject({
-            id: ProjectId.makeUnsafe("project-shell"),
-            workspaceRoot: "/tmp/project-shell",
-          }),
-          makeReadModelProject({
-            id: ProjectId.makeUnsafe("project-other"),
-            workspaceRoot: "/tmp/project-other",
-          }),
-        ],
-        threads: [
-          makeReadModelThread({
-            id: ThreadId.makeUnsafe("thread-project-1"),
-            projectId: ProjectId.makeUnsafe("project-shell"),
-          }),
-          makeReadModelThread({
-            id: ThreadId.makeUnsafe("thread-project-2"),
-            projectId: ProjectId.makeUnsafe("project-other"),
-          }),
-        ],
-      },
-    );
-
-    const next = applyShellEvent(initialState, {
-      kind: "project-removed",
-      sequence: 2,
-      projectId: ProjectId.makeUnsafe("project-shell"),
-    } satisfies OrchestrationShellStreamEvent);
-
-    expect(next.projects.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-other"),
-    ]);
-    expect(next.threads.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-project-2"),
-    ]);
-    expect(next.threadIds).toEqual([ThreadId.makeUnsafe("thread-project-2")]);
-    expect(next.threadShellById?.[ThreadId.makeUnsafe("thread-project-1")]).toBeUndefined();
-    expect(next.sidebarThreadSummaryById["thread-project-1"]).toBeUndefined();
-  });
-
-  it("does not let a stale shell upsert clear optimistic createBranchFlowCompleted", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const initialState = syncServerReadModel(
-      makeState(
-        makeThread({
-          envMode: "worktree",
-          branch: "feature/semantic-branch",
-          worktreePath: "/tmp/project/.worktrees/semantic-branch",
-          associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
-          associatedWorktreeBranch: "feature/semantic-branch",
-          associatedWorktreeRef: "feature/semantic-branch",
-          createBranchFlowCompleted: true,
-        }),
-      ),
-      makeReadModel(
-        makeReadModelThread({
-          envMode: "worktree",
-          branch: "feature/semantic-branch",
-          worktreePath: "/tmp/project/.worktrees/semantic-branch",
-          associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
-          associatedWorktreeBranch: "feature/semantic-branch",
-          associatedWorktreeRef: "feature/semantic-branch",
-          createBranchFlowCompleted: true,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const next = applyShellEvent(initialState, {
-      kind: "thread-upserted",
-      sequence: 2,
-      thread: {
-        id: threadId,
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "worktree",
-        branch: "feature/semantic-branch",
-        worktreePath: "/tmp/project/.worktrees/semantic-branch",
-        associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
-        associatedWorktreeBranch: "feature/semantic-branch",
-        associatedWorktreeRef: "feature/semantic-branch",
-        createBranchFlowCompleted: false,
-        parentThreadId: null,
-        subagentAgentId: null,
-        subagentNickname: null,
-        subagentRole: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        lastKnownPr: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-        archivedAt: null,
-        handoff: null,
-        session: null,
-      },
-    });
-
-    expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
-  });
-
-  it("settles a running latest turn immediately when session stop is requested", () => {
-    const initialState = makeState(
-      makeThread({
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: TurnId.makeUnsafe("turn-running"),
-          createdAt: "2026-02-27T00:01:00.000Z",
-          updatedAt: "2026-02-27T00:01:00.000Z",
-        },
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: MessageId.makeUnsafe("assistant-running"),
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.session-stop-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        createdAt: "2026-02-27T00:02:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.session).toMatchObject({
-      status: "closed",
-      orchestrationStatus: "stopped",
-      activeTurnId: undefined,
-      updatedAt: "2026-02-27T00:02:00.000Z",
-    });
-    expect(next.threads[0]?.latestTurn).toMatchObject({
-      turnId: TurnId.makeUnsafe("turn-running"),
-      state: "interrupted",
-      requestedAt: "2026-02-27T00:01:00.000Z",
-      startedAt: "2026-02-27T00:01:05.000Z",
-      completedAt: "2026-02-27T00:02:00.000Z",
-      assistantMessageId: MessageId.makeUnsafe("assistant-running"),
-    });
-  });
-
-  it("keeps the latest turn running when interrupt is only requested", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: MessageId.makeUnsafe("assistant-running"),
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-interrupt-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: TurnId.makeUnsafe("turn-running"),
-        createdAt: "2026-02-27T00:02:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.latestTurn).toMatchObject({
-      turnId: TurnId.makeUnsafe("turn-running"),
-      state: "running",
-      requestedAt: "2026-02-27T00:01:00.000Z",
-      startedAt: "2026-02-27T00:01:05.000Z",
-      completedAt: null,
-      assistantMessageId: MessageId.makeUnsafe("assistant-running"),
-    });
-  });
-
-  it("keeps pending proposed-plan linkage across live turn updates", () => {
-    const sourceProposedPlan = {
-      threadId: ThreadId.makeUnsafe("thread-source"),
-      planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
-    };
-    const next = applyOrchestrationEvents(makeState(makeThread()), [
-      makeDomainEvent("thread.turn-start-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe("user-message"),
-        runtimeMode: "full-access",
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        dispatchMode: "queue",
-        createdAt: "2026-02-27T00:01:00.000Z",
-        sourceProposedPlan,
-      }),
-      makeDomainEvent("thread.message-sent", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe("assistant-message"),
-        role: "assistant",
-        text: "Done",
-        turnId: TurnId.makeUnsafe("turn-1"),
-        streaming: false,
-        createdAt: "2026-02-27T00:01:05.000Z",
-        updatedAt: "2026-02-27T00:01:06.000Z",
-        attachments: [],
-        source: "native",
-      }),
-    ]);
-
-    expect(next.threads[0]?.pendingSourceProposedPlan).toEqual(sourceProposedPlan);
-    expect(next.threads[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
-  });
-
-  it("does not truncate streamed assistant text when completion only carries the trailing chunk", () => {
-    const assistantId = MessageId.makeUnsafe("assistant-message");
-    const turnId = TurnId.makeUnsafe("turn-1");
-    const initialState = makeState(
-      makeThread({
-        messages: [
-          {
-            id: assistantId,
-            role: "assistant",
-            text: "Hello",
-            turnId,
-            createdAt: "2026-02-27T00:01:05.000Z",
-            streaming: true,
-            source: "native",
-          },
-        ],
-        latestTurn: {
-          turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.message-sent", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: assistantId,
-        role: "assistant",
-        text: " world",
-        turnId,
-        streaming: false,
-        createdAt: "2026-02-27T00:01:05.000Z",
-        updatedAt: "2026-02-27T00:01:06.000Z",
-        attachments: [],
-        source: "native",
-      }),
-    ]);
-
-    expect(next.threads[0]?.messages).toMatchObject([
-      {
-        id: assistantId,
-        text: "Hello world",
-        streaming: false,
-        completedAt: "2026-02-27T00:01:06.000Z",
-      },
-    ]);
-  });
-
-  it("replaces a non-streaming user message when an active-tail edit reuses its message id", () => {
-    const userId = MessageId.makeUnsafe("user-active-edit");
-    const initialState = makeState(
-      makeThread({
-        messages: [
-          {
-            id: userId,
-            role: "user",
-            text: "old prompt",
-            turnId: null,
-            createdAt: "2026-02-27T00:01:00.000Z",
-            streaming: false,
-            source: "native",
-          },
-        ],
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.message-sent", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: userId,
-        role: "user",
-        text: "edited prompt",
-        turnId: null,
-        streaming: false,
-        createdAt: "2026-02-27T00:01:00.000Z",
-        updatedAt: "2026-02-27T00:01:05.000Z",
-        attachments: [],
-        source: "native",
-      }),
-    ]);
-
-    expect(next.threads[0]?.messages).toMatchObject([
-      {
-        id: userId,
-        text: "edited prompt",
-        streaming: false,
-      },
-    ]);
-  });
-
-  it("applies thread.meta-updated branch metadata immediately during live updates", () => {
-    const initialState = makeState(
-      makeThread({
-        title: "Old title",
-        envMode: "worktree",
-        branch: "dpcode/tmp-working",
-        worktreePath: "/tmp/project/.worktrees/tmp-working",
-        associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
-        associatedWorktreeBranch: "dpcode/tmp-working",
-        associatedWorktreeRef: "dpcode/tmp-working",
-        session: {
-          provider: "codex",
-          status: "ready",
-          orchestrationStatus: "ready",
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.meta-updated", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "New title",
-        branch: "dpcode/app-startup-crash",
-        worktreePath: "/tmp/project/.worktrees/app-startup-crash",
-        associatedWorktreePath: "/tmp/project/.worktrees/app-startup-crash",
-        associatedWorktreeBranch: "dpcode/app-startup-crash",
-        associatedWorktreeRef: "dpcode/app-startup-crash",
-        updatedAt: "2026-02-27T00:01:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]).toMatchObject({
-      title: "New title",
-      branch: "dpcode/app-startup-crash",
-      worktreePath: "/tmp/project/.worktrees/app-startup-crash",
-      associatedWorktreePath: "/tmp/project/.worktrees/app-startup-crash",
-      associatedWorktreeBranch: "dpcode/app-startup-crash",
-      associatedWorktreeRef: "dpcode/app-startup-crash",
-      session: null,
-      updatedAt: "2026-02-27T00:01:00.000Z",
-    });
-  });
-
-  it("keeps createBranchFlowCompleted sticky for stale thread.meta-updated payloads", () => {
-    const initialState = makeState(
-      makeThread({
-        envMode: "worktree",
-        branch: "feature/semantic-branch",
-        worktreePath: "/tmp/project/.worktrees/semantic-branch",
-        associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
-        associatedWorktreeBranch: "feature/semantic-branch",
-        associatedWorktreeRef: "feature/semantic-branch",
-        createBranchFlowCompleted: true,
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.meta-updated", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        createBranchFlowCompleted: false,
-        updatedAt: "2026-02-27T00:01:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
-  });
-
-  it("preserves pinnedMessages and notes through the normalized read-model projection", () => {
-    // Regression: the normalized ThreadShell projection used to omit pinnedMessages/notes, so a
-    // read-model sync would reconstruct the thread without them — pins clicked in the sidebar
-    // never surfaced in the Environment panel. `next.threads[0]` reads back through
-    // getThreadsFromState (the shell projection), so this asserts the fields survive the round trip.
-    const messageId = MessageId.makeUnsafe("assistant-pin-1");
-    const pinnedMessages = [
-      { messageId, label: null, done: false, pinnedAt: "2026-02-27T00:01:00.000Z" },
-    ];
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          pinnedMessages,
-          notes: "remember to rerun typecheck",
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
-    expect(next.threads[0]?.notes).toBe("remember to rerun typecheck");
-  });
-
-  it("surfaces pinnedMessages and notes from a live thread.meta-updated event", () => {
-    const initialState = makeState(makeThread());
-    const messageId = MessageId.makeUnsafe("assistant-pin-2");
-    const pinnedMessages = [
-      {
-        messageId,
-        label: "Check the migration",
-        done: false,
-        pinnedAt: "2026-02-27T00:02:00.000Z",
-      },
-    ];
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.meta-updated", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        pinnedMessages,
-        notes: "scratch",
-        updatedAt: "2026-02-27T00:02:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
-    expect(next.threads[0]?.notes).toBe("scratch");
-  });
-
-  it("applies live pinned-message operation events without replacing the whole list", () => {
-    const initialState = makeState(makeThread());
-    const firstMessageId = MessageId.makeUnsafe("assistant-pin-op-1");
-    const secondMessageId = MessageId.makeUnsafe("assistant-pin-op-2");
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.pinned-message-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        pin: {
-          messageId: firstMessageId,
-          label: null,
-          done: false,
-          pinnedAt: "2026-02-27T00:03:00.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:00.000Z",
-      }),
-      makeDomainEvent("thread.pinned-message-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        pin: {
-          messageId: secondMessageId,
-          label: null,
-          done: false,
-          pinnedAt: "2026-02-27T00:03:05.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:05.000Z",
-      }),
-      makeDomainEvent("thread.pinned-message-done-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: firstMessageId,
-        done: true,
-        updatedAt: "2026-02-27T00:03:10.000Z",
-      }),
-      makeDomainEvent("thread.pinned-message-label-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: firstMessageId,
-        label: "Follow up",
-        updatedAt: "2026-02-27T00:03:15.000Z",
-      }),
-      makeDomainEvent("thread.pinned-message-removed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: secondMessageId,
-        updatedAt: "2026-02-27T00:03:20.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.pinnedMessages).toEqual([
-      {
-        messageId: firstMessageId,
-        label: "Follow up",
-        done: true,
-        pinnedAt: "2026-02-27T00:03:00.000Z",
-      },
-    ]);
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
-  });
-
-  it("preserves threadMarkers through the normalized read-model projection", () => {
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-1"),
-      messageId: MessageId.makeUnsafe("assistant-marker-1"),
-      startOffset: 6,
-      endOffset: 20,
-      selectedText: "important text",
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-02-27T00:01:00.000Z",
-      updatedAt: "2026-02-27T00:01:00.000Z",
-    };
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          threadMarkers: [marker],
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.threadMarkers).toEqual([marker]);
-  });
-
-  it("applies live thread marker operation events without replacing the whole list", () => {
-    const initialState = makeState(makeThread());
-    const markerId = ThreadMarkerId.makeUnsafe("marker-op-1");
-    const secondMarkerId = ThreadMarkerId.makeUnsafe("marker-op-2");
-    const messageId = MessageId.makeUnsafe("assistant-marker-op");
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: markerId,
-          messageId,
-          startOffset: 6,
-          endOffset: 20,
-          selectedText: "important text",
-          style: "highlight",
-          color: "yellow",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:00.000Z",
-          updatedAt: "2026-02-27T00:03:00.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:00.000Z",
-      }),
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: secondMarkerId,
-          messageId,
-          startOffset: 30,
-          endOffset: 39,
-          selectedText: "underline",
-          style: "underline",
-          color: "blue",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:05.000Z",
-          updatedAt: "2026-02-27T00:03:05.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:05.000Z",
-      }),
-      makeDomainEvent("thread.marker-done-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        done: true,
-        updatedAt: "2026-02-27T00:03:10.000Z",
-      }),
-      makeDomainEvent("thread.marker-label-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        label: "Follow up",
-        updatedAt: "2026-02-27T00:03:15.000Z",
-      }),
-      makeDomainEvent("thread.marker-removed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId: secondMarkerId,
-        updatedAt: "2026-02-27T00:03:20.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.threadMarkers).toEqual([
-      {
-        id: markerId,
-        messageId,
-        startOffset: 6,
-        endOffset: 20,
-        selectedText: "important text",
-        style: "highlight",
-        color: "yellow",
-        label: "Follow up",
-        done: true,
-        createdAt: "2026-02-27T00:03:00.000Z",
-        updatedAt: "2026-02-27T00:03:15.000Z",
-      },
-    ]);
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
-  });
-
-  it("does not let a sidebar shell upsert clobber pinnedMessages/notes from the detail path", () => {
-    // The sidebar shell snapshot/event does not carry pinnedMessages or notes. A shell upsert must
-    // preserve the values resolved from the thread-detail path rather than clearing them.
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const messageId = MessageId.makeUnsafe("assistant-pin-3");
-    const pinnedMessages = [
-      { messageId, label: null, done: true, pinnedAt: "2026-02-27T00:03:00.000Z" },
-    ];
-    const initialState = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          pinnedMessages,
-          notes: "keep me",
-        }),
-      ),
-    );
-
-    const next = applyShellEvent(initialState, {
-      kind: "thread-upserted",
-      sequence: 2,
-      thread: {
-        id: threadId,
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        associatedWorktreePath: null,
-        associatedWorktreeBranch: null,
-        associatedWorktreeRef: null,
-        createBranchFlowCompleted: false,
-        parentThreadId: null,
-        subagentAgentId: null,
-        subagentNickname: null,
-        subagentRole: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        lastKnownPr: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-        archivedAt: null,
-        handoff: null,
-        session: null,
-      },
-    });
-
-    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
-    expect(next.threads[0]?.notes).toBe("keep me");
-  });
-
-  it("updates turn diffs and latest turn immediately from live events", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-        pendingSourceProposedPlan: {
-          threadId: ThreadId.makeUnsafe("thread-source"),
-          planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-diff-completed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: TurnId.makeUnsafe("turn-1"),
-        completedAt: "2026-02-27T00:02:00.000Z",
-        status: "ready",
-        files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
-        checkpointRef: CheckpointRef.makeUnsafe("checkpoint-1"),
-        assistantMessageId: MessageId.makeUnsafe("assistant-message"),
-        checkpointTurnCount: 1,
-      }),
-    ]);
-
-    expect(next.threads[0]?.turnDiffSummaries).toHaveLength(1);
-    expect(next.threads[0]?.latestTurn).toMatchObject({
-      turnId: TurnId.makeUnsafe("turn-1"),
-      state: "completed",
-      completedAt: "2026-02-27T00:02:00.000Z",
-      assistantMessageId: MessageId.makeUnsafe("assistant-message"),
-    });
-  });
-
-  it("preserves the previously-recorded assistantMessageId when a turn-diff event arrives with a null id", () => {
-    const existingAssistantMessageId = MessageId.makeUnsafe("assistant-real");
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: existingAssistantMessageId,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-diff-completed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: TurnId.makeUnsafe("turn-1"),
-        completedAt: "2026-02-27T00:02:00.000Z",
-        status: "ready",
-        files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
-        checkpointRef: CheckpointRef.makeUnsafe("checkpoint-1"),
-        assistantMessageId: null,
-        checkpointTurnCount: 1,
-      }),
-    ]);
-
-    expect(next.threads[0]?.latestTurn?.assistantMessageId).toBe(existingAssistantMessageId);
-  });
-
-  it("keeps an active turn running when an interim provider diff placeholder arrives", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-diff-completed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: TurnId.makeUnsafe("turn-1"),
-        completedAt: "2026-02-27T00:02:00.000Z",
-        status: "missing",
-        files: [],
-        checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-1"),
-        assistantMessageId: null,
-        checkpointTurnCount: 1,
-      }),
-    ]);
-
-    expect(next.threads[0]?.turnDiffSummaries).toHaveLength(1);
-    expect(next.threads[0]?.latestTurn).toMatchObject({
-      turnId: TurnId.makeUnsafe("turn-1"),
-      state: "running",
-      completedAt: null,
-    });
-  });
-
-  it("does not leak the previous turn's assistantMessageId into a null-id summary for a different turn", () => {
-    const existingAssistantMessageId = MessageId.makeUnsafe("assistant-turn-1");
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "completed",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: "2026-02-27T00:01:30.000Z",
-          assistantMessageId: existingAssistantMessageId,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-diff-completed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: TurnId.makeUnsafe("turn-2"),
-        completedAt: "2026-02-27T00:02:00.000Z",
-        status: "ready",
-        files: [{ path: "src/other.ts", kind: "modified", additions: 1, deletions: 0 }],
-        checkpointRef: CheckpointRef.makeUnsafe("checkpoint-2"),
-        assistantMessageId: null,
-        checkpointTurnCount: 2,
-      }),
-    ]);
-
-    // latestTurn is only replaced when turnIds match, so turn-1 stays intact
-    // and its real assistantMessageId is preserved (no bleed-through from the
-    // turn-2 null payload).
-    expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
-    expect(next.threads[0]?.latestTurn?.assistantMessageId).toBe(existingAssistantMessageId);
-
-    const turn2Summary = next.threads[0]?.turnDiffSummaries.find(
-      (entry) => entry.turnId === TurnId.makeUnsafe("turn-2"),
-    );
-    expect(turn2Summary?.assistantMessageId ?? null).toBeNull();
-  });
-
-  it("deduplicates duplicate checkpoint file paths in live turn diff events", () => {
-    const initialState = makeState(makeThread());
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-diff-completed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: TurnId.makeUnsafe("turn-1"),
-        completedAt: "2026-02-27T00:02:00.000Z",
-        status: "ready",
-        files: [
-          { path: "CLAUDE.md", kind: "modified", additions: 1, deletions: 0 },
-          { path: "CLAUDE.md", kind: "modified", additions: 0, deletions: 2 },
-        ],
-        checkpointRef: CheckpointRef.makeUnsafe("checkpoint-1"),
-        assistantMessageId: MessageId.makeUnsafe("assistant-message"),
-        checkpointTurnCount: 1,
-      }),
-    ]);
-
-    expect(next.threads[0]?.turnDiffSummaries[0]?.files).toEqual([
-      { path: "CLAUDE.md", kind: "modified", additions: 1, deletions: 2 },
-    ]);
-  });
-
-  it("cleans thread state on revert and clears pending proposed plans", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-2"),
-          state: "completed",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: "2026-02-27T00:03:00.000Z",
-          assistantMessageId: MessageId.makeUnsafe("assistant-2"),
-        },
-        pendingSourceProposedPlan: {
-          threadId: ThreadId.makeUnsafe("thread-source"),
-          planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
-        },
-        messages: [
-          {
-            id: MessageId.makeUnsafe("user-1"),
-            role: "user",
-            text: "one",
-            turnId: TurnId.makeUnsafe("turn-1"),
-            createdAt: "2026-02-27T00:00:00.000Z",
-            streaming: false,
-          },
-          {
-            id: MessageId.makeUnsafe("assistant-1"),
-            role: "assistant",
-            text: "reply",
-            turnId: TurnId.makeUnsafe("turn-1"),
-            createdAt: "2026-02-27T00:00:10.000Z",
-            completedAt: "2026-02-27T00:00:10.000Z",
-            streaming: false,
-          },
-          {
-            id: MessageId.makeUnsafe("user-2"),
-            role: "user",
-            text: "two",
-            turnId: TurnId.makeUnsafe("turn-2"),
-            createdAt: "2026-02-27T00:01:00.000Z",
-            streaming: false,
-          },
-        ],
-        proposedPlans: [
-          {
-            id: OrchestrationProposedPlanId.makeUnsafe("plan-1"),
-            turnId: TurnId.makeUnsafe("turn-1"),
-            planMarkdown: "keep",
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: "2026-02-27T00:00:05.000Z",
-            updatedAt: "2026-02-27T00:00:05.000Z",
-          },
-          {
-            id: OrchestrationProposedPlanId.makeUnsafe("plan-2"),
-            turnId: TurnId.makeUnsafe("turn-2"),
-            planMarkdown: "drop",
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: "2026-02-27T00:01:05.000Z",
-            updatedAt: "2026-02-27T00:01:05.000Z",
-          },
-        ],
-        activities: [
-          makeActivity({ id: "activity-1", turnId: "turn-1" }),
-          makeActivity({ id: "activity-2", turnId: "turn-2" }),
-        ],
-        turnDiffSummaries: [
-          {
-            turnId: TurnId.makeUnsafe("turn-1"),
-            completedAt: "2026-02-27T00:00:15.000Z",
-            status: "ready",
-            files: [],
-            checkpointTurnCount: 1,
-          },
-          {
-            turnId: TurnId.makeUnsafe("turn-2"),
-            completedAt: "2026-02-27T00:03:00.000Z",
-            status: "ready",
-            files: [],
-            checkpointTurnCount: 2,
-          },
-        ],
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.reverted", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnCount: 1,
-      }),
-    ]);
-
-    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
-    expect(next.threads[0]?.messages.map((message) => message.id)).toEqual([
-      MessageId.makeUnsafe("user-1"),
-      MessageId.makeUnsafe("assistant-1"),
-    ]);
-    expect(next.threads[0]?.proposedPlans.map((plan) => plan.id)).toEqual([
-      OrchestrationProposedPlanId.makeUnsafe("plan-1"),
-    ]);
-    expect(next.threads[0]?.activities.map((activity) => activity.id)).toEqual([
-      EventId.makeUnsafe("activity-1"),
-    ]);
-    expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
-  });
-
-  it("rolls back conversation state from an edited user message", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-2"),
-          state: "completed",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: "2026-02-27T00:03:00.000Z",
-          assistantMessageId: MessageId.makeUnsafe("assistant-2"),
-        },
-        pendingSourceProposedPlan: {
-          threadId: ThreadId.makeUnsafe("thread-source"),
-          planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
-        },
-        messages: [
-          {
-            id: MessageId.makeUnsafe("user-1"),
-            role: "user",
-            text: "one",
-            turnId: TurnId.makeUnsafe("turn-1"),
-            createdAt: "2026-02-27T00:00:00.000Z",
-            streaming: false,
-          },
-          {
-            id: MessageId.makeUnsafe("assistant-1"),
-            role: "assistant",
-            text: "reply one",
-            turnId: TurnId.makeUnsafe("turn-1"),
-            createdAt: "2026-02-27T00:00:10.000Z",
-            streaming: false,
-          },
-          {
-            id: MessageId.makeUnsafe("user-2"),
-            role: "user",
-            text: "two",
-            turnId: TurnId.makeUnsafe("turn-2"),
-            createdAt: "2026-02-27T00:01:00.000Z",
-            streaming: false,
-          },
-          {
-            id: MessageId.makeUnsafe("assistant-2"),
-            role: "assistant",
-            text: "reply two",
-            turnId: TurnId.makeUnsafe("turn-2"),
-            createdAt: "2026-02-27T00:01:10.000Z",
-            streaming: false,
-          },
-        ],
-        proposedPlans: [
-          {
-            id: OrchestrationProposedPlanId.makeUnsafe("plan-2"),
-            turnId: TurnId.makeUnsafe("turn-2"),
-            planMarkdown: "drop",
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: "2026-02-27T00:01:05.000Z",
-            updatedAt: "2026-02-27T00:01:05.000Z",
-          },
-        ],
-        activities: [makeActivity({ id: "activity-2", turnId: "turn-2" })],
-        turnDiffSummaries: [
-          {
-            turnId: TurnId.makeUnsafe("turn-1"),
-            completedAt: "2026-02-27T00:00:15.000Z",
-            status: "ready",
-            files: [],
-            checkpointTurnCount: 1,
-          },
-          {
-            turnId: TurnId.makeUnsafe("turn-2"),
-            completedAt: "2026-02-27T00:03:00.000Z",
-            status: "ready",
-            files: [],
-            checkpointTurnCount: 2,
-          },
-        ],
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.conversation-rolled-back", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe("user-2"),
-        numTurns: 1,
-        removedTurnIds: [TurnId.makeUnsafe("turn-2")],
-      }),
-    ]);
-
-    expect(next.threads[0]?.messages.map((message) => message.id)).toEqual([
-      MessageId.makeUnsafe("user-1"),
-      MessageId.makeUnsafe("assistant-1"),
-    ]);
-    expect(next.threads[0]?.turnDiffSummaries.map((summary) => summary.turnId)).toEqual([
-      TurnId.makeUnsafe("turn-1"),
-    ]);
-    expect(next.threads[0]?.proposedPlans).toEqual([]);
-    expect(next.threads[0]?.activities).toEqual([]);
-    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
-    expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
   });
 
   it("reorderProjects moves a project to a target index", () => {
@@ -1728,6 +202,7 @@ describe("store pure functions", () => {
     const project2 = ProjectId.makeUnsafe("project-2");
     const project3 = ProjectId.makeUnsafe("project-3");
     const state: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project1,
@@ -1751,7 +226,6 @@ describe("store pure functions", () => {
           cwd: "/tmp/project-3",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -1765,6 +239,7 @@ describe("store pure functions", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const state: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project1,
@@ -1782,7 +257,6 @@ describe("store pure functions", () => {
           expanded: false,
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -1795,38 +269,11 @@ describe("store pure functions", () => {
     ]);
   });
 
-  it("collapses all projects when toggled off", () => {
-    const state: AppState = {
-      projects: [
-        makeProject({
-          id: ProjectId.makeUnsafe("project-1"),
-          name: "Project 1",
-          remoteName: "Project 1",
-          folderName: "project-1",
-          cwd: "/tmp/project-1",
-        }),
-        makeProject({
-          id: ProjectId.makeUnsafe("project-2"),
-          name: "Project 2",
-          remoteName: "Project 2",
-          folderName: "project-2",
-          cwd: "/tmp/project-2",
-        }),
-      ],
-      threads: [],
-      sidebarThreadSummaryById: {},
-      threadsHydrated: true,
-    };
-
-    const next = setAllProjectsExpanded(state, false);
-
-    expect(next.projects.every((project) => project.expanded === false)).toBe(true);
-  });
-
   it("collapses every project except the active one", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const state: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project1,
@@ -1843,7 +290,6 @@ describe("store pure functions", () => {
           cwd: "/tmp/project-2",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -1856,1179 +302,12 @@ describe("store pure functions", () => {
     ]);
   });
 
-  it("renames a project locally without changing its remote or folder names", () => {
-    const state = makeState(makeThread());
-
-    const next = renameProjectLocally(state, ProjectId.makeUnsafe("project-1"), "dpcode");
-
-    expect(next.projects[0]).toMatchObject({
-      name: "dpcode",
-      localName: "dpcode",
-      remoteName: "Project",
-      folderName: "project",
-    });
-  });
-});
-
-describe("store read model sync", () => {
-  it("adds the desktop bridge token to server attachment preview URLs", () => {
-    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-    const testWindow = {
-      location: { origin: "t3://app" },
-      desktopBridge: {
-        getWsUrl: () => "ws://127.0.0.1:53036/?token=desktop-secret",
-      },
-    };
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: testWindow,
-    });
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        messages: [
-          {
-            id: MessageId.makeUnsafe("message-with-image"),
-            role: "user",
-            text: "see image",
-            attachments: [
-              {
-                type: "image",
-                id: "thread-1-image",
-                name: "image.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-            ],
-            createdAt: "2026-02-27T00:00:00.000Z",
-            updatedAt: "2026-02-27T00:00:00.000Z",
-            streaming: false,
-            source: "native",
-            dispatchMode: "queue",
-            turnId: null,
-          },
-        ],
-      }),
-    );
-
-    try {
-      const next = syncServerReadModel(initialState, readModel);
-
-      expect(next.threads[0]?.messages[0]?.attachments?.[0]).toMatchObject({
-        previewUrl: "http://127.0.0.1:53036/attachments/thread-1-image?token=desktop-secret",
-      });
-    } finally {
-      if (previousWindow) {
-        Object.defineProperty(globalThis, "window", previousWindow);
-      } else {
-        Reflect.deleteProperty(globalThis, "window");
-      }
-    }
-  });
-
-  it("filters non-fatal runtime errors from thread banners during read model sync", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "error",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError:
-            "2026-04-12T23:27:41.094760Z ERROR codex_core::tools::router: error=write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.threads[0]?.error).toBeNull();
-    expect(next.threads[0]?.session?.lastError).toBeUndefined();
-  });
-
-  it("reconciles snapshot state even when thread updatedAt matches a prior live event", () => {
-    const sourceProposedPlan = {
-      threadId: ThreadId.makeUnsafe("thread-source"),
-      planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
-    };
-    const liveState = applyOrchestrationEvents(makeState(makeThread()), [
-      makeDomainEvent("thread.turn-start-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe("user-message"),
-        runtimeMode: "full-access",
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        dispatchMode: "queue",
-        createdAt: "2026-02-27T00:05:00.000Z",
-        sourceProposedPlan,
-      }),
-    ]);
-
-    const next = syncServerReadModel(
-      liveState,
-      makeReadModel(
-        makeReadModelThread({
-          updatedAt: "2026-02-27T00:05:00.000Z",
-          latestTurn: null,
-          session: null,
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
-    expect(next.threads[0]?.latestTurn).toBeNull();
-    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
-  });
-
-  it("preserves claude model slugs without an active session", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-6",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.threads[0]?.modelSelection.model).toBe("claude-opus-4-6");
-  });
-
-  it("resolves claude aliases when session provider is claudeAgent", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "sonnet",
-        },
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.threads[0]?.modelSelection.model).toBe("claude-sonnet-4-6");
-  });
-
-  it("preserves OpenCode as the active session provider", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "opencode",
-          model: "openrouter/gpt-oss-120b:free",
-        },
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "opencode",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.threads[0]?.modelSelection.provider).toBe("opencode");
-    expect(next.threads[0]?.session?.provider).toBe("opencode");
-  });
-
-  it("preserves Pi as the active session provider", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "pi",
-          model: "anthropic/claude-sonnet-4-5",
-        },
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "pi",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.threads[0]?.modelSelection.provider).toBe("pi");
-    expect(next.threads[0]?.session?.provider).toBe("pi");
-  });
-
-  it("preserves exact OpenCode thread model slugs from the read model", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "opencode",
-          model: "openai/gpt-5.4",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.threads[0]?.modelSelection.model).toBe("openai/gpt-5.4");
-  });
-
-  it("preserves exact OpenCode project default model slugs from the read model", () => {
-    const initialState = makeState(makeThread());
-    const readModel = {
-      ...makeReadModel(makeReadModelThread({})),
-      projects: [
-        makeReadModelProject({
-          defaultModelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        }),
-      ],
-    };
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.projects[0]?.defaultModelSelection?.model).toBe("openai/gpt-5.4");
-  });
-
-  it("preserves project and thread updatedAt timestamps from the read model", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.projects[0]?.updatedAt).toBe("2026-02-27T00:00:00.000Z");
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
-  });
-
-  it("preserves a newer live assistant intro when a hot-path snapshot lags behind", () => {
-    const threadId = ThreadId.makeUnsafe("thread-hot-path");
-    const turnId = TurnId.makeUnsafe("turn-hot-path");
-    const assistantId = MessageId.makeUnsafe("assistant-hot-path");
-    const liveState = makeState(
-      makeThread({
-        id: threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-        },
-        session: {
-          provider: "claudeAgent",
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: turnId,
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
-        latestTurn: {
-          turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
-        messages: [
-          {
-            id: MessageId.makeUnsafe("user-hot-path"),
-            role: "user",
-            text: "scan repo",
-            turnId,
-            createdAt: "2026-02-27T00:00:00.000Z",
-            streaming: false,
-          },
-          {
-            id: assistantId,
-            role: "assistant",
-            text: "I'll start by scanning the repo.",
-            turnId,
-            createdAt: "2026-02-27T00:00:01.000Z",
-            streaming: true,
-            source: "native",
-          },
-        ],
-      }),
-    );
-
-    const next = syncServerThreadDetailHotPath(
-      liveState,
-      makeReadModelThread({
-        id: threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-        },
-        latestTurn: {
-          turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-        updatedAt: "2026-02-27T00:00:02.000Z",
-        messages: [
-          {
-            id: MessageId.makeUnsafe("user-hot-path"),
-            role: "user",
-            text: "scan repo",
-            turnId,
-            streaming: false,
-            source: "native",
-            createdAt: "2026-02-27T00:00:00.000Z",
-            updatedAt: "2026-02-27T00:00:00.000Z",
-            attachments: [],
-          },
-        ],
-        session: {
-          threadId,
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "full-access",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
-      }),
-    );
-
-    const nextThread = next.threads.find((thread) => thread.id === threadId);
-    expect(nextThread?.messages.find((message) => message.id === assistantId)?.text).toBe(
-      "I'll start by scanning the repo.",
-    );
-    expect(nextThread?.latestTurn?.assistantMessageId).toBe(assistantId);
-    expect(nextThread?.latestTurn?.state).toBe("running");
-    expect(nextThread?.latestTurn?.completedAt).toBeNull();
-    expect(nextThread?.session?.orchestrationStatus).toBe("running");
-    expect(nextThread?.session?.activeTurnId).toBe(turnId);
-  });
-
-  it("stops preserving a live assistant intro once the read model settles the same turn", () => {
-    const threadId = ThreadId.makeUnsafe("thread-hot-path-settled");
-    const turnId = TurnId.makeUnsafe("turn-hot-path-settled");
-    const assistantId = MessageId.makeUnsafe("assistant-hot-path-settled");
-    const liveState = makeState(
-      makeThread({
-        id: threadId,
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: turnId,
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
-        latestTurn: {
-          turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
-        messages: [
-          {
-            id: MessageId.makeUnsafe("user-hot-path-settled"),
-            role: "user",
-            text: "/review",
-            turnId,
-            createdAt: "2026-02-27T00:00:00.000Z",
-            streaming: false,
-          },
-          {
-            id: assistantId,
-            role: "assistant",
-            text: "Reviewing current changes.",
-            turnId,
-            createdAt: "2026-02-27T00:00:01.000Z",
-            streaming: false,
-            source: "native",
-          },
-        ],
-      }),
-    );
-
-    const completedAt = "2026-02-27T00:00:05.000Z";
-    const next = syncServerThreadDetailHotPath(
-      liveState,
-      makeReadModelThread({
-        id: threadId,
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        latestTurn: {
-          turnId,
-          state: "completed",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt,
-          assistantMessageId: assistantId,
-        },
-        updatedAt: completedAt,
-        messages: [
-          {
-            id: MessageId.makeUnsafe("user-hot-path-settled"),
-            role: "user",
-            text: "/review",
-            turnId,
-            streaming: false,
-            source: "native",
-            createdAt: "2026-02-27T00:00:00.000Z",
-            updatedAt: "2026-02-27T00:00:00.000Z",
-            attachments: [],
-          },
-          {
-            id: assistantId,
-            role: "assistant",
-            text: "Review complete.",
-            turnId,
-            streaming: false,
-            source: "native",
-            createdAt: "2026-02-27T00:00:01.000Z",
-            updatedAt: completedAt,
-            attachments: [],
-          },
-        ],
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: completedAt,
-        },
-      }),
-    );
-
-    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("completed");
-    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.completedAt).toBe(completedAt);
-    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("ready");
-    expect(next.threadSessionById?.[threadId]?.activeTurnId).toBeUndefined();
-  });
-
-  it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {
-    const initialState = syncServerReadModel(
-      makeState(makeThread({ title: "Original title" })),
-      makeReadModel(
-        makeReadModelThread({
-          title: "Original title",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const next = syncServerThreadDetailHotPath(
-      initialState,
-      makeReadModelThread({
-        title: "Renamed title",
-        archivedAt: "2026-02-27T00:05:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
-      title: "Original title",
-      archivedAt: null,
-    });
-  });
-
-  it("creates an initial sidebar summary when hot-path detail sync sees a new thread first", () => {
-    const threadId = ThreadId.makeUnsafe("thread-detail-before-shell");
-    const initialState: AppState = {
-      ...makeState(makeThread()),
-      threadIds: [],
-      threads: [],
-      sidebarThreadSummaryById: {},
-    };
-
-    const next = syncServerThreadDetailHotPath(
-      initialState,
-      makeReadModelThread({
-        id: threadId,
-        title: "Visible while running",
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-detail-before-shell"),
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:01.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-        updatedAt: "2026-02-27T00:00:01.000Z",
-      }),
-    );
-
-    expect(next.threadIds).toContain(threadId);
-    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
-      id: threadId,
-      title: "Visible while running",
-      latestTurn: {
-        state: "running",
-      },
-    });
-  });
-
-  it("keeps createBranchFlowCompleted sticky during stale hot-path detail syncs", () => {
-    const threadId = ThreadId.makeUnsafe("thread-hot-path-branch-flow");
-    const liveState = makeState(
-      makeThread({
-        id: threadId,
-        branch: "dpcode/tmp-working",
-        worktreePath: "/tmp/worktrees/thread-hot-path-branch-flow",
-        createBranchFlowCompleted: true,
-      }),
-    );
-
-    const next = syncServerThreadDetailHotPath(
-      liveState,
-      makeReadModelThread({
-        id: threadId,
-        branch: "dpcode/tmp-working",
-        worktreePath: "/tmp/worktrees/thread-hot-path-branch-flow",
-        createBranchFlowCompleted: false,
-      }),
-    );
-
-    expect(next.threads.find((thread) => thread.id === threadId)?.createBranchFlowCompleted).toBe(
-      true,
-    );
-    expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
-  });
-
-  it("does not rebuild sidebar summaries for streaming assistant deltas", () => {
-    const initialState = syncServerReadModel(
-      makeState(makeThread({ title: "Stable sidebar title" })),
-      makeReadModel(
-        makeReadModelThread({
-          title: "Stable sidebar title",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const previousSummary = initialState.sidebarThreadSummaryById["thread-1"];
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.message-sent", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe("assistant-streaming"),
-        role: "assistant",
-        text: "streaming delta",
-        turnId: TurnId.makeUnsafe("turn-1"),
-        streaming: true,
-        createdAt: "2026-02-27T00:01:00.000Z",
-        updatedAt: "2026-02-27T00:01:00.000Z",
-        attachments: [],
-        source: "native",
-      }),
-    ]);
-
-    expect(next.sidebarThreadSummaryById["thread-1"]).toBe(previousSummary);
-    expect(next.threads[0]?.messages.at(-1)).toMatchObject({
-      id: MessageId.makeUnsafe("assistant-streaming"),
-      text: "streaming delta",
-      streaming: true,
-    });
-  });
-
-  it("replaces duplicate live activities by id instead of appending duplicate ids", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const initialState = makeState(
-      makeThread({
-        activities: [
-          makeActivity({
-            id: "activity-command",
-            kind: "tool.completed",
-            summary: "Ran command",
-            payload: { title: "Ran command" },
-          }),
-        ],
-      }),
-    );
-    const richActivity = makeActivity({
-      id: "activity-command",
-      kind: "tool.completed",
-      summary: "Ran command",
-      payload: {
-        itemType: "command_execution",
-        title: "Ran command",
-        data: {
-          item: {
-            type: "commandExecution",
-            command: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
-          },
-        },
-      },
-    });
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.activity-appended", {
-        threadId,
-        activity: richActivity,
-      }),
-    ]);
-
-    expect(next.threads[0]?.activities).toHaveLength(1);
-    expect(next.threads[0]?.activities[0]?.payload).toEqual(richActivity.payload);
-    expect(next.activityIdsByThreadId?.[threadId]).toEqual(["activity-command"]);
-    expect(Object.keys(next.activityByThreadId?.[threadId] ?? {})).toEqual(["activity-command"]);
-  });
-
-  it("keeps richer activity payloads when duplicate events arrive with generic data", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const richActivity = makeActivity({
-      id: "activity-command",
-      kind: "tool.completed",
-      summary: "Ran command",
-      payload: {
-        itemType: "command_execution",
-        title: "Ran command",
-        detail: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
-        data: {
-          item: {
-            type: "commandExecution",
-            command: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
-            commandActions: [{ type: "read", command: "sed -n '1,220p' README.md" }],
-          },
-        },
-      },
-    });
-    const initialState = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(makeReadModelThread({ activities: [richActivity] })),
-    );
-    const genericDuplicate = makeActivity({
-      id: "activity-command",
-      kind: "tool.completed",
-      summary: "Ran command",
-      payload: { title: "Ran command" },
-    });
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.activity-appended", {
-        threadId,
-        activity: genericDuplicate,
-      }),
-    ]);
-
-    expect(next.threads[0]?.activities).toHaveLength(1);
-    expect(next.threads[0]?.activities[0]).toBe(richActivity);
-    expect(next.activityByThreadId?.[threadId]?.["activity-command"]).toBe(richActivity);
-  });
-
-  it("dedupes read-model activity snapshots without losing rich command payloads", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const richActivity = makeActivity({
-      id: "activity-command",
-      kind: "tool.completed",
-      summary: "Ran command",
-      payload: {
-        itemType: "command_execution",
-        title: "Ran command",
-        data: {
-          item: {
-            type: "commandExecution",
-            command: `/bin/zsh -lc 'find apps packages -maxdepth 2 -type d | sort'`,
-          },
-        },
-      },
-    });
-    const genericDuplicate = makeActivity({
-      id: "activity-command",
-      kind: "tool.completed",
-      summary: "Ran command",
-      payload: { title: "Ran command" },
-    });
-
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          activities: [richActivity, genericDuplicate],
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.activities).toEqual([richActivity]);
-    expect(next.activityIdsByThreadId?.[threadId]).toEqual(["activity-command"]);
-    expect(next.activityByThreadId?.[threadId]?.["activity-command"]).toBe(richActivity);
-  });
-
-  it("caps stored activity detail to the latest activity window", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const activities = Array.from({ length: 505 }, (_, index) =>
-      makeActivity({
-        id: `activity-${index}`,
-        sequence: index,
-        createdAt: "2026-02-27T00:00:00.000Z",
-      }),
-    );
-
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(makeReadModelThread({ activities })),
-    );
-
-    expect(next.threads[0]?.activities).toHaveLength(500);
-    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
-    expect(next.threads[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
-    expect(next.activityIdsByThreadId?.[threadId]).toHaveLength(500);
-    expect(next.activityIdsByThreadId?.[threadId]?.[0]).toBe("activity-5");
-  });
-
-  it("keeps pending interaction activities outside the latest activity window", () => {
-    const activities = [
-      makeActivity({
-        id: "approval-old",
-        kind: "approval.requested",
-        tone: "approval",
-        payload: { requestId: "approval-1", requestKind: "command" },
-        sequence: 0,
-      }),
-      ...Array.from({ length: 505 }, (_, index) =>
-        makeActivity({
-          id: `activity-${index}`,
-          sequence: index + 1,
-          createdAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    ];
-
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(makeReadModelThread({ activities })),
-    );
-
-    expect(next.threads[0]?.activities).toHaveLength(501);
-    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("approval-old"));
-    expect(next.threads[0]?.activities[1]?.id).toBe(EventId.makeUnsafe("activity-5"));
-  });
-
-  it("does not keep resolved interaction activities outside the latest activity window", () => {
-    const activities = [
-      makeActivity({
-        id: "approval-old",
-        kind: "approval.requested",
-        tone: "approval",
-        payload: { requestId: "approval-1", requestKind: "command" },
-        sequence: 0,
-      }),
-      makeActivity({
-        id: "approval-resolved-old",
-        kind: "approval.resolved",
-        tone: "approval",
-        payload: { requestId: "approval-1", decision: "accept" },
-        sequence: 1,
-      }),
-      ...Array.from({ length: 505 }, (_, index) =>
-        makeActivity({
-          id: `activity-${index}`,
-          sequence: index + 2,
-          createdAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    ];
-
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(makeReadModelThread({ activities })),
-    );
-
-    expect(next.threads[0]?.activities).toHaveLength(500);
-    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
-    expect(next.threads[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
-  });
-
-  it("preserves the existing sidebar pending-user-input state during detail-only response events", () => {
-    const initialState = syncServerReadModel(
-      makeState(
-        makeThread({
-          hasPendingUserInput: true,
-          activities: [
-            makeActivity({
-              id: "activity-user-input-requested",
-              createdAt: "2026-02-27T00:00:30.000Z",
-              kind: "user-input.requested",
-              summary: "Need more input",
-              payload: {
-                requestId: "request-1",
-                questions: [
-                  {
-                    id: "q1",
-                    prompt: "Pick one",
-                    type: "single_select",
-                    options: [{ id: "yes", label: "Yes" }],
-                  },
-                ],
-              },
-              sequence: 1,
-            }),
-          ],
-        }),
-      ),
-      makeReadModel(
-        makeReadModelThread({
-          activities: [
-            makeActivity({
-              id: "activity-user-input-requested",
-              createdAt: "2026-02-27T00:00:30.000Z",
-              kind: "user-input.requested",
-              summary: "Need more input",
-              payload: {
-                requestId: "request-1",
-                questions: [
-                  {
-                    id: "q1",
-                    prompt: "Pick one",
-                    type: "single_select",
-                    options: [{ id: "yes", label: "Yes" }],
-                  },
-                ],
-              },
-              sequence: 1,
-            }),
-          ],
-        }),
-      ),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.user-input-response-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: ApprovalRequestId.makeUnsafe("request-1"),
-        answers: {
-          q1: "yes",
-        },
-        createdAt: "2026-02-27T00:01:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.hasPendingUserInput).toBe(false);
-    expect(
-      next.threads[0]?.activities.some(
-        (activity) =>
-          activity.kind === "user-input.resolved" &&
-          (activity.payload as Record<string, unknown>).requestId === "request-1",
-      ),
-    ).toBe(true);
-    expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingUserInput).toBe(false);
-  });
-
-  it("clears pending approval summary state when an approval response is requested", () => {
-    const initialState = syncServerReadModel(
-      makeState(
-        makeThread({
-          hasPendingApprovals: true,
-          activities: [
-            makeActivity({
-              id: "activity-approval-requested",
-              createdAt: "2026-02-27T00:00:30.000Z",
-              kind: "approval.requested",
-              summary: "Command approval requested",
-              tone: "approval",
-              payload: {
-                requestId: "request-1",
-                requestKind: "command",
-              },
-              sequence: 1,
-            }),
-          ],
-        }),
-      ),
-      makeReadModel(
-        makeReadModelThread({
-          activities: [
-            makeActivity({
-              id: "activity-approval-requested",
-              createdAt: "2026-02-27T00:00:30.000Z",
-              kind: "approval.requested",
-              summary: "Command approval requested",
-              tone: "approval",
-              payload: {
-                requestId: "request-1",
-                requestKind: "command",
-              },
-              sequence: 1,
-            }),
-          ],
-        }),
-      ),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.approval-response-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: ApprovalRequestId.makeUnsafe("request-1"),
-        decision: "accept",
-        createdAt: "2026-02-27T00:01:00.000Z",
-      }),
-    ]);
-
-    expect(next.threads[0]?.hasPendingApprovals).toBe(false);
-    expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingApprovals).toBe(false);
-  });
-
-  it("updates sidebar summaries during hot-path archive events", () => {
-    const initialState = syncServerReadModel(
-      makeState(makeThread({ title: "Archivable thread" })),
-      makeReadModel(
-        makeReadModelThread({
-          title: "Archivable thread",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const next = applyOrchestrationEventsHotPath(
-      initialState,
-      [
-        makeDomainEvent("thread.archived", {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          archivedAt: "2026-02-27T00:07:00.000Z",
-          updatedAt: "2026-02-27T00:07:00.000Z",
-        }),
-      ],
-      { updateThreadArray: false },
-    );
-
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
-  });
-
-  it("retains archived threads in the synced store for the archived settings panel", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        id: ThreadId.makeUnsafe("thread-archived"),
-        archivedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.threads).toHaveLength(1);
-    expect(next.threads[0]?.id).toBe("thread-archived");
-    expect(next.threads[0]?.archivedAt).toBe("2026-02-27T00:05:00.000Z");
-    expect(next.sidebarThreadSummaryById["thread-archived"]?.archivedAt).toBe(
-      "2026-02-27T00:05:00.000Z",
-    );
-  });
-
-  it("removes archived threads when a delete event reaches the hot path", () => {
-    const threadId = ThreadId.makeUnsafe("thread-archived");
-    const initialState = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          id: threadId,
-          archivedAt: "2026-02-27T00:05:00.000Z",
-        }),
-      ),
-    );
-
-    const next = applyOrchestrationEventsHotPath(
-      initialState,
-      [
-        makeDomainEvent("thread.deleted", {
-          threadId,
-          deletedAt: "2026-02-27T00:06:00.000Z",
-        }),
-      ],
-      { updateThreadArray: false },
-    );
-
-    expect(next.threads).toHaveLength(0);
-    expect(next.threadIds).not.toContain(threadId);
-    expect(next.threadShellById?.[threadId]).toBeUndefined();
-    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
-  });
-
-  it("removes successfully deleted archived threads through the shared client helper", () => {
-    const threadId = ThreadId.makeUnsafe("thread-archived");
-    const initialState = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          id: threadId,
-          archivedAt: "2026-02-27T00:05:00.000Z",
-        }),
-      ),
-    );
-
-    const next = removeDeletedThreadFromClientState(initialState, threadId);
-
-    expect(next.threads).toHaveLength(0);
-    expect(next.threadIds).not.toContain(threadId);
-    expect(next.threadShellById?.[threadId]).toBeUndefined();
-    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
-  });
-
-  it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {
-    const initialState = syncServerReadModel(
-      makeState(makeThread({ title: "Original title" })),
-      makeReadModel(
-        makeReadModelThread({
-          title: "Original title",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const next = syncServerThreadDetailHotPath(
-      initialState,
-      makeReadModelThread({
-        title: "Renamed title",
-        archivedAt: "2026-02-27T00:05:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
-      title: "Original title",
-      archivedAt: null,
-    });
-  });
-
-  it("updates sidebar summaries during hot-path thread renames", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const initialState = syncServerReadModel(
-      makeState(makeThread({ title: "Original title" })),
-      makeReadModel(
-        makeReadModelThread({
-          title: "Original title",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const next = applyOrchestrationEventsHotPath(
-      initialState,
-      [
-        makeDomainEvent("thread.meta-updated", {
-          threadId,
-          title: "Renamed title",
-          updatedAt: "2026-02-27T00:03:00.000Z",
-        }),
-      ],
-      { updateThreadArray: false },
-    );
-
-    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
-      title: "Renamed title",
-      updatedAt: "2026-02-27T00:03:00.000Z",
-    });
-    expect(next.threadShellById?.[threadId]?.title).toBe("Renamed title");
-    expect(next.threads.find((thread) => thread.id === threadId)?.title).toBe("Renamed title");
-  });
-
-  it("updates sidebar summaries when a hot-path session starts running", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const turnId = TurnId.makeUnsafe("turn-running");
-    const initialState = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const next = applyOrchestrationEventsHotPath(
-      initialState,
-      [
-        makeDomainEvent("thread.session-set", {
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: turnId,
-            lastError: null,
-            updatedAt: "2026-02-27T00:04:00.000Z",
-          },
-        }),
-      ],
-      { updateThreadArray: false },
-    );
-
-    expect(next.sidebarThreadSummaryById[threadId]?.session).toMatchObject({
-      status: "running",
-      orchestrationStatus: "running",
-      activeTurnId: turnId,
-    });
-    expect(next.sidebarThreadSummaryById[threadId]?.latestTurn).toMatchObject({
-      turnId,
-      state: "running",
-      completedAt: null,
-    });
-  });
-
-  it("updates sidebar summaries during hot-path archive events after thread detail sync", () => {
-    const shellState = syncServerReadModel(
-      makeState(makeThread({ title: "Archivable thread" })),
-      makeReadModel(
-        makeReadModelThread({
-          title: "Archivable thread",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-    const initialState = syncServerThreadDetailHotPath(
-      shellState,
-      makeReadModelThread({
-        title: "Detail-only title",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    const next = applyOrchestrationEventsHotPath(
-      initialState,
-      [
-        makeDomainEvent("thread.archived", {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          archivedAt: "2026-02-27T00:07:00.000Z",
-          updatedAt: "2026-02-27T00:07:00.000Z",
-        }),
-      ],
-      { updateThreadArray: false },
-    );
-
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
-  });
-
   it("preserves the current project order when syncing incoming read model updates", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const project3 = ProjectId.makeUnsafe("project-3");
     const initialState: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project2,
@@ -3045,13 +324,13 @@ describe("store read model sync", () => {
           cwd: "/tmp/project-1",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
     const readModel: OrchestrationReadModel = {
       snapshotSequence: 2,
       updatedAt: "2026-02-27T00:00:00.000Z",
+      spaces: [],
       projects: [
         makeReadModelProject({
           id: project1,
@@ -3077,72 +356,114 @@ describe("store read model sync", () => {
     expect(next.projects.map((project) => project.id)).toEqual([project2, project1, project3]);
   });
 
-  it("preserves expanded project state when a project briefly disappears from the snapshot", () => {
-    const project1 = ProjectId.makeUnsafe("project-1");
-    const project2 = ProjectId.makeUnsafe("project-2");
-    const initialState: AppState = {
-      projects: [
-        makeProject({
-          id: project1,
-          name: "Project 1",
-          remoteName: "Project 1",
-          folderName: "project-1",
-          cwd: "/tmp/project-1",
-        }),
-        makeProject({
-          id: project2,
-          name: "Project 2",
-          remoteName: "Project 2",
-          folderName: "project-2",
-          cwd: "/tmp/project-2",
-        }),
-      ],
-      threads: [],
-      sidebarThreadSummaryById: {},
-      threadsHydrated: true,
-    };
+  it("keeps the latest local expansion through read-model and shell reconnects", () => {
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const project = makeReadModelProject({
+      id: projectId,
+      workspaceRoot: "/tmp/project-1",
+    });
+    const readModel = makeProjectsReadModel([project]);
+    const hydrated = syncServerReadModel(
+      { ...useStore.getState(), projects: [], shellSnapshotSequence: 0 },
+      readModel,
+    );
+    const locallyCollapsed = setAllProjectsExpanded(hydrated, false);
 
-    const snapshotWithoutProject2: OrchestrationReadModel = {
+    const afterReadModel = syncServerReadModel(locallyCollapsed, {
+      ...readModel,
       snapshotSequence: 2,
-      updatedAt: "2026-02-27T00:00:00.000Z",
-      projects: [
-        makeReadModelProject({
-          id: project1,
-          title: "Project 1",
-          workspaceRoot: "/tmp/project-1",
-        }),
-      ],
-      threads: [],
-    };
-    const snapshotWithProject2Restored: OrchestrationReadModel = {
+    });
+    const shellSnapshot: OrchestrationShellSnapshot = {
       snapshotSequence: 3,
-      updatedAt: "2026-02-27T00:01:00.000Z",
-      projects: [
-        makeReadModelProject({
-          id: project1,
-          title: "Project 1",
-          workspaceRoot: "/tmp/project-1",
-        }),
-        makeReadModelProject({
-          id: project2,
-          title: "Project 2",
-          workspaceRoot: "/tmp/project-2",
-        }),
-      ],
+      updatedAt: readModel.updatedAt,
+      spaces: [],
+      projects: [project],
       threads: [],
     };
+    const afterShell = syncServerShellSnapshot(afterReadModel, shellSnapshot);
 
-    const withoutProject2 = syncServerReadModel(initialState, snapshotWithoutProject2);
-    const restored = syncServerReadModel(withoutProject2, snapshotWithProject2Restored);
+    expect(afterReadModel.projects[0]?.expanded).toBe(false);
+    expect(afterShell.projects[0]?.expanded).toBe(false);
+  });
 
-    expect(restored.projects.find((project) => project.id === project2)?.expanded).toBe(true);
+  it("persists the latest expansion and reordered project list", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      fresh.useStore
+        .getState()
+        .syncServerReadModel(
+          makeProjectsReadModel([
+            makeReadModelProject({ id: project1, workspaceRoot: "/tmp/project-1" }),
+            makeReadModelProject({ id: project2, workspaceRoot: "/tmp/project-2" }),
+          ]),
+        );
+
+      fresh.useStore.getState().setAllProjectsExpanded(false);
+      fresh.useStore.getState().toggleProject(project1);
+      fresh.useStore.getState().toggleProject(project1);
+      fresh.useStore.getState().toggleProject(project2);
+      fresh.useStore.getState().reorderProjects(project2, project1);
+      fresh.persistAppStateNow();
+
+      expect(JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}")).toMatchObject({
+        expandedProjectCwds: ["/tmp/project-2"],
+        projectOrderCwds: ["/tmp/project-2", "/tmp/project-1"],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("drops stale remembered project state when a snapshot returns a different set", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+      const fresh = await import("./store");
+      const persistence = await import("./storePersistence");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      fresh.useStore
+        .getState()
+        .syncServerReadModel(
+          makeProjectsReadModel([
+            makeReadModelProject({ id: project1, workspaceRoot: "/tmp/project-1" }),
+          ]),
+        );
+      fresh.useStore.getState().setProjectExpanded(project1, false);
+
+      fresh.useStore.getState().syncServerReadModel({
+        ...makeProjectsReadModel([
+          makeReadModelProject({ id: project2, workspaceRoot: "/tmp/project-2" }),
+        ]),
+        snapshotSequence: 2,
+      });
+
+      const remembered = persistence.getRememberedProjectUiState();
+      expect(remembered.projectOrderCount).toBe(1);
+      expect(remembered.projectOrderIndexForCwd("/tmp/project-2")).toBe(0);
+      expect(remembered.projectOrderIndexForCwd("/tmp/project-1")).toBeUndefined();
+      expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(false);
+      const projects = fresh.useStore.getState().projects;
+      expect(projects.map((project) => project.cwd)).toEqual(["/tmp/project-2"]);
+      expect(projects[0]?.expanded).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("preserves a local project alias across read model syncs", () => {
     const aliasedState = renameProjectLocally(
       makeState(makeThread()),
       ProjectId.makeUnsafe("project-1"),
-      "dpcode",
+      "synara",
     );
 
     const next = syncServerReadModel(
@@ -3155,8 +476,8 @@ describe("store read model sync", () => {
     );
 
     expect(next.projects[0]).toMatchObject({
-      name: "dpcode",
-      localName: "dpcode",
+      name: "synara",
+      localName: "synara",
       remoteName: "Project",
       folderName: "project",
     });
@@ -3164,26 +485,12 @@ describe("store read model sync", () => {
 
   it("keeps a cleared local project alias from reappearing during syncs", async () => {
     const storage = new Map<string, string>();
-    const fakeWindow = {
-      localStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          storage.set(key, value);
-        },
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-        clear: () => {
-          storage.clear();
-        },
-      },
-      addEventListener: vi.fn(),
-    };
+    const fakeWindow = makeFakeWindow(storage);
     storage.set(
-      "dpcode:renderer-state:v8",
+      PERSISTED_STATE_KEY,
       JSON.stringify({
         projectNamesByCwd: {
-          "/tmp/project": "dpcode",
+          "/tmp/project": "synara",
         },
       }),
     );
@@ -3198,11 +505,10 @@ describe("store read model sync", () => {
         projects: [
           makeProject({
             id: projectId,
-            name: "dpcode",
-            localName: "dpcode",
+            name: "synara",
+            localName: "synara",
           }),
         ],
-        threads: [makeThread()],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,
       }));
@@ -3230,22 +536,8 @@ describe("store read model sync", () => {
 
   it("persists project aliases immediately when the local alias changes", async () => {
     const storage = new Map<string, string>();
-    const setItem = vi.fn((key: string, value: string) => {
-      storage.set(key, value);
-    });
-    const fakeWindow = {
-      localStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem,
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-        clear: () => {
-          storage.clear();
-        },
-      },
-      addEventListener: vi.fn(),
-    };
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
     vi.stubGlobal("window", fakeWindow);
     try {
       vi.resetModules();
@@ -3260,17 +552,16 @@ describe("store read model sync", () => {
             cwd: "/tmp/project",
           }),
         ],
-        threads: [makeThread()],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,
       }));
 
-      freshStore.useStore.getState().renameProjectLocally(projectId, "dpcode");
+      freshStore.useStore.getState().renameProjectLocally(projectId, "synara");
 
       expect(setItem).toHaveBeenCalled();
-      expect(JSON.parse(storage.get("synara:renderer-state:v8") ?? "{}")).toMatchObject({
+      expect(JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}")).toMatchObject({
         projectNamesByCwd: {
-          "/tmp/project": "dpcode",
+          "/tmp/project": "synara",
         },
       });
     } finally {
@@ -3278,35 +569,467 @@ describe("store read model sync", () => {
     }
   });
 
-  it("reuses normalized thread objects when the incoming snapshot is unchanged", () => {
-    const readModel = {
-      snapshotSequence: 1,
-      updatedAt: "2026-02-28T00:00:00.000Z",
-      projects: [
+  it("preserves all-collapsed state across a full reload and defaults unknown projects to expanded", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel = makeProjectsReadModel([
         makeReadModelProject({
-          defaultModelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          updatedAt: "2026-02-27T00:00:00.000Z",
+          id: project1,
+          title: "Project 1",
+          workspaceRoot: "/tmp/project-1",
         }),
-      ],
-      threads: [
-        makeReadModelThread({
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          createdAt: "2026-02-13T00:00:00.000Z",
-          updatedAt: "2026-02-28T00:00:00.000Z",
+        makeReadModelProject({
+          id: project2,
+          title: "Project 2",
+          workspaceRoot: "/tmp/project-2",
         }),
-      ],
-    } satisfies OrchestrationReadModel;
+      ]);
 
-    const hydratedState = syncServerReadModel(makeState(makeThread()), readModel);
-    const thread = hydratedState.threads[0];
-    const next = syncServerReadModel(hydratedState, readModel);
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore.getState().setAllProjectsExpanded(false);
+      fresh.persistAppStateNow();
 
-    expect(next.threads[0]).toBe(thread);
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.expandedProjectCwds).toEqual([]);
+      expect(saved.projectOrderCwds).toEqual(["/tmp/project-1", "/tmp/project-2"]);
+      expect(setItem).toHaveBeenCalled();
+
+      vi.resetModules();
+
+      const reloaded = await import("./store");
+      const project3 = ProjectId.makeUnsafe("project-3");
+      reloaded.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          ...readModel.projects,
+          makeReadModelProject({
+            id: project3,
+            title: "Project 3",
+            workspaceRoot: "/tmp/project-3",
+          }),
+        ]),
+      );
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, expanded }) => ({ id, expanded })),
+      ).toEqual([
+        { id: project1, expanded: false },
+        { id: project2, expanded: false },
+        { id: project3, expanded: true },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
+
+  it("preserves a legacy all-collapsed payload through the first sync after reload", async () => {
+    const storage = new Map<string, string>();
+    storage.set(PERSISTED_STATE_KEY, JSON.stringify({ expandedProjectCwds: [] }));
+    vi.stubGlobal("window", makeFakeWindow(storage));
+    try {
+      vi.resetModules();
+
+      const reloaded = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      reloaded.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ]),
+      );
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, expanded }) => ({ id, expanded })),
+      ).toEqual([
+        { id: project1, expanded: false },
+        { id: project2, expanded: false },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
+
+  it("preserves mixed expansion state across a full reload", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel = makeProjectsReadModel([
+        makeReadModelProject({
+          id: project1,
+          title: "Project 1",
+          workspaceRoot: "/tmp/project-1",
+        }),
+        makeReadModelProject({
+          id: project2,
+          title: "Project 2",
+          workspaceRoot: "/tmp/project-2",
+        }),
+      ]);
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore.getState().setAllProjectsExpanded(false);
+      fresh.useStore.getState().toggleProject(project1);
+      fresh.persistAppStateNow();
+
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.expandedProjectCwds).toEqual(["/tmp/project-1"]);
+      expect(saved.projectOrderCwds).toEqual(["/tmp/project-1", "/tmp/project-2"]);
+
+      vi.resetModules();
+
+      const reloaded = await import("./store");
+      reloaded.useStore.getState().syncServerReadModel(readModel);
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, expanded }) => ({ id, expanded })),
+      ).toEqual([
+        { id: project1, expanded: true },
+        { id: project2, expanded: false },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
+
+  it("keeps a project's local alias and resets expansion when its workspace root changes", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      fresh.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+        ]),
+      );
+      fresh.useStore.getState().renameProjectLocally(project1, "alpha");
+      fresh.useStore.getState().setAllProjectsExpanded(false);
+      fresh.persistAppStateNow();
+
+      fresh.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1-moved",
+          }),
+        ]),
+      );
+
+      const moved = fresh.useStore.getState().projects[0];
+      expect(moved).toBeDefined();
+      expect(moved?.cwd).toBe("/tmp/project-1-moved");
+      expect(moved?.localName).toBe("alpha");
+      expect(moved?.expanded).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
+
+  it("restores a project's appearance after reload and forgets it once reset to the default folder", async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("window", makeFakeWindow(storage));
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel = makeProjectsReadModel([
+        makeReadModelProject({ id: project1, title: "Project 1", workspaceRoot: "/tmp/project-1" }),
+        makeReadModelProject({ id: project2, title: "Project 2", workspaceRoot: "/tmp/project-2" }),
+      ]);
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore
+        .getState()
+        .setProjectAppearanceLocally(project1, { kind: "icon", icon: "rocket", color: "blue" });
+      fresh.useStore
+        .getState()
+        .setProjectAppearanceLocally(project2, { kind: "emoji", emoji: "🐱" });
+
+      vi.resetModules();
+      const reloaded = await import("./store");
+      reloaded.useStore.getState().syncServerReadModel(readModel);
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, appearance }) => ({ id, appearance })),
+      ).toEqual([
+        { id: project1, appearance: { kind: "icon", icon: "rocket", color: "blue" } },
+        { id: project2, appearance: { kind: "emoji", emoji: "🐱" } },
+      ]);
+
+      reloaded.useStore
+        .getState()
+        .setProjectAppearanceLocally(project1, { kind: "icon", icon: "folder-2", color: null });
+      expect(reloaded.useStore.getState().projects[0]?.appearance).toBeNull();
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.projectAppearanceByCwd).toEqual({
+        "/tmp/project-2": { kind: "emoji", emoji: "🐱" },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
+
+  it("removes a deleted project's local alias from persisted projectNamesByCwd", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const { getRememberedProjectUiState } = await import("./storePersistence");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel = makeProjectsReadModel([
+        makeReadModelProject({
+          id: project1,
+          title: "Project 1",
+          workspaceRoot: "/tmp/project-1",
+        }),
+        makeReadModelProject({
+          id: project2,
+          title: "Project 2",
+          workspaceRoot: "/tmp/project-2",
+        }),
+      ]);
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore.getState().renameProjectLocally(project1, "alpha");
+      fresh.useStore.getState().renameProjectLocally(project2, "beta");
+
+      fresh.useStore.getState().removeDeletedProjectFromClientState(project2);
+      expect(getRememberedProjectUiState().projectNameForCwd("/tmp/project-2")).toBeUndefined();
+      fresh.persistAppStateNow();
+
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.projectNamesByCwd).toEqual({ "/tmp/project-1": "alpha" });
+      expect(saved.projectNamesByCwd).not.toHaveProperty("/tmp/project-2");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
+
+  it("does not persist project UI before thread hydration", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const projectId = ProjectId.makeUnsafe("project-1");
+      fresh.useStore.setState((state) => ({
+        ...state,
+        projects: [makeProject({ id: projectId, cwd: "/tmp/project" })],
+      }));
+
+      fresh.persistAppStateNow();
+
+      expect(setItem).not.toHaveBeenCalled();
+      expect(storage.has(PERSISTED_STATE_KEY)).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["read-model", "shell"] as const)(
+    "%s snapshots forget removed project preferences before the cwd returns",
+    async (kind) => {
+      vi.stubGlobal("window", makeFakeWindow(new Map()));
+      try {
+        vi.resetModules();
+        const fresh = await import("./store");
+        const { getRememberedProjectUiState } = await import("./storePersistence");
+        const first = makeReadModelProject({ workspaceRoot: "/tmp/removed" });
+        const kept = makeReadModelProject({
+          id: ProjectId.makeUnsafe("kept"),
+          workspaceRoot: "/tmp/kept",
+        });
+        const sync = (projects: OrchestrationReadModel["projects"], sequence: number) => {
+          const snapshot = { ...makeProjectsReadModel(projects), snapshotSequence: sequence };
+          if (kind === "shell") fresh.useStore.getState().syncServerShellSnapshot(snapshot);
+          else fresh.useStore.getState().syncServerReadModel(snapshot);
+        };
+        sync([first, kept], 1);
+        fresh.useStore.getState().renameProjectLocally(first.id, "Old alias");
+        fresh.useStore.getState().setProjectExpanded(first.id, false);
+        sync([kept], 2);
+        const remembered = getRememberedProjectUiState();
+        expect(remembered.projectOrderIndexForCwd("/tmp/removed")).toBeUndefined();
+        expect(remembered.projectNameForCwd("/tmp/removed")).toBeUndefined();
+        sync([first, kept], 3);
+        expect(fresh.useStore.getState().projects.map((project) => project.id)).toEqual([
+          kept.id,
+          first.id,
+        ]);
+        expect(fresh.useStore.getState().projects[1]).toMatchObject({
+          expanded: true,
+          localName: null,
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each(["read-model", "shell"] as const)(
+    "%s expires legacy expansion for an empty or known-disjoint project set",
+    async (kind) => {
+      for (const emptyFirst of [false, true]) {
+        const storage = new Map<string, string>([
+          [
+            PERSISTED_STATE_KEY,
+            JSON.stringify({
+              expandedProjectCwds: emptyFirst ? [] : ["/tmp/old"],
+            }),
+          ],
+        ]);
+        vi.stubGlobal("window", makeFakeWindow(storage));
+        try {
+          vi.resetModules();
+          const fresh = await import("./store");
+          const sync = (projects: OrchestrationReadModel["projects"], sequence: number) => {
+            const snapshot = { ...makeProjectsReadModel(projects), snapshotSequence: sequence };
+            if (kind === "shell") fresh.useStore.getState().syncServerShellSnapshot(snapshot);
+            else fresh.useStore.getState().syncServerReadModel(snapshot);
+          };
+          if (emptyFirst) sync([], 1);
+          sync([makeReadModelProject({ workspaceRoot: "/tmp/unrelated" })], 2);
+          expect(fresh.useStore.getState().projects[0]?.expanded).toBe(true);
+        } finally {
+          vi.unstubAllGlobals();
+        }
+      }
+    },
+  );
+
+  it("normalizes trailing slashes across reload and remembers toggles before writing storage", async () => {
+    const storage = new Map<string, string>([
+      [
+        PERSISTED_STATE_KEY,
+        JSON.stringify({
+          projectOrderCwds: ["/tmp/second/", "/tmp/first/"],
+          expandedProjectCwds: ["/tmp/second/"],
+          projectNamesByCwd: { "/tmp/first/": "Alias" },
+        }),
+      ],
+    ]);
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+      const fresh = await import("./store");
+      const { getRememberedProjectUiState } = await import("./storePersistence");
+      const first = makeReadModelProject({ workspaceRoot: "/tmp/first" });
+      const second = makeReadModelProject({
+        id: ProjectId.makeUnsafe("second"),
+        workspaceRoot: "/tmp/second",
+      });
+      fresh.useStore.getState().syncServerReadModel(makeProjectsReadModel([first, second]));
+      expect(fresh.useStore.getState().projects.map(({ id }) => id)).toEqual([second.id, first.id]);
+      expect(fresh.useStore.getState().projects[1]).toMatchObject({
+        expanded: false,
+        localName: "Alias",
+      });
+      fakeWindow.localStorage.setItem.mockImplementation((key, value) => {
+        expect(getRememberedProjectUiState().isProjectExpanded("/tmp/first")).toBe(true);
+        storage.set(key, value);
+      });
+      fresh.useStore.getState().toggleProject(first.id);
+      expect(getRememberedProjectUiState().isProjectExpanded("/tmp/first")).toBe(true);
+      fresh.persistAppStateNow();
+      expect(JSON.parse(storage.get(PERSISTED_STATE_KEY)!)).toMatchObject({
+        projectOrderCwds: ["/tmp/second", "/tmp/first"],
+        expandedProjectCwds: ["/tmp/second", "/tmp/first"],
+        projectNamesByCwd: { "/tmp/first": "Alias" },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps surviving persisted order ahead of unknown projects after reload pruning", async () => {
+    const storage = new Map<string, string>([
+      [
+        PERSISTED_STATE_KEY,
+        JSON.stringify({
+          projectOrderCwds: ["/tmp/removed", "/tmp/kept"],
+          expandedProjectCwds: [],
+        }),
+      ],
+    ]);
+    vi.stubGlobal("window", makeFakeWindow(storage));
+    try {
+      vi.resetModules();
+      const fresh = await import("./store");
+      fresh.useStore
+        .getState()
+        .syncServerReadModel(
+          makeProjectsReadModel([
+            makeReadModelProject({ workspaceRoot: "/tmp/new" }),
+            makeReadModelProject({ id: ProjectId.makeUnsafe("kept"), workspaceRoot: "/tmp/kept" }),
+          ]),
+        );
+      expect(
+        fresh.useStore.getState().projects.map(({ cwd, expanded }) => ({ cwd, expanded })),
+      ).toEqual([
+        { cwd: "/tmp/kept", expanded: false },
+        { cwd: "/tmp/new", expanded: true },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["read-model", "shell"] as const)(
+    "%s pure projection consumes legacy state on the first sync without a subscriber",
+    async (kind) => {
+      const storage = new Map<string, string>([
+        [PERSISTED_STATE_KEY, JSON.stringify({ expandedProjectCwds: [] })],
+      ]);
+      vi.stubGlobal("window", makeFakeWindow(storage));
+      try {
+        vi.resetModules();
+        const fresh = await import("./store");
+        const { initialState } = await import("./storeState");
+        const { getRememberedProjectUiState } = await import("./storePersistence");
+        const snapshot = makeProjectsReadModel([makeReadModelProject({})]);
+        const sync = kind === "shell" ? fresh.syncServerShellSnapshot : fresh.syncServerReadModel;
+        const next = sync(initialState, snapshot);
+        expect(next.projects[0]?.expanded).toBe(false);
+        expect(getRememberedProjectUiState().isLegacyExpansionPayload).toBe(false);
+        expect(getRememberedProjectUiState().projectOrderCount).toBe(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });

@@ -4,34 +4,45 @@
 // Layer: UI component (pure; drag wiring lives in KanbanColumn)
 // Exports: KanbanCardView
 
-import { GoRepoForked } from "react-icons/go";
-import { LuSplit } from "react-icons/lu";
-import { memo } from "react";
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import type { ThreadId } from "@synara/contracts";
 
-import { resolvePrStatePresentation, resolveThreadStatusPill } from "../Sidebar.logic";
+import {
+  resolveThreadPullRequestFallback,
+  type ThreadPullRequest,
+} from "~/hooks/useThreadPullRequests";
+import { PrStateChip } from "../pullRequest/PrStateChip";
+import { resolveThreadStatusPill } from "../Sidebar.logic";
+import { ThreadStatusPillChip } from "../ThreadStatusPillChip";
 import { ProviderIcon } from "../ProviderIcon";
 import {
   GitBranchIcon,
-  GitMergedSimpleIcon,
-  GitPullRequestIcon,
   LoaderIcon,
   PaperclipIcon,
-  PinIcon,
+  PinFilledIcon,
   TerminalIcon,
+  WorktreeIcon,
 } from "~/lib/icons";
 import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
 import { formatElapsed } from "../../session-logic";
 import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
+import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
-import { KANBAN_COLUMN_LABELS, kanbanThreadCardId, type KanbanCard } from "./kanban.logic";
+import { kanbanThreadCardId, refineAttentionFlagsForLivePr, type KanbanCard } from "./kanban.logic";
+
+/** Resolved PR badge per thread from the board root's useThreadPullRequests call. */
+export type KanbanCardPrLookup = ReadonlyMap<ThreadId, ThreadPullRequest>;
 
 export interface KanbanCardViewProps {
   card: KanbanCard;
   onOpen?: (card: KanbanCard) => void;
   /** Right-click handler — opens the sidebar-style thread/draft context menu. */
   onContextMenu?: (card: KanbanCard, event: React.MouseEvent) => void;
+  /** Keyboard handler — the board uses it for Alt+Arrow draft reorder. */
+  onKeyDown?: (card: KanbanCard, event: React.KeyboardEvent) => void;
+  prByThreadId: KanbanCardPrLookup;
   /** Rendered inside the DragOverlay — lifted styling, no interactions. */
   isOverlay?: boolean;
   /** The in-column original while its overlay clone is being dragged. */
@@ -47,16 +58,16 @@ export interface KanbanCardViewProps {
 function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
   if (card.isTerminal) {
     return (
-      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
-        <TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" aria-hidden />
+      <span className="flex shrink-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/80">
+        <TerminalIcon className="size-3 shrink-0" aria-hidden />
         Terminal
       </span>
     );
   }
   return (
-    <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
+    <span className="flex shrink-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/80">
       <KanbanStatusIcon column={card.column} className="size-3" />
-      {KANBAN_COLUMN_LABELS[card.column]}
+      {KANBAN_COLUMN_V2_LABELS[card.column]}
     </span>
   );
 }
@@ -78,35 +89,55 @@ function KanbanCardStatusPill({ card }: { card: KanbanCard }) {
   if (!pill || REDUNDANT_COLUMN_PILL_LABELS.has(pill.label)) {
     return null;
   }
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5 text-[11px]", pill.colorClass)}>
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          pill.dotClass,
-          pill.pulse ? "animate-pulse" : "",
-        )}
-      />
-      <span className="truncate">{pill.label}</span>
-    </span>
-  );
+  return <ThreadStatusPillChip pill={pill} />;
 }
 
-function KanbanCardPrChip({
+/**
+ * v2-path red attention pills. Failed and stuck render their label so the card is
+ * never a silent normal card (D1); awaiting-approval/awaiting-input/needs-review
+ * also carry their pill flags. A card can carry more than one flag (stuck +
+ * needs-review), so up to two pills render — kept compact, never a wall of red.
+ * Classic cards never set `attention`, so this stays empty for the 3-column
+ * escape hatch.
+ */
+function KanbanCardAttentionPill({
+  card,
   pr,
 }: {
-  pr: NonNullable<NonNullable<KanbanCard["thread"]>["lastKnownPr"]>;
+  card: KanbanCard;
+  pr: ReturnType<typeof resolveThreadPullRequestFallback> | null;
 }) {
-  const presentation = resolvePrStatePresentation(pr.state);
-  const PrIcon =
-    presentation.iconKind === "merged-simple" ? GitMergedSimpleIcon : GitPullRequestIcon;
+  if (!card.attention || card.attention.length === 0) {
+    return null;
+  }
+  // Preserve the resolved-empty vs not-yet-resolved distinction: an explicit
+  // `null` PR means live resolution settled with no open PR (drop needs-review),
+  // while `undefined` means the row has not resolved yet (keep the initial pill).
+  // Refinement operates on raw flags (`card.attention`); display copy is mapped
+  // after, so the comparison never drifts from the flag set.
+  const refinedFlags = refineAttentionFlagsForLivePr(
+    card.attention,
+    pr === null ? null : pr?.state,
+  );
+  // Tone follows what the pill actually renders — a refined-out needs-review can
+  // never hide a failed/stuck flag behind a red pill (M1). Up to two labels.
+  const visibleFlags = refinedFlags.slice(0, 2);
+  const tone = visibleFlags.some((flag) => flag === "failed" || flag === "stuck")
+    ? "text-red-600 dark:text-red-300/90"
+    : "text-amber-600 dark:text-amber-300/90";
+  const pillClassName = cn(
+    "shrink-0 rounded-full px-2 py-0.5 text-ui-xs font-medium ring-1 ring-inset",
+    "bg-red-500/[0.07] ring-red-500/30",
+    tone,
+  );
   return (
-    <span
-      title={`#${pr.number} ${presentation.label}: ${pr.title}`}
-      className={cn("flex shrink-0 items-center gap-0.5 text-[11px]", presentation.colorClass)}
-    >
-      <PrIcon className="size-3 shrink-0" aria-hidden />#{pr.number}
-    </span>
+    <>
+      {visibleFlags.map((flag) => (
+        <span key={flag} className={pillClassName}>
+          {KANBAN_ATTENTION_LABELS[flag]}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -114,10 +145,14 @@ function KanbanCardViewComponent({
   card,
   onOpen,
   onContextMenu,
-  isOverlay = false,
-  isDragSource = false,
+  onKeyDown,
+  prByThreadId,
+  isOverlay: isOverlayProp,
+  isDragSource: isDragSourceProp,
   nowMs,
 }: KanbanCardViewProps) {
+  const isOverlay = isOverlayProp ?? false;
+  const isDragSource = isDragSourceProp ?? false;
   // Thread-backed draft cards keep their own title, so the unsent prompt is shown
   // separately; local drafts and unsent-prompt cards already title themselves from it.
   const showDraftPreview =
@@ -125,12 +160,23 @@ function KanbanCardViewComponent({
     card.draftPrompt.length > 0 &&
     card.cardId === kanbanThreadCardId(card.threadId);
 
-  const isForked = Boolean(card.thread?.forkSourceThreadId && !card.thread.sidechatSourceThreadId);
+  const isForked = Boolean(card.thread?.forkSourceThreadId);
   const worktreeBadgeLabel = resolveThreadEnvironmentPresentation({
     envMode: card.envMode,
     worktreePath: card.worktreePath,
   }).worktreeBadgeLabel;
-  const pr = card.thread?.lastKnownPr ?? null;
+  // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+  // checkout moved on); rows the board root has not resolved yet get the same validation
+  // without live status instead of the raw — possibly stale — persisted badge.
+  const pr = card.thread
+    ? prByThreadId.has(card.threadId)
+      ? (prByThreadId.get(card.threadId) ?? null)
+      : resolveThreadPullRequestFallback({
+          branch: card.thread.branch,
+          hasDedicatedWorktree: card.thread.worktreePath !== null,
+          lastKnownPr: card.thread.lastKnownPr ?? null,
+        })
+    : null;
   const activeWorkElapsed =
     card.activeWorkStartedAt && nowMs
       ? formatElapsed(card.activeWorkStartedAt, new Date(nowMs).toISOString())
@@ -142,6 +188,7 @@ function KanbanCardViewComponent({
       tabIndex={isOverlay ? -1 : 0}
       onClick={onOpen ? () => onOpen(card) : undefined}
       onContextMenu={onContextMenu ? (event) => onContextMenu(card, event) : undefined}
+      onKeyDown={onKeyDown ? (event) => onKeyDown(card, event) : undefined}
       className={cn(
         "flex w-full cursor-pointer flex-col gap-1.5 rounded-lg bg-card/70 px-3 py-2.5 text-left transition-colors",
         RAISED_SURFACE_CHROME_CLASS_NAME,
@@ -150,22 +197,23 @@ function KanbanCardViewComponent({
         // hairline so each card stays visually separated in dark mode.
         "dark:border dark:border-white/[0.05]",
         "hover:bg-card focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-        isOverlay && "bg-card shadow-lg dark:shadow-lg",
+        // A dragged card floats over the board, so it keeps its opaque fill on a glass window.
+        isOverlay ? "bg-card shadow-lg dark:shadow-lg" : GLASS_RAISED_SURFACE_CLASS_NAME,
         isDragSource && "opacity-40",
       )}
     >
       <span className="flex min-w-0 items-start gap-1.5">
-        <span className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-snug font-medium text-foreground/90">
+        <span className="line-clamp-2 min-w-0 flex-1 text-ui-lg leading-snug font-medium text-foreground/90">
           {card.title}
         </span>
         {card.thread?.isPinned ? (
           <span title="Pinned" className="flex shrink-0 items-center pt-0.5">
-            <PinIcon className="size-3 text-muted-foreground/60" aria-hidden />
+            <PinFilledIcon className="size-3 text-muted-foreground/60" aria-hidden />
           </span>
         ) : null}
       </span>
       {showDraftPreview ? (
-        <span className="line-clamp-2 text-xs leading-snug text-muted-foreground">
+        <span className="line-clamp-2 text-ui leading-snug text-muted-foreground">
           {card.draftPrompt}
         </span>
       ) : null}
@@ -180,25 +228,25 @@ function KanbanCardViewComponent({
           />
         )}
         {card.branch ? (
-          <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground/70">
+          <span className="flex min-w-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/70">
             <GitBranchIcon className="size-3 shrink-0" aria-hidden />
             <span className="max-w-32 truncate">{card.branch}</span>
           </span>
         ) : null}
         {worktreeBadgeLabel ? (
           <span title={worktreeBadgeLabel} className="flex shrink-0 items-center">
-            <LuSplit className="size-3 rotate-90 text-muted-foreground/70" aria-hidden />
+            <WorktreeIcon className="size-3 text-muted-foreground/70" aria-hidden />
           </span>
         ) : null}
         {isForked ? (
           <span title="Forked thread" className="flex shrink-0 items-center">
-            <GoRepoForked
+            <GitBranchIcon
               className="size-3 text-emerald-600 dark:text-emerald-300/90"
               aria-hidden
             />
           </span>
         ) : null}
-        {pr ? <KanbanCardPrChip pr={pr} /> : null}
+        {pr ? <PrStateChip pr={pr} /> : null}
         {card.draftHasAttachments ? (
           <PaperclipIcon className="size-3 shrink-0 text-muted-foreground/70" aria-hidden />
         ) : null}
@@ -207,12 +255,12 @@ function KanbanCardViewComponent({
             // Optimistically In Progress — the thread's real status (Draft/Completed)
             // would contradict the column until the first runtime signal arrives.
             <>
-              <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-sky-600 dark:text-sky-300/90">
+              <span className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
                 <LoaderIcon className="size-3 shrink-0 animate-spin" aria-hidden />
                 Starting…
               </span>
               {activeWorkElapsed ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
                   Worked for {activeWorkElapsed}
                 </span>
               ) : null}
@@ -220,12 +268,15 @@ function KanbanCardViewComponent({
           ) : (
             <>
               <KanbanCardStatusPill card={card} />
+              {card.attention && card.attention.length > 0 ? (
+                <KanbanCardAttentionPill card={card} pr={pr} />
+              ) : null}
               {activeWorkElapsed ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
                   Worked for {activeWorkElapsed}
                 </span>
               ) : card.timestamp ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
                   {formatRelativeTime(card.timestamp)}
                 </span>
               ) : null}
@@ -238,4 +289,4 @@ function KanbanCardViewComponent({
   );
 }
 
-export const KanbanCardView = memo(KanbanCardViewComponent);
+export const KanbanCardView = KanbanCardViewComponent;

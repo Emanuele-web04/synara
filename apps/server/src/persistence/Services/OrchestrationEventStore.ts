@@ -9,11 +9,17 @@
  *
  * @module OrchestrationEventStore
  */
-import { OrchestrationEvent } from "@t3tools/contracts";
+import { OrchestrationEvent } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
+
+export interface OrchestrationEventReplayFilter {
+  readonly eventTypes: ReadonlyArray<OrchestrationEvent["type"]>;
+  readonly activityKinds?: ReadonlyArray<string>;
+  readonly includeBoundaryEvent?: boolean;
+}
 
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
@@ -31,11 +37,43 @@ export interface OrchestrationEventStoreShape {
     event: Omit<OrchestrationEvent, "sequence">,
   ) => Effect.Effect<OrchestrationEvent, OrchestrationEventStoreError>;
 
+  /** Capture the latest durable sequence for a finite replay fence. */
+  readonly getHighWaterSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /** Capture the latest durable sequence for one thread stream. */
+  readonly getThreadHighWaterSequence: (
+    threadId: string,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /** Capture the latest durable event sequence that assigned this thread's title. */
+  readonly getThreadTitleHighWaterSequence: (
+    threadId: string,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /** Read one stable, newest-first page from a thread's durable event stream. */
+  readonly readThreadEvents: (input: {
+    readonly threadId: string;
+    readonly throughSequenceInclusive: number;
+    readonly beforeSequenceExclusive?: number;
+    readonly limit: number;
+    readonly eventTypes?: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, OrchestrationEventStoreError>;
+
+  /** Replay one thread's events after an exclusive global sequence cursor. */
+  readonly readThreadEventsFromSequence: (
+    threadId: string,
+    sequenceExclusive: number,
+    limit?: number,
+    throughSequenceInclusive?: number,
+    eventTypes?: ReadonlyArray<string>,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
   /**
    * Replay events after the provided sequence.
    *
    * @param sequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to emit.
+   * @param throughSequenceInclusive - Optional captured high-water fence.
    * @returns Stream containing ordered events.
    *
    * Reads in fixed-size pages and normalizes non-integer/negative limits.
@@ -43,6 +81,8 @@ export interface OrchestrationEventStoreShape {
   readonly readFromSequence: (
     sequenceExclusive: number,
     limit?: number,
+    throughSequenceInclusive?: number,
+    filter?: OrchestrationEventReplayFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
   /**
@@ -67,4 +107,4 @@ export interface OrchestrationEventStoreShape {
 export class OrchestrationEventStore extends ServiceMap.Service<
   OrchestrationEventStore,
   OrchestrationEventStoreShape
->()("t3/persistence/Services/OrchestrationEventStore") {}
+>()("synara/persistence/Services/OrchestrationEventStore") {}

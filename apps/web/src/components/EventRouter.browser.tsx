@@ -1,25 +1,65 @@
 import "../index.css";
 
 import {
+  ApprovalRequestId,
+  CommandId,
   EventId,
   MessageId,
+  DEVICE_WS_METHODS,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   ProjectId,
   ThreadId,
   TurnId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
-  type OrchestrationShellStreamEvent,
+  type OrchestrationShellStreamItem,
   type OrchestrationThread,
   type ServerConfig,
   type WsWelcomePayload,
   WS_METHODS,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { page } from "vitest/browser";
+
+const threadSnapshotFailureListeners = vi.hoisted(
+  () =>
+    new Set<
+      (failure: {
+        readonly threadId: string;
+        readonly code: string | null;
+        readonly error: Error;
+      }) => void
+    >(),
+);
+
+const shellStreamFailureListeners = vi.hoisted(
+  () => new Set<(failure: { readonly code: string | null; readonly error: Error }) => void>(),
+);
+
+vi.mock("../wsNativeApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../wsNativeApi")>();
+  return {
+    ...actual,
+    onShellStreamFailure: (
+      listener: (failure: { readonly code: string | null; readonly error: Error }) => void,
+    ) => {
+      shellStreamFailureListeners.add(listener);
+      return () => shellStreamFailureListeners.delete(listener);
+    },
+    onThreadStreamFailure: (
+      listener: typeof threadSnapshotFailureListeners extends Set<infer T> ? T : never,
+    ) => {
+      threadSnapshotFailureListeners.add(listener);
+      return () => threadSnapshotFailureListeners.delete(listener);
+    },
+  };
+});
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
@@ -32,9 +72,25 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
+import {
+  acknowledgeStartupAnnouncementsForTest,
+  createBrowserTestServerConfig,
+  createBrowserTestServerSettings,
+  createFullscreenTestHost,
+} from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
-import { useWorkspaceStore } from "../workspaceStore";
-import { resetWsNativeApiForTest } from "../wsNativeApi";
+import {
+  buildThreadSubscribeInput,
+  resetThreadDetailResumeCursorsForTests,
+  setThreadDetailResumeCursor,
+} from "../threadDetailResumeCursors";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
+import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
+// Pre-transform the compiler-heavy component before the first hydration deadline.
+// This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
+import "./ChatView";
+import { toastManager } from "./ui/toast";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-other-browser-test");
@@ -48,41 +104,39 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: EffectRpcWebSocketClient | null = null;
 let shellStreamRequestId: string | null = null;
+let shellStreamClient: EffectRpcWebSocketClient | null = null;
+let serverLifecycleRequestId: string | null = null;
+let serverLifecycleClient: EffectRpcWebSocketClient | null = null;
+let suppressNextShellSnapshot = false;
 const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
+const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
+let getShellSnapshotRequestCount = 0;
+let getThreadDetailSnapshotRequestCount = 0;
+const getThreadDetailSnapshotRequests: unknown[] = [];
+let delayNextThreadDetailSnapshotResponse = false;
+let pendingThreadDetailSnapshotResponse: {
+  readonly client: EffectRpcWebSocketClient;
+  readonly requestId: string;
+  readonly result: unknown;
+} | null = null;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
 function createBaseServerConfig(): ServerConfig {
-  return {
-    cwd: "/repo/project",
-    worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.t3code-keybindings.json",
-    keybindings: [],
-    issues: [],
-    providers: [
-      {
-        provider: "codex",
-        status: "ready",
-        available: true,
-        authStatus: "authenticated",
-        checkedAt: NOW_ISO,
-      },
-    ],
-    availableEditors: [],
-  };
+  return createBrowserTestServerConfig(NOW_ISO);
 }
 
 function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][number]>) {
   return {
     snapshotSequence: 1,
+    spaces: [],
     projects: [
       {
         id: PROJECT_ID,
@@ -149,6 +203,57 @@ function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][nu
   } satisfies OrchestrationReadModel;
 }
 
+function withApprovalRequest(
+  thread: OrchestrationThread,
+  input: {
+    readonly requestId: ApprovalRequestId;
+    readonly status?: "pending" | "responding" | "uncertain";
+  },
+): OrchestrationThread {
+  const createdAt = "2026-03-04T12:00:05.000Z";
+  const lifecycleGeneration = `generation:${input.requestId}`;
+  const status = input.status ?? "pending";
+  return {
+    ...thread,
+    updatedAt: createdAt,
+    hasPendingApprovals: true,
+    activities: [
+      {
+        id: EventId.makeUnsafe(`event:${input.requestId}`),
+        createdAt,
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: input.requestId,
+          lifecycleGeneration,
+          requestKind: "command",
+          requestType: "command_execution_approval",
+          detail: "Command: git status",
+        },
+        turnId: null,
+        sequence: 2,
+      },
+    ],
+    pendingInteractions: [
+      {
+        interactionKind: "approval",
+        requestId: input.requestId,
+        threadId: thread.id,
+        turnId: null,
+        lifecycleGeneration,
+        status,
+        decision: status === "pending" ? null : "accept",
+        responseCommandId:
+          status === "pending" ? null : CommandId.makeUnsafe(`response:${input.requestId}`),
+        responseRequestedAt: status === "pending" ? null : createdAt,
+        createdAt,
+        resolvedAt: null,
+      },
+    ],
+  };
+}
+
 function buildFixture(): TestFixture {
   return {
     snapshot: createSnapshot(),
@@ -176,10 +281,23 @@ function findThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationT
 
 function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    getShellSnapshotRequestCount += 1;
     return createShellSnapshotFromReadModel(fixture.snapshot);
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot) {
+    getThreadDetailSnapshotRequestCount += 1;
+    getThreadDetailSnapshotRequests.push(body);
+    const request = body as { readonly threadId?: ThreadId } | null;
+    const thread = request?.threadId ? findThreadDetailFromFixtureSnapshot(request.threadId) : null;
+    return thread
+      ? {
+          snapshotSequence: fixture.snapshot.snapshotSequence,
+          thread,
+        }
+      : null;
   }
   if (tag === ORCHESTRATION_WS_METHODS.replayEvents) {
     const request = body as { readonly fromSequenceExclusive?: unknown } | null;
@@ -188,8 +306,21 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
     replayRequestCursors.push(fromSequenceExclusive);
     return replayEvents.filter((event) => event.sequence > fromSequenceExclusive);
   }
+  if (tag === WS_METHODS.serverGetSettings) {
+    return createBrowserTestServerSettings(NOW_ISO);
+  }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
+  }
+  if (tag === WS_METHODS.projectsListDevServers) {
+    return { servers: [] };
+  }
+  if (tag === WS_METHODS.automationList) {
+    return { definitions: [], runs: [] };
+  }
+  // The sidebar reads to-dos on Beta hosts; the `{}` fallback would fail to decode.
+  if (tag === WS_METHODS.todoList) {
+    return { todos: [] };
   }
   if (tag === WS_METHODS.gitListBranches) {
     return {
@@ -217,7 +348,6 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    wsClient = client;
     client.addEventListener("message", (event) => {
       if (typeof event.data !== "string") {
         return;
@@ -232,6 +362,11 @@ const worker = setupWorker(
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
         subscribeShellRequestCount += 1;
         shellStreamRequestId = request.id;
+        shellStreamClient = client;
+        if (suppressNextShellSnapshot) {
+          suppressNextShellSnapshot = false;
+          return;
+        }
         sendEffectRpcChunk(client, request.id, {
           kind: "snapshot",
           snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
@@ -239,6 +374,8 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerLifecycle) {
+        serverLifecycleRequestId = request.id;
+        serverLifecycleClient = client;
         sendEffectRpcChunk(client, request.id, {
           type: "welcome",
           payload: fixture.welcome,
@@ -255,8 +392,18 @@ const worker = setupWorker(
       if (
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeServerKeepAwake ||
         method === WS_METHODS.subscribeTerminalEvents ||
-        method === WS_METHODS.subscribeOrchestrationDomainEvents
+        method === WS_METHODS.subscribeOrchestrationDomainEvents ||
+        method === WS_METHODS.subscribeProjectDevServerEvents ||
+        method === WS_METHODS.subscribeAutomationEvents ||
+        method === WS_METHODS.subscribeTodoEvents ||
+        // Left open like the rest: these are infinite subscriptions, and the
+        // default below answers with an Exit, which a stream RPC reads as the
+        // socket dying and answers with a full reconnect. That loops forever
+        // and starves the RPCs these tests are actually asserting on.
+        method === DEVICE_WS_METHODS.subscribeEvents ||
+        method === COMPUTER_WS_METHODS.subscribeEvents
       ) {
         return;
       }
@@ -268,6 +415,7 @@ const worker = setupWorker(
         );
         subscribeThreadRequests.push(threadId);
         threadStreamRequestIdByThreadId.set(threadId, request.id);
+        threadStreamClientByThreadId.set(threadId, client);
         if (delayNextThreadSnapshot) {
           delayNextThreadSnapshot = false;
           return;
@@ -285,7 +433,20 @@ const worker = setupWorker(
         });
         return;
       }
-      sendEffectRpcExit(client, request.id, resolveWsRpc(method, requestBody));
+      const result = resolveWsRpc(method, requestBody);
+      if (
+        method === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot &&
+        delayNextThreadDetailSnapshotResponse
+      ) {
+        delayNextThreadDetailSnapshotResponse = false;
+        pendingThreadDetailSnapshotResponse = {
+          client,
+          requestId: request.id,
+          result,
+        };
+        return;
+      }
+      sendEffectRpcExit(client, request.id, result);
     });
   }),
   http.get("*/attachments/:attachmentId", () => new HttpResponse(null, { status: 204 })),
@@ -295,65 +456,112 @@ const worker = setupWorker(
 async function mountApp(options?: {
   routeThreadId?: ThreadId;
   waitForThreadId?: ThreadId | null;
-}): Promise<{ cleanup: () => Promise<void> }> {
-  const host = document.createElement("div");
-  host.style.position = "fixed";
-  host.style.inset = "0";
-  host.style.width = "100vw";
-  host.style.height = "100vh";
-  host.style.display = "grid";
-  host.style.overflow = "hidden";
-  document.body.append(host);
+}): Promise<{ router: ReturnType<typeof getRouter>; cleanup: () => Promise<void> }> {
+  const host = createFullscreenTestHost();
 
   const routeThreadId = options?.routeThreadId ?? THREAD_ID;
   const router = getRouter(createMemoryHistory({ initialEntries: [`/${routeThreadId}`] }));
   const screen = await render(<RouterProvider router={router} />, { container: host });
 
-  await vi.waitFor(
-    () => {
-      if (options?.waitForThreadId === null) {
-        expect(useStore.getState().threadsHydrated).toBe(true);
-        return;
-      }
-      const expectedThreadId = options?.waitForThreadId ?? THREAD_ID;
-      expect(useStore.getState().threads.some((thread) => thread.id === expectedThreadId)).toBe(
-        true,
-      );
-    },
-    { timeout: 8_000, interval: 16 },
-  );
+  try {
+    await vi.waitFor(
+      () => {
+        if (options?.waitForThreadId === null) {
+          expect(useStore.getState().threadsHydrated).toBe(true);
+          return;
+        }
+        const expectedThreadId = options?.waitForThreadId ?? THREAD_ID;
+        expect(useStore.getState().threadIds?.includes(expectedThreadId)).toBe(true);
+        expect(threadStreamRequestIdByThreadId.has(expectedThreadId)).toBe(true);
+        const expectedThread = findThreadDetailFromFixtureSnapshot(expectedThreadId);
+        if (!expectedThread) return;
+        const hydratedMessageIdSet = new Set(
+          useStore.getState().messageIdsByThreadId?.[expectedThreadId] ?? [],
+        );
+        expect(
+          expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
+        ).toBe(true);
+      },
+      // The first Chromium/MSW mount can spend more than 40 seconds compiling
+      // the full desktop route graph on a cold Windows dev cache.
+      { timeout: 60_000, interval: 16 },
+    );
+  } catch (cause) {
+    await screen.unmount();
+    if (host.isConnected) host.remove();
+    throw cause;
+  }
+  let cleanedUp = false;
 
   return {
+    router,
     cleanup: async () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       await screen.unmount();
-      host.remove();
+      if (host.isConnected) host.remove();
     },
   };
 }
 
 function sendThreadEventPush(event: OrchestrationEvent) {
-  if (!wsClient) {
-    throw new Error("WebSocket client not connected");
-  }
-  const requestId = threadStreamRequestIdByThreadId.get(event.aggregateId as ThreadId);
-  if (!requestId) {
+  const threadId = event.aggregateId as ThreadId;
+  const requestId = threadStreamRequestIdByThreadId.get(threadId);
+  const client = threadStreamClientByThreadId.get(threadId);
+  if (!requestId || !client) {
     throw new Error(`Thread stream is not connected for ${event.aggregateId}`);
   }
-  sendEffectRpcChunk(wsClient, requestId, {
+  sendEffectRpcChunk(client, requestId, {
     kind: "event",
     event,
   });
 }
 
-function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
-  if (!wsClient) {
-    throw new Error("WebSocket client not connected");
-  }
+function resumedThreadEvent(): Extract<OrchestrationEvent, { type: "thread.message-sent" }> {
+  return {
+    sequence: 2,
+    eventId: EventId.makeUnsafe("event-overflow-resume-2"),
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    occurredAt: NOW_ISO,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.message-sent",
+    payload: {
+      threadId: THREAD_ID,
+      messageId: MessageId.makeUnsafe("msg-overflow-resumed"),
+      role: "assistant",
+      text: "Resumed from the applied cursor",
+      turnId: TurnId.makeUnsafe("turn-overflow-resume"),
+      source: "native",
+      streaming: true,
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+    },
+  };
+}
+
+function sendThreadReplayPush(threadId: ThreadId, events: readonly OrchestrationEvent[]) {
   const requestId = threadStreamRequestIdByThreadId.get(threadId);
-  if (!requestId) {
+  const client = threadStreamClientByThreadId.get(threadId);
+  if (!requestId || !client) {
     throw new Error(`Thread stream is not connected for ${threadId}`);
   }
-  sendEffectRpcChunk(wsClient, requestId, {
+  sendEffectRpcChunk(client, requestId, {
+    kind: "replay",
+    events,
+  });
+}
+
+function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
+  const requestId = threadStreamRequestIdByThreadId.get(threadId);
+  const client = threadStreamClientByThreadId.get(threadId);
+  if (!requestId || !client) {
+    throw new Error(`Thread stream is not connected for ${threadId}`);
+  }
+  sendEffectRpcChunk(client, requestId, {
     kind: "snapshot",
     snapshot: {
       snapshotSequence,
@@ -362,14 +570,30 @@ function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
   });
 }
 
-function sendShellEventPush(event: OrchestrationShellStreamEvent) {
-  if (!wsClient) {
-    throw new Error("WebSocket client not connected");
+function sendPendingThreadDetailSnapshotResponse() {
+  const pending = pendingThreadDetailSnapshotResponse;
+  if (pending === null) {
+    throw new Error("No delayed thread-detail snapshot response is pending");
   }
-  if (!shellStreamRequestId) {
+  pendingThreadDetailSnapshotResponse = null;
+  sendEffectRpcExit(pending.client, pending.requestId, pending.result);
+}
+
+function sendShellEventPush(event: OrchestrationShellStreamItem) {
+  if (!shellStreamRequestId || !shellStreamClient) {
     throw new Error("Shell stream is not connected");
   }
-  sendEffectRpcChunk(wsClient, shellStreamRequestId, event);
+  sendEffectRpcChunk(shellStreamClient, shellStreamRequestId, event);
+}
+
+function sendServerWelcomePush() {
+  if (!serverLifecycleRequestId || !serverLifecycleClient) {
+    throw new Error("Server lifecycle stream is not connected");
+  }
+  sendEffectRpcChunk(serverLifecycleClient, serverLifecycleRequestId, {
+    type: "welcome",
+    payload: fixture.welcome,
+  });
 }
 
 describe("EventRouter scoped orchestration sync", () => {
@@ -383,25 +607,35 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   afterAll(async () => {
+    await resetWsNativeApiForTest();
     await worker.stop();
   });
 
-  beforeEach(() => {
-    resetWsNativeApiForTest();
+  beforeEach(async () => {
+    await resetWsNativeApiForTest();
+    threadSnapshotFailureListeners.clear();
+    shellStreamFailureListeners.clear();
     fixture = buildFixture();
     document.body.innerHTML = "";
     shellStreamRequestId = null;
+    shellStreamClient = null;
+    serverLifecycleRequestId = null;
+    serverLifecycleClient = null;
+    suppressNextShellSnapshot = false;
     threadStreamRequestIdByThreadId.clear();
+    threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
     localStorage.clear();
+    acknowledgeStartupAnnouncementsForTest(fixture.serverConfig);
+    toastManager.close();
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
     });
     useStore.setState({
+      shellSnapshotSequence: 0,
       projects: [],
-      threads: [],
       threadIds: [],
       threadShellById: {},
       threadSessionById: {},
@@ -415,30 +649,393 @@ describe("EventRouter scoped orchestration sync", () => {
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
       sidebarThreadSummaryById: {},
+      deletedThreadIdsById: {},
+      deletedProjectIdsById: {},
       threadsHydrated: false,
     });
-    useWorkspaceStore.setState({
+    useWorkspacePathsStore.setState({
       homeDir: null,
-      workspacePages: [
-        {
-          id: "workspace-test",
-          title: "Workspace 1",
-          layoutPresetId: "single",
-          createdAt: NOW_ISO,
-          updatedAt: NOW_ISO,
-        },
-      ],
+      chatWorkspaceRoot: null,
+      studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
     });
     subscribeShellRequestCount = 0;
     subscribeThreadRequestCountById.clear();
     subscribeThreadRequests = [];
     replayEvents = [];
     replayRequestCursors = [];
+    getShellSnapshotRequestCount = 0;
+    getThreadDetailSnapshotRequestCount = 0;
+    getThreadDetailSnapshotRequests.length = 0;
+    delayNextThreadDetailSnapshotResponse = false;
+    pendingThreadDetailSnapshotResponse = null;
+    resetThreadDetailResumeCursorsForTests();
   });
 
   afterEach(() => {
-    resetWsNativeApiForTest();
+    vi.useRealTimers();
     document.body.innerHTML = "";
+  });
+
+  it("surfaces exhausted shell overflow and retries only the shell subscription", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousShell = subscribeShellRequestCount;
+      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const listener of shellStreamFailureListeners)
+          listener({
+            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+            error: new Error("Stream overflow retry budget exhausted"),
+          });
+      }
+      await vi.waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+            (element) => element.textContent === "Workspace updates paused",
+          ),
+        ).toHaveLength(1),
+      );
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("dismisses workspace overflow after a reconnected shell snapshot", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousShell = subscribeShellRequestCount;
+      for (const listener of shellStreamFailureListeners)
+        listener({
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("Stream overflow retry budget exhausted"),
+        });
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .toBeVisible();
+      sendServerWelcomePush();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+      await expect
+        .element(page.getByText("Workspace updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("resumes exhausted thread overflow without a detail snapshot", async () => {
+    const mounted = await mountApp();
+    try {
+      const previousSnapshots = getThreadDetailSnapshotRequestCount;
+      const previousShell = subscribeShellRequestCount;
+      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("Stream overflow retry budget exhausted"),
+        });
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+      expect(buildThreadSubscribeInput(THREAD_ID)).toEqual({
+        threadId: THREAD_ID,
+        afterSequence: 1,
+        batchReplay: true,
+        messageWindow: { limit: 100 },
+      });
+      expect(subscribeShellRequestCount).toBe(previousShell);
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+      await expect.element(page.getByText("Thread updates paused", { exact: true })).toBeVisible();
+      delayNextThreadSnapshot = true; // A cursor resume delivers only subsequent events.
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() =>
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe((previousThread ?? 0) + 1),
+      );
+      expect(subscribeShellRequestCount).toBe(previousShell);
+      sendThreadEventPush(resumedThreadEvent());
+      await vi.waitFor(() =>
+        expect(
+          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+            (message) => message.text === "Resumed from the applied cursor",
+          ),
+        ).toBe(true),
+      );
+      expect(getThreadDetailSnapshotRequestCount).toBe(previousSnapshots);
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("deduplicates overflow notices and scopes them to their thread", async () => {
+    fixture.snapshot = {
+      ...fixture.snapshot,
+      threads: [
+        ...fixture.snapshot.threads,
+        { ...fixture.snapshot.threads[0]!, id: OTHER_THREAD_ID, title: "Other thread" },
+      ],
+    };
+    const mounted = await mountApp();
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const listener of threadSnapshotFailureListeners)
+          listener({
+            threadId: THREAD_ID,
+            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+            error: new Error("overflow exhausted"),
+          });
+      }
+      await vi.waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+            (element) => element.textContent === "Thread updates paused",
+          ),
+        ).toHaveLength(1),
+      );
+      await expect.element(page.getByText(/The update stream for.*Root test thread/)).toBeVisible();
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
+      await vi.waitFor(() =>
+        expect(threadStreamRequestIdByThreadId.has(OTHER_THREAD_ID)).toBe(true),
+      );
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("clears an exhausted failure when a reconnected cursor stream applies an event", async () => {
+    const mounted = await mountApp();
+    try {
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("overflow exhausted"),
+        });
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+      const previous = subscribeThreadRequestCountById.get(THREAD_ID) ?? 0;
+      delayNextThreadSnapshot = true;
+      sendServerWelcomePush();
+      await vi.waitFor(() =>
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previous + 1),
+      );
+      sendThreadEventPush(resumedThreadEvent());
+      await vi.waitFor(() =>
+        expect(
+          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+            (message) => message.text === "Resumed from the applied cursor",
+          ),
+        ).toBe(true),
+      );
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).not.toBe("failed");
+      await expect
+        .element(page.getByText("Thread updates paused", { exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each(["thread", "shell"])(
+    "surfaces one %s retry rejection even while the paused notice exits",
+    async (scope) => {
+      const mounted = await mountApp();
+      const api = createWsNativeApi();
+      const subscribe = vi
+        .spyOn(api.orchestration, scope === "thread" ? "subscribeThread" : "subscribeShell")
+        .mockRejectedValue(new Error("Server is still unavailable"));
+      const title =
+        scope === "thread"
+          ? "Unable to resume thread updates"
+          : "Unable to resume workspace updates";
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (scope === "thread") {
+            for (const listener of threadSnapshotFailureListeners)
+              listener({
+                threadId: THREAD_ID,
+                code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+                error: new Error("overflow exhausted"),
+              });
+          } else {
+            for (const listener of shellStreamFailureListeners)
+              listener({
+                code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+                error: new Error("overflow exhausted"),
+              });
+          }
+          await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+          await expect.element(page.getByText(title, { exact: true })).toBeVisible();
+          await vi.waitFor(() =>
+            expect(
+              [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+                (element) => element.textContent === title,
+              ),
+            ).toHaveLength(1),
+          );
+        }
+      } finally {
+        subscribe.mockRestore();
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("ignores a retry rejection after the thread consumer is disposed", async () => {
+    const mounted = await mountApp();
+    let rejectRetry: (error: Error) => void = () => undefined;
+    const retry = new Promise<void>((_resolve, reject) => {
+      rejectRetry = reject;
+    });
+    const api = createWsNativeApi();
+    const subscribe = vi.spyOn(api.orchestration, "subscribeThread").mockReturnValueOnce(retry);
+    try {
+      for (const listener of threadSnapshotFailureListeners)
+        listener({
+          threadId: THREAD_ID,
+          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+          error: new Error("overflow exhausted"),
+        });
+      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalled());
+      await mounted.cleanup();
+      const priorSync = useStore.getState().threadDetailSyncById?.[THREAD_ID];
+      rejectRetry(new Error("Connection stopped after leaving the thread"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe(priorSync);
+    } finally {
+      subscribe.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
+  it.each(["archive", "thread removal", "project removal"])(
+    "prunes terminal runtimes after live %s",
+    async (operation) => {
+      const mounted = await mountApp();
+      const cleanup = vi.fn();
+      const unregister = registerTerminalRuntimeCleanup(cleanup);
+      try {
+        const shell = createShellSnapshotFromReadModel(fixture.snapshot);
+        sendShellEventPush(
+          operation === "archive"
+            ? {
+                kind: "thread-upserted",
+                sequence: 2,
+                thread: { ...shell.threads[0]!, archivedAt: NOW_ISO },
+              }
+            : operation === "thread removal"
+              ? { kind: "thread-removed", sequence: 2, threadId: THREAD_ID }
+              : { kind: "project-removed", sequence: 2, projectId: PROJECT_ID },
+        );
+        await vi.waitFor(() => {
+          expect(cleanup).toHaveBeenCalled();
+          const scopes = cleanup.mock.calls.at(-1)?.[0] as ReadonlySet<string>;
+          expect(scopes.has(THREAD_ID)).toBe(false);
+          expect(scopes.has(`dock-terminal:${THREAD_ID}`)).toBe(false);
+        });
+      } finally {
+        unregister();
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("retains terminal runtimes when a buffered unarchive is newer than the reconnect snapshot", async () => {
+    const mounted = await mountApp();
+    const cleanup = vi.fn();
+    const unregister = registerTerminalRuntimeCleanup(cleanup);
+    try {
+      suppressNextShellSnapshot = true;
+      sendServerWelcomePush();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(2));
+      cleanup.mockClear();
+      const shell = createShellSnapshotFromReadModel(fixture.snapshot);
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 3,
+        thread: { ...shell.threads[0]!, archivedAt: null },
+      });
+      sendShellEventPush({
+        kind: "snapshot",
+        snapshot: {
+          ...shell,
+          snapshotSequence: 2,
+          threads: [{ ...shell.threads[0]!, archivedAt: NOW_ISO }],
+        },
+      });
+      await vi.waitFor(() => expect(cleanup).toHaveBeenCalled());
+      for (const [scopes] of cleanup.mock.calls as [ReadonlySet<string>][]) {
+        expect(scopes.has(THREAD_ID)).toBe(true);
+        expect(scopes.has(`dock-terminal:${THREAD_ID}`)).toBe(true);
+      }
+    } finally {
+      unregister();
+      await mounted.cleanup();
+    }
+  });
+
+  it("coalesces the replayed welcome with the initial subscription bootstrap", async () => {
+    const mounted = await mountApp();
+
+    try {
+      expect(subscribeShellRequestCount).toBe(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not query a fallback after a streamed shell snapshot with no spaces", async () => {
+    const mounted = await mountApp();
+
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      expect(useStore.getState().spaces).toEqual([]);
+      expect(getShellSnapshotRequestCount).toBe(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("applies the shell fallback when a reconnect snapshot does not arrive", async () => {
+    const mounted = await mountApp();
+
+    try {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: fixture.snapshot.threads.map((thread) => ({
+          ...thread,
+          title: "Updated after reconnect",
+        })),
+      };
+      suppressNextShellSnapshot = true;
+      sendServerWelcomePush();
+
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(2));
+      await vi.waitFor(() => expect(getShellSnapshotRequestCount).toBe(1), {
+        timeout: 3_000,
+      });
+      await vi.waitFor(() =>
+        expect(getThreadFromState(useStore.getState(), THREAD_ID)?.title).toBe(
+          "Updated after reconnect",
+        ),
+      );
+    } finally {
+      await mounted.cleanup();
+    }
   });
 
   it("drops duplicate thread events after the thread snapshot sequence advances", async () => {
@@ -479,7 +1076,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("hello");
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       sendThreadEventPush(firstAssistantChunk);
@@ -517,7 +1114,7 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(message?.text).toBe("hello world");
           expect(message?.streaming).toBe(false);
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -650,105 +1247,930 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
-  it("polls a subscribed running thread to recover missed detail events", async () => {
-    const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
+  it("hydrates a pending approval for an orchestrator thread with no session detail", async () => {
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        creationSource: "synara_mcp",
+        sourceThreadId: OTHER_THREAD_ID,
+        messages: [],
+        session: null,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const requestId = ApprovalRequestId.makeUnsafe("approval-orchestrator-thread");
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 2,
+          threads: fixture.snapshot.threads.map((thread) =>
+            withApprovalRequest(thread, { requestId }),
+          ),
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      };
+
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(document.body.textContent).toContain("Approve this command?");
+          expect(
+            getThreadFromState(useStore.getState(), THREAD_ID)?.pendingInteractions?.[0]?.requestId,
+          ).toBe(requestId);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  });
+
+  it("queues a pending approval repair behind an older projection read", async () => {
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        creationSource: "synara_mcp",
+        sourceThreadId: OTHER_THREAD_ID,
+        messages: [],
+        latestTurn: null,
+        session: {
+          threadId: THREAD_ID,
+          status: "starting",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: NOW_ISO,
+        },
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      delayNextThreadDetailSnapshotResponse = true;
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      const delayedResponse = pendingThreadDetailSnapshotResponse!;
+      const staleThread = {
+        ...fixture.snapshot.threads[0]!,
+        session: null,
+        hasPendingApprovals: false,
+      };
+      pendingThreadDetailSnapshotResponse = {
+        ...delayedResponse,
+        result: {
+          snapshotSequence: 1,
+          thread: staleThread,
+        },
+      };
+
+      const requestId = ApprovalRequestId.makeUnsafe("approval-after-stale-projection");
+      const currentThread = withApprovalRequest(staleThread, { requestId });
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 2,
+          threads: [currentThread],
+          updatedAt: currentThread.updatedAt,
+        },
+      };
+      const requestCountBeforeApproval = getThreadDetailSnapshotRequestCount;
+
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+      });
+      await vi.waitFor(() =>
+        expect(getThreadFromState(useStore.getState(), THREAD_ID)?.hasPendingApprovals).toBe(true),
+      );
+
+      sendPendingThreadDetailSnapshotResponse();
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(requestCountBeforeApproval);
+          expect(document.body.textContent).toContain("Approve this command?");
+          expect(
+            getThreadFromState(useStore.getState(), THREAD_ID)?.pendingInteractions?.[0]?.requestId,
+          ).toBe(requestId);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("does not poll a hydrated non-actionable approval", async () => {
+    const baseSnapshot = createSnapshot({
+      creationSource: "synara_mcp",
+      sourceThreadId: OTHER_THREAD_ID,
+      messages: [],
+      session: null,
+    });
+    fixture = {
+      ...fixture,
+      snapshot: {
+        ...baseSnapshot,
+        threads: [
+          withApprovalRequest(baseSnapshot.threads[0]!, {
+            requestId: ApprovalRequestId.makeUnsafe("approval-response-uncertain"),
+            status: "uncertain",
+          }),
+        ],
+      },
+    };
+    // Advance the polling clock while browser rendering and transport timers stay real.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const mounted = await mountApp();
+
+    try {
+      await vi.waitFor(() =>
+        expect(
+          getThreadFromState(useStore.getState(), THREAD_ID)?.pendingInteractions?.[0],
+        ).toMatchObject({ requestId: "approval-response-uncertain", status: "uncertain" }),
+      );
+      // Cover the reconciliation deadline plus the polling interval's phase.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getThreadDetailSnapshotRequestCount).toBe(0);
+      expect(document.body.textContent).not.toContain("Approve this command?");
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it.each(["healthy", "exhausted"])(
+    "polls a running thread with a %s stream without hiding an exhausted stream failure",
+    async (streamState) => {
+      const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
+      fixture = {
+        ...fixture,
+        snapshot: createSnapshot({
+          latestTurn: {
+            turnId: runningTurnId,
+            state: "running",
+            requestedAt: "2026-03-04T12:00:04.000Z",
+            startedAt: "2026-03-04T12:00:04.500Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: runningTurnId,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:04.500Z",
+          },
+          updatedAt: "2026-03-04T12:00:04.500Z",
+        }),
+      };
+
+      const assistantMessage = {
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-catchup-assistant"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: MessageId.makeUnsafe("msg-catchup-assistant"),
+          role: "assistant",
+          text: "Recovered by periodic catch-up",
+          turnId: runningTurnId,
+          source: "native",
+          streaming: false,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const sessionReady = {
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-catchup-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:06.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:06.000Z",
+          },
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+      const mounted = await mountApp();
+
+      try {
+        if (streamState === "exhausted") {
+          for (const listener of threadSnapshotFailureListeners)
+            listener({
+              threadId: THREAD_ID,
+              code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+              error: new Error("overflow exhausted"),
+            });
+          expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+        }
+        replayEvents = [assistantMessage, sessionReady];
+        await vi.waitFor(
+          () => {
+            const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+            expect(
+              thread?.messages.some(
+                (message) =>
+                  message.id === MessageId.makeUnsafe("msg-catchup-assistant") &&
+                  message.text === "Recovered by periodic catch-up" &&
+                  message.streaming === false,
+              ),
+            ).toBe(true);
+            expect(thread?.session?.orchestrationStatus).toBe("ready");
+          },
+          { timeout: 5_000, interval: 16 },
+        );
+        expect(replayRequestCursors).toContain(1);
+        if (streamState === "exhausted") {
+          expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+          await expect
+            .element(page.getByText("Thread updates paused", { exact: true }))
+            .toBeVisible();
+          await expect
+            .element(page.getByRole("button", { name: "Retry updates", exact: true }))
+            .toBeVisible();
+        }
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("limits skipped projection reconciles to 72 seconds since the last snapshot", async () => {
+    const turnId = TurnId.makeUnsafe("turn-reconcile-deadline");
     fixture = {
       ...fixture,
       snapshot: createSnapshot({
         latestTurn: {
-          turnId: runningTurnId,
+          turnId,
           state: "running",
-          requestedAt: "2026-03-04T12:00:04.000Z",
-          startedAt: "2026-03-04T12:00:04.500Z",
+          requestedAt: NOW_ISO,
+          startedAt: NOW_ISO,
           completedAt: null,
           assistantMessageId: null,
         },
         session: {
           threadId: THREAD_ID,
           status: "running",
-          providerName: "opencode",
+          providerName: "codex",
           runtimeMode: "full-access",
-          activeTurnId: runningTurnId,
+          activeTurnId: turnId,
           lastError: null,
-          updatedAt: "2026-03-04T12:00:04.500Z",
+          updatedAt: NOW_ISO,
         },
-        updatedAt: "2026-03-04T12:00:04.500Z",
       }),
     };
-
-    const assistantMessage = {
-      sequence: 2,
-      eventId: EventId.makeUnsafe("event-catchup-assistant"),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      occurredAt: "2026-03-04T12:00:05.000Z",
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "thread.message-sent",
-      payload: {
-        threadId: THREAD_ID,
-        messageId: MessageId.makeUnsafe("msg-catchup-assistant"),
-        role: "assistant",
-        text: "Recovered by periodic catch-up",
-        turnId: runningTurnId,
-        source: "native",
-        streaming: false,
-        createdAt: "2026-03-04T12:00:05.000Z",
-        updatedAt: "2026-03-04T12:00:05.000Z",
-      },
-    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-    const sessionReady = {
-      sequence: 3,
-      eventId: EventId.makeUnsafe("event-catchup-session-ready"),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      occurredAt: "2026-03-04T12:00:06.000Z",
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "thread.session-set",
-      payload: {
-        threadId: THREAD_ID,
-        session: {
-          threadId: THREAD_ID,
-          status: "ready",
-          providerName: "opencode",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-03-04T12:00:06.000Z",
-        },
-      },
-    } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
-    replayEvents = [assistantMessage, sessionReady];
-
     const mounted = await mountApp();
+    // Advance only the scheduling clock; leave transport and browser timers real.
+    let now = Date.now() + 6_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
 
     try {
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          expect(
-            thread?.messages.some(
-              (message) =>
-                message.id === MessageId.makeUnsafe("msg-catchup-assistant") &&
-                message.text === "Recovered by periodic catch-up" &&
-                message.streaming === false,
-            ),
-          ).toBe(true);
-          expect(thread?.session?.orchestrationStatus).toBe("ready");
-        },
-        { timeout: 5_000, interval: 16 },
-      );
-      expect(replayRequestCursors).toContain(1);
+      await vi.waitFor(() => expect(getThreadDetailSnapshotRequestCount).toBe(1), {
+        timeout: 4_000,
+      });
+      // Let the snapshot continuation record its successful reconciliation time.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      const lastSnapshotAt = now;
+
+      for (const elapsedMs of [9_000, 27_000, 63_000]) {
+        const previousReplayCount = replayRequestCursors.length;
+        now = lastSnapshotAt + elapsedMs;
+        await vi.waitFor(
+          () => expect(replayRequestCursors.length).toBeGreaterThan(previousReplayCount),
+          { timeout: 4_000 },
+        );
+        expect(getThreadDetailSnapshotRequestCount).toBe(1);
+      }
+
+      // Each replay was empty, but skipped reconciles must not move the real-fetch
+      // deadline to 135 seconds by adding their backoff delays together.
+      now = lastSnapshotAt + 72_000;
+      await vi.waitFor(() => expect(getThreadDetailSnapshotRequestCount).toBe(2), {
+        timeout: 4_000,
+      });
     } finally {
+      clock.mockRestore();
       fixture = buildFixture();
       await mounted.cleanup();
     }
   });
+
+  it("does not poll a converged terminal thread projection", async () => {
+    // Advance the polling clock while browser rendering and transport timers stay real.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const mounted = await mountApp();
+
+    try {
+      // Cover the reconciliation deadline plus the polling interval's phase.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getThreadDetailSnapshotRequestCount).toBe(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("runs one terminal reconciliation when the final assistant event is absent", async () => {
+    const turnId = TurnId.makeUnsafe("turn-terminal-fence");
+    const finalMessageId = MessageId.makeUnsafe("msg-terminal-fence-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 3,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Recovered after the terminal fence.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-terminal-fence-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.messages.some((message) => message.id === finalMessageId)).toBe(false);
+      });
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Recovered after the terminal fence.",
+          );
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 120_000);
+
+  it("keeps the terminal fence until a post-settle snapshot includes the assistant reply", async () => {
+    // Mirrors #548: session-set lands (and a premature detail snapshot is taken)
+    // before buffered assistant finals are projected. Clearing the fence on that
+    // first snapshot left the UI spinning until a full reload.
+    const turnId = TurnId.makeUnsafe("turn-fence-premature-snapshot");
+    const finalMessageId = MessageId.makeUnsafe("msg-fence-premature-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    const completedAt = "2026-03-04T12:00:09.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      // Premature authoritative projection: terminal at the session-set sequence,
+      // with an assistantMessageId that has not been projected into messages yet.
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 2,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [...currentThread.messages],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      delayNextThreadDetailSnapshotResponse = true;
+
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-fence-premature-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.messages.some((message) => message.id === finalMessageId)).toBe(false);
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      sendPendingThreadDetailSnapshotResponse();
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+      expect(
+        getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+          (message) => message.id === finalMessageId,
+        ),
+      ).toBe(false);
+
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 3,
+          threads: [
+            {
+              ...fixture.snapshot.threads[0]!,
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Recovered without a reload.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+            },
+          ],
+        },
+      };
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(1);
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Recovered without a reload.",
+          );
+        },
+        { timeout: 15_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 120_000);
+
+  it("reconciles a missed completion from the authoritative thread projection", async () => {
+    const turnId = TurnId.makeUnsafe("turn-missed-completion");
+    const progressMessageId = MessageId.makeUnsafe("msg-missed-completion-progress");
+    const finalMessageId = MessageId.makeUnsafe("msg-missed-completion-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+
+    const mounted = await mountApp();
+
+    try {
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-missed-completion-progress"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: progressMessageId,
+          role: "assistant",
+          text: "Cloning repository…",
+          turnId,
+          source: "native",
+          streaming: true,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.messages.find((message) => message.id === progressMessageId)?.text).toBe(
+          "Cloning repository…",
+        );
+      });
+
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 4,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: progressMessageId,
+                  role: "assistant",
+                  text: "Cloning repository… done.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: "2026-03-04T12:00:05.000Z",
+                  updatedAt: "2026-03-04T12:00:08.000Z",
+                },
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Repository cloned successfully.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      // Deliver only the terminal session transition, not the final message.
+      // The reducer now considers the session and turn terminal, but the stale
+      // streaming message must keep projection repair eligible until the
+      // authoritative detail snapshot closes it.
+      sendThreadEventPush({
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-missed-completion-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+        expect(
+          thread?.messages.find((message) => message.id === progressMessageId)?.streaming,
+        ).toBe(true);
+      });
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(thread?.latestTurn?.state).toBe("completed");
+          expect(thread?.session?.orchestrationStatus).toBe("ready");
+          expect(thread?.session?.activeTurnId).toBeUndefined();
+          expect(
+            thread?.messages.filter((message) => message.id === progressMessageId),
+          ).toHaveLength(1);
+          expect(
+            thread?.messages.find((message) => message.id === progressMessageId)?.streaming,
+          ).toBe(false);
+          expect(thread?.messages.filter((message) => message.id === finalMessageId)).toHaveLength(
+            1,
+          );
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Repository cloned successfully.",
+          );
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("does not apply a delayed projection snapshot behind the live thread cursor", async () => {
+    const turnId = TurnId.makeUnsafe("turn-delayed-projection");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+
+    const mounted = await mountApp();
+
+    try {
+      delayNextThreadDetailSnapshotResponse = true;
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-delayed-projection-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+      });
+
+      sendPendingThreadDetailSnapshotResponse();
+      // Let the RPC continuation run before asserting that the older snapshot
+      // did not roll back the just-applied stream event.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+
+      expect(pendingThreadDetailSnapshotResponse).toBeNull();
+      const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+      expect(thread?.latestTurn?.state).toBe("completed");
+      expect(thread?.latestTurn?.completedAt).toBe(completedAt);
+      expect(thread?.session?.orchestrationStatus).toBe("ready");
+      expect(thread?.session?.activeTurnId).toBeUndefined();
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
 
   it("flushes only the first assistant chunk immediately for a message", async () => {
     const mounted = await mountApp();
@@ -829,17 +2251,27 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
-  it("recovers buffered thread events by re-requesting the missing thread snapshot", async () => {
-    delayNextThreadSnapshot = true;
+  it("applies a batched cursor-resume replay in a single store update", async () => {
     const mounted = await mountApp();
+    const messageId = MessageId.makeUnsafe("msg-assistant-replay");
+    const observedMessageStates: Array<{ text: string; streaming: boolean }> = [];
+    const unsubscribe = useStore.subscribe((state) => {
+      const message = getThreadFromState(state, THREAD_ID)?.messages.find(
+        (entry) => entry.id === messageId,
+      );
+      const last = observedMessageStates.at(-1);
+      if (message && (last?.text !== message.text || last.streaming !== message.streaming)) {
+        observedMessageStates.push({ text: message.text, streaming: message.streaming });
+      }
+    });
 
     try {
-      const bufferedEvent = {
+      const streamingChunk = {
         sequence: 2,
-        eventId: EventId.makeUnsafe("event-buffered-message"),
+        eventId: EventId.makeUnsafe("event-message-replay-1"),
         aggregateKind: "thread",
         aggregateId: THREAD_ID,
-        occurredAt: "2026-03-04T12:00:07.000Z",
+        occurredAt: "2026-03-04T12:00:05.000Z",
         commandId: null,
         causationEventId: null,
         correlationId: null,
@@ -847,41 +2279,289 @@ describe("EventRouter scoped orchestration sync", () => {
         type: "thread.message-sent",
         payload: {
           threadId: THREAD_ID,
-          messageId: MessageId.makeUnsafe("msg-buffered-assistant"),
+          messageId,
           role: "assistant",
-          text: "buffered reply",
-          turnId: TurnId.makeUnsafe("turn-2"),
+          text: "Working",
+          turnId: TurnId.makeUnsafe("turn-replay"),
           source: "native",
+          streaming: true,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const completedMessage = {
+        ...streamingChunk,
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-message-replay-2"),
+        occurredAt: "2026-03-04T12:00:09.000Z",
+        payload: {
+          ...streamingChunk.payload,
+          text: "Working done.",
           streaming: false,
-          createdAt: "2026-03-04T12:00:07.000Z",
-          updatedAt: "2026-03-04T12:00:07.000Z",
+          updatedAt: "2026-03-04T12:00:09.000Z",
         },
       } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
+      // Per-event delivery would flush the first streaming chunk immediately
+      // and render the intermediate state; the batch must land all at once.
+      sendThreadReplayPush(THREAD_ID, [streamingChunk, completedMessage]);
+
+      await vi.waitFor(
+        () => {
+          expect(observedMessageStates.at(-1)).toEqual({
+            text: "Working done.",
+            streaming: false,
+          });
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      expect(observedMessageStates).toEqual([{ text: "Working done.", streaming: false }]);
+    } finally {
+      unsubscribe();
+      await mounted.cleanup();
+    }
+  });
+
+  it("recovers buffered thread events with a direct snapshot read", async () => {
+    const recoveryThreadId = ThreadId.makeUnsafe("thread-buffered-recovery");
+    const bufferedEvent = {
+      sequence: 3,
+      eventId: EventId.makeUnsafe("event-buffered-message"),
+      aggregateKind: "thread",
+      aggregateId: recoveryThreadId,
+      occurredAt: "2026-03-04T12:00:07.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: recoveryThreadId,
+        messageId: MessageId.makeUnsafe("msg-buffered-assistant"),
+        role: "assistant",
+        text: "buffered reply",
+        turnId: TurnId.makeUnsafe("turn-2"),
+        source: "native",
+        streaming: false,
+        createdAt: "2026-03-04T12:00:07.000Z",
+        updatedAt: "2026-03-04T12:00:07.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [recoveryThreadId]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          isTemporary: false,
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: recoveryThreadId,
+      },
+    });
+    const mounted = await mountApp({ routeThreadId: recoveryThreadId, waitForThreadId: null });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      const subscribeCountBeforeBufferedEvent =
+        subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
+      const snapshotReadsBeforeBufferedEvent = getThreadDetailSnapshotRequestCount;
       sendThreadEventPush(bufferedEvent);
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            snapshotReadsBeforeBufferedEvent,
+          );
+          expect(getThreadDetailSnapshotRequests.at(-1)).toEqual({
+            _tag: ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot,
+            threadId: recoveryThreadId,
+            messageWindow: { limit: 100 },
+          });
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      // A buffered event requests the projection without cancelling its stream.
+      // No projection exists yet, so it cannot establish an applied cursor.
+      expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+        subscribeCountBeforeBufferedEvent,
+      );
+      expect(buildThreadSubscribeInput(recoveryThreadId)).toEqual({
+        threadId: recoveryThreadId,
+        messageWindow: { limit: 100 },
+      });
+      const subscribeCountBeforeMaterialization =
+        subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
+      const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
+
+      const baseThread = fixture.snapshot.threads[0]!;
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: [
+          ...fixture.snapshot.threads,
+          {
+            ...baseThread,
+            id: recoveryThreadId,
+            title: "Buffered recovery thread",
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            checkpoints: [],
+            latestTurn: null,
+            updatedAt: "2026-03-04T12:00:08.000Z",
+          } satisfies OrchestrationReadModel["threads"][number],
+        ],
+      };
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
+          (thread) => thread.id === recoveryThreadId,
+        )!,
+      });
 
       let thread;
       await vi.waitFor(
         () => {
-          thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            detailSnapshotReadsBeforeMaterialization,
+          );
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+            subscribeCountBeforeMaterialization,
+          );
+          thread = getThreadFromState(useStore.getState(), recoveryThreadId);
           const message = thread?.messages.find(
             (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
           );
           expect(message?.text).toBe("buffered reply");
+          expect(useStore.getState().threadDetailAppliedSequenceById?.[recoveryThreadId]).toBe(3);
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       sendThreadEventPush(bufferedEvent);
 
       await new Promise((resolve) => window.setTimeout(resolve, 120));
 
-      thread = getThreadFromState(useStore.getState(), THREAD_ID);
+      thread = getThreadFromState(useStore.getState(), recoveryThreadId);
       expect(
         thread?.messages.filter(
           (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
         ),
       ).toHaveLength(1);
+      expect(buildThreadSubscribeInput(recoveryThreadId)).toEqual({
+        threadId: recoveryThreadId,
+        afterSequence: 3,
+        batchReplay: true,
+        messageWindow: { limit: 100 },
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("recovers a promoted draft when both live promotion paths are missed", async () => {
+    const draftThreadId = ThreadId.makeUnsafe("thread-draft-missed-live-promotion");
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [draftThreadId]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          isTemporary: false,
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: draftThreadId,
+      },
+    });
+    const mounted = await mountApp({ routeThreadId: draftThreadId, waitForThreadId: null });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      const subscribeCountBeforeMaterialization =
+        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+      const detailReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
+      const baseThread = fixture.snapshot.threads[0]!;
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: [
+          ...fixture.snapshot.threads,
+          {
+            ...baseThread,
+            id: draftThreadId,
+            title: "Recovered missed promotion",
+            messages: [
+              {
+                id: MessageId.makeUnsafe("msg-draft-missed-live-promotion"),
+                role: "assistant",
+                text: "recovered without a reload",
+                turnId: TurnId.makeUnsafe("turn-draft-missed-live-promotion"),
+                streaming: false,
+                source: "native",
+                createdAt: "2026-03-04T12:00:09.000Z",
+                updatedAt: "2026-03-04T12:00:09.000Z",
+              },
+            ],
+            activities: [],
+            proposedPlans: [],
+            checkpoints: [],
+            latestTurn: {
+              turnId: TurnId.makeUnsafe("turn-draft-missed-live-promotion"),
+              state: "completed",
+              requestedAt: "2026-03-04T12:00:08.000Z",
+              startedAt: "2026-03-04T12:00:08.100Z",
+              completedAt: "2026-03-04T12:00:09.000Z",
+              assistantMessageId: MessageId.makeUnsafe("msg-draft-missed-live-promotion"),
+            },
+            updatedAt: "2026-03-04T12:00:09.000Z",
+          } satisfies OrchestrationReadModel["threads"][number],
+        ],
+      };
+
+      // Deliberately do not push either a shell upsert or a thread stream item.
+      // The periodic direct projection read must promote the visible draft.
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            detailReadsBeforeMaterialization,
+          );
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountBeforeMaterialization,
+          );
+          expect(
+            getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text,
+          ).toBe("recovered without a reload");
+          expect(
+            useComposerDraftStore.getState().draftThreadsByThreadId[draftThreadId],
+          ).toBeUndefined();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }
@@ -924,6 +2604,9 @@ describe("EventRouter scoped orchestration sync", () => {
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforeMaterialization =
+        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+      const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
 
       const baseThread = fixture.snapshot.threads[0]!;
       fixture.snapshot = {
@@ -979,15 +2662,123 @@ describe("EventRouter scoped orchestration sync", () => {
 
       await vi.waitFor(
         () => {
-          expect(useStore.getState().threads.some((thread) => thread.id === draftThreadId)).toBe(
-            true,
+          expect(useStore.getState().threadIds?.includes(draftThreadId)).toBe(true);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            detailSnapshotReadsBeforeMaterialization,
           );
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
-          expect(
-            subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBeGreaterThanOrEqual(2);
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountBeforeMaterialization,
+          );
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      const subscribeCountAfterMaterialization =
+        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+      for (const listener of threadSnapshotFailureListeners) {
+        listener({
+          threadId: draftThreadId,
+          code: "THREAD_SNAPSHOT_NOT_FOUND",
+          error: new Error("The original draft stream exhausted after materialization"),
+        });
+      }
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountAfterMaterialization + 1,
+          );
+          expect(useStore.getState().threadDetailSyncById?.[draftThreadId]).toBe("synced");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hydrates a promoted draft when it first appears in a shell snapshot", async () => {
+    const draftThreadId = ThreadId.makeUnsafe("thread-draft-promoted-by-snapshot");
+    delayNextThreadSnapshot = true;
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [draftThreadId]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          isTemporary: false,
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: draftThreadId,
+      },
+    });
+    const mounted = await mountApp({ routeThreadId: draftThreadId, waitForThreadId: null });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      const subscribeCountBeforeMaterialization =
+        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+      const detailReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
+      const baseThread = fixture.snapshot.threads[0]!;
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: [
+          ...fixture.snapshot.threads,
+          {
+            ...baseThread,
+            id: draftThreadId,
+            title: "Snapshot-promoted thread",
+            messages: [
+              {
+                id: MessageId.makeUnsafe("msg-snapshot-promoted"),
+                role: "assistant",
+                text: "hydrated from promoted snapshot",
+                turnId: TurnId.makeUnsafe("turn-snapshot-promoted"),
+                streaming: true,
+                source: "native",
+                createdAt: "2026-03-04T12:00:09.000Z",
+                updatedAt: "2026-03-04T12:00:09.000Z",
+              },
+            ],
+            activities: [],
+            proposedPlans: [],
+            checkpoints: [],
+            updatedAt: "2026-03-04T12:00:09.000Z",
+          } satisfies OrchestrationReadModel["threads"][number],
+        ],
+      };
+
+      sendShellEventPush({
+        kind: "snapshot",
+        snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            detailReadsBeforeMaterialization,
+          );
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountBeforeMaterialization,
+          );
+          expect(useStore.getState().threadDetailSyncById?.[draftThreadId]).toBe("synced");
+          expect(
+            getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text,
+          ).toBe("hydrated from promoted snapshot");
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -1076,26 +2867,325 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
-  it("does not resubscribe shell sync when workspace pages change", async () => {
-    const mounted = await mountApp();
+  describe("snapshot ordering against queued and buffered events", () => {
+    const orderingTurnId = TurnId.makeUnsafe("turn-snapshot-ordering");
+    const orderingMessageId = MessageId.makeUnsafe("msg-snapshot-ordering");
+    const orderingStartedAt = "2026-03-04T12:00:04.000Z";
 
-    try {
-      let initialSubscribeShellCount = 0;
-      await vi.waitFor(
-        () => {
-          expect(subscribeShellRequestCount).toBeGreaterThan(0);
-          initialSubscribeShellCount = subscribeShellRequestCount;
+    function orderingDelta(
+      sequence: number,
+      text: string,
+    ): Extract<OrchestrationEvent, { type: "thread.message-sent" }> {
+      const at = new Date(Date.parse(orderingStartedAt) + sequence * 10).toISOString();
+      return {
+        sequence,
+        eventId: EventId.makeUnsafe(`event-snapshot-ordering-${sequence}`),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: at,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: orderingMessageId,
+          role: "assistant",
+          text,
+          turnId: orderingTurnId,
+          source: "native",
+          streaming: true,
+          createdAt: orderingStartedAt,
+          updatedAt: at,
         },
-        { timeout: 4_000, interval: 16 },
-      );
-
-      useWorkspaceStore.getState().createWorkspace();
-
-      await new Promise((resolve) => window.setTimeout(resolve, 120));
-
-      expect(subscribeShellRequestCount).toBe(initialSubscribeShellCount);
-    } finally {
-      await mounted.cleanup();
+      };
     }
+
+    function runningOrderingThread(): Partial<OrchestrationThread> {
+      return {
+        latestTurn: {
+          turnId: orderingTurnId,
+          state: "running",
+          requestedAt: orderingStartedAt,
+          startedAt: orderingStartedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: orderingTurnId,
+          lastError: null,
+          updatedAt: orderingStartedAt,
+        },
+        updatedAt: orderingStartedAt,
+      };
+    }
+
+    function orderingThreadWithAssistantText(text: string): OrchestrationThread {
+      const base = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      return {
+        ...base,
+        messages: [
+          ...base.messages,
+          {
+            id: orderingMessageId,
+            role: "assistant",
+            text,
+            turnId: orderingTurnId,
+            streaming: true,
+            source: "native",
+            createdAt: orderingStartedAt,
+            updatedAt: orderingStartedAt,
+          },
+        ],
+        latestTurn: {
+          turnId: orderingTurnId,
+          state: "running",
+          requestedAt: orderingStartedAt,
+          startedAt: orderingStartedAt,
+          completedAt: null,
+          assistantMessageId: orderingMessageId,
+        },
+      };
+    }
+
+    function orderingMessageText(): string | undefined {
+      return getThreadFromState(useStore.getState(), THREAD_ID)?.messages.find(
+        (message) => message.id === orderingMessageId,
+      )?.text;
+    }
+
+    async function holdNextProjectionRead(): Promise<void> {
+      delayNextThreadDetailSnapshotResponse = true;
+      await vi.waitFor(() => expect(pendingThreadDetailSnapshotResponse).not.toBeNull(), {
+        timeout: 15_000,
+        interval: 16,
+      });
+    }
+
+    // Queueing an event advances the resume cursor before the throttled flush
+    // applies it to the store.
+    async function waitForQueuedCursor(sequence: number): Promise<void> {
+      await vi.waitFor(
+        () =>
+          expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({ afterSequence: sequence }),
+        { timeout: 2_000, interval: 2 },
+      );
+    }
+
+    // A throttled flush that just ran makes the next queued event wait for most
+    // of the 100 ms flush window instead of flushing on the next task.
+    async function flushThrottledDelta(sequence: number, text: string, expectedText: string) {
+      sendThreadEventPush(orderingDelta(sequence, text));
+      await vi.waitFor(() => expect(orderingMessageText()).toBe(expectedText), {
+        timeout: 4_000,
+        interval: 2,
+      });
+    }
+
+    function releaseProjectionRead(snapshotSequence: number, thread: OrchestrationThread) {
+      const pending = pendingThreadDetailSnapshotResponse;
+      if (pending === null) {
+        throw new Error("No delayed thread-detail snapshot response is pending");
+      }
+      pendingThreadDetailSnapshotResponse = { ...pending, result: { snapshotSequence, thread } };
+      sendPendingThreadDetailSnapshotResponse();
+    }
+
+    it("does not re-apply queued assistant deltas that a projection snapshot already contains", async () => {
+      fixture = { ...fixture, snapshot: createSnapshot(runningOrderingThread()) };
+      const mounted = await mountApp();
+      try {
+        await holdNextProjectionRead();
+        // The first chunk of a message flushes immediately; later ones go
+        // through the 100 ms flush throttle.
+        sendThreadEventPush(orderingDelta(2, "Hello"));
+        await vi.waitFor(() => expect(orderingMessageText()).toBe("Hello"), {
+          timeout: 4_000,
+          interval: 16,
+        });
+        await flushThrottledDelta(3, " big", "Hello big");
+        // Queued behind the throttle: its cursor advanced before the store saw it.
+        sendThreadEventPush(orderingDelta(4, " world"));
+        await waitForQueuedCursor(4);
+        // The projection read committed after every delta, so it already
+        // contains them; the queued delta must not land on top of it again.
+        releaseProjectionRead(4, orderingThreadWithAssistantText("Hello big world"));
+
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        expect(orderingMessageText()).toBe("Hello big world");
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
+
+    it("does not let a queued running session regress a newer settled projection", async () => {
+      fixture = { ...fixture, snapshot: createSnapshot(runningOrderingThread()) };
+      const mounted = await mountApp();
+      try {
+        await holdNextProjectionRead();
+        const nextTurnId = TurnId.makeUnsafe("turn-snapshot-ordering-next");
+        const startedAt = "2026-03-04T12:00:06.000Z";
+        const completedAt = "2026-03-04T12:00:08.000Z";
+        sendThreadEventPush(orderingDelta(2, "Done."));
+        await flushThrottledDelta(3, " Next.", "Done. Next.");
+        sendThreadEventPush({
+          sequence: 4,
+          eventId: EventId.makeUnsafe("event-snapshot-ordering-running"),
+          aggregateKind: "thread",
+          aggregateId: THREAD_ID,
+          occurredAt: startedAt,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.session-set",
+          payload: {
+            threadId: THREAD_ID,
+            session: {
+              threadId: THREAD_ID,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: nextTurnId,
+              lastError: null,
+              updatedAt: startedAt,
+            },
+          },
+        });
+        await waitForQueuedCursor(4);
+        // The projection already settled that turn (sequence 5) when it was read.
+        releaseProjectionRead(5, {
+          ...getThreadDetailFromFixtureSnapshot(THREAD_ID),
+          latestTurn: {
+            turnId: nextTurnId,
+            state: "completed",
+            requestedAt: startedAt,
+            startedAt,
+            completedAt,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+          updatedAt: completedAt,
+        });
+
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+        expect(thread?.latestTurn?.turnId).toBe(nextTurnId);
+        expect(thread?.latestTurn?.state).toBe("completed");
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
+
+    it("ignores a thread-stream snapshot older than the applied cursor", async () => {
+      const mounted = await mountApp();
+      try {
+        sendThreadEventPush(orderingDelta(2, "Hello"));
+        await vi.waitFor(() => expect(orderingMessageText()).toBe("Hello"), {
+          timeout: 4_000,
+          interval: 16,
+        });
+
+        // A slower snapshot taken before event 2 must not move the cursor back,
+        // or a catch-up replay from it re-applies the already-consumed delta.
+        sendThreadSnapshotPush(THREAD_ID, 1);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+        expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({ afterSequence: 2 });
+
+        sendThreadEventPush(orderingDelta(2, "Hello"));
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        expect(orderingMessageText()).toBe("Hello");
+      } finally {
+        await mounted.cleanup();
+      }
+    }, 60_000);
+
+    it.each([1, 40])(
+      "rejects older snapshots after confirming cached resume seed %s",
+      async (cachedSequence) => {
+        // Cover both a current cache and an initial snapshot from a reset journal.
+        useStore
+          .getState()
+          .syncServerReadModel({ ...fixture.snapshot, snapshotSequence: cachedSequence });
+        setThreadDetailResumeCursor(THREAD_ID, cachedSequence);
+        const mounted = await mountApp();
+        try {
+          // The subscription's first snapshot confirms sequence 1. A later older snapshot
+          // is now a race, not the initial snapshot of a reset server journal.
+          sendThreadSnapshotPush(THREAD_ID, fixture.snapshot.snapshotSequence - 1);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+          expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({
+            afterSequence: fixture.snapshot.snapshotSequence,
+          });
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+      60_000,
+    );
+
+    it("resyncs instead of applying buffered events after the pre-snapshot buffer overflowed", async () => {
+      const mounted = await mountApp();
+      try {
+        // A terminal stream fault drops the cursor, so the next events buffer
+        // until a projection read lands. Hold that read while the buffer overflows.
+        delayNextThreadDetailSnapshotResponse = true;
+        for (const listener of threadSnapshotFailureListeners) {
+          listener({ threadId: THREAD_ID, code: null, error: new Error("stream fault") });
+        }
+        const chunks = Array.from({ length: 520 }, (_, index) => `${index % 10}`);
+        sendThreadEventPush(orderingDelta(2, chunks[0]!));
+        await vi.waitFor(() => expect(pendingThreadDetailSnapshotResponse).not.toBeNull(), {
+          timeout: 4_000,
+          interval: 16,
+        });
+        for (const [index, chunk] of chunks.entries()) {
+          if (index === 0) continue;
+          sendThreadEventPush(orderingDelta(index + 2, chunk));
+        }
+        const subscribesBeforeRelease = subscribeThreadRequestCountById.get(THREAD_ID) ?? 0;
+        // The resync reads the projection that already holds every chunk.
+        fixture = {
+          ...fixture,
+          snapshot: {
+            ...fixture.snapshot,
+            snapshotSequence: chunks.length + 1,
+            threads: [orderingThreadWithAssistantText(chunks.join(""))],
+          },
+        };
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+        // The held read predates every buffered chunk.
+        releaseProjectionRead(1, buildFixture().snapshot.threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            expect(subscribeThreadRequestCountById.get(THREAD_ID) ?? 0).toBeGreaterThan(
+              subscribesBeforeRelease,
+            );
+            expect(orderingMessageText()).toBe(chunks.join(""));
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
   });
 });

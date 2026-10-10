@@ -3,12 +3,12 @@
 // Layer: Web UI primitive (shared between the Environment menu and the in-app browser home).
 // Depends on: shared local-server presentation helpers.
 
-import type { ServerLocalServerProcess } from "@t3tools/contracts";
+import type { ServerLocalServerProcess } from "@synara/contracts";
 import {
   localServerAddressLabel,
   localServerFolderLabel,
   localServerPrimaryLabel,
-} from "@t3tools/shared/localServers";
+} from "@synara/shared/localServers";
 
 import { cn } from "~/lib/utils";
 
@@ -31,16 +31,15 @@ interface LocalServerIdentityToneTokens {
 
 const IDENTITY_TONE: Record<LocalServerIdentityTone, LocalServerIdentityToneTokens> = {
   menu: {
-    primary:
-      "text-[length:var(--app-font-size-ui,12px)] font-medium text-[var(--color-text-foreground)]",
-    meta: "text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/65",
+    primary: "text-ui font-normal text-[var(--color-text-foreground)]",
+    meta: "text-ui-xs text-muted-foreground/65",
     address: "tabular-nums",
     separator: "text-muted-foreground/30",
     folder: "text-muted-foreground/45",
   },
   browser: {
-    primary: "text-[14px] font-semibold text-white",
-    meta: "text-[12px] text-white/35",
+    primary: "text-ui-lg font-semibold text-white",
+    meta: "text-ui text-white/35",
     address: "",
     separator: "text-white/20",
     folder: "text-white/30",

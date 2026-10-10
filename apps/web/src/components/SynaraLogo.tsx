@@ -11,7 +11,7 @@ export function SynaraLogo({ className, ...props }: SVGProps<SVGSVGElement>) {
 
   return (
     <svg
-      viewBox="0 0 577 580"
+      viewBox="0 0 470 504"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden={ariaLabel ? undefined : true}

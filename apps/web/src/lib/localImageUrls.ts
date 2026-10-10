@@ -3,13 +3,13 @@
 // Layer: Web utility
 // Exports: local image URL detection and builders
 // Depends on: wsHttpUrl (so desktop requests carry the legacy startup token used by attachments)
-//             and @t3tools/shared/localImage for the canonical route + extension allowlist.
+//             and @synara/shared/localPreviewFiles for the canonical route + extension allowlist.
 
 import {
   LOCAL_IMAGE_ROUTE_PATH,
   SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX,
-} from "@t3tools/shared/localImage";
-import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+} from "@synara/shared/localPreviewFiles";
+import { isLocalAbsolutePath, isWindowsAbsolutePath } from "@synara/shared/path";
 
 import { resolveWsHttpUrl } from "./wsHttpUrl";
 
@@ -50,14 +50,32 @@ export function isLocalImageMarkdownSrc(src: string | undefined): src is string 
   );
 }
 
+// Grants must name the same decoded file as the preview HTTP request.
+export function localImageAbsolutePath(src: string): string | null {
+  const normalized = normalizeMarkdownImagePath(src);
+  return isLocalImageMarkdownSrc(src) && isLocalAbsolutePath(normalized) ? normalized : null;
+}
+
 export function buildLocalImageUrl(input: {
   readonly src: string;
   readonly cwd: string | undefined;
   readonly download?: boolean;
+  // Accept an explicit `undefined` (not just absent) so callers can forward an
+  // optional `previewGrant: string | null | undefined` straight through under
+  // exactOptionalPropertyTypes. Internally falsy grants are simply omitted below.
+  readonly grant?: string | null | undefined;
+  /** Changes the preview URL so an explicit reload bypasses browser caching. */
+  readonly cacheKey?: string | number | undefined;
 }): string {
   const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
   if (input.cwd) {
     params.set("cwd", input.cwd);
+  }
+  if (input.grant) {
+    params.set("grant", input.grant);
+  }
+  if (input.cacheKey !== undefined) {
+    params.set("v", String(input.cacheKey));
   }
   if (input.download) {
     params.set("download", "1");

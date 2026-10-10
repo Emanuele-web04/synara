@@ -1,4 +1,4 @@
-import { RuntimeRequestId, TurnId } from "@t3tools/contracts";
+import { RuntimeRequestId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,9 +8,92 @@ import {
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
+  stampAcpRuntimeEventLifecycleGeneration,
 } from "./AcpCoreRuntimeEvents.ts";
+import { mergeToolCallState, parseSessionUpdateEvent } from "./AcpRuntimeModel.ts";
 
 describe("AcpCoreRuntimeEvents", () => {
+  it.each(["cursor", "droid", "grok", "devin"] as const)(
+    "preserves Computer identity through %s start, update and sparse completion events",
+    (provider) => {
+      const rawInput = {
+        _toolName: "mcp__synara__computer_inspect",
+        tool: "computer_read_clipboard",
+        arguments: {},
+      };
+      const started = parseSessionUpdateEvent({
+        sessionId: "computer-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "computer-call",
+          title: "Tool",
+          kind: "other",
+          status: "pending",
+          rawInput,
+        },
+      }).events[0];
+      expect(started?._tag).toBe("ToolCallUpdated");
+      if (started?._tag !== "ToolCallUpdated") throw new Error("Expected Computer tool start");
+      let state = started.toolCall;
+      for (const status of ["pending", "in_progress", "completed"] as const) {
+        if (status !== "pending") {
+          const updated = parseSessionUpdateEvent({
+            sessionId: "computer-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "computer-call",
+              status,
+              ...(status === "completed" ? { rawOutput: { text: "private clipboard value" } } : {}),
+            },
+          }).events[0];
+          expect(updated?._tag).toBe("ToolCallUpdated");
+          if (updated?._tag !== "ToolCallUpdated") throw new Error("Expected Computer tool update");
+          state = mergeToolCallState(state, updated.toolCall);
+        }
+        const event = makeAcpToolCallEvent({
+          stamp: { eventId: `event-${status}` as never, createdAt: "2026-09-20T00:00:00.000Z" },
+          provider,
+          threadId: "thread-computer" as never,
+          turnId: TurnId.makeUnsafe("turn-computer"),
+          toolCall: state,
+          rawPayload: {},
+        });
+        expect(event).toMatchObject({
+          provider,
+          type:
+            status === "pending"
+              ? "item.started"
+              : status === "completed"
+                ? "item.completed"
+                : "item.updated",
+          payload: {
+            itemType: "dynamic_tool_call",
+            data: { toolName: "computer_inspect", rawInput },
+          },
+        });
+        expect(state.title).not.toContain("private clipboard value");
+      }
+    },
+  );
+
+  it("stamps one captured lifecycle generation without mutating legacy events", () => {
+    const event = makeAcpContentDeltaEvent({
+      stamp: { eventId: "event-generation" as never, createdAt: "2026-07-14T00:00:00.000Z" },
+      provider: "cursor",
+      threadId: "thread-generation" as never,
+      turnId: TurnId.makeUnsafe("turn-generation"),
+      text: "hello",
+      rawPayload: { sessionId: "session-generation" },
+    });
+
+    expect(stampAcpRuntimeEventLifecycleGeneration(event, undefined)).toBe(event);
+    expect(stampAcpRuntimeEventLifecycleGeneration(event, "generation-7")).toEqual({
+      ...event,
+      lifecycleGeneration: "generation-7",
+    });
+    expect(event).not.toHaveProperty("lifecycleGeneration");
+  });
+
   it("maps ACP permission requests to canonical runtime events", () => {
     const stamp = { eventId: "event-1" as never, createdAt: "2026-03-27T00:00:00.000Z" };
     const turnId = TurnId.makeUnsafe("turn-1");
@@ -67,6 +150,54 @@ describe("AcpCoreRuntimeEvents", () => {
       },
     });
   });
+
+  // An approval whose request type has no renderable kind never reaches the user,
+  // so every remaining ACP tool kind has to land on the canonical tool approval.
+  it.each(["search", "fetch", "think", "other", "unknown"] as const)(
+    "maps the %s ACP permission kind to a canonical tool approval",
+    (kind) => {
+      const stamp = { eventId: "event-kind" as never, createdAt: "2026-03-27T00:00:00.000Z" };
+      const permissionRequest = {
+        kind,
+        detail: "run the tool",
+        toolCall: {
+          toolCallId: "tool-kind",
+          kind,
+          status: "pending" as const,
+          detail: "run the tool",
+          data: { toolCallId: "tool-kind", kind },
+        },
+      };
+
+      expect(
+        makeAcpRequestOpenedEvent({
+          stamp,
+          provider: "cursor",
+          threadId: "thread-kind" as never,
+          turnId: TurnId.makeUnsafe("turn-kind"),
+          requestId: RuntimeRequestId.makeUnsafe("request-kind"),
+          permissionRequest,
+          detail: "run the tool",
+          args: {},
+          source: "acp.jsonrpc",
+          method: "session/request_permission",
+          rawPayload: {},
+        }),
+      ).toMatchObject({ payload: { requestType: "tool_approval" } });
+
+      expect(
+        makeAcpRequestResolvedEvent({
+          stamp,
+          provider: "cursor",
+          threadId: "thread-kind" as never,
+          turnId: TurnId.makeUnsafe("turn-kind"),
+          requestId: RuntimeRequestId.makeUnsafe("request-kind"),
+          permissionRequest,
+          decision: "accept",
+        }),
+      ).toMatchObject({ payload: { requestType: "tool_approval" } });
+    },
+  );
 
   it("maps ACP core plan, tool-call, and content updates", () => {
     const stamp = { eventId: "event-1" as never, createdAt: "2026-03-27T00:00:00.000Z" };

@@ -1,11 +1,12 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 
 import {
   GetByCommandIdInput,
+  NewOrchestrationCommandReceipt,
   OrchestrationCommandReceipt,
   OrchestrationCommandReceiptRepository,
   type OrchestrationCommandReceiptRepositoryShape,
@@ -14,8 +15,9 @@ import {
 const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const upsertReceiptRow = SqlSchema.void({
-    Request: OrchestrationCommandReceipt,
+  const insertReceiptRow = SqlSchema.findOneOption({
+    Request: NewOrchestrationCommandReceipt,
+    Result: Schema.Struct({ commandId: Schema.String }),
     execute: (receipt) =>
       sql`
         INSERT INTO orchestration_command_receipts (
@@ -25,7 +27,9 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
           accepted_at,
           result_sequence,
           status,
-          error
+          error,
+          fingerprint_version,
+          command_fingerprint
         )
         VALUES (
           ${receipt.commandId},
@@ -34,16 +38,13 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
           ${receipt.acceptedAt},
           ${receipt.resultSequence},
           ${receipt.status},
-          ${receipt.error}
+          ${receipt.error},
+          ${receipt.fingerprintVersion},
+          ${receipt.commandFingerprint}
         )
         ON CONFLICT (command_id)
-        DO UPDATE SET
-          aggregate_kind = excluded.aggregate_kind,
-          aggregate_id = excluded.aggregate_id,
-          accepted_at = excluded.accepted_at,
-          result_sequence = excluded.result_sequence,
-          status = excluded.status,
-          error = excluded.error
+        DO NOTHING
+        RETURNING command_id AS "commandId"
       `,
   });
 
@@ -59,15 +60,18 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
           accepted_at AS "acceptedAt",
           result_sequence AS "resultSequence",
           status,
-          error
+          error,
+          fingerprint_version AS "fingerprintVersion",
+          command_fingerprint AS "commandFingerprint"
         FROM orchestration_command_receipts
         WHERE command_id = ${commandId}
       `,
   });
 
-  const upsert: OrchestrationCommandReceiptRepositoryShape["upsert"] = (receipt) =>
-    upsertReceiptRow(receipt).pipe(
-      Effect.mapError(toPersistenceSqlError("OrchestrationCommandReceiptRepository.upsert:query")),
+  const insert: OrchestrationCommandReceiptRepositoryShape["insert"] = (receipt) =>
+    insertReceiptRow(receipt).pipe(
+      Effect.map(Option.isSome),
+      Effect.mapError(toPersistenceSqlError("OrchestrationCommandReceiptRepository.insert:query")),
     );
 
   const getByCommandId: OrchestrationCommandReceiptRepositoryShape["getByCommandId"] = (input) =>
@@ -78,7 +82,7 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
     );
 
   return {
-    upsert,
+    insert,
     getByCommandId,
   } satisfies OrchestrationCommandReceiptRepositoryShape;
 });

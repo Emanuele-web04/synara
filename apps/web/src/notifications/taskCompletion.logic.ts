@@ -7,10 +7,13 @@ import {
   defaultTerminalTitleForCliKind,
   type TerminalCliKind,
   type TerminalVisualState,
-} from "@t3tools/shared/terminalThreads";
+} from "@synara/shared/terminalThreads";
+import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
+  countOutstandingBackgroundWork,
+  derivePendingBackgroundWork,
   derivePendingUserInputs,
   hasLiveLatestTurn,
 } from "../session-logic";
@@ -19,6 +22,7 @@ export interface CompletedThreadCandidate {
   threadId: Thread["id"];
   projectId: Thread["projectId"];
   title: string;
+  turnId: NonNullable<Thread["latestTurn"]>["turnId"];
   completedAt: string;
   assistantSummary: string | null;
 }
@@ -30,8 +34,33 @@ export interface ThreadAttentionCandidate {
   title: string;
   requestId: string;
   createdAt: string;
-  requestKind?: "command" | "file-read" | "file-change";
+  requestKind?: "command" | "file-read" | "file-change" | "permissions" | "tool";
   summary?: string;
+}
+
+export interface SnoozeReminderCandidate {
+  threadId: Thread["id"];
+  title: string;
+  reminderAt: string;
+}
+
+/** Reminders deliberately include the initial snapshot so an overdue wakeup
+ * survives a closed app. Persisted receipts, rather than a lifecycle transition,
+ * determine whether the notification has already been shown. */
+export function collectSnoozeReminderCandidates(
+  threads: readonly Pick<
+    Thread,
+    "id" | "title" | "archivedAt" | "snoozedUntil" | "snoozeReminderAt"
+  >[],
+): SnoozeReminderCandidate[] {
+  return threads.flatMap((thread) =>
+    thread.archivedAt == null &&
+    thread.snoozedUntil == null &&
+    thread.snoozeReminderAt &&
+    Number.isFinite(Date.parse(thread.snoozeReminderAt))
+      ? [{ threadId: thread.id, title: thread.title, reminderAt: thread.snoozeReminderAt }]
+      : [],
+  );
 }
 
 interface TerminalNotificationThreadState {
@@ -67,23 +96,429 @@ export function shouldShowThreadNotificationToast(input: {
   return !input.visibleThreadIds.has(input.threadId);
 }
 
+export function shouldAttemptSystemTaskNotification(input: {
+  enabled: boolean;
+  isWindowForeground: boolean;
+}): boolean {
+  return input.enabled && !input.isWindowForeground;
+}
+
 // Treat sidebar "working" states as the only notification-worthy starting point.
 function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolean {
   return status === "running" || status === "connecting";
 }
 
-// Build a short body from the latest assistant message without dumping long output into OS chrome.
+const NOTIFICATION_SUMMARY_MAX_LENGTH = 120;
+
+const PROTECTED_CODE_START = "\uE000";
+const PROTECTED_CODE_END = "\uE001";
+
+function markdownColumnWidth(value: string): number {
+  let columns = 0;
+  for (const character of value) {
+    columns = character === "\t" ? columns + (4 - (columns % 4)) : columns + 1;
+  }
+  return columns;
+}
+
+function findMarkdownContainerBoundary(
+  text: string,
+  contentStart: number,
+  quotePrefix: string,
+  quoteDepth: number,
+  listContinuationIndent: number,
+): number | null {
+  if (quoteDepth === 0 && listContinuationIndent === 0) {
+    return null;
+  }
+
+  const quotePattern = new RegExp(`^${quotePrefix}`);
+  let lineStart = contentStart;
+
+  while (lineStart < text.length) {
+    const nextNewline = text.indexOf("\n", lineStart);
+    const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+    const line = text.slice(lineStart, lineEnd).replace(/\r$/, "");
+    const quoteMatch = quotePattern.exec(line);
+
+    if (quoteDepth > 0 && !quoteMatch) {
+      return lineStart;
+    }
+
+    const content = line.slice(quoteMatch?.[0].length ?? 0);
+    if (listContinuationIndent > 0 && content.trim().length > 0) {
+      const indentation = content.match(/^[ \t]*/)?.[0] ?? "";
+      if (markdownColumnWidth(indentation) < listContinuationIndent) {
+        return lineStart;
+      }
+    }
+
+    if (nextNewline === -1) {
+      break;
+    }
+    lineStart = nextNewline + 1;
+  }
+
+  return null;
+}
+
+function protectMarkdownFencedBlocks(text: string, protect: (content: string) => string): string {
+  const openingPattern =
+    /(^|\n)((?:[ \t]{0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+))*[ \t]{0,3})(`{3,}|~{3,})([^\r\n]*)\r?\n/g;
+  let result = "";
+  let cursor = 0;
+  let openingMatch: RegExpExecArray | null;
+
+  while ((openingMatch = openingPattern.exec(text)) !== null) {
+    const linePrefix = openingMatch[1] ?? "";
+    const containerPrefix = openingMatch[2] ?? "";
+    const fence = openingMatch[3] ?? "";
+    const info = openingMatch[4] ?? "";
+    const fenceCharacter = fence[0];
+
+    // Backticks are not valid inside a backtick fence's info string. Treat
+    // such a line as prose so same-line multi-backtick code remains inline.
+    if (fenceCharacter === "`" && info.includes("`")) {
+      continue;
+    }
+
+    const quoteDepth = containerPrefix.match(/>/g)?.length ?? 0;
+    const quotePrefix = `(?:[ \\t]{0,3}>[ \\t]?){${quoteDepth}}`;
+    const prefixWithoutBlockquotes = containerPrefix.replace(/[ \t]{0,3}>[ \t]?/g, "");
+    const listContinuationIndent = /(?:[-+*]|\d{1,9}[.)])[ \t]+/.test(prefixWithoutBlockquotes)
+      ? markdownColumnWidth(prefixWithoutBlockquotes)
+      : 0;
+    const closingPattern = new RegExp(
+      `(^|\\n)${quotePrefix}([ \\t]*)${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
+      "g",
+    );
+    closingPattern.lastIndex = openingPattern.lastIndex;
+    let closingMatch: RegExpExecArray | null = null;
+    let closingCandidate: RegExpExecArray | null;
+    const minimumClosingIndent = listContinuationIndent;
+    const maximumClosingIndent = listContinuationIndent + 3;
+
+    while ((closingCandidate = closingPattern.exec(text)) !== null) {
+      const closingColumns = markdownColumnWidth(closingCandidate[2] ?? "");
+      if (closingColumns >= minimumClosingIndent && closingColumns <= maximumClosingIndent) {
+        closingMatch = closingCandidate;
+        break;
+      }
+    }
+    const containerBoundary = findMarkdownContainerBoundary(
+      text,
+      openingPattern.lastIndex,
+      quotePrefix,
+      quoteDepth,
+      listContinuationIndent,
+    );
+    const boundaryPrecedesClosing =
+      containerBoundary !== null &&
+      (closingMatch === null || containerBoundary < closingMatch.index);
+    const effectiveClosingMatch = boundaryPrecedesClosing ? null : closingMatch;
+    const contentEnd = boundaryPrecedesClosing
+      ? containerBoundary
+      : (effectiveClosingMatch?.index ?? text.length);
+    const content = text
+      .slice(openingPattern.lastIndex, contentEnd)
+      .replace(new RegExp(`(^|\\n)${quotePrefix}`, "g"), "$1");
+
+    result += text.slice(cursor, openingMatch.index);
+    result += linePrefix;
+    result += protect(content);
+
+    if (!effectiveClosingMatch) {
+      cursor = contentEnd;
+      if (containerBoundary === null) {
+        break;
+      }
+      openingPattern.lastIndex = cursor;
+      continue;
+    }
+
+    cursor = closingPattern.lastIndex;
+    openingPattern.lastIndex = cursor;
+  }
+
+  return result + text.slice(cursor);
+}
+
+function protectMarkdownEscapes(text: string, protect: (content: string) => string): string {
+  return text.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, (_match, punctuation: string) =>
+    protect(punctuation),
+  );
+}
+
+function protectMarkdownInlineCode(text: string, protect: (content: string) => string): string {
+  const runs: Array<{ start: number; end: number; length: number }> = [];
+  let index = 0;
+
+  while (index < text.length) {
+    if (text[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    const start = index;
+    while (text[index] === "`") {
+      index += 1;
+    }
+    runs.push({ start, end: index, length: index - start });
+  }
+
+  const nextMatchingRun = Array.from<number | undefined>({ length: runs.length });
+  const nextRunByLength = new Map<number, number>();
+
+  for (let runIndex = runs.length - 1; runIndex >= 0; runIndex -= 1) {
+    const run = runs[runIndex];
+    if (!run) {
+      continue;
+    }
+    nextMatchingRun[runIndex] = nextRunByLength.get(run.length);
+    nextRunByLength.set(run.length, runIndex);
+  }
+
+  let result = "";
+  let cursor = 0;
+  let runIndex = 0;
+
+  while (runIndex < runs.length) {
+    const openingRun = runs[runIndex];
+    const closingRunIndex = nextMatchingRun[runIndex];
+    if (!openingRun || closingRunIndex === undefined) {
+      runIndex += 1;
+      continue;
+    }
+    const closingRun = runs[closingRunIndex];
+    if (!closingRun) {
+      runIndex += 1;
+      continue;
+    }
+
+    result += text.slice(cursor, openingRun.start);
+    result += protect(text.slice(openingRun.end, closingRun.start));
+    cursor = closingRun.end;
+    runIndex = closingRunIndex + 1;
+  }
+
+  return result + text.slice(cursor);
+}
+
+function protectMarkdownCode(text: string): {
+  protectedText: string;
+  restore: (value: string) => string;
+} {
+  const segments: string[] = [];
+  const protect = (content: string): string => {
+    const token = `${PROTECTED_CODE_START}${segments.length}${PROTECTED_CODE_END}`;
+    segments.push(content);
+    return token;
+  };
+
+  const protectedBlocks = protectMarkdownFencedBlocks(text, protect);
+  const protectedEscapes = protectMarkdownEscapes(protectedBlocks, protect);
+  const protectedText = protectMarkdownInlineCode(protectedEscapes, protect);
+
+  return {
+    protectedText,
+    restore: (value) =>
+      value.replace(
+        new RegExp(`${PROTECTED_CODE_START}(\\d+)${PROTECTED_CODE_END}`, "g"),
+        (_match, index: string) => segments[Number(index)] ?? "",
+      ),
+  };
+}
+
+function buildMatchingMarkdownDelimiters(
+  text: string,
+  openDelimiter: "[" | "(",
+  closeDelimiter: "]" | ")",
+): ReadonlyMap<number, number> {
+  const openingIndexes: number[] = [];
+  const matches = new Map<number, number>();
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "\\") {
+      index += 1;
+      continue;
+    }
+    if (character === openDelimiter) {
+      openingIndexes.push(index);
+      continue;
+    }
+    if (character === closeDelimiter) {
+      const openingIndex = openingIndexes.pop();
+      if (openingIndex !== undefined) {
+        matches.set(openingIndex, index);
+      }
+    }
+  }
+
+  return matches;
+}
+
+function normalizeMarkdownReferenceLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+const MARKDOWN_REFERENCE_DEFINITION_PATTERN =
+  /^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*(?:<[^<>\r\n]*>|[^\s<>]+)(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^)\r\n]*\)))?[ \t]*$/gm;
+
+function collectMarkdownReferenceLabels(text: string): ReadonlySet<string> {
+  const labels = new Set<string>();
+
+  for (const match of text.matchAll(MARKDOWN_REFERENCE_DEFINITION_PATTERN)) {
+    const label = match[1];
+    if (label) {
+      labels.add(normalizeMarkdownReferenceLabel(label));
+    }
+  }
+  return labels;
+}
+
+function removeMarkdownReferenceDefinitions(text: string): string {
+  return text.replace(MARKDOWN_REFERENCE_DEFINITION_PATTERN, "");
+}
+
+function stripMarkdownLinks(text: string, referenceLabels: ReadonlySet<string>): string {
+  const labelMatches = buildMatchingMarkdownDelimiters(text, "[", "]");
+  const destinationMatches = buildMatchingMarkdownDelimiters(text, "(", ")");
+  let result = "";
+  let index = 0;
+
+  while (index < text.length) {
+    const isImage = text[index] === "!" && text[index + 1] === "[";
+    const labelOpenIndex = isImage ? index + 1 : index;
+    if (text[labelOpenIndex] !== "[") {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    const labelCloseIndex = labelMatches.get(labelOpenIndex);
+    if (labelCloseIndex === undefined) {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    const destinationOpenIndex = labelCloseIndex + 1;
+    if (text[destinationOpenIndex] === "(") {
+      const destinationCloseIndex = destinationMatches.get(destinationOpenIndex);
+      if (destinationCloseIndex === undefined) {
+        result += text[index];
+        index += 1;
+        continue;
+      }
+
+      if (isImage) {
+        result += " ";
+      } else {
+        result += text.slice(labelOpenIndex + 1, labelCloseIndex);
+      }
+      index = destinationCloseIndex + 1;
+      continue;
+    }
+
+    const label = text.slice(labelOpenIndex + 1, labelCloseIndex);
+    if (text[destinationOpenIndex] === "[") {
+      const referenceCloseIndex = labelMatches.get(destinationOpenIndex);
+      if (referenceCloseIndex === undefined) {
+        result += text[index];
+        index += 1;
+        continue;
+      }
+      const explicitReference = text.slice(destinationOpenIndex + 1, referenceCloseIndex);
+      const reference = explicitReference.length > 0 ? explicitReference : label;
+      if (!referenceLabels.has(normalizeMarkdownReferenceLabel(reference))) {
+        result += text[index];
+        index += 1;
+        continue;
+      }
+
+      result += isImage ? " " : label;
+      index = referenceCloseIndex + 1;
+      continue;
+    }
+
+    if (!referenceLabels.has(normalizeMarkdownReferenceLabel(label))) {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    result += isImage ? " " : label;
+    index = labelCloseIndex + 1;
+  }
+
+  return result;
+}
+
+// Reduce rich assistant output to readable notification context. Toasts and OS
+// notifications should never expose Markdown syntax or turn into mini transcripts.
+function summarizeAssistantText(text: string): string | null {
+  const { protectedText, restore } = protectMarkdownCode(text);
+  const referenceLabels = collectMarkdownReferenceLabels(protectedText);
+  const withoutReferenceDefinitions = removeMarkdownReferenceDefinitions(protectedText);
+  const cleaned = stripMarkdownLinks(withoutReferenceDefinitions, referenceLabels)
+    .replace(/`+/g, "")
+    .replace(/^[ \t]{0,3}(?:#{1,6}[ \t]+|>[ \t]?)/gm, "")
+    .replace(/^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, " · ")
+    .replace(/\*\*([^\s*\n](?:[^*\n]*[^\s*\n])?)\*\*/g, "$1")
+    .replace(
+      /(^|[^\p{L}\p{N}\p{M}_])__([^\s_\n](?:[^_\n]*[^\s_\n])?)__(?=$|[^\p{L}\p{N}\p{M}_])/gu,
+      "$1$2",
+    )
+    .replace(/~~([^\s~\n](?:[^~\n]*[^\s~\n])?)~~/g, "$1")
+    .replace(
+      /(^|[^\p{L}\p{N}\p{M}_])\*([^\s*\n](?:[^*\n]*[^\s*\n])?)\*(?=$|[^\p{L}\p{N}\p{M}_])/gu,
+      "$1$2",
+    )
+    .replace(
+      /(^|[^\p{L}\p{N}\p{M}_])_([^\s_\n](?:[^_\n]*[^\s_\n])?)_(?=$|[^\p{L}\p{N}\p{M}_])/gu,
+      "$1$2",
+    );
+  const trimmed = restore(cleaned).trim().replace(/\s+/g, " ");
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.length <= NOTIFICATION_SUMMARY_MAX_LENGTH
+    ? trimmed
+    : `${trimmed.slice(0, NOTIFICATION_SUMMARY_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+// Build a short body from the turn's *final* assistant message — the end-of-turn reply
+// that lands after the work/compaction, not the opening preamble. Prefer the canonical
+// `latestTurn.assistantMessageId`; if it's missing/empty, fall back to the last non-empty
+// assistant message of that turn so we still surface the latest reply.
 function summarizeLatestAssistantMessage(thread: Thread): string | null {
+  const latestTurnId = thread.latestTurn?.turnId ?? null;
+  const finalAssistantMessageId = thread.latestTurn?.assistantMessageId ?? null;
+
+  if (finalAssistantMessageId) {
+    const finalMessage = thread.messages.find((message) => message.id === finalAssistantMessageId);
+    if (finalMessage) {
+      const summary = summarizeAssistantText(finalMessage.text);
+      if (summary) {
+        return summary;
+      }
+    }
+  }
+
   for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
     const message = thread.messages[index];
     if (!message || message.role !== "assistant") {
       continue;
     }
-    const trimmed = message.text.trim().replace(/\s+/g, " ");
-    if (trimmed.length === 0) {
+    // Stay within the just-completed turn so an earlier/other-turn preamble can't win.
+    if (latestTurnId && message.turnId !== latestTurnId) {
       continue;
     }
-    return trimmed.length <= 140 ? trimmed : `${trimmed.slice(0, 137)}...`;
+    const summary = summarizeAssistantText(message.text);
+    if (summary) {
+      return summary;
+    }
   }
   return null;
 }
@@ -113,21 +548,69 @@ function isCompletionNotificationSettled(thread: Thread | undefined): boolean {
 export function collectCompletedThreadCandidates(
   previousThreads: readonly Thread[],
   nextThreads: readonly Thread[],
+  options: {
+    /**
+     * Notify once the agent and every background subagent it launched have
+     * finished, instead of each time the agent or one of its subagents stops.
+     */
+    readonly waitForSubagents?: boolean;
+  } = {},
 ): CompletedThreadCandidate[] {
   const previousById = new Map(previousThreads.map((thread) => [thread.id, thread] as const));
   const candidates: CompletedThreadCandidate[] = [];
 
   for (const thread of nextThreads) {
+    if (thread.snoozedUntil != null) continue;
+    // A subagent's own thread finishing is a step of its parent's work, and
+    // its result reaches the parent thread anyway.
+    if (options.waitForSubagents && thread.parentThreadId) {
+      continue;
+    }
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
       continue;
     }
+    // Every check below reads only these inputs, and with all three unchanged the
+    // previous-snapshot dedupe further down always skips the thread. This runs on
+    // every store flush for every loaded thread, so skip the per-thread activity
+    // folds instead of replaying them for threads that did not move.
+    if (
+      previousThread.latestTurn === thread.latestTurn &&
+      previousThread.session === thread.session &&
+      previousThread.activities === thread.activities
+    ) {
+      continue;
+    }
 
-    const completedAt = thread.latestTurn?.completedAt;
-    if (!completedAt) {
+    const latestTurn = thread.latestTurn;
+    const completedAt = latestTurn?.completedAt;
+    if (!latestTurn || !completedAt) {
+      continue;
+    }
+    // Interrupted/error settlements are not completions: the stop was either
+    // user-initiated or already surfaced through the error state, and "Finished
+    // working." copy would be wrong for both.
+    if (latestTurn.state !== "completed") {
       continue;
     }
     if (!isCompletionNotificationSettled(thread)) {
+      continue;
+    }
+    // Background subagents can keep running after the turn settles; "Finished
+    // working." would be premature while tracked background tasks are live.
+    if (
+      (derivePendingBackgroundWork({
+        activities: thread.activities,
+        latestTurn: thread.latestTurn,
+        session: thread.session,
+      })?.count ?? 0) > 0
+    ) {
+      continue;
+    }
+    if (
+      options.waitForSubagents &&
+      countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }) > 0
+    ) {
       continue;
     }
     if (!previousThread.session && !previousThread.latestTurn?.completedAt) {
@@ -138,7 +621,17 @@ export function collectCompletedThreadCandidates(
     }
     if (
       previousThread.latestTurn?.turnId === thread.latestTurn?.turnId &&
-      isCompletionNotificationSettled(previousThread)
+      isCompletionNotificationSettled(previousThread) &&
+      // A held completion can be released by the final task or session settling
+      // without the parent entering another turn. Only dedupe a previously
+      // settled snapshot if it was already eligible for the alert.
+      !(
+        options.waitForSubagents &&
+        countOutstandingBackgroundWork({
+          activities: previousThread.activities,
+          session: previousThread.session,
+        }) > 0
+      )
     ) {
       continue;
     }
@@ -147,12 +640,24 @@ export function collectCompletedThreadCandidates(
       threadId: thread.id,
       projectId: thread.projectId,
       title: thread.title,
+      turnId: latestTurn.turnId,
       completedAt,
       assistantSummary: summarizeLatestAssistantMessage(thread),
     });
   }
 
   return candidates;
+}
+
+// Identity of one settled completion. The snapshot diff above can re-emit the
+// same completion when the session status wobbles out of and back into a settled
+// state (e.g. a follow-up turn spinning up while latestTurn still points at the
+// finished one); callers dedupe on this key so each completion notifies once.
+// completedAt is deliberately excluded: the same turn's completedAt is rewritten
+// by later events (assistant message, session settle, checkpoint diff) with
+// slightly different timestamps, and a turn only ever completes once.
+export function completedThreadNotificationKey(candidate: CompletedThreadCandidate): string {
+  return `${candidate.threadId}:${candidate.turnId}`;
 }
 function resolveTerminalNotificationState(
   threadState: TerminalNotificationThreadState | undefined,
@@ -219,7 +724,9 @@ export function collectCompletedTerminalCandidates(
   return candidates;
 }
 
-function approvalSummary(requestKind: "command" | "file-read" | "file-change"): string {
+function approvalSummary(
+  requestKind: "command" | "file-read" | "file-change" | "permissions" | "tool",
+): string {
   switch (requestKind) {
     case "command":
       return "Command approval requested.";
@@ -227,7 +734,33 @@ function approvalSummary(requestKind: "command" | "file-read" | "file-change"): 
       return "File-read approval requested.";
     case "file-change":
       return "File-change approval requested.";
+    case "permissions":
+      return "Permission approval requested.";
+    case "tool":
+      return "Tool approval requested.";
   }
+}
+
+function requestedActivityInstanceKeys(
+  activities: Thread["activities"],
+  kind: "approval.requested" | "user-input.requested",
+): Set<string> {
+  return new Set(
+    activities.flatMap((activity) => {
+      if (activity.kind !== kind || !activity.payload) return [];
+      const payload = activity.payload as Record<string, unknown>;
+      return typeof payload.requestId === "string"
+        ? [
+            pendingRequestInstanceKey(
+              payload.requestId,
+              typeof payload.lifecycleGeneration === "string"
+                ? payload.lifecycleGeneration
+                : undefined,
+            ),
+          ]
+        : [];
+    }),
+  );
 }
 
 // Compare consecutive activity snapshots and emit only fresh input-needed transitions.
@@ -239,20 +772,58 @@ export function collectThreadAttentionCandidates(
   const candidates: ThreadAttentionCandidate[] = [];
 
   for (const thread of nextThreads) {
+    if (thread.snoozedUntil != null) continue;
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
       continue;
     }
+    // Both derivations below are pure functions of these inputs. When none of
+    // them changed (the whole workspace during ordinary text streaming, where
+    // only message text moves), every next request id already sits in the
+    // previous id set and nothing can be emitted, so replaying every thread's
+    // activities per streamed token is skipped outright.
+    if (
+      previousThread.activities === thread.activities &&
+      previousThread.pendingInteractions === thread.pendingInteractions &&
+      previousThread.hasPendingApprovals === thread.hasPendingApprovals &&
+      previousThread.hasPendingUserInput === thread.hasPendingUserInput &&
+      previousThread.latestTurn?.turnId === thread.latestTurn?.turnId
+    ) {
+      continue;
+    }
 
     const previousApprovalIds = new Set(
-      derivePendingApprovals(previousThread.activities).map((approval) => approval.requestId),
+      derivePendingApprovals(previousThread.activities, previousThread.pendingInteractions, {
+        authoritativeHasPending: previousThread.hasPendingApprovals,
+        latestTurnId: previousThread.latestTurn?.turnId,
+      }).map((approval) => approval.requestId),
     );
     const previousUserInputIds = new Set(
-      derivePendingUserInputs(previousThread.activities).map((request) => request.requestId),
+      derivePendingUserInputs(previousThread.activities, previousThread.pendingInteractions, {
+        authoritativeHasPending: previousThread.hasPendingUserInput,
+        latestTurnId: previousThread.latestTurn?.turnId,
+      }).map((request) => request.requestId),
+    );
+    const previousApprovalActivityKeys = requestedActivityInstanceKeys(
+      previousThread.activities,
+      "approval.requested",
+    );
+    const previousUserInputActivityKeys = requestedActivityInstanceKeys(
+      previousThread.activities,
+      "user-input.requested",
     );
 
-    for (const approval of derivePendingApprovals(thread.activities)) {
-      if (previousApprovalIds.has(approval.requestId)) {
+    for (const approval of derivePendingApprovals(thread.activities, thread.pendingInteractions, {
+      authoritativeHasPending: thread.hasPendingApprovals,
+      latestTurnId: thread.latestTurn?.turnId,
+    })) {
+      if (
+        previousApprovalIds.has(approval.requestId) ||
+        (thread.pendingInteractions === undefined &&
+          previousApprovalActivityKeys.has(
+            pendingRequestInstanceKey(approval.requestId, approval.lifecycleGeneration),
+          ))
+      ) {
         continue;
       }
       candidates.push({
@@ -266,8 +837,17 @@ export function collectThreadAttentionCandidates(
       });
     }
 
-    for (const request of derivePendingUserInputs(thread.activities)) {
-      if (previousUserInputIds.has(request.requestId)) {
+    for (const request of derivePendingUserInputs(thread.activities, thread.pendingInteractions, {
+      authoritativeHasPending: thread.hasPendingUserInput,
+      latestTurnId: thread.latestTurn?.turnId,
+    })) {
+      if (
+        previousUserInputIds.has(request.requestId) ||
+        (thread.pendingInteractions === undefined &&
+          previousUserInputActivityKeys.has(
+            pendingRequestInstanceKey(request.requestId, request.lifecycleGeneration),
+          ))
+      ) {
         continue;
       }
       candidates.push({
@@ -370,14 +950,6 @@ export function buildTerminalAttentionCopy(candidate: TerminalAttentionCandidate
     title: "Terminal input needed",
     body: `${terminalLabel} needs your attention.`,
   };
-}
-
-export function shouldSuppressVisibleThreadNotification(input: {
-  threadId: Thread["id"];
-  visibleThreadIds: ReadonlySet<Thread["id"]>;
-  windowForeground: boolean;
-}): boolean {
-  return input.windowForeground && input.visibleThreadIds.has(input.threadId);
 }
 
 export const collectInputNeededThreadCandidates = collectThreadAttentionCandidates;

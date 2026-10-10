@@ -28,6 +28,7 @@ import {
   PASTE_COMMAND,
   TextNode,
   $getRoot,
+  $nodesOfType,
   type ElementNode,
   type LexicalNode,
   type EditorState,
@@ -54,14 +55,16 @@ import {
 } from "~/composer-logic";
 import {
   matchComposerLinkToken,
+  matchComposerSlashCommandChipToken,
   splitPromptIntoComposerSegments,
 } from "~/composer-editor-mentions";
 import { parseBareComposerLink } from "~/lib/linkChips";
-import {
-  INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
-  type TerminalContextDraft,
-} from "~/lib/terminalContext";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import { type TerminalContextDraft } from "~/lib/terminalContext";
+import { shouldCollapsePastedText } from "~/lib/composerPastedText";
+import type { ProviderMentionReference } from "@synara/contracts";
+import { useStore } from "~/store";
+import { createComposerThreadMentionSourcesSelector } from "~/storeSelectors";
+import { resolveThreadDisplayProvider } from "~/lib/threadDisplayProvider";
 import { cn } from "~/lib/utils";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
@@ -72,11 +75,13 @@ import {
 import {
   ComposerMentionNode,
   ComposerSkillNode,
+  ComposerSlashCommandNode,
   ComposerAgentMentionNode,
   ComposerTerminalContextNode,
   ComposerLinkNode,
   $createComposerMentionNode,
   $createComposerSkillNode,
+  $createComposerSlashCommandNode,
   $createComposerAgentMentionNode,
   $createComposerTerminalContextNode,
   $createComposerLinkNode,
@@ -87,11 +92,7 @@ import {
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
 
-const ComposerTerminalContextActionsContext = createContext<{
-  onRemoveTerminalContext: (contextId: string) => void;
-}>({
-  onRemoveTerminalContext: () => {},
-});
+const ComposerRemoveTerminalContextContext = createContext<(contextId: string) => void>(() => {});
 
 // Node classes imported from ./composer-nodes
 
@@ -231,6 +232,7 @@ function getAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: number): numb
     if (
       node instanceof ComposerMentionNode ||
       node instanceof ComposerSkillNode ||
+      node instanceof ComposerSlashCommandNode ||
       node instanceof ComposerAgentMentionNode
     ) {
       return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
@@ -283,6 +285,7 @@ function getExpandedAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: numbe
     if (
       node instanceof ComposerMentionNode ||
       node instanceof ComposerSkillNode ||
+      node instanceof ComposerSlashCommandNode ||
       node instanceof ComposerAgentMentionNode
     ) {
       return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
@@ -315,6 +318,7 @@ function findSelectionPointAtOffset(
   if (
     node instanceof ComposerMentionNode ||
     node instanceof ComposerSkillNode ||
+    node instanceof ComposerSlashCommandNode ||
     node instanceof ComposerAgentMentionNode ||
     node instanceof ComposerLinkNode ||
     node instanceof ComposerTerminalContextNode
@@ -447,12 +451,22 @@ function $setComposerEditorPrompt(
   const segments = splitPromptIntoComposerSegments(prompt, terminalContexts, mentionReferences);
   for (const segment of segments) {
     if (segment.type === "mention") {
-      paragraph.append($createComposerMentionNode(segment.path, segment.kind));
+      const thread = segment.threadId
+        ? useStore.getState().sidebarThreadSummaryById[segment.threadId]
+        : undefined;
+      const provider = thread ? resolveThreadDisplayProvider(thread) : undefined;
+      paragraph.append(
+        $createComposerMentionNode(segment.path, segment.kind, provider, segment.threadId),
+      );
       continue;
     }
     if (segment.type === "skill") {
       const prefixedName = `${segment.prefix ?? "$"}${segment.name}`;
       paragraph.append($createComposerSkillNode(prefixedName));
+      continue;
+    }
+    if (segment.type === "slash-command") {
+      paragraph.append($createComposerSlashCommandNode(segment.command));
       continue;
     }
     if (segment.type === "terminal-context") {
@@ -484,13 +498,16 @@ function collectTerminalContextIds(node: LexicalNode): string[] {
 }
 
 export interface ComposerPromptEditorHandle {
+  blur: () => void;
   focus: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
+  isFocused: () => boolean;
   readSnapshot: () => {
     value: string;
     cursor: number;
     expandedCursor: number;
+    selectionCollapsed: boolean;
     terminalContextIds: string[];
   };
 }
@@ -502,8 +519,14 @@ interface ComposerPromptEditorProps {
   mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
+  ariaLabel?: string | undefined;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
+  /**
+   * Invoked when a sufficiently large text paste should collapse into an attachment
+   * card instead of inserting raw text. When omitted, pastes insert as text.
+   */
+  onCollapsePastedText?: (text: string) => void;
   onChange: (
     nextValue: string,
     nextCursor: number,
@@ -681,7 +704,7 @@ function ComposerInlineTokenSelectionNormalizePlugin() {
 
 function ComposerInlineTokenBackspacePlugin() {
   const [editor] = useLexicalComposerContext();
-  const { onRemoveTerminalContext } = useContext(ComposerTerminalContextActionsContext);
+  const onRemoveTerminalContext = useContext(ComposerRemoveTerminalContextContext);
 
   useEffect(() => {
     return editor.registerCommand(
@@ -742,6 +765,27 @@ function ComposerInlineTokenBackspacePlugin() {
       COMMAND_PRIORITY_HIGH,
     );
   }, [editor, onRemoveTerminalContext]);
+
+  return null;
+}
+
+function ComposerSlashCommandTransformPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    return editor.registerNodeTransform(TextNode, (node) => {
+      if (isComposerInlineTokenNode(node)) {
+        return;
+      }
+      const match = matchComposerSlashCommandChipToken(node.getTextContent());
+      if (!match) {
+        return;
+      }
+      const splitNodes = node.splitText(match.start, match.end);
+      const commandNode = match.start === 0 ? splitNodes[0] : splitNodes[1];
+      commandNode?.replace($createComposerSlashCommandNode(match.command));
+    });
+  }, [editor]);
 
   return null;
 }
@@ -810,20 +854,102 @@ function ComposerLinkPastePlugin() {
   return null;
 }
 
+// Thread mention chips resolve their provider icon from the sidebar summaries,
+// which may not be loaded yet when a draft is restored (and can change after a
+// provider handoff). Refresh the stored provider on existing chips whenever the
+// summaries change so the icon never stays stale.
+function ComposerThreadMentionProviderPlugin() {
+  const [editor] = useLexicalComposerContext();
+  const threadMentionSources = useStore(
+    useMemo(() => createComposerThreadMentionSourcesSelector(), []),
+  );
+  const providerByThreadId = useMemo(
+    () => new Map(threadMentionSources.map((source) => [source.id as string, source.provider])),
+    [threadMentionSources],
+  );
+
+  useEffect(() => {
+    const staleProvider = (node: ComposerMentionNode): boolean => {
+      const threadId = node.getMentionThreadId();
+      if (!threadId) return false;
+      const provider = providerByThreadId.get(threadId);
+      return provider !== undefined && provider !== node.getMentionProvider();
+    };
+    const needsUpdate = editor
+      .getEditorState()
+      .read(() => $nodesOfType(ComposerMentionNode).some(staleProvider));
+    if (!needsUpdate) return;
+    editor.update(
+      () => {
+        for (const node of $nodesOfType(ComposerMentionNode)) {
+          if (!staleProvider(node)) continue;
+          const provider = providerByThreadId.get(node.getMentionThreadId() ?? "");
+          if (provider) node.setMentionProvider(provider);
+        }
+      },
+      { tag: "history-merge" },
+    );
+  }, [editor, providerByThreadId]);
+
+  return null;
+}
+
+// A sufficiently large text paste collapses into an attachment card instead of
+// flooding the editor. Intercepting at the Lexical command level (rather than the
+// React onPaste prop) is required: Lexical's own paste listener would otherwise
+// insert the raw text before a bubbled React handler could preventDefault.
+function ComposerBigPastePlugin(props: { onCollapsePastedText: (text: string) => void }) {
+  const [editor] = useLexicalComposerContext();
+  const onCollapseRef = useRef(props.onCollapsePastedText);
+
+  useEffect(() => {
+    onCollapseRef.current = props.onCollapsePastedText;
+  }, [props.onCollapsePastedText]);
+
+  useEffect(() => {
+    return editor.registerCommand(
+      PASTE_COMMAND,
+      (event) => {
+        const clipboardData = event instanceof ClipboardEvent ? event.clipboardData : null;
+        if (!clipboardData) {
+          return false;
+        }
+        // Image/file pastes are handled by the composer dropzone — never collapse them.
+        if (clipboardData.files.length > 0) {
+          return false;
+        }
+        const text = clipboardData.getData("text/plain");
+        if (!shouldCollapsePastedText(text)) {
+          return false;
+        }
+        event.preventDefault();
+        onCollapseRef.current(text);
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+  }, [editor]);
+
+  return null;
+}
+
 function ComposerPromptEditorInner({
   value,
   cursor,
   terminalContexts,
-  mentionReferences = [],
+  mentionReferences: mentionReferencesProp,
   disabled,
   placeholder,
+  ariaLabel,
   className,
   onRemoveTerminalContext,
+  onCollapsePastedText,
   onChange,
   onCommandKeyDown,
   onPaste,
   editorRef,
 }: ComposerPromptEditorInnerProps) {
+  const mentionReferences = mentionReferencesProp ?? [];
   const [editor] = useLexicalComposerContext();
   const onChangeRef = useRef(onChange);
   const initialCursor = clampCollapsedComposerCursor(value, cursor);
@@ -835,20 +961,34 @@ function ComposerPromptEditorInner({
     value,
     cursor: initialCursor,
     expandedCursor: expandCollapsedComposerCursor(value, initialCursor),
+    selectionCollapsed: true,
     terminalContextIds: terminalContexts.map((context) => context.id),
   });
   const isApplyingControlledUpdateRef = useRef(false);
-  const terminalContextActions = useMemo(
-    () => ({ onRemoveTerminalContext }),
-    [onRemoveTerminalContext],
-  );
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
 
+  // Disabling the editor (e.g. while a turn dispatch is connecting) turns off
+  // contenteditable, which drops browser focus to <body>. Remember whether the
+  // composer owned focus at disable time and hand it back once re-enabled, so
+  // sending a message never silently kicks the user out of the input.
+  const restoreFocusOnEnableRef = useRef(false);
   useEffect(() => {
-    editor.setEditable(!disabled);
+    if (disabled) {
+      const rootElement = editor.getRootElement();
+      restoreFocusOnEnableRef.current = Boolean(
+        rootElement && document.activeElement === rootElement,
+      );
+      editor.setEditable(false);
+      return;
+    }
+    editor.setEditable(true);
+    if (restoreFocusOnEnableRef.current) {
+      restoreFocusOnEnableRef.current = false;
+      editor.getRootElement()?.focus();
+    }
   }, [disabled, editor]);
 
   useLayoutEffect(() => {
@@ -869,6 +1009,7 @@ function ComposerPromptEditorInner({
       value,
       cursor: normalizedCursor,
       expandedCursor: expandCollapsedComposerCursor(value, normalizedCursor),
+      selectionCollapsed: true,
       terminalContextIds: terminalContexts.map((context) => context.id),
     };
     terminalContextsSignatureRef.current = terminalContextsSignature;
@@ -917,6 +1058,7 @@ function ComposerPromptEditorInner({
         value: snapshotRef.current.value,
         cursor: boundedCursor,
         expandedCursor: expandCollapsedComposerCursor(snapshotRef.current.value, boundedCursor),
+        selectionCollapsed: true,
         terminalContextIds: snapshotRef.current.terminalContextIds,
       };
       onChangeRef.current(
@@ -930,14 +1072,29 @@ function ComposerPromptEditorInner({
     [editor],
   );
 
+  const blurEditor = useCallback(() => {
+    editor.getRootElement()?.blur();
+  }, [editor]);
+
+  // Keep global shortcuts decoupled from Lexical's root element details.
+  const isEditorFocused = useCallback(() => {
+    const rootElement = editor.getRootElement();
+    return Boolean(
+      rootElement && typeof document !== "undefined" && document.activeElement === rootElement,
+    );
+  }, [editor]);
+
   const readSnapshot = useCallback((): {
     value: string;
     cursor: number;
     expandedCursor: number;
+    selectionCollapsed: boolean;
     terminalContextIds: string[];
   } => {
     let snapshot = snapshotRef.current;
     editor.getEditorState().read(() => {
+      const selection = $getSelection();
+      const selectionCollapsed = !$isRangeSelection(selection) || selection.isCollapsed();
       const nextValue = $getRoot().getTextContent();
       const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
       const nextCursor = clampCollapsedComposerCursor(
@@ -957,6 +1114,7 @@ function ComposerPromptEditorInner({
         value: nextValue,
         cursor: nextCursor,
         expandedCursor: nextExpandedCursor,
+        selectionCollapsed,
         terminalContextIds,
       };
     });
@@ -967,6 +1125,7 @@ function ComposerPromptEditorInner({
   useImperativeHandle(
     editorRef,
     () => ({
+      blur: blurEditor,
       focus: () => {
         focusAt(snapshotRef.current.cursor);
       },
@@ -979,13 +1138,16 @@ function ComposerPromptEditorInner({
           ),
         );
       },
+      isFocused: isEditorFocused,
       readSnapshot,
     }),
-    [focusAt, readSnapshot],
+    [blurEditor, focusAt, isEditorFocused, readSnapshot],
   );
 
   const handleEditorChange = useCallback((editorState: EditorState) => {
     editorState.read(() => {
+      const selection = $getSelection();
+      const selectionCollapsed = !$isRangeSelection(selection) || selection.isCollapsed();
       const nextValue = $getRoot().getTextContent();
       const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
       const nextCursor = clampCollapsedComposerCursor(
@@ -1018,6 +1180,7 @@ function ComposerPromptEditorInner({
         value: nextValue,
         cursor: nextCursor,
         expandedCursor: nextExpandedCursor,
+        selectionCollapsed,
         terminalContextIds,
       };
       const cursorAdjacentToMention =
@@ -1034,7 +1197,7 @@ function ComposerPromptEditorInner({
   }, []);
 
   return (
-    <ComposerTerminalContextActionsContext.Provider value={terminalContextActions}>
+    <ComposerRemoveTerminalContextContext.Provider value={onRemoveTerminalContext}>
       <div className="relative">
         <PlainTextPlugin
           contentEditable={
@@ -1048,6 +1211,7 @@ function ComposerPromptEditorInner({
               )}
               data-testid="composer-editor"
               aria-placeholder={placeholder}
+              aria-label={ariaLabel}
               placeholder={<span />}
               onPaste={onPaste}
             />
@@ -1072,11 +1236,16 @@ function ComposerPromptEditorInner({
         <ComposerInlineTokenArrowPlugin />
         <ComposerInlineTokenSelectionNormalizePlugin />
         <ComposerInlineTokenBackspacePlugin />
+        <ComposerSlashCommandTransformPlugin />
         <ComposerLinkTransformPlugin />
         <ComposerLinkPastePlugin />
+        <ComposerThreadMentionProviderPlugin />
+        {onCollapsePastedText ? (
+          <ComposerBigPastePlugin onCollapsePastedText={onCollapsePastedText} />
+        ) : null}
         <HistoryPlugin />
       </div>
-    </ComposerTerminalContextActionsContext.Provider>
+    </ComposerRemoveTerminalContextContext.Provider>
   );
 }
 
@@ -1091,8 +1260,10 @@ export const ComposerPromptEditor = forwardRef<
     mentionReferences,
     disabled,
     placeholder,
+    ariaLabel,
     className,
     onRemoveTerminalContext,
+    onCollapsePastedText,
     onChange,
     onCommandKeyDown,
     onPaste,
@@ -1104,24 +1275,21 @@ export const ComposerPromptEditor = forwardRef<
   // Normalize once at the wrapper boundary so the inner editor can treat mention refs as concrete.
   const normalizedMentionReferences = mentionReferences ?? [];
   const initialMentionReferencesRef = useRef(normalizedMentionReferences);
-  const initialConfig = useMemo<InitialConfigType>(
-    () => ({
-      namespace: "t3tools-composer-editor",
-      editable: true,
-      nodes: [...COMPOSER_NODE_CLASSES],
-      editorState: () => {
-        $setComposerEditorPrompt(
-          initialValueRef.current,
-          initialTerminalContextsRef.current,
-          initialMentionReferencesRef.current,
-        );
-      },
-      onError: (error) => {
-        throw error;
-      },
-    }),
-    [],
-  );
+  const initialConfig: InitialConfigType = {
+    namespace: "synara-composer-editor",
+    editable: true,
+    nodes: [...COMPOSER_NODE_CLASSES],
+    editorState: () => {
+      $setComposerEditorPrompt(
+        initialValueRef.current,
+        initialTerminalContextsRef.current,
+        initialMentionReferencesRef.current,
+      );
+    },
+    onError: (error) => {
+      throw error;
+    },
+  };
 
   return (
     <LexicalComposer key={COMPOSER_EDITOR_HMR_KEY} initialConfig={initialConfig}>
@@ -1132,10 +1300,12 @@ export const ComposerPromptEditor = forwardRef<
         mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
+        ariaLabel={ariaLabel}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
         onPaste={onPaste}
         editorRef={ref}
+        {...(onCollapsePastedText ? { onCollapsePastedText } : {})}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
       />

@@ -5,7 +5,7 @@ import type {
   ProjectReadFileResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths";
 
 export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceFileSystemError>()(
@@ -23,6 +23,30 @@ export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceF
   }
 }
 
+export class WorkspaceFileConflictError extends Schema.TaggedErrorClass<WorkspaceFileConflictError>()(
+  "WorkspaceFileConflictError",
+  {
+    cwd: Schema.String,
+    relativePath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return "This file changed on disk after it was opened. Reload it before saving to avoid overwriting those changes.";
+  }
+}
+
+export class WorkspaceFileDeletedError extends Schema.TaggedErrorClass<WorkspaceFileDeletedError>()(
+  "WorkspaceFileDeletedError",
+  {
+    cwd: Schema.String,
+    relativePath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return "This file was removed from disk after it was opened. Reload the Explorer before saving.";
+  }
+}
+
 export interface WorkspaceFileSystemShape {
   readonly readFile: (
     input: ProjectReadFileInput,
@@ -34,11 +58,14 @@ export interface WorkspaceFileSystemShape {
     input: ProjectWriteFileInput,
   ) => Effect.Effect<
     ProjectWriteFileResult,
-    WorkspaceFileSystemError | WorkspacePathOutsideRootError
+    | WorkspaceFileConflictError
+    | WorkspaceFileDeletedError
+    | WorkspaceFileSystemError
+    | WorkspacePathOutsideRootError
   >;
 }
 
 export class WorkspaceFileSystem extends ServiceMap.Service<
   WorkspaceFileSystem,
   WorkspaceFileSystemShape
->()("t3/workspace/Services/WorkspaceFileSystem") {}
+>()("synara/workspace/Services/WorkspaceFileSystem") {}

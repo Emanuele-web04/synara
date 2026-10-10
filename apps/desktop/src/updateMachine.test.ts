@@ -9,6 +9,8 @@ import {
   reduceDesktopUpdateStateOnDownloadProgress,
   reduceDesktopUpdateStateOnDownloadStart,
   reduceDesktopUpdateStateOnInstallFailure,
+  reduceDesktopUpdateStateOnInstallRestartFailure,
+  reduceDesktopUpdateStateOnInstallStart,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
@@ -95,6 +97,52 @@ describe("updateMachine", () => {
     expect(failedInstall.canRetry).toBe(true);
   });
 
+  it("clears the previous failure for a retry without discarding the artifact or failure count", () => {
+    const failed = reduceDesktopUpdateStateOnInstallFailure(
+      {
+        ...createInitialDesktopUpdateState("1.0.0", runtimeInfo),
+        enabled: true,
+        status: "downloaded",
+        availableVersion: "1.1.0",
+        downloadedVersion: "1.1.0",
+        installFailureCount: 2,
+      },
+      "The update could not be installed automatically",
+    );
+    const retry = reduceDesktopUpdateStateOnInstallStart(failed);
+    expect(retry).toMatchObject({
+      status: "downloaded",
+      downloadedVersion: "1.1.0",
+      availableVersion: "1.1.0",
+      installFailureCount: 2,
+      errorContext: null,
+      message: null,
+      canRetry: false,
+    });
+  });
+
+  it("restores a durable restart failure without stale downloaded state", () => {
+    const state = reduceDesktopUpdateStateOnInstallRestartFailure(
+      {
+        ...createInitialDesktopUpdateState("1.0.0", runtimeInfo),
+        enabled: true,
+      },
+      "1.1.0",
+      2,
+      "Synara restarted before the update was installed.",
+    );
+
+    expect(state).toMatchObject({
+      status: "error",
+      availableVersion: "1.1.0",
+      downloadedVersion: null,
+      installFailureCount: 2,
+      message: "Synara restarted before the update was installed.",
+      errorContext: "install",
+      canRetry: true,
+    });
+  });
+
   it("clears stale download state when no update is available", () => {
     const state = reduceDesktopUpdateStateOnNoUpdate(
       {
@@ -106,6 +154,7 @@ describe("updateMachine", () => {
         message: "old failure",
         errorContext: "download",
         canRetry: true,
+        installFailureCount: 2,
       },
       "2026-03-04T00:00:00.000Z",
     );
@@ -115,6 +164,7 @@ describe("updateMachine", () => {
     expect(state.downloadedVersion).toBeNull();
     expect(state.message).toBeNull();
     expect(state.errorContext).toBeNull();
+    expect(state.installFailureCount).toBe(0);
   });
 
   it("tracks available, download start, and progress cleanly", () => {
@@ -135,5 +185,47 @@ describe("updateMachine", () => {
     expect(downloading.downloadPercent).toBeNull();
     expect(progress.downloadPercent).toBe(55.5);
     expect(progress.errorContext).toBeNull();
+  });
+
+  it("preserves install failure count across a retry for the same version", () => {
+    const failed = reduceDesktopUpdateStateOnInstallRestartFailure(
+      {
+        ...createInitialDesktopUpdateState("1.0.0", runtimeInfo),
+        enabled: true,
+      },
+      "1.1.0",
+      2,
+      "Install failed",
+    );
+    const checking = reduceDesktopUpdateStateOnCheckStart(failed, "2026-03-04T00:00:00.000Z");
+    const available = reduceDesktopUpdateStateOnUpdateAvailable(
+      checking,
+      "1.1.0",
+      "2026-03-04T00:00:01.000Z",
+    );
+    const downloaded = reduceDesktopUpdateStateOnDownloadComplete(
+      reduceDesktopUpdateStateOnDownloadStart(available),
+      "1.1.0",
+    );
+
+    expect(checking.installFailureCount).toBe(2);
+    expect(available.installFailureCount).toBe(2);
+    expect(downloaded.installFailureCount).toBe(2);
+  });
+
+  it("resets install failure count when a different update appears", () => {
+    const state = reduceDesktopUpdateStateOnUpdateAvailable(
+      {
+        ...createInitialDesktopUpdateState("1.0.0", runtimeInfo),
+        enabled: true,
+        status: "error",
+        availableVersion: "1.1.0",
+        installFailureCount: 2,
+      },
+      "1.2.0",
+      "2026-03-04T00:00:00.000Z",
+    );
+
+    expect(state.installFailureCount).toBe(0);
   });
 });

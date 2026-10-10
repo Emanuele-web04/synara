@@ -2,11 +2,11 @@
 
 ## Read This First
 
-We are not actively accepting contributions right now.
+We are accepting focused contributions, especially small bug fixes, reliability fixes, performance improvements, and maintenance work.
 
-You can still open an issue or PR, but please do so knowing there is a high chance we close it, defer it forever, or never look at it.
+You can open an issue or PR, but please do so knowing that Synara is still early and we are keeping scope, quality, and direction tight.
 
-If that sounds annoying, that is because it is. This project is still early and we are trying to keep scope, quality, and direction under control.
+Large, unfocused, or direction-changing PRs may still be closed quickly.
 
 PRs are automatically labeled with a `vouch:*` trust status and a `size:*` diff size based on changed lines.
 
@@ -54,7 +54,64 @@ If we have to guess what changed, we are much less likely to review it.
 
 If you are thinking about a non-trivial change, open an issue first.
 
-That still does not mean we will want the PR, but it gives you a chance to avoid wasting your time.
+That gives you a chance to check whether the direction fits before spending time on a larger patch.
+
+## Testing
+
+Run the full workspace test suite from the repository root with:
+
+```bash
+bun run test
+```
+
+For focused web tests, pass paths relative to `apps/web` through the dedicated root command:
+
+```bash
+bun run test:web:focused src/path/to/example.test.ts
+```
+
+The pinned `@pierre/diffs` patch refreshes file-editor rows after line insertions
+and deletions. When upgrading the dependency, verify repeated Enter, subsequent
+typing, undo, and redo with the real editor browser tests before removing it:
+
+```bash
+bun run --cwd apps/web test:browser src/components/codeEditor/CodeEditorPane.browser.tsx
+```
+
+The pinned `@effect/platform-node-shared` patch preserves Windows spawn options
+and rejects invalid PIDs before converting child handles into process-group
+signals. Windows group cleanup must launch `taskkill` directly with
+`windowsHide: true`, so teardown does not open a console beneath the desktop app.
+Valid groups may outlive their leader; cleanup must continue to reach those descendants. When updating Effect, keep these behaviors and run
+`apps/server/src/platform/effectProcessSignals.test.ts` against the installed
+runtime, including its Windows cases.
+
+The same patch makes writable stream errors fail the owning Effect sink, waits
+for accepted writes before completing, and removes drain/finish listeners on
+cancellation. Pending writes retain an error listener until they settle so a
+late broken pipe cannot become an uncaught process exception. Keep the source
+and compiled runtime changes together and run
+`apps/server/src/platform/effectWritableSink.test.ts` after updating Effect.
+
+Process-tree teardown captures POSIX start times and Windows creation times for
+checking descendants during delayed cleanup and exit verification. Start times
+add evidence to the existing command-line comparison. POSIX start times have
+second resolution and observation followed by signaling is not atomic;
+these checks are not proof of arbitrary PID ownership. Root signaling still
+requires the caller to own the live process lifecycle. Direct owned-child
+cancellation must work even when external process-table tools are unavailable.
+
+Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
+`ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments
+strip that inherited flag, so relying on inheritance can launch the desktop GUI
+instead of the proxy. Keep the provider environment filtering intact.
+
+Database lifecycle locks publish their owner metadata atomically. Startup may
+recover an empty lock directory or one containing only Finder's `.DS_Store`,
+including the stale-lock recovery guard. It must preserve live owners, malformed
+owner metadata, links, and unrecognized files. An unknown owner is not proof of
+another running server; the desktop lock dialog provides **Open logs** to inspect
+the underlying error. Never remove a populated lock to work around a startup block.
 
 ## Be Realistic
 

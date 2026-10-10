@@ -1,17 +1,84 @@
 import { assert, describe, it } from "vitest";
-import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
+import {
+  buildVisibleToastLayout,
+  shouldHideCollapsedToastContent,
+  shouldRunVisibleToastAutoDismiss,
+  shouldUseCompactToast,
+} from "./toast.logic";
 
-describe("shouldHideCollapsedToastContent", () => {
-  it("keeps a single visible toast readable", () => {
-    assert.equal(shouldHideCollapsedToastContent(0, 1), false);
+describe("shouldUseCompactToast", () => {
+  it("uses the compact layout for a plain toast", () => {
+    assert.equal(shouldUseCompactToast({ data: {} }), true);
   });
 
+  it("honors the contextual override even with copyable items", () => {
+    assert.equal(
+      shouldUseCompactToast({
+        data: {
+          compactContextual: true,
+          copyItems: [{ label: "path", text: "/tmp" }],
+        },
+      }),
+      true,
+    );
+  });
+
+  it("renders expanded when the toast has copyable items or actions", () => {
+    assert.equal(
+      shouldUseCompactToast({
+        data: { copyItems: [{ label: "path", text: "/tmp" }] },
+      }),
+      false,
+    );
+    assert.equal(shouldUseCompactToast({ data: { copyText: "x" } }), false);
+    assert.equal(shouldUseCompactToast({ actionProps: {} }), false);
+    assert.equal(shouldUseCompactToast({ data: { secondaryActionProps: {} } }), false);
+  });
+
+  it("keeps an empty copy item list compact", () => {
+    assert.equal(shouldUseCompactToast({ data: { copyItems: [] } }), true);
+  });
+});
+
+describe("shouldHideCollapsedToastContent", () => {
   it("keeps the front-most toast readable in a visible stack", () => {
     assert.equal(shouldHideCollapsedToastContent(0, 3), false);
   });
 
   it("hides non-front toasts until the stack is expanded", () => {
     assert.equal(shouldHideCollapsedToastContent(1, 3), true);
+  });
+});
+
+describe("shouldRunVisibleToastAutoDismiss", () => {
+  it("also pauses for explicit, visibility, and window-focus gates", () => {
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: true,
+        documentVisible: true,
+        windowFocused: true,
+        toastFocused: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: false,
+        documentVisible: false,
+        windowFocused: true,
+        toastFocused: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: false,
+        documentVisible: true,
+        windowFocused: false,
+        toastFocused: false,
+      }),
+      false,
+    );
   });
 });
 

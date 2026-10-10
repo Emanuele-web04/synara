@@ -64,7 +64,8 @@ export class ProviderAdapterRequestError extends Schema.TaggedErrorClass<Provide
   },
 ) {
   override get message(): string {
-    return `Provider adapter request failed (${this.provider}) for ${this.method}: ${this.detail}`;
+    const detail = this.detail.trim();
+    return `Provider adapter request failed (${this.provider}) for ${this.method}${detail ? `: ${detail}` : ""}`;
   }
 }
 
@@ -77,6 +78,8 @@ export class ProviderAdapterProcessError extends Schema.TaggedErrorClass<Provide
     provider: Schema.String,
     threadId: Schema.String,
     detail: Schema.String,
+    // startup-failed is only valid after cleanup proves the process stopped.
+    reason: Schema.optional(Schema.Literals(["resume-state-unavailable", "startup-failed"])),
     cause: Schema.optional(Schema.Defect),
   },
 ) {
@@ -93,6 +96,7 @@ export class ProviderValidationError extends Schema.TaggedErrorClass<ProviderVal
   {
     operation: Schema.String,
     issue: Schema.String,
+    reason: Schema.optional(Schema.Literals(["runtime-unavailable", "stale-interaction"])),
     cause: Schema.optional(Schema.Defect),
   },
 ) {

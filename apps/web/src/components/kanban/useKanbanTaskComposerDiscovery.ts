@@ -6,6 +6,7 @@
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderNativeCommandDescriptor,
@@ -13,14 +14,16 @@ import type {
   ProviderSkillDescriptor,
   ProviderStartOptions,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { useMemo } from "react";
 
 import type { ComposerCommandItem } from "~/components/chat/ComposerCommandMenu";
 import type { ComposerTrigger } from "~/composer-logic";
-import { useComposerCommandMenuItems } from "~/hooks/useComposerCommandMenuItems";
+import {
+  buildSearchableModelOptions,
+  useComposerCommandMenuItems,
+} from "~/hooks/useComposerCommandMenuItems";
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
@@ -33,25 +36,16 @@ import {
   supportsSkillDiscovery,
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
-import { isMacPlatform } from "~/lib/utils";
-import { compareProvidersByOrder } from "~/providerOrdering";
-import { AVAILABLE_PROVIDER_OPTIONS } from "../chat/ProviderModelPicker";
+import { isMacNavigatorPlatform } from "~/lib/utils";
+import type {
+  ProviderModelOptionsByProviderInstance,
+  ProviderModelPickerInstance,
+} from "../chat/ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
 type ComposerPluginSuggestion = {
   plugin: ProviderPluginDescriptor;
   mention: ProviderMentionReference;
-};
-
-type SearchableModelOption = {
-  provider: ProviderKind;
-  providerLabel: string;
-  slug: string;
-  name: string;
-  searchSlug: string;
-  searchName: string;
-  searchProvider: string;
-  searchUpstreamProvider: string;
 };
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
@@ -64,10 +58,13 @@ const KANBAN_SUPPORTED_APP_SLASH_COMMANDS = new Set(["clear", "default", "plan"]
 interface UseKanbanTaskComposerDiscoveryInput {
   readonly composerTrigger: ComposerTrigger | null;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly modelOptionsByProvider: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
   >;
+  readonly modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
+  readonly providerInstances: ReadonlyArray<ProviderModelPickerInstance>;
   readonly selectedRuntimeAgents: readonly ProviderAgentDescriptor[];
   readonly selectedProjectCwd: string | null;
   readonly serverCwd: string | null;
@@ -77,6 +74,7 @@ interface UseKanbanTaskComposerDiscoveryInput {
   readonly hiddenProviders: readonly ProviderKind[];
   readonly providerOrder: readonly ProviderKind[];
   readonly piAgentDir: string | null;
+  readonly ompAgentDir: string | null;
 }
 
 export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDiscoveryInput): {
@@ -89,7 +87,10 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const {
     composerTrigger,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd,
     serverCwd,
@@ -99,12 +100,12 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     hiddenProviders,
     providerOrder,
     piAgentDir,
+    ompAgentDir,
   } = input;
 
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverHomeDir,
-    isMacPlatform(platform),
+    isMacNavigatorPlatform(),
   );
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
@@ -125,36 +126,28 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   });
 
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       binaryPath:
         (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.binaryPath
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.binaryPath
-            : null) ?? null,
+          : null) ?? null,
       serverUrl:
         (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.serverUrl
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.serverUrl
-            : null) ?? null,
-      serverPassword:
-        (selectedProvider === "opencode"
-          ? providerOptionsForDispatch?.opencode?.serverPassword
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.serverPassword
-            : null) ?? null,
+          : null) ?? null,
       experimentalWebSockets:
         selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.experimentalWebSockets
           : undefined,
-      agentDir: selectedProvider === "pi" ? piAgentDir : null,
+      agentDir:
+        selectedProvider === "pi" ? piAgentDir : selectedProvider === "omp" ? ompAgentDir : null,
       enabled:
         (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
@@ -162,15 +155,22 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     }),
   );
   const canDiscoverProviderSkills =
-    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
+    selectedProvider === "pi" ||
+    selectedProvider === "omp" ||
+    supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
-      agentDir: selectedProvider === "pi" ? piAgentDir : null,
+      agentDir:
+        selectedProvider === "pi" ? piAgentDir : selectedProvider === "omp" ? ompAgentDir : null,
       enabled:
-        (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
+        (isSkillTrigger ||
+          composerTriggerKind === "slash-command" ||
+          selectedProvider === "pi" ||
+          selectedProvider === "omp") &&
         canDiscoverProviderSkills &&
         composerSkillCwd !== null,
     }),
@@ -178,6 +178,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerPluginsQuery = useQuery(
     providerPluginsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       enabled:
@@ -195,62 +196,37 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   );
 
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
-  const providerPlugins = useMemo(
-    () =>
-      providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
-        marketplace.plugins.map((plugin) => ({
-          plugin,
-          mention: {
-            name: plugin.name,
-            path: `plugin://${plugin.name}@${marketplace.name}`,
-          } satisfies ProviderMentionReference,
-        })),
-      ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS,
-    [providerPluginsQuery.data],
-  );
+  const providerPlugins =
+    providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
+      marketplace.plugins.map((plugin) => ({
+        plugin,
+        mention: {
+          name: plugin.name,
+          path: `plugin://${plugin.name}@${marketplace.name}`,
+        } satisfies ProviderMentionReference,
+      })),
+    ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS;
   const providerNativeCommands =
     providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
-  const hiddenProviderSet = useMemo(
-    () => new Set<ProviderKind>(hiddenProviders),
-    [hiddenProviders],
-  );
-  const searchableModelOptions = useMemo<SearchableModelOption[]>(
-    () =>
-      AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
-        compareProvidersByOrder(providerOrder, left.value, right.value),
-      )
-        .filter(
-          (option) => option.value === selectedProvider || !hiddenProviderSet.has(option.value),
-        )
-        .flatMap((option) =>
-          modelOptionsByProvider[option.value].map(
-            ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-              provider: option.value,
-              providerLabel: option.label,
-              slug,
-              name,
-              searchSlug: slug.toLowerCase(),
-              searchName: name.toLowerCase(),
-              searchProvider: option.label.toLowerCase(),
-              searchUpstreamProvider: (
-                upstreamProviderName ??
-                upstreamProviderId ??
-                ""
-              ).toLowerCase(),
-            }),
-          ),
-        ),
-    [hiddenProviderSet, modelOptionsByProvider, providerOrder, selectedProvider],
-  );
-  const dynamicAgents = useMemo(
-    () =>
-      selectedRuntimeAgents.map((agent) =>
-        agent.description
-          ? { name: agent.name, displayName: agent.displayName, description: agent.description }
-          : { name: agent.name, displayName: agent.displayName },
-      ),
-    [selectedRuntimeAgents],
+  const searchableModelOptions = buildSearchableModelOptions({
+    providerOptions: providerInstances
+      .filter((instance) => instance.enabled)
+      .map((instance) => ({
+        value: instance.provider,
+        label: instance.label,
+        instanceId: instance.instanceId,
+      })),
+    modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerOrder,
+    hiddenProviders,
+    protectedProviders: [selectedProvider],
+  });
+  const dynamicAgents = selectedRuntimeAgents.map((agent) =>
+    agent.description
+      ? { name: agent.name, displayName: agent.displayName, description: agent.description }
+      : { name: agent.name, displayName: agent.displayName },
   );
   const rawComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger,
@@ -265,15 +241,14 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     canOfferReviewCommand: false,
     canOfferForkCommand: false,
     canOfferSideCommand: false,
+    canOfferExportCommand: false,
+    surfaceAppSlashCommands: KANBAN_SUPPORTED_APP_SLASH_COMMANDS,
+    providerArtifacts: providerCommandsQuery.data?.artifacts,
     dynamicAgents,
   });
-  const composerMenuItems = useMemo(
-    () =>
-      rawComposerMenuItems.filter(
-        (item) =>
-          item.type !== "slash-command" || KANBAN_SUPPORTED_APP_SLASH_COMMANDS.has(item.command),
-      ),
-    [rawComposerMenuItems],
+  const composerMenuItems = rawComposerMenuItems.filter(
+    (item) =>
+      item.type !== "slash-command" || KANBAN_SUPPORTED_APP_SLASH_COMMANDS.has(item.command),
   );
   const isComposerMenuLoading =
     (composerTriggerKind === "mention" &&

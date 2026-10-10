@@ -7,16 +7,13 @@ import {
 } from "./merge-mac-update-manifests.ts";
 
 describe("merge-mac-update-manifests", () => {
-  it("merges arm64 and x64 macOS update manifests into one multi-arch manifest", () => {
+  it("merges ZIP-only arm64 and x64 updater manifests", () => {
     const arm64 = parseMacUpdateManifest(
       `version: 0.0.4
 files:
   - url: Synara-0.0.4-arm64.zip
     sha512: arm64zip
     size: 125621344
-  - url: Synara-0.0.4-arm64.dmg
-    sha512: arm64dmg
-    size: 131754935
 path: Synara-0.0.4-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-07T10:32:14.587Z'
@@ -30,9 +27,6 @@ files:
   - url: Synara-0.0.4-x64.zip
     sha512: x64zip
     size: 132000112
-  - url: Synara-0.0.4-x64.dmg
-    sha512: x64dmg
-    size: 138148807
 path: Synara-0.0.4-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-07T10:36:07.540Z'
@@ -46,17 +40,13 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     assert.equal(merged.releaseDate, "2026-03-07T10:36:07.540Z");
     assert.deepStrictEqual(
       merged.files.map((file) => file.url),
-      [
-        "Synara-0.0.4-arm64.zip",
-        "Synara-0.0.4-arm64.dmg",
-        "Synara-0.0.4-x64.zip",
-        "Synara-0.0.4-x64.dmg",
-      ],
+      ["Synara-0.0.4-arm64.zip", "Synara-0.0.4-x64.zip"],
     );
 
     const serialized = serializeMacUpdateManifest(merged);
     assert.ok(!serialized.includes("path:"));
-    assert.equal((serialized.match(/- url:/g) ?? []).length, 4);
+    assert.equal((serialized.match(/- url:/g) ?? []).length, 2);
+    assert.ok(!serialized.includes(".dmg"));
   });
 
   it("rejects mismatched manifest versions", () => {

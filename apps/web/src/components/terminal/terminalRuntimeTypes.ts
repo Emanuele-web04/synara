@@ -5,7 +5,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import type { TerminalLinkMatch } from "../../terminal-links";
 
@@ -34,6 +34,7 @@ export interface TerminalRuntimeConfig {
   terminalCliKind?: TerminalCliKind | null;
   cwd: string;
   runtimeEnv?: Record<string, string>;
+  providerAuthInstanceId?: string;
   callbacks: TerminalRuntimeCallbacks;
 }
 
@@ -48,7 +49,7 @@ export interface TerminalPendingWrite {
   queuedAt: number;
 }
 
-export type TerminalRuntimeStatus = "connecting" | "replaying" | "ready" | "error";
+export type TerminalRuntimeStatus = "connecting" | "replaying" | "ready" | "exited" | "error";
 
 export interface TerminalRuntimeEntry {
   runtimeKey: string;
@@ -58,6 +59,7 @@ export interface TerminalRuntimeEntry {
   terminalCliKind: TerminalCliKind | null;
   cwd: string;
   runtimeEnv?: Record<string, string>;
+  providerAuthInstanceId?: string;
   callbacks: TerminalRuntimeCallbacks;
   wrapper: HTMLDivElement;
   container: HTMLDivElement | null;

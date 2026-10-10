@@ -1,4 +1,8 @@
 import {
+  SpaceCreatedPayload as ContractsSpaceCreatedPayloadSchema,
+  SpaceMetaUpdatedPayload as ContractsSpaceMetaUpdatedPayloadSchema,
+  SpaceOrderUpdatedPayload as ContractsSpaceOrderUpdatedPayloadSchema,
+  SpaceDeletedPayload as ContractsSpaceDeletedPayloadSchema,
   ProjectCreatedPayload as ContractsProjectCreatedPayloadSchema,
   ProjectMetaUpdatedPayload as ContractsProjectMetaUpdatedPayloadSchema,
   ProjectDeletedPayload as ContractsProjectDeletedPayloadSchema,
@@ -9,10 +13,6 @@ import {
   ThreadPinnedMessageRemovedPayload as ContractsThreadPinnedMessageRemovedPayloadSchema,
   ThreadPinnedMessageDoneSetPayload as ContractsThreadPinnedMessageDoneSetPayloadSchema,
   ThreadPinnedMessageLabelSetPayload as ContractsThreadPinnedMessageLabelSetPayloadSchema,
-  ThreadMarkerAddedPayload as ContractsThreadMarkerAddedPayloadSchema,
-  ThreadMarkerRemovedPayload as ContractsThreadMarkerRemovedPayloadSchema,
-  ThreadMarkerDoneSetPayload as ContractsThreadMarkerDoneSetPayloadSchema,
-  ThreadMarkerLabelSetPayload as ContractsThreadMarkerLabelSetPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
   ThreadDeletedPayload as ContractsThreadDeletedPayloadSchema,
@@ -31,9 +31,15 @@ import {
   ThreadConversationRollbackRequestedPayload as ContractsThreadConversationRollbackRequestedPayloadSchema,
   ThreadMessageEditResendRequestedPayload as ContractsThreadMessageEditResendRequestedPayloadSchema,
   ThreadSessionStopRequestedPayload as ContractsThreadSessionStopRequestedPayloadSchema,
-} from "@t3tools/contracts";
+  ThreadSidechatActivityRecordedPayload as ContractsThreadSidechatActivityRecordedPayloadSchema,
+  ThreadSidechatExpiredPayload as ContractsThreadSidechatExpiredPayloadSchema,
+} from "@synara/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
+export const SpaceCreatedPayload = ContractsSpaceCreatedPayloadSchema;
+export const SpaceMetaUpdatedPayload = ContractsSpaceMetaUpdatedPayloadSchema;
+export const SpaceOrderUpdatedPayload = ContractsSpaceOrderUpdatedPayloadSchema;
+export const SpaceDeletedPayload = ContractsSpaceDeletedPayloadSchema;
 export const ProjectCreatedPayload = ContractsProjectCreatedPayloadSchema;
 export const ProjectMetaUpdatedPayload = ContractsProjectMetaUpdatedPayloadSchema;
 export const ProjectDeletedPayload = ContractsProjectDeletedPayloadSchema;
@@ -45,10 +51,6 @@ export const ThreadPinnedMessageAddedPayload = ContractsThreadPinnedMessageAdded
 export const ThreadPinnedMessageRemovedPayload = ContractsThreadPinnedMessageRemovedPayloadSchema;
 export const ThreadPinnedMessageDoneSetPayload = ContractsThreadPinnedMessageDoneSetPayloadSchema;
 export const ThreadPinnedMessageLabelSetPayload = ContractsThreadPinnedMessageLabelSetPayloadSchema;
-export const ThreadMarkerAddedPayload = ContractsThreadMarkerAddedPayloadSchema;
-export const ThreadMarkerRemovedPayload = ContractsThreadMarkerRemovedPayloadSchema;
-export const ThreadMarkerDoneSetPayload = ContractsThreadMarkerDoneSetPayloadSchema;
-export const ThreadMarkerLabelSetPayload = ContractsThreadMarkerLabelSetPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
 export const ThreadDeletedPayload = ContractsThreadDeletedPayloadSchema;
@@ -75,3 +77,6 @@ export const ThreadConversationRolledBackPayload =
 export const ThreadMessageEditResendRequestedPayload =
   ContractsThreadMessageEditResendRequestedPayloadSchema;
 export const ThreadSessionStopRequestedPayload = ContractsThreadSessionStopRequestedPayloadSchema;
+export const ThreadSidechatActivityRecordedPayload =
+  ContractsThreadSidechatActivityRecordedPayloadSchema;
+export const ThreadSidechatExpiredPayload = ContractsThreadSidechatExpiredPayloadSchema;

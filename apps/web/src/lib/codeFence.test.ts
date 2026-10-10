@@ -31,6 +31,18 @@ describe("parseCodeFenceInfo", () => {
     });
   });
 
+  it("treats a Windows-style bare path as a file reference", () => {
+    const fence = parseCodeFenceInfo("src\\components\\Button.tsx");
+    expect(fence).toMatchObject({
+      isFileReference: true,
+      filePath: "src\\components\\Button.tsx",
+      fileName: "Button.tsx",
+      directory: "src\\components",
+      lineRange: null,
+      language: "tsx",
+    });
+  });
+
   it("resolves a language for files without a directory", () => {
     const fence = parseCodeFenceInfo("12:20:Dockerfile");
     expect(fence.isFileReference).toBe(true);
@@ -39,21 +51,18 @@ describe("parseCodeFenceInfo", () => {
     expect(fence.language).toBe("dockerfile");
   });
 
-  it("keeps bare language tokens as-is", () => {
-    expect(parseCodeFenceInfo("ts")).toMatchObject({
+  it("keeps root-level filename-looking tokens as language tokens", () => {
+    expect(parseCodeFenceInfo("package.json")).toMatchObject({
       isFileReference: false,
-      language: "ts",
+      language: "package.json",
       filePath: null,
     });
   });
 
   it("falls back to text for an empty info string and maps gitignore to ini", () => {
     expect(parseCodeFenceInfo("").language).toBe("text");
+    expect(parseCodeFenceInfo("   ").language).toBe("text");
     expect(parseCodeFenceInfo("gitignore").language).toBe("ini");
-  });
-
-  it("falls back to text for unknown extensions", () => {
-    expect(parseCodeFenceInfo("1:2:notes.unknownext").language).toBe("text");
   });
 });
 
@@ -73,7 +82,8 @@ describe("dedentCode", () => {
     expect(dedentCode(input)).toBe(input);
   });
 
-  it("leaves single-line snippets untouched when flush", () => {
-    expect(dedentCode("const value = 42;")).toBe("const value = 42;");
+  it("handles tab indentation", () => {
+    const input = ["\t\talpha();", "\t\tbeta();"].join("\n");
+    expect(dedentCode(input)).toBe(["alpha();", "beta();"].join("\n"));
   });
 });

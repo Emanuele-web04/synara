@@ -3,8 +3,9 @@
 // Layer: Web subscription utility
 // Exports: Pure controller factory plus a React hook backed by thread-detail retention.
 
-import type { ThreadId } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import type { ThreadId } from "@synara/contracts";
+import { useEffect, useRef } from "react";
+import { hasThreadDetailResumeCursor } from "./threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "./threadDetailSubscriptionRetention";
 
 export const THREAD_DETAIL_PREWARM_RELEASE_MS = 10_000;
@@ -31,6 +32,7 @@ export interface ThreadDetailPrewarmController {
 
 export interface ThreadDetailPrewarmControllerOptions {
   retainThreadDetailSubscription?: RetainThreadDetailSubscription | undefined;
+  canPrewarmThreadDetail?: ((threadId: ThreadId) => boolean) | undefined;
   releaseMs?: number | undefined;
   maxRetainedThreads?: number | undefined;
   clock?: ThreadDetailPrewarmClock | undefined;
@@ -41,7 +43,11 @@ const DEFAULT_CLOCK: ThreadDetailPrewarmClock = {
   clearTimeout: (timeoutId) => clearTimeout(timeoutId),
 };
 
-function uniqueThreadIds(threadIds: readonly ThreadId[], limit: number): ThreadId[] {
+function uniqueEligibleThreadIds(
+  threadIds: readonly ThreadId[],
+  limit: number,
+  isEligible: (threadId: ThreadId) => boolean,
+): ThreadId[] {
   const nextThreadIds: ThreadId[] = [];
   const seenThreadIds = new Set<ThreadId>();
 
@@ -50,6 +56,11 @@ function uniqueThreadIds(threadIds: readonly ThreadId[], limit: number): ThreadI
       continue;
     }
     seenThreadIds.add(threadId);
+    // Eligibility filters before the limit: ineligible (cold) threads must not
+    // consume prewarm slots that a cached thread later in the list could use.
+    if (!isEligible(threadId)) {
+      continue;
+    }
     nextThreadIds.push(threadId);
     if (nextThreadIds.length >= limit) {
       break;
@@ -64,6 +75,10 @@ export function createThreadDetailPrewarmController(
 ): ThreadDetailPrewarmController {
   const retainThreadDetail =
     options.retainThreadDetailSubscription ?? retainThreadDetailSubscription;
+  // A speculative prewarm subscription is only cheap when it resumes from a
+  // cursor: without cached detail it would open a full-history snapshot stream
+  // and compete with real navigation for the per-client thread-stream budget.
+  const canPrewarmThreadDetail = options.canPrewarmThreadDetail ?? hasThreadDetailResumeCursor;
   const releaseMs = options.releaseMs ?? THREAD_DETAIL_PREWARM_RELEASE_MS;
   const maxRetainedThreads = options.maxRetainedThreads ?? THREAD_DETAIL_PREWARM_LIMIT;
   const clock = options.clock ?? DEFAULT_CLOCK;
@@ -81,6 +96,9 @@ export function createThreadDetailPrewarmController(
 
   const prewarmThreadDetail = (threadId: ThreadId) => {
     const existing = retainedThreadById.get(threadId);
+    if (!existing && !canPrewarmThreadDetail(threadId)) {
+      return;
+    }
     if (existing) {
       clock.clearTimeout(existing.timeoutId);
     }
@@ -101,7 +119,13 @@ export function createThreadDetailPrewarmController(
   return {
     prewarmThreadDetail,
     prewarmThreadDetails(threadIds) {
-      const nextThreadIds = uniqueThreadIds(threadIds, maxRetainedThreads);
+      const nextThreadIds = uniqueEligibleThreadIds(
+        threadIds,
+        maxRetainedThreads,
+        // Already-retained threads stay eligible: their prewarm retain is live
+        // even if the cursor moved underneath, matching prewarmThreadDetail.
+        (threadId) => retainedThreadById.has(threadId) || canPrewarmThreadDetail(threadId),
+      );
       const nextThreadIdSet = new Set(nextThreadIds);
 
       for (const threadId of nextThreadIds) {
@@ -135,19 +159,16 @@ export function useThreadDetailPrewarm(): Omit<ThreadDetailPrewarmController, "d
     [],
   );
 
-  const prewarmThreadDetail = useCallback((threadId: ThreadId) => {
+  const prewarmThreadDetail = (threadId: ThreadId) => {
     controllerRef.current?.prewarmThreadDetail(threadId);
-  }, []);
+  };
 
-  const prewarmThreadDetails = useCallback((threadIds: readonly ThreadId[]) => {
+  const prewarmThreadDetails = (threadIds: readonly ThreadId[]) => {
     controllerRef.current?.prewarmThreadDetails(threadIds);
-  }, []);
+  };
 
-  return useMemo(
-    () => ({
-      prewarmThreadDetail,
-      prewarmThreadDetails,
-    }),
-    [prewarmThreadDetail, prewarmThreadDetails],
-  );
+  return {
+    prewarmThreadDetail,
+    prewarmThreadDetails,
+  };
 }

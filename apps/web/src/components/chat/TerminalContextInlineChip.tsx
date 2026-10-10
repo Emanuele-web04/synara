@@ -15,7 +15,8 @@ interface TerminalContextInlineChipProps {
 }
 
 export function TerminalContextInlineChip(props: TerminalContextInlineChipProps) {
-  const { label, tooltipText, expired = false } = props;
+  const { label, tooltipText, expired: expiredProp } = props;
+  const expired = expiredProp ?? false;
 
   return (
     <Tooltip>

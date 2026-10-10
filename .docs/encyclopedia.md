@@ -1,6 +1,6 @@
 # Encyclopedia
 
-This is a living glossary for DP Code. It explains what common terms mean in this codebase.
+This is a living glossary for Synara. It explains what common terms mean in this codebase.
 
 ## Table of contents
 
@@ -101,7 +101,7 @@ The live provider-backed runtime attached to a thread. Session shape is in [the 
 
 #### Runtime mode
 
-The safety/access mode for a thread or session. In [the contracts][1], the main values are `approval-required` and `full-access`. See [runtime-modes.md][18].
+The safety/access mode for a thread or session. In [the contracts][1], the values are `approval-required`, `auto`, and `full-access`. Auto uses a native AI approval reviewer for Codex and Claude Code; Full access bypasses approval entirely. See [runtime-modes.md][18].
 
 #### Interaction mode
 

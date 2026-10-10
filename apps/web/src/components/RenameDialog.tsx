@@ -1,5 +1,5 @@
 // FILE: RenameDialog.tsx
-// Purpose: Shared single-field rename dialog for threads and projects.
+// Purpose: Shared single-field dialog for thread/project rename and snooze date entry.
 // Layer: Shared UI component
 // Exports: RenameDialog
 
@@ -25,6 +25,10 @@ export interface RenameDialogProps {
   allowEmpty?: boolean | undefined;
   placeholder?: string | undefined;
   saveLabel?: string | undefined;
+  /** Snooze reuses this dialog with a native date-time field. */
+  inputType?: "text" | "datetime-local" | undefined;
+  /** Extra gate on Save beyond the empty check, e.g. a date in the future. */
+  isValueValid?: ((value: string) => boolean) | undefined;
   onOpenChange: (open: boolean) => void;
   onSave: (next: string) => Promise<void> | void;
 }
@@ -39,22 +43,68 @@ export function RenameDialog({
   title,
   description,
   initialValue,
-  allowEmpty = false,
+  allowEmpty: allowEmptyProp,
   placeholder,
-  saveLabel = "Save",
+  saveLabel: saveLabelProp,
+  inputType,
+  isValueValid,
   onOpenChange,
   onSave,
 }: RenameDialogProps) {
+  const allowEmpty = allowEmptyProp ?? false;
+  const saveLabel = saveLabelProp ?? "Save";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description ? <DialogDescription>{description}</DialogDescription> : null}
+        </DialogHeader>
+        {/* Field state lives below DialogPopup, which unmounts its children
+            after the close transition — each open seeds a fresh value from
+            initialValue without a reset effect. */}
+        <RenameDialogForm
+          inputLabel={title}
+          initialValue={initialValue}
+          allowEmpty={allowEmpty}
+          placeholder={placeholder}
+          saveLabel={saveLabel}
+          inputType={inputType ?? "text"}
+          isValueValid={isValueValid}
+          onOpenChange={onOpenChange}
+          onSave={onSave}
+        />
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function RenameDialogForm({
+  inputLabel,
+  initialValue,
+  allowEmpty,
+  placeholder,
+  saveLabel,
+  inputType,
+  isValueValid,
+  onOpenChange,
+  onSave,
+}: {
+  inputLabel: string;
+  initialValue: string;
+  allowEmpty: boolean;
+  placeholder: string | undefined;
+  saveLabel: string;
+  inputType: "text" | "datetime-local";
+  isValueValid: ((value: string) => boolean) | undefined;
+  onOpenChange: (open: boolean) => void;
+  onSave: (value: string) => Promise<void> | void;
+}) {
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) {
-      setIsSaving(false);
-      return;
-    }
-    setValue(initialValue);
     const frame = window.requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -62,10 +112,11 @@ export function RenameDialog({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [open, initialValue]);
+  }, []);
 
   const trimmed = value.trim();
-  const canSave = (allowEmpty || trimmed.length > 0) && !isSaving;
+  const canSave =
+    (allowEmpty || trimmed.length > 0) && (isValueValid?.(trimmed) ?? true) && !isSaving;
 
   const handleSubmit = async () => {
     if (!canSave) return;
@@ -79,49 +130,40 @@ export function RenameDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup surface="solid" className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          {description ? <DialogDescription>{description}</DialogDescription> : null}
-        </DialogHeader>
-        <DialogPanel>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleSubmit();
-            }}
-          >
-            <Input
-              ref={inputRef}
-              size="lg"
-              value={value}
-              placeholder={placeholder}
-              disabled={isSaving}
-              onChange={(event) => setValue(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  onOpenChange(false);
-                }
-              }}
-            />
-          </form>
-        </DialogPanel>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
+    <>
+      <DialogPanel>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSubmit();
+          }}
+        >
+          <Input
+            ref={inputRef}
+            aria-label={inputLabel}
+            type={inputType}
+            size="lg"
+            value={value}
+            placeholder={placeholder}
             disabled={isSaving}
-          >
-            Cancel
-          </Button>
-          <Button size="sm" onClick={() => void handleSubmit()} disabled={!canSave}>
-            {isSaving ? "Saving..." : saveLabel}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onOpenChange(false);
+              }
+            }}
+          />
+        </form>
+      </DialogPanel>
+      <DialogFooter>
+        <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={isSaving}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={() => void handleSubmit()} disabled={!canSave}>
+          {isSaving ? "Saving..." : saveLabel}
+        </Button>
+      </DialogFooter>
+    </>
   );
 }

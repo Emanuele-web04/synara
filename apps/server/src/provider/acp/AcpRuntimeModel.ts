@@ -1,12 +1,19 @@
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 import type {
   RuntimeContentStreamKind,
   ThreadTokenUsageSnapshot,
   ToolLifecycleItemType,
-} from "@t3tools/contracts";
-import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
+} from "@synara/contracts";
+import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 
+import { canonicalSynaraComputerToolName } from "../../agentGateway/computerToolPermission.ts";
 import { computeUsagePercent, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
+import { isImageGenerationToolName } from "../imageGenerationTool.ts";
+import {
+  ACP_IMAGE_GENERATION_TOOL_KIND,
+  ACP_SUBAGENT_TOOL_KIND,
+  canonicalItemTypeFromAcpToolKind,
+} from "./AcpAdapterSupport.ts";
 
 type AcpTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 
@@ -87,17 +94,17 @@ export type AcpParsedSessionEvent =
   | {
       readonly _tag: "UsageUpdated";
       readonly usage: ThreadTokenUsageSnapshot;
-      readonly cost?: EffectAcpSchema.Cost | null | undefined;
+      readonly cost?: Acp.Cost | null | undefined;
       readonly rawPayload: unknown;
     };
 
 type AcpSessionSetupResponse =
-  | EffectAcpSchema.LoadSessionResponse
-  | EffectAcpSchema.NewSessionResponse
-  | EffectAcpSchema.ResumeSessionResponse;
+  | Acp.LoadSessionResponse
+  | Acp.NewSessionResponse
+  | Acp.ResumeSessionResponse;
 
 type AcpToolCallUpdate = Extract<
-  EffectAcpSchema.SessionNotification["update"],
+  Acp.SessionNotification["update"],
   { readonly sessionUpdate: "tool_call" | "tool_call_update" }
 >;
 
@@ -113,9 +120,9 @@ export function extractModelConfigId(sessionResponse: AcpSessionSetupResponse): 
 }
 
 export function findSessionConfigOption(
-  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+  configOptions: ReadonlyArray<Acp.SessionConfigOption> | null | undefined,
   configId: string,
-): EffectAcpSchema.SessionConfigOption | undefined {
+): Acp.SessionConfigOption | undefined {
   if (!configOptions) {
     return undefined;
   }
@@ -127,7 +134,7 @@ export function findSessionConfigOption(
 }
 
 export function collectSessionConfigOptionValues(
-  configOption: EffectAcpSchema.SessionConfigOption,
+  configOption: Acp.SessionConfigOption,
 ): ReadonlyArray<string> {
   if (configOption.type !== "select") {
     return [];
@@ -258,7 +265,7 @@ function extractToolCallCommand(rawInput: unknown, title: string | undefined): s
 }
 
 function extractTextContentFromToolCallContent(
-  content: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined,
+  content: ReadonlyArray<Acp.ToolCallContent> | null | undefined,
 ): string | undefined {
   if (!content) return undefined;
   const chunks = content
@@ -277,7 +284,7 @@ function extractTextContentFromToolCallContent(
 }
 
 function summarizeToolCallLocations(
-  locations: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | null | undefined,
+  locations: ReadonlyArray<Acp.ToolCallLocation> | null | undefined,
 ): string | undefined {
   const paths = (locations ?? [])
     .map((location) =>
@@ -293,7 +300,7 @@ function summarizeToolCallLocations(
 }
 
 function summarizeToolCallContent(
-  content: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined,
+  content: ReadonlyArray<Acp.ToolCallContent> | null | undefined,
 ): string | undefined {
   for (const entry of content ?? []) {
     if (entry.type === "diff") {
@@ -315,7 +322,10 @@ function summarizeToolCallContent(
   return extractTextContentFromToolCallContent(content);
 }
 
-function isProviderGenericToolTitle(title: string | undefined, kind: string | undefined): boolean {
+export function isProviderGenericToolTitle(
+  title: string | undefined,
+  kind: string | undefined,
+): boolean {
   const normalized = title?.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) {
     return false;
@@ -336,6 +346,12 @@ function normalizeToolKind(kind: unknown): string | undefined {
   return typeof kind === "string" && kind.trim().length > 0 ? kind.trim() : undefined;
 }
 
+function readNativeToolName(rawInput: unknown): unknown {
+  return isRecord(rawInput)
+    ? (rawInput._toolName ?? rawInput.toolName ?? rawInput.tool_name)
+    : undefined;
+}
+
 function inferToolKindFromProviderTitle(title: string | undefined): string | undefined {
   const normalized = title?.toLowerCase().replace(/\s+/g, " ").trim();
   switch (normalized) {
@@ -351,20 +367,34 @@ function inferToolKindFromProviderTitle(title: string | undefined): string | und
   }
 }
 
-function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
-  switch (kind) {
-    case "execute":
-      return "command_execution";
-    case "edit":
-    case "delete":
-    case "move":
-      return "file_change";
-    case "fetch":
-      return "web_search";
-    case "search":
-    default:
-      return "dynamic_tool_call";
+interface AcpSubagentToolInput {
+  readonly description?: string;
+  readonly prompt?: string;
+}
+
+const ACP_SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(["task", "agent", "subagent"]);
+
+// Cursor's ACP bridge surfaces its `Task` subagent tool as a generic `other` tool call
+// whose rawInput carries the native tool name plus the task description/prompt. The
+// subagent streams nothing back over ACP until it finishes (only `cursor/task`, a
+// completion-only notification), so this detection is what lets the client render it
+// as a subagent run instead of an idle-looking generic tool.
+function parseSubagentToolInput(rawInput: unknown): AcpSubagentToolInput | undefined {
+  if (!isRecord(rawInput)) {
+    return undefined;
   }
+  const toolName =
+    typeof rawInput._toolName === "string" ? rawInput._toolName.trim().toLowerCase() : undefined;
+  if (!toolName || !ACP_SUBAGENT_TOOL_NAMES.has(toolName)) {
+    return undefined;
+  }
+  const description =
+    typeof rawInput.description === "string" ? trimNonEmpty(rawInput.description) : undefined;
+  const prompt = typeof rawInput.prompt === "string" ? trimNonEmpty(rawInput.prompt) : undefined;
+  return {
+    ...(description !== undefined ? { description } : {}),
+    ...(prompt !== undefined ? { prompt } : {}),
+  };
 }
 
 function deriveGenericToolActionTitle(
@@ -373,6 +403,8 @@ function deriveGenericToolActionTitle(
 ): string | undefined {
   const running = status === "pending" || status === "inProgress" || status === undefined;
   switch (kind) {
+    case ACP_IMAGE_GENERATION_TOOL_KIND:
+      return "Image generation";
     case "execute":
       return "Ran command";
     case "edit":
@@ -408,12 +440,12 @@ function makeToolCallState(
   input: {
     readonly toolCallId: string;
     readonly title?: string | null | undefined;
-    readonly kind?: EffectAcpSchema.ToolKind | null | undefined;
-    readonly status?: EffectAcpSchema.ToolCallStatus | null | undefined;
+    readonly kind?: Acp.ToolKind | null | undefined;
+    readonly status?: Acp.ToolCallStatus | null | undefined;
     readonly rawInput?: unknown;
     readonly rawOutput?: unknown;
-    readonly content?: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined;
-    readonly locations?: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | null | undefined;
+    readonly content?: ReadonlyArray<Acp.ToolCallContent> | null | undefined;
+    readonly locations?: ReadonlyArray<Acp.ToolCallLocation> | null | undefined;
   },
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
@@ -423,14 +455,30 @@ function makeToolCallState(
   if (!toolCallId) {
     return undefined;
   }
-  const title = input.title?.trim() || undefined;
-  const command = extractToolCallCommand(input.rawInput, title);
+  const subagent = parseSubagentToolInput(input.rawInput);
+  // A subagent's own description ("Explore composer UI") is the row heading; the
+  // provider title ("Task: Explore composer UI") is only the fallback.
+  const title = subagent?.description ?? (input.title?.trim() || undefined);
+  const command = subagent ? undefined : extractToolCallCommand(input.rawInput, title);
   const textContent = extractTextContentFromToolCallContent(input.content);
   const structuredContent = summarizeToolCallContent(input.content);
   const locationDetail = summarizeToolCallLocations(input.locations);
   const outputDetail = summarizeToolRawOutput(input.rawOutput);
   const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
-  const kind = normalizeToolKind(input.kind) ?? inferToolKindFromProviderTitle(title);
+  const protocolKind = normalizeToolKind(input.kind);
+  const nativeToolName = readNativeToolName(input.rawInput);
+  // A provider's native identifier wins over presentation. Bare exact titles are
+  // only a fallback for generic kinds with no native name, never approval policy.
+  const imageGeneration =
+    isImageGenerationToolName(nativeToolName) ||
+    (nativeToolName === undefined &&
+      (protocolKind === undefined || protocolKind === "other") &&
+      isImageGenerationToolName(title));
+  const kind = subagent
+    ? ACP_SUBAGENT_TOOL_KIND
+    : imageGeneration
+      ? ACP_IMAGE_GENERATION_TOOL_KIND
+      : (protocolKind ?? inferToolKindFromProviderTitle(title));
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
@@ -439,8 +487,21 @@ function makeToolCallState(
   if (kind) {
     data.kind = kind;
   }
+  if (subagent) {
+    // Shape read by the web collab-action extractor (`item.tool` / `item.prompt`).
+    data.tool = "task";
+    if (subagent.prompt) {
+      data.prompt = subagent.prompt;
+    }
+  }
   if (command) {
     data.command = command;
+  }
+  // Native name fields identify the tool; provider titles are presentation only.
+  // Keep arguments intact in rawInput, never promote their values into a title.
+  const computerToolName = canonicalSynaraComputerToolName(nativeToolName);
+  if (computerToolName) {
+    data.toolName = computerToolName;
   }
   if (input.rawInput !== undefined) {
     data.rawInput = input.rawInput;
@@ -455,13 +516,24 @@ function makeToolCallState(
     data.locations = input.locations;
   }
   const kindSpecificTitleIsGeneric = isProviderGenericToolTitle(title, kind);
+  // A healthy subagent row previews its prompt (from data), not a restated title or
+  // the bookkeeping rawOutput ({ durationMs, isBackground }); failures keep the detail.
   const fallbackDetail =
-    command ??
-    locationDetail ??
-    structuredContent ??
-    outputDetail ??
-    (kindSpecificTitleIsGeneric ? undefined : normalizedTitle) ??
-    textContent;
+    subagent && status !== "failed"
+      ? undefined
+      : status === "failed"
+        ? (textContent ??
+          outputDetail ??
+          command ??
+          locationDetail ??
+          structuredContent ??
+          (kindSpecificTitleIsGeneric ? undefined : normalizedTitle))
+        : (command ??
+          locationDetail ??
+          structuredContent ??
+          outputDetail ??
+          (kindSpecificTitleIsGeneric ? undefined : normalizedTitle) ??
+          textContent);
   const actionTitle = deriveGenericToolActionTitle(kind, status);
   const hasPresentationSeed =
     title !== undefined ||
@@ -477,7 +549,13 @@ function makeToolCallState(
     ? deriveToolActivityPresentation({
         itemType,
         data,
-        fallbackSummary: actionTitle ?? (itemType === "command_execution" ? "Ran command" : "Tool"),
+        fallbackSummary:
+          actionTitle ??
+          (itemType === "command_execution"
+            ? "Ran command"
+            : itemType === "collab_agent_tool_call"
+              ? "Subagent task"
+              : "Tool"),
         ...(normalizedTitle !== undefined && !kindSpecificTitleIsGeneric
           ? { title: normalizedTitle }
           : actionTitle !== undefined
@@ -523,7 +601,14 @@ export function mergeToolCallState(
   next: AcpToolCallState,
 ): AcpToolCallState {
   const nextKind = typeof next.data.kind === "string" ? next.data.kind : undefined;
-  const kind = nextKind ?? previous?.kind;
+  // Sparse completion updates often repeat ACP's generic kind without the native
+  // name. They describe the same call and must not erase its detected image kind.
+  const kind =
+    nextKind === "other" &&
+    previous?.kind === ACP_IMAGE_GENERATION_TOOL_KIND &&
+    readNativeToolName(next.data.rawInput) === undefined
+      ? previous.kind
+      : (nextKind ?? previous?.kind);
   const status = next.status ?? previous?.status;
   const nextTitleIsGeneric = isProviderGenericToolTitle(next.title, kind);
   const actionTitle = nextTitleIsGeneric ? deriveGenericToolActionTitle(kind, status) : undefined;
@@ -542,13 +627,12 @@ export function mergeToolCallState(
     data: {
       ...previous?.data,
       ...next.data,
+      ...(kind === ACP_IMAGE_GENERATION_TOOL_KIND ? { kind } : {}),
     },
   };
 }
 
-export function parsePermissionRequest(
-  params: EffectAcpSchema.RequestPermissionRequest,
-): AcpPermissionRequest {
+export function parsePermissionRequest(params: Acp.RequestPermissionRequest): AcpPermissionRequest {
   const toolCall = makeToolCallState(
     {
       toolCallId: params.toolCall.toolCallId,
@@ -575,7 +659,7 @@ export function parsePermissionRequest(
   };
 }
 
-export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotification): {
+export function parseSessionUpdateEvent(params: Acp.SessionNotification): {
   readonly modeId?: string;
   readonly events: ReadonlyArray<AcpParsedSessionEvent>;
 } {

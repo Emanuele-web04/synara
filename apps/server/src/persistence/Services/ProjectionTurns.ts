@@ -16,7 +16,7 @@ import {
   OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -42,6 +42,10 @@ export const ProjectionTurn = Schema.Struct({
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
@@ -60,6 +64,10 @@ export const ProjectionTurnById = Schema.Struct({
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
@@ -73,6 +81,10 @@ export const ProjectionPendingTurnStart = Schema.Struct({
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
   requestedAt: IsoDateTime,
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
 });
 export type ProjectionPendingTurnStart = typeof ProjectionPendingTurnStart.Type;
 
@@ -86,6 +98,15 @@ export const GetProjectionTurnByTurnIdInput = Schema.Struct({
   turnId: TurnId,
 });
 export type GetProjectionTurnByTurnIdInput = typeof GetProjectionTurnByTurnIdInput.Type;
+
+export interface ProjectionTurnWaitSnapshot {
+  readonly existingThreadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
+  readonly turns: ReadonlyArray<{
+    readonly threadId: GetProjectionTurnByTurnIdInput["threadId"];
+    readonly turnId: GetProjectionTurnByTurnIdInput["turnId"];
+    readonly state: ProjectionTurnState;
+  }>;
+}
 
 export const GetProjectionPendingTurnStartInput = Schema.Struct({
   threadId: ThreadId,
@@ -119,6 +140,12 @@ export interface ProjectionTurnRepositoryShape {
     row: ProjectionPendingTurnStart,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  /** Records workspace classification on the request's current pending or concrete row. */
+  readonly markStartedWithoutGitWorkspace: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, ProjectionRepositoryError>;
+
   /**
    * Returns the newest pending-start placeholder for a thread; this is expected to be at most one row after replacement writes.
    */
@@ -147,6 +174,17 @@ export interface ProjectionTurnRepositoryShape {
     input: GetProjectionTurnByTurnIdInput,
   ) => Effect.Effect<Option.Option<ProjectionTurnById>, ProjectionRepositoryError>;
 
+  /** Batch lookup used by long-poll status readers to avoid one query per turn. */
+  readonly getManyByTurnId: (
+    input: ReadonlyArray<GetProjectionTurnByTurnIdInput>,
+  ) => Effect.Effect<ReadonlyArray<ProjectionTurnById>, ProjectionRepositoryError>;
+
+  /** One lightweight query for pinned turn states plus current thread existence. */
+  readonly getManyWaitSnapshot: (input: {
+    readonly threadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
+    readonly turns: ReadonlyArray<GetProjectionTurnByTurnIdInput>;
+  }) => Effect.Effect<ProjectionTurnWaitSnapshot, ProjectionRepositoryError>;
+
   /**
    * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.
    */
@@ -165,4 +203,4 @@ export interface ProjectionTurnRepositoryShape {
 export class ProjectionTurnRepository extends ServiceMap.Service<
   ProjectionTurnRepository,
   ProjectionTurnRepositoryShape
->()("t3/persistence/Services/ProjectionTurns/ProjectionTurnRepository") {}
+>()("synara/persistence/Services/ProjectionTurns/ProjectionTurnRepository") {}

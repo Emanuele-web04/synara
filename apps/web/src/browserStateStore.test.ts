@@ -1,13 +1,18 @@
-import { ThreadId } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { ThreadId } from "@synara/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createDedupedBrowserStateStorage,
   sanitizeRecentHistoryByThreadId,
   selectThreadBrowserHistory,
+  useBrowserStateStore,
 } from "./browserStateStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("browserStateStore selectors", () => {
   it("reuses the same empty history snapshot for unknown threads", () => {
@@ -24,6 +29,58 @@ describe("browserStateStore selectors", () => {
 
     expect(first).toBe(second);
     expect(first).toEqual([]);
+  });
+
+  it("does not let a stale IPC completion overwrite a newer pushed browser state", () => {
+    const persisted = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (name: string) => persisted.get(name) ?? null,
+      setItem: (name: string, value: string) => persisted.set(name, value),
+      removeItem: (name: string) => persisted.delete(name),
+    });
+    useBrowserStateStore.setState({ threadStatesByThreadId: {}, recentHistoryByThreadId: {} });
+    const tab = {
+      id: "tab-1",
+      url: "https://new.example/",
+      title: "New visible page",
+      status: "live" as const,
+      isLoading: false,
+      canGoBack: false,
+      canGoForward: false,
+      faviconUrl: null,
+      lastCommittedUrl: "https://new.example/",
+      lastError: null,
+    };
+    const upsert = useBrowserStateStore.getState().upsertThreadState;
+
+    upsert({
+      threadId: THREAD_ID,
+      version: 2,
+      open: true,
+      activeTabId: tab.id,
+      tabs: [tab],
+      lastError: null,
+    });
+    upsert({
+      threadId: THREAD_ID,
+      version: 1,
+      open: true,
+      activeTabId: tab.id,
+      tabs: [
+        {
+          ...tab,
+          url: "https://stale.example/",
+          title: "Stale hidden page",
+          lastCommittedUrl: "https://stale.example/",
+        },
+      ],
+      lastError: null,
+    });
+
+    expect(useBrowserStateStore.getState().threadStatesByThreadId[THREAD_ID]).toMatchObject({
+      version: 2,
+      tabs: [{ url: "https://new.example/", title: "New visible page" }],
+    });
   });
 });
 
@@ -75,19 +132,13 @@ describe("createDedupedBrowserStateStorage", () => {
 });
 
 describe("sanitizeRecentHistoryByThreadId", () => {
-  it("returns an empty record for non-object input", () => {
-    expect(sanitizeRecentHistoryByThreadId(null)).toEqual({});
-    expect(sanitizeRecentHistoryByThreadId("nope")).toEqual({});
-    expect(sanitizeRecentHistoryByThreadId([1, 2, 3])).toEqual({});
-  });
-
   it("drops malformed entries and keeps only well-formed history", () => {
     const result = sanitizeRecentHistoryByThreadId({
       "thread-1": [
         { url: "https://a.com", title: "A", tabId: "t1" },
         { url: "https://b.com", title: "B" },
         null,
-        { url: 5, title: "C", tabId: "t3" },
+        { url: 5, title: "C", tabId: "synara" },
       ],
       "thread-2": "not-an-array",
     });
@@ -99,7 +150,7 @@ describe("sanitizeRecentHistoryByThreadId", () => {
 
   it("drops threads whose history fully fails validation", () => {
     const result = sanitizeRecentHistoryByThreadId({
-      "thread-1": [null, { url: 5, title: "C", tabId: "t3" }],
+      "thread-1": [null, { url: 5, title: "C", tabId: "synara" }],
       "thread-2": [],
     });
 

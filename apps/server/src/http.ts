@@ -1,4 +1,5 @@
-import type http from "node:http";
+import { readEventLoopStatus } from "./eventLoopMonitor";
+import * as fs from "node:fs/promises";
 import nodePath from "node:path";
 
 import Mime from "@effect/platform-node/Mime";
@@ -7,9 +8,27 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
-} from "@t3tools/contracts";
-import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
-import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
+  ProjectId,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  ProviderInstanceId,
+  ProviderKind,
+  SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
+  ThreadId,
+} from "@synara/contracts";
+import {
+  ATTACHMENT_CANCEL_ROUTE_PATH,
+  ATTACHMENT_UPLOAD_ROUTE_PATH,
+  LIBRARY_UPLOAD_ROUTE_PATH,
+  VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
+} from "@synara/shared/binaryTransfer";
+import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
+import { threadExportBlockedReason } from "@synara/shared/threadExport";
+import {
+  providerStartOptionsFromInstance,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
+import { Cause, DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -18,24 +37,91 @@ import {
   resolveAttachmentRelativePath,
 } from "./attachmentPaths";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
-import { authErrorResponse, makeEffectAuthRequest, serveAuthHttpRoute } from "./auth/http";
-import { ServerAuth } from "./auth/Services/ServerAuth";
-import type { ServerAuthShape } from "./auth/Services/ServerAuth";
-import type { SessionCredentialServiceShape } from "./auth/Services/SessionCredentialService";
+import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
+import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
+import {
+  codexConfiguredHomePathsFromSettings,
+  type CodexGeneratedImageHomeCandidate,
+  enabledCodexProviderInstanceIdsFromSettings,
+} from "./codexGeneratedImages.ts";
 import { ServerConfig, type ServerConfigShape } from "./config";
+import { writeFileStringAtomically } from "./atomicWrite";
+import { GitCore } from "./git/Services/GitCore";
+import { LibraryError } from "./projectAgent/Errors";
+import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
+import { GROUPS_BETA_ONLY_MESSAGE, isServerGroupsEnabled } from "./projectAgent/groupsBetaGate";
+import {
+  commitLibraryChange,
+  pushLibraryIfConfigured,
+  withLibraryQueue,
+  withLibraryRootLock,
+} from "./projectAgent/libraryGit";
+import {
+  assertLibraryRootLocation,
+  ensureLibraryRepo,
+  normalizeLibraryRelativePath,
+  resolveLibraryRoot,
+  resolveLibraryWriteTarget,
+} from "./projectAgent/libraryStore";
+import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
-import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalImageFile } from "./localImageFiles.ts";
+import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
+import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
+import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
+import { ServerSettingsService } from "./serverSettings";
+import { isLoopbackHost } from "./startupAccess";
+import {
+  attachmentPrincipalForSession,
+  LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+} from "./managedAttachmentPrincipal";
+import {
+  persistReservedManagedAttachment,
+  reserveManagedAttachmentUpload,
+} from "./managedAttachmentStore";
+import { ManagedAttachmentRepository } from "./persistence/Services/ManagedAttachments";
+import { ComputerService } from "./computer/Services/ComputerService";
+import {
+  authorizeDesktopShutdown,
+  DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
+  DESKTOP_SHUTDOWN_ROUTE_PATH,
+  type ServerShutdownController,
+} from "./serverShutdown";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
+import {
+  ifNoneMatchSatisfies,
+  isSidecarRequestPath,
+  negotiateStaticEncodingPreference,
+  staticCacheControl,
+  staticEtag,
+} from "./staticAssets";
+import {
+  isTrustedAppOrigin,
+  normalizeCorsOrigin,
+  shouldRejectAuthMutationOrigin,
+} from "./trustedOrigins";
+import {
+  VOICE_UPLOAD_CAPACITY_ERROR_MESSAGE,
+  voiceUploadAdmissionGate,
+} from "./voiceUploadAdmission";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
+const SVG_DOCUMENT_SECURITY_HEADERS = {
+  "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+  "X-Content-Type-Options": "nosniff",
+} as const;
+export const AUTH_JSON_BODY_MAX_BYTES = 16 * 1024;
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
   AuthCreatePairingCredentialInput,
@@ -124,34 +210,156 @@ function toEffectHttpResponse(payload: HttpPayload) {
   });
 }
 
-export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
+function localPreviewCorsHeaders(input: {
+  readonly config: ServerConfigShape;
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly url: URL;
+}): Record<string, string> {
+  const origin = normalizeCorsOrigin(input.request.headers.origin);
+  if (
+    !origin ||
+    !isTrustedAppOrigin({ origin, requestOrigin: input.url.origin, config: input.config })
+  ) {
+    return {};
+  }
+  return {
+    "Access-Control-Allow-Origin": origin,
+    Vary: "Origin",
+  };
+}
+
+export function makeEffectHttpRouteLayer(
+  readiness: ServerReadiness,
+  shutdownController: ServerShutdownController,
+) {
   return Layer.mergeAll(
-    HttpRouter.add(
-      "GET",
-      "/health",
-      readiness.getSnapshot.pipe(
-        Effect.map((snapshot) =>
-          HttpServerResponse.jsonUnsafe(
-            {
-              status: "ok",
-              startupReady: snapshot.startupReady,
-              pushBusReady: snapshot.pushBusReady,
-              keybindingsReady: snapshot.keybindingsReady,
-              terminalSubscriptionsReady: snapshot.terminalSubscriptionsReady,
-              orchestrationSubscriptionsReady: snapshot.orchestrationSubscriptionsReady,
-            },
-            { status: 200 },
-          ),
-        ),
-      ),
-    ),
+    makeHealthEffectRouteLayer(readiness),
+    makeDesktopShutdownEffectRouteLayer(shutdownController),
+    makeDesktopComputerEmergencyStopRouteLayer(),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
+    threadExportEffectRouteLayer,
     siteFaviconEffectRouteLayer,
     editorIconEffectRouteLayer,
     localImageEffectRouteLayer,
+    binaryUploadEffectRouteLayer,
     attachmentsEffectRouteLayer,
     staticAndDevEffectRouteLayer,
+  );
+}
+
+export function makeDesktopShutdownEffectRouteLayer(shutdownController: ServerShutdownController) {
+  return HttpRouter.add(
+    "POST",
+    DESKTOP_SHUTDOWN_ROUTE_PATH,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const authorization = authorizeDesktopShutdown({
+        config,
+        remoteAddress: request.remoteAddress,
+        authorization: request.headers.authorization,
+      });
+
+      if (!authorization.authorized) {
+        return HttpServerResponse.jsonUnsafe(
+          { error: authorization.reason === "unavailable" ? "Not Found" : "Unauthorized" },
+          {
+            status: authorization.status,
+            ...(authorization.status === 401
+              ? { headers: { "WWW-Authenticate": 'Bearer realm="synara-desktop-shutdown"' } }
+              : {}),
+          },
+        );
+      }
+
+      yield* shutdownController.requestStop;
+      return HttpServerResponse.jsonUnsafe({ accepted: true }, { status: 202 });
+    }),
+  );
+}
+
+/**
+ * The desktop relays physical Escape presses here after its local host latch
+ * has already engaged. The manager-side latch is what keeps queued work from
+ * dispatching once the desktop side is dead or restarting; both sides fail
+ * closed independently rather than trusting a single transport.
+ */
+export function makeDesktopComputerEmergencyStopRouteLayer() {
+  return HttpRouter.add(
+    "POST",
+    DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const authorization = authorizeDesktopShutdown({
+        config,
+        remoteAddress: request.remoteAddress,
+        authorization: request.headers.authorization,
+      });
+
+      if (!authorization.authorized) {
+        return HttpServerResponse.jsonUnsafe(
+          { error: authorization.reason === "unavailable" ? "Not Found" : "Unauthorized" },
+          {
+            status: authorization.status,
+            ...(authorization.status === 401
+              ? { headers: { "WWW-Authenticate": 'Bearer realm="synara-desktop-emergency-stop"' } }
+              : {}),
+          },
+        );
+      }
+
+      const computerService = Option.getOrUndefined(yield* Effect.serviceOption(ComputerService));
+      if (!computerService) {
+        return HttpServerResponse.jsonUnsafe({ accepted: false }, { status: 404 });
+      }
+
+      yield* Effect.promise(() => computerService.manager.emergencyStopInput()).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("desktop computer emergency stop failed", Cause.pretty(cause)),
+        ),
+      );
+      return HttpServerResponse.jsonUnsafe({ accepted: true }, { status: 202 });
+    }),
+  );
+}
+
+export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
+  return HttpRouter.add(
+    "GET",
+    "/health",
+    Effect.gen(function* () {
+      const snapshot = yield* readiness.getSnapshot;
+      const orchestrationEngine = yield* OrchestrationEngineService;
+      const projection = yield* orchestrationEngine.getProjectionCatchUpStatus;
+      return HttpServerResponse.jsonUnsafe(
+        {
+          status: "ok",
+          eventLoop: yield* readEventLoopStatus,
+          startupReady: snapshot.startupReady,
+          pushBusReady: snapshot.pushBusReady,
+          keybindingsReady: snapshot.keybindingsReady,
+          terminalSubscriptionsReady: snapshot.terminalSubscriptionsReady,
+          orchestrationSubscriptionsReady: snapshot.orchestrationSubscriptionsReady,
+          // /health is unauthenticated, so only shape-level diagnostics may
+          // leave the process. lastFailure carries pretty-printed causes whose
+          // schema-decode issues can embed raw event payloads (user prompts);
+          // it stays server-side — the log line that recorded the failure is
+          // where operators read the detail.
+          projection: {
+            state: projection.state,
+            inFlight: projection.inFlight,
+            retryAttempts: projection.retryAttempts,
+            hasFailure: projection.lastFailure !== null,
+            highWaterSequence: projection.highWaterSequence,
+            lagByProjector: projection.lagByProjector,
+            missingProjectors: projection.missingProjectors,
+          },
+        },
+        { status: 200 },
+      );
+    }),
   );
 }
 
@@ -161,10 +369,55 @@ const requireAuthenticatedRequest = Effect.gen(function* () {
   yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
 });
 
+const requireAuthenticatedMutationRequest = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = HttpServerRequest.toURL(request);
+  if (!url) return yield* Effect.fail({ message: "Bad Request", status: 400 as const });
+  const config = yield* ServerConfig;
+  const serverAuth = yield* ServerAuth;
+  const session = yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
+  if (
+    shouldRejectAuthMutationOrigin({
+      rawOrigin: request.headers.origin,
+      requestOrigin: url.origin,
+      config,
+      credentialSource: session.credentialSource,
+    })
+  ) {
+    return yield* Effect.fail({
+      message: "Trusted request origin required.",
+      status: 403 as const,
+    });
+  }
+  return session;
+});
+
+function trustedMutationCorsHeaders(input: {
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly url: URL;
+  readonly config: ServerConfigShape;
+}): Record<string, string> | null {
+  const origin = normalizeCorsOrigin(input.request.headers.origin);
+  if (!origin) return {};
+  if (!isTrustedAppOrigin({ origin, requestOrigin: input.url.origin, config: input.config })) {
+    return null;
+  }
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    Vary: "Origin",
+  };
+}
+
 export function isLegacyTokenAuthorized(input: {
   readonly config: ServerConfigShape;
   readonly url: URL;
 }): boolean {
+  if (!isLoopbackHost(input.config.host) || input.config.publicUrl) {
+    return false;
+  }
   const legacyToken = input.url.searchParams.get("token");
   return !input.config.authToken || legacyToken === input.config.authToken;
 }
@@ -173,25 +426,94 @@ function encodeCookie(input: {
   readonly name: string;
   readonly value: string;
   readonly expiresAt: DateTime.DateTime;
+  readonly secure: boolean;
 }) {
-  return `${encodeURIComponent(input.name)}=${encodeURIComponent(input.value)}; Expires=${DateTime.toDate(input.expiresAt).toUTCString()}; HttpOnly; Path=/; SameSite=Lax`;
+  return `${encodeURIComponent(input.name)}=${encodeURIComponent(input.value)}; Expires=${DateTime.toDate(input.expiresAt).toUTCString()}; HttpOnly; Path=/; SameSite=Lax${input.secure ? "; Secure" : ""}`;
 }
 
-const readEffectJson = (request: HttpServerRequest.HttpServerRequest, message: string) =>
-  request.json.pipe(
-    Effect.mapError(
-      (cause) =>
-        new (class extends Error {
-          override readonly cause = cause;
-        })(message),
+function encodeExpiredCookie(input: { readonly name: string; readonly secure: boolean }) {
+  return `${encodeURIComponent(input.name)}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Path=/; SameSite=Lax${input.secure ? "; Secure" : ""}`;
+}
+
+function isBodyCapacityError(cause: unknown): boolean {
+  if (Cause.isExceededCapacityError(cause)) return true;
+  if (cause instanceof Error && cause.message === "maxBytes exceeded") return true;
+  if (!cause || typeof cause !== "object") return false;
+  const record = cause as { readonly reason?: unknown; readonly cause?: unknown };
+  return (
+    (record.cause !== undefined && record.cause !== cause && isBodyCapacityError(record.cause)) ||
+    (record.reason !== undefined && isBodyCapacityError(record.reason))
+  );
+}
+
+function mapPayloadError(message: string, cause: unknown) {
+  if (
+    cause &&
+    typeof cause === "object" &&
+    "status" in cause &&
+    (cause as { readonly status?: unknown }).status === 413
+  ) {
+    return cause as { readonly message: string; readonly status: 413; readonly cause?: unknown };
+  }
+  return { message, status: 400 as const, cause };
+}
+
+const readEffectJson = (
+  request: HttpServerRequest.HttpServerRequest,
+  message: string,
+): Effect.Effect<
+  unknown,
+  Error | { readonly message: string; readonly status: 413; readonly cause?: unknown }
+> => {
+  const declaredLength = Number(request.headers["content-length"] ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > AUTH_JSON_BODY_MAX_BYTES) {
+    return Effect.fail({
+      message: "Request body too large.",
+      status: 413 as const,
+    });
+  }
+  return request.json.pipe(
+    Effect.provideService(HttpServerRequest.MaxBodySize, FileSystem.Size(AUTH_JSON_BODY_MAX_BYTES)),
+    Effect.mapError((cause) =>
+      isBodyCapacityError(cause)
+        ? { message: "Request body too large.", status: 413 as const, cause }
+        : new (class extends Error {
+            override readonly cause = cause;
+          })(message),
     ),
   );
+};
 
-const authEffectRouteLayer = HttpRouter.add(
+const readEffectBinary = (
+  request: HttpServerRequest.HttpServerRequest,
+  maxBytes: number,
+): Effect.Effect<
+  Uint8Array,
+  { readonly message: string; readonly status: number; readonly cause?: unknown }
+> => {
+  const declaredLength = Number(request.headers["content-length"] ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    return Effect.fail({ message: "Request body too large.", status: 413 as const });
+  }
+  return request.arrayBuffer.pipe(
+    Effect.provideService(HttpServerRequest.MaxBodySize, FileSystem.Size(maxBytes)),
+    Effect.map((buffer) => new Uint8Array(buffer)),
+    Effect.mapError((cause) => ({
+      message: isBodyCapacityError(cause)
+        ? "Request body too large."
+        : "Could not read request body.",
+      status: isBodyCapacityError(cause) ? 413 : 400,
+      cause,
+    })),
+  );
+};
+
+export const authEffectRouteLayer = HttpRouter.add(
   "*",
   "/api/auth/*",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    const config = yield* ServerConfig;
     const serverAuth = yield* ServerAuth;
     const sessions = yield* SessionCredentialService;
     const url = HttpServerRequest.toURL(request);
@@ -205,11 +527,7 @@ const authEffectRouteLayer = HttpRouter.add(
     if (request.method === "POST" && url.pathname === "/api/auth/bootstrap") {
       const payload = yield* readEffectJson(request, "Invalid bootstrap payload.").pipe(
         Effect.flatMap(decodeBootstrapInput),
-        Effect.mapError((cause) => ({
-          message: "Invalid bootstrap payload.",
-          status: 400 as const,
-          cause,
-        })),
+        Effect.mapError((cause) => mapPayloadError("Invalid bootstrap payload.", cause)),
       );
       const result = yield* serverAuth.exchangeBootstrapCredential(payload.credential, {
         ...deriveAuthClientMetadata({
@@ -223,6 +541,7 @@ const authEffectRouteLayer = HttpRouter.add(
             name: sessions.cookieName,
             value: result.sessionToken,
             expiresAt: result.response.expiresAt,
+            secure: config.publicUrl !== undefined,
           }),
         },
       });
@@ -231,11 +550,7 @@ const authEffectRouteLayer = HttpRouter.add(
     if (request.method === "POST" && url.pathname === "/api/auth/bootstrap/bearer") {
       const payload = yield* readEffectJson(request, "Invalid bootstrap payload.").pipe(
         Effect.flatMap(decodeBootstrapInput),
-        Effect.mapError((cause) => ({
-          message: "Invalid bootstrap payload.",
-          status: 400 as const,
-          cause,
-        })),
+        Effect.mapError((cause) => mapPayloadError("Invalid bootstrap payload.", cause)),
       );
       return HttpServerResponse.jsonUnsafe(
         yield* serverAuth.exchangeBootstrapCredentialForBearerSession(payload.credential, {
@@ -247,13 +562,15 @@ const authEffectRouteLayer = HttpRouter.add(
       );
     }
 
+    const authenticatedMutationSession = requireAuthenticatedMutationRequest;
+
     if (request.method === "POST" && url.pathname === "/api/auth/ws-token") {
-      const session = yield* serverAuth.authenticateHttpRequest(authRequest);
+      const session = yield* authenticatedMutationSession;
       return HttpServerResponse.jsonUnsafe(yield* serverAuth.issueWebSocketToken(session));
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/pairing-token") {
-      const session = yield* serverAuth.authenticateHttpRequest(authRequest);
+      const session = yield* authenticatedMutationSession;
       if (session.role !== "owner")
         return HttpServerResponse.jsonUnsafe(
           { error: "Only owner sessions can create pairing credentials." },
@@ -263,18 +580,42 @@ const authEffectRouteLayer = HttpRouter.add(
         Number(request.headers["content-length"] ?? "0") > 0
           ? yield* readEffectJson(request, "Invalid pairing credential payload.").pipe(
               Effect.flatMap(decodeCreatePairingCredentialInput),
-              Effect.mapError((cause) => ({
-                message: "Invalid pairing credential payload.",
-                status: 400 as const,
-                cause,
-              })),
+              Effect.mapError((cause) =>
+                mapPayloadError("Invalid pairing credential payload.", cause),
+              ),
             )
           : {};
       return HttpServerResponse.jsonUnsafe(yield* serverAuth.issuePairingCredential(payload));
     }
 
+    if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+      const session = yield* authenticatedMutationSession;
+      return HttpServerResponse.jsonUnsafe(
+        { revoked: yield* serverAuth.logoutSession(session.sessionId) },
+        {
+          headers: {
+            "Set-Cookie": encodeExpiredCookie({
+              name: sessions.cookieName,
+              secure: config.publicUrl !== undefined,
+            }),
+          },
+        },
+      );
+    }
+
     const ownerSession = Effect.gen(function* () {
       const session = yield* serverAuth.authenticateHttpRequest(authRequest);
+      if (session.role !== "owner") {
+        return yield* Effect.fail({
+          message: "Only owner sessions can manage network access.",
+          status: 403 as const,
+        });
+      }
+      return session;
+    });
+
+    const ownerMutationSession = Effect.gen(function* () {
+      const session = yield* authenticatedMutationSession;
       if (session.role !== "owner") {
         return yield* Effect.fail({
           message: "Only owner sessions can manage network access.",
@@ -290,14 +631,10 @@ const authEffectRouteLayer = HttpRouter.add(
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/pairing-links/revoke") {
-      yield* ownerSession;
+      yield* ownerMutationSession;
       const payload = yield* readEffectJson(request, "Invalid revoke pairing link payload.").pipe(
         Effect.flatMap(decodeRevokePairingLinkInput),
-        Effect.mapError((cause) => ({
-          message: "Invalid revoke pairing link payload.",
-          status: 400 as const,
-          cause,
-        })),
+        Effect.mapError((cause) => mapPayloadError("Invalid revoke pairing link payload.", cause)),
       );
       return HttpServerResponse.jsonUnsafe({
         revoked: yield* serverAuth.revokePairingLink(payload.id),
@@ -310,14 +647,10 @@ const authEffectRouteLayer = HttpRouter.add(
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/clients/revoke") {
-      const session = yield* ownerSession;
+      const session = yield* ownerMutationSession;
       const payload = yield* readEffectJson(request, "Invalid revoke client payload.").pipe(
         Effect.flatMap(decodeRevokeClientSessionInput),
-        Effect.mapError((cause) => ({
-          message: "Invalid revoke client payload.",
-          status: 400 as const,
-          cause,
-        })),
+        Effect.mapError((cause) => mapPayloadError("Invalid revoke client payload.", cause)),
       );
       return HttpServerResponse.jsonUnsafe({
         revoked: yield* serverAuth.revokeClientSession(session.sessionId, payload.sessionId),
@@ -325,7 +658,7 @@ const authEffectRouteLayer = HttpRouter.add(
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/clients/revoke-others") {
-      const session = yield* ownerSession;
+      const session = yield* ownerMutationSession;
       return HttpServerResponse.jsonUnsafe({
         revokedCount: yield* serverAuth.revokeOtherClientSessions(session.sessionId),
       });
@@ -354,7 +687,7 @@ const authEffectRouteLayer = HttpRouter.add(
   ),
 );
 
-const projectFaviconEffectRouteLayer = HttpRouter.add(
+export const projectFaviconEffectRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
@@ -374,12 +707,20 @@ const projectFaviconEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text(FALLBACK_FAVICON_SVG, {
         status: 200,
         contentType: "image/svg+xml",
-        headers: { "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL },
+        headers: {
+          "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
+          ...SVG_DOCUMENT_SECURITY_HEADERS,
+        },
       });
     }
     return yield* HttpServerResponse.file(faviconPath, {
       status: 200,
-      headers: { "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL },
+      headers: {
+        "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
+        ...(nodePath.extname(faviconPath).toLowerCase() === ".svg"
+          ? SVG_DOCUMENT_SECURITY_HEADERS
+          : {}),
+      },
     }).pipe(
       Effect.catch(() =>
         Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
@@ -417,18 +758,85 @@ const siteFaviconEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text(FALLBACK_SITE_FAVICON_SVG, {
         status: 200,
         contentType: "image/svg+xml",
-        headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_FALLBACK },
+        headers: {
+          "Cache-Control": SITE_FAVICON_CACHE_CONTROL_FALLBACK,
+          ...SVG_DOCUMENT_SECURITY_HEADERS,
+        },
       });
     }
     return HttpServerResponse.uint8Array(favicon.bytes, {
       status: 200,
       contentType: favicon.contentType ?? "image/x-icon",
-      headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_SUCCESS },
+      headers: {
+        "Cache-Control": SITE_FAVICON_CACHE_CONTROL_SUCCESS,
+        ...(favicon.contentType?.toLowerCase().startsWith("image/svg+xml")
+          ? SVG_DOCUMENT_SECURITY_HEADERS
+          : {}),
+      },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
-const editorIconEffectRouteLayer = HttpRouter.add(
+// Builds a ZIP export of a single thread (thread.json + transcript.md) and streams
+// it back as a download. Loads only the requested thread detail so the export cost
+// scales with that thread rather than the whole projection; mirrors the auth shape
+// of the other binary GET routes (favicon/attachments).
+const threadExportEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/thread-export",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
+
+    // Error responses need the trusted-origin CORS headers too: the desktop
+    // app fetches cross-origin (synara://app), and without them the browser masks
+    // a 400/404/409 body as an opaque network failure.
+    const corsHeaders = localPreviewCorsHeaders({ config, request, url });
+
+    const threadIdParam = url.searchParams.get("threadId")?.trim();
+    if (!threadIdParam)
+      return HttpServerResponse.text("Missing threadId parameter", {
+        status: 400,
+        headers: corsHeaders,
+      });
+
+    const snapshotQuery = yield* ProjectionSnapshotQuery;
+    const threadOption = yield* snapshotQuery.getThreadDetailForExportById(
+      ThreadId.makeUnsafe(threadIdParam),
+    );
+    if (Option.isNone(threadOption))
+      return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
+    const thread = threadOption.value;
+
+    const blockedReason = threadExportBlockedReason(thread);
+    if (blockedReason !== null) {
+      return HttpServerResponse.text(blockedReason, { status: 409, headers: corsHeaders });
+    }
+
+    const fileName = threadArchiveFileName({ title: thread.title, isoTimestamp: thread.updatedAt });
+    return HttpServerResponse.stream(
+      Stream.fromAsyncIterable(threadArchiveChunks(thread), (cause) => cause),
+      {
+        status: 200,
+        contentType: "application/zip",
+        headers: {
+          "Content-Disposition": attachmentContentDisposition(fileName),
+          "Cache-Control": "no-store",
+          ...corsHeaders,
+          "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+      },
+    );
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+export const editorIconEffectRouteLayer = HttpRouter.add(
   "GET",
   EDITOR_ICON_ROUTE_PATH,
   Effect.gen(function* () {
@@ -451,6 +859,45 @@ const editorIconEffectRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
+// Node rejects header values outside Latin-1 (ERR_INVALID_CHAR) inside the
+// platform's writeHead, which leaves the response hanging. Printable ASCII names
+// keep the quoted form. Anything else goes only in the RFC 5987 `filename*` form,
+// because browserDownload.ts reads only `filename=` and would prefer a lossy
+// ASCII fallback over the full name the web client already has.
+function attachmentContentDisposition(fileName: string): string {
+  const safeFileName = fileName.replaceAll('"', "");
+  if (/^[\x20-\x7e]*$/.test(safeFileName)) {
+    return `attachment; filename="${safeFileName}"`;
+  }
+  // encodeURIComponent throws on lone surrogates and leaves `'()*` bare, which
+  // RFC 5987 does not allow unencoded.
+  const encoded = encodeURIComponent(safeFileName.replace(/\p{Cs}/gu, "\uFFFD")).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename*=UTF-8''${encoded}`;
+}
+
+// Streams a disk file as the response body instead of buffering it in memory:
+// preview files can be large (PDFs especially), and a full-file buffer per
+// request is an easy way to balloon server memory under concurrent loads.
+// Callers must have stat'ed the file already — an unreadable file after that
+// point aborts the connection mid-stream, which clients surface as a failed
+// load (the same outcome the buffered 404 produced, minus the status code).
+function streamedFileResponse(input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly headers: Record<string, string>;
+}): HttpServerResponse.HttpServerResponse {
+  return HttpServerResponse.stream(input.fileSystem.stream(input.path), {
+    status: 200,
+    contentType: Mime.getType(input.path) ?? "application/octet-stream",
+    contentLength: input.sizeBytes,
+    headers: input.headers,
+  });
+}
+
 export const localImageEffectRouteLayer = HttpRouter.add(
   "GET",
   LOCAL_IMAGE_ROUTE_PATH,
@@ -464,38 +911,463 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       yield* requireAuthenticatedRequest;
     }
 
-    const imageFile = yield* Effect.promise(() =>
-      resolveAllowedLocalImageFile({
+    // Dedicated per-account Codex homes anchor their own generated-image roots;
+    // resolve them from settings when the service can be read so those images
+    // stay servable. When settings are unavailable, configured roots cannot be
+    // trusted, but auth-fresh live session homes remain eligible.
+    const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+    const codexSettingsScope = Option.isSome(settingsService)
+      ? yield* settingsService.value.getSettings.pipe(
+          Effect.map((settings) => ({
+            configuredHomePaths: codexConfiguredHomePathsFromSettings(settings),
+            enabledProviderInstanceIds: enabledCodexProviderInstanceIdsFromSettings(settings),
+          })),
+          Effect.catch(() => Effect.succeed(null)),
+        )
+      : null;
+    const adapterRegistry = yield* Effect.serviceOption(ProviderAdapterRegistry);
+    const liveCodexHomePaths = Option.isSome(adapterRegistry)
+      ? yield* adapterRegistry.value.getByProvider("codex").pipe(
+          Effect.flatMap((adapter) =>
+            adapter.listGeneratedImageHomePaths
+              ? adapter.listGeneratedImageHomePaths(
+                  codexSettingsScope
+                    ? {
+                        enabledProviderInstanceIds: codexSettingsScope.enabledProviderInstanceIds,
+                      }
+                    : undefined,
+                )
+              : Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([]),
+          ),
+          Effect.catch(() => Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([])),
+        )
+      : [];
+    const codexHomePaths: readonly CodexGeneratedImageHomeCandidate[] = [
+      ...(codexSettingsScope?.configuredHomePaths ?? []),
+      ...liveCodexHomePaths,
+    ];
+
+    const previewFile = yield* Effect.promise(() =>
+      resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        codexHomePaths,
+        scratchWorkspacesRoot: resolveScratchWorkspacesRoot(),
+        allowAbsoluteLocalPreviewFile: true,
+        previewGrant: url.searchParams.get("grant"),
       }).catch(() => null),
     );
-    if (!imageFile) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
+    if (!previewFile) {
+      return HttpServerResponse.text("Not Found", {
+        status: 404,
+        headers: localPreviewCorsHeaders({ config, request, url }),
+      });
     }
 
-    // Read the bytes ourselves (mirrors the static-asset route) instead of relying on
-    // HttpServerResponse.file, which depends on Etag.Generator/Path services and was
-    // failing with a 500 on the local-image preview/download path.
+    // Stream (don't use HttpServerResponse.file, which depends on
+    // Etag.Generator/Path services and was failing with a 500 here).
     const fileSystem = yield* FileSystem.FileSystem;
-    const data = yield* fileSystem
-      .readFile(imageFile.path)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
     const isDownload = url.searchParams.get("download") === "1";
-    const safeFileName = imageFile.fileName.replaceAll('"', "");
-    return HttpServerResponse.uint8Array(data, {
-      status: 200,
-      contentType: Mime.getType(imageFile.path) ?? "application/octet-stream",
+    const isSvg = nodePath.extname(previewFile.path).toLowerCase() === ".svg";
+    return streamedFileResponse({
+      fileSystem,
+      path: previewFile.path,
+      sizeBytes: previewFile.sizeBytes,
       headers: {
         "Cache-Control": "private, max-age=60",
-        ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
+        // The PDF viewer fetches bytes from either the desktop app origin or
+        // the configured Vite dev origin. Reflect only those trusted origins:
+        // auth-token-less local servers must not expose workspace files to any
+        // random web page that can guess path/cwd query params.
+        ...localPreviewCorsHeaders({ config, request, url }),
+        // PDFs render in an unsandboxed same-origin iframe; never let the
+        // browser second-guess the declared content type.
+        "X-Content-Type-Options": "nosniff",
+        ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
+        ...(isDownload
+          ? { "Content-Disposition": attachmentContentDisposition(previewFile.fileName) }
+          : {}),
       },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+const binaryUploadEffectHandler = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = HttpServerRequest.toURL(request);
+  if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+  const config = yield* ServerConfig;
+  const corsHeaders = trustedMutationCorsHeaders({ request, url, config });
+  if (corsHeaders === null) {
+    return HttpServerResponse.jsonUnsafe(
+      { error: "Trusted request origin required." },
+      { status: 403 },
+    );
+  }
+  if (request.method === "OPTIONS") {
+    return HttpServerResponse.empty({ status: 204, headers: corsHeaders });
+  }
+  if (request.method !== "POST") {
+    return HttpServerResponse.text("Method Not Allowed", { status: 405, headers: corsHeaders });
+  }
+  const mutationSession = isLegacyTokenAuthorized({ config, url })
+    ? null
+    : yield* requireAuthenticatedMutationRequest;
+  const attachmentPrincipal =
+    mutationSession === null
+      ? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL
+      : attachmentPrincipalForSession(mutationSession.sessionId);
+
+  if (url.pathname === ATTACHMENT_UPLOAD_ROUTE_PATH) {
+    const type = url.searchParams.get("type");
+    const threadId = url.searchParams.get("threadId")?.trim() ?? "";
+    const name = url.searchParams.get("name") ?? "";
+    const mimeType = url.searchParams.get("mimeType") ?? "";
+    if ((type !== "image" && type !== "file") || !threadId || !name || !mimeType) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Attachment upload metadata is invalid." },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const maxBytes =
+      type === "image" ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES : PROVIDER_SEND_TURN_MAX_FILE_BYTES;
+    const declaredLength = Number(request.headers["content-length"] ?? "0");
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Request body too large." },
+        { status: 413, headers: corsHeaders },
+      );
+    }
+    const reservedBytes =
+      Number.isSafeInteger(declaredLength) && declaredLength > 0 && declaredLength <= maxBytes
+        ? declaredLength
+        : maxBytes;
+    const repository = yield* ManagedAttachmentRepository;
+    const now = new Date().toISOString();
+    const reservation = yield* reserveManagedAttachmentUpload({
+      type,
+      threadId,
+      name,
+      mimeType,
+      reservedBytes,
+      now,
+      principal: attachmentPrincipal,
+      repository,
+    });
+    const bytes = yield* readEffectBinary(request, maxBytes).pipe(
+      Effect.tapError(() =>
+        repository
+          .cancelStaged({
+            attachmentId: reservation.attachmentId,
+            ownerKind: attachmentPrincipal.ownerKind,
+            ownerId: attachmentPrincipal.ownerId,
+            reason: "upload-body-failed",
+            requestedAt: new Date().toISOString(),
+          })
+          .pipe(Effect.ignore),
+      ),
+    );
+    const attachment = yield* persistReservedManagedAttachment({
+      reservation,
+      bytes,
+      attachmentsDir: config.attachmentsDir,
+      now: new Date().toISOString(),
+      principal: attachmentPrincipal,
+      repository,
+    });
+    return HttpServerResponse.jsonUnsafe(attachment, { status: 201, headers: corsHeaders });
+  }
+
+  if (url.pathname === ATTACHMENT_CANCEL_ROUTE_PATH) {
+    const payload = yield* readEffectJson(request, "Invalid attachment cancellation payload.");
+    const attachmentId =
+      payload && typeof payload === "object" && "attachmentId" in payload
+        ? String((payload as { readonly attachmentId?: unknown }).attachmentId ?? "").trim()
+        : "";
+    if (!attachmentId || attachmentId.length > 128 || !/^[a-z0-9_-]+$/iu.test(attachmentId)) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Attachment cancellation payload is invalid." },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const repository = yield* ManagedAttachmentRepository;
+    const result = yield* repository.cancelStaged({
+      attachmentId,
+      ownerKind: attachmentPrincipal.ownerKind,
+      ownerId: attachmentPrincipal.ownerId,
+      reason: "client-cancelled",
+      requestedAt: new Date().toISOString(),
+    });
+    if (result.status === "not-found") {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Attachment not found." },
+        { status: 404, headers: corsHeaders },
+      );
+    }
+    if (result.status === "already-claimed") {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Attachment is already committed." },
+        { status: 409, headers: corsHeaders },
+      );
+    }
+    return HttpServerResponse.jsonUnsafe(
+      { cancelled: true },
+      { status: 200, headers: corsHeaders },
+    );
+  }
+
+  if (url.pathname === LIBRARY_UPLOAD_ROUTE_PATH) {
+    const projectIdParam = url.searchParams.get("projectId")?.trim() ?? "";
+    const relativeDirectory = url.searchParams.get("relativePath")?.trim() ?? "";
+    const name = url.searchParams.get("name") ?? "";
+    if (!projectIdParam || !name) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Library upload metadata is invalid." },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const declaredLength = Number(request.headers["content-length"] ?? "0");
+    if (Number.isFinite(declaredLength) && declaredLength > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Request body too large." },
+        { status: 413, headers: corsHeaders },
+      );
+    }
+    return yield* Effect.gen(function* () {
+      // Library writes are owner-only: a non-owner session gets read access
+      // through the RPC surface but cannot mutate the library over HTTP.
+      if (mutationSession !== null && mutationSession.role !== "owner") {
+        return yield* new LibraryError({
+          message: "Owner authorization is required for this operation.",
+          code: "forbidden",
+        });
+      }
+      if (!isServerGroupsEnabled()) {
+        return yield* new LibraryError({ message: GROUPS_BETA_ONLY_MESSAGE, code: "forbidden" });
+      }
+      const projectId = ProjectId.makeUnsafe(projectIdParam);
+      const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
+      const shell = yield* projectionReadModelQuery.getProjectShellById(projectId);
+      const isGroupContainer =
+        Option.isSome(shell) &&
+        isGroupCoordinatorHostProject({
+          kind: shell.value.kind,
+          workspaceRoot: shell.value.workspaceRoot,
+          groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+          studioWorkspaceRoot: config.studioWorkspaceRoot,
+        });
+      if (!isGroupContainer) {
+        return yield* new LibraryError({
+          message: "The hub library is only available on hub containers.",
+          code: "forbidden",
+        });
+      }
+      const normalizedName = yield* normalizeLibraryRelativePath(name);
+      if (normalizedName !== name || normalizedName.includes("/")) {
+        return yield* new LibraryError({
+          message: "Library upload name must be a file name, not a path.",
+          code: "invalid",
+        });
+      }
+      const bytes = yield* readEffectBinary(request, PROVIDER_SEND_TURN_MAX_FILE_BYTES);
+      const git = yield* GitCore;
+      // The root resolves inside the project lock so a configure-time move
+      // cannot have an upload land in the pre-move directory.
+      return yield* withLibraryRootLock(
+        projectId,
+        Effect.gen(function* () {
+          const agentConfig = Option.getOrNull(
+            yield* (yield* ProjectAgentRepository).getConfig(projectId),
+          );
+          const root = yield* resolveLibraryRoot({
+            stateDir: config.stateDir,
+            projectId,
+            libraryPath: agentConfig?.libraryPath,
+          });
+          yield* assertLibraryRootLocation({
+            root,
+            stateDir: config.stateDir,
+            groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+            studioWorkspaceRoot: config.studioWorkspaceRoot,
+            isCustomPath: agentConfig?.libraryPath !== undefined,
+            projectId,
+          });
+          return yield* withLibraryQueue(
+            root,
+            Effect.gen(function* () {
+              yield* ensureLibraryRepo(git, root, projectId, {
+                isManaged: agentConfig?.libraryPath === undefined,
+              });
+              const relativePath = relativeDirectory
+                ? `${yield* normalizeLibraryRelativePath(relativeDirectory)}/${normalizedName}`
+                : normalizedName;
+              const target = yield* resolveLibraryWriteTarget(root, relativePath);
+              yield* writeFileStringAtomically({ filePath: target, contents: bytes });
+              yield* commitLibraryChange(git, root, `Add ${relativePath}`);
+              const stat = yield* Effect.tryPromise({
+                try: () => fs.stat(target),
+                catch: () => new LibraryError({ message: "Library upload did not persist." }),
+              });
+              yield* Effect.forkDetach(
+                withLibraryQueue(
+                  root,
+                  pushLibraryIfConfigured({
+                    git,
+                    root,
+                    libraryRemoteUrl: agentConfig?.libraryRemoteUrl,
+                    libraryPushOnChange: agentConfig?.libraryPushOnChange,
+                  }),
+                ),
+              );
+              return {
+                name: normalizedName,
+                relativePath,
+                kind: "file" as const,
+                sizeBytes: bytes.length,
+                modifiedAt: stat.mtime.toISOString(),
+              };
+            }),
+          );
+        }),
+      );
+    }).pipe(
+      Effect.map((entry) =>
+        HttpServerResponse.jsonUnsafe(entry, { status: 201, headers: corsHeaders }),
+      ),
+      // Errors become responses here (not in the outer catch) so they keep
+      // the CORS headers every other branch of this handler returns.
+      Effect.catch((cause) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: cause instanceof Error ? cause.message : "Library upload failed." },
+            {
+              status:
+                cause instanceof LibraryError
+                  ? cause.code === "forbidden"
+                    ? 403
+                    : cause.code === "not-found"
+                      ? 404
+                      : cause.code === "conflict"
+                        ? 409
+                        : 400
+                  : cause &&
+                      typeof cause === "object" &&
+                      typeof (cause as { status?: unknown }).status === "number"
+                    ? (cause as { status: number }).status
+                    : 500,
+              headers: corsHeaders,
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (url.pathname === VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH) {
+    const provider = url.searchParams.get("provider")?.trim() ?? "";
+    const providerInstanceId = url.searchParams.get("providerInstanceId")?.trim() || undefined;
+    const cwd = url.searchParams.get("cwd")?.trim() ?? "";
+    const threadId = url.searchParams.get("threadId")?.trim() || undefined;
+    const mimeType = url.searchParams.get("mimeType")?.trim() ?? "";
+    const sampleRateHz = Number(url.searchParams.get("sampleRateHz"));
+    const durationMs = Number(url.searchParams.get("durationMs"));
+    if (
+      !Schema.is(ProviderKind)(provider) ||
+      (providerInstanceId !== undefined && !Schema.is(ProviderInstanceId)(providerInstanceId)) ||
+      !cwd ||
+      !mimeType ||
+      !Number.isSafeInteger(sampleRateHz) ||
+      !Number.isSafeInteger(durationMs)
+    ) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Voice transcription metadata is invalid." },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const releaseUpload = voiceUploadAdmissionGate.tryAcquire();
+    if (!releaseUpload) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: VOICE_UPLOAD_CAPACITY_ERROR_MESSAGE },
+        { status: 429, headers: corsHeaders },
+      );
+    }
+    return yield* Effect.gen(function* () {
+      const bytes = yield* readEffectBinary(request, SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES);
+      const registry = yield* ProviderAdapterRegistry;
+      const serverSettings = yield* ServerSettingsService;
+      const settings = yield* serverSettings.getSettings;
+      const instance = resolveProviderInstance(settings, {
+        provider,
+        ...(providerInstanceId ? { instanceId: providerInstanceId } : {}),
+      });
+      if (!instance || instance.driver !== provider || !instance.enabled) {
+        return HttpServerResponse.jsonUnsafe(
+          {
+            error: `Voice transcription provider instance '${providerInstanceId ?? provider}' is unavailable.`,
+          },
+          { status: 409, headers: corsHeaders },
+        );
+      }
+      const adapter = yield* getEnabledProviderAdapter(instance.driver, serverSettings, registry);
+      if (!adapter.transcribeVoice) {
+        return HttpServerResponse.jsonUnsafe(
+          { error: `Voice transcription is unavailable for provider '${provider}'.` },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+      const providerOptions = providerStartOptionsFromInstance(instance);
+      const result = yield* adapter.transcribeVoice({
+        provider: instance.driver,
+        providerInstanceId: instance.instanceId,
+        ...(providerOptions ? { providerOptions } : {}),
+        cwd,
+        ...(threadId ? { threadId: ThreadId.makeUnsafe(threadId) } : {}),
+        mimeType,
+        sampleRateHz,
+        durationMs,
+        audioBase64: Buffer.from(bytes).toString("base64"),
+      });
+      return HttpServerResponse.jsonUnsafe(result, { status: 200, headers: corsHeaders });
+    }).pipe(Effect.ensuring(Effect.sync(releaseUpload)));
+  }
+
+  return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
+}).pipe(
+  Effect.catch((error) =>
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const url = HttpServerRequest.toURL(request);
+      const headers = url ? trustedMutationCorsHeaders({ request, url, config }) : null;
+      const response =
+        error instanceof AuthError
+          ? authErrorResponse(error)
+          : HttpServerResponse.jsonUnsafe(
+              {
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : String((error as { readonly message?: unknown }).message ?? error),
+              },
+              {
+                status:
+                  typeof (error as { readonly status?: unknown }).status === "number"
+                    ? (error as { readonly status: number }).status
+                    : 500,
+              },
+            );
+      // Browser clients need the original error body, including authentication
+      // and provider failures. Never reflect an untrusted origin here.
+      return HttpServerResponse.setHeaders(response, headers ?? {});
+    }),
+  ),
+);
+
+export const binaryUploadEffectRouteLayer = Layer.mergeAll(
+  HttpRouter.add("*", ATTACHMENT_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
+  HttpRouter.add("*", ATTACHMENT_CANCEL_ROUTE_PATH, binaryUploadEffectHandler),
+  HttpRouter.add("*", VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
+  HttpRouter.add("*", LIBRARY_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
 );
 
 export const attachmentsEffectRouteLayer = HttpRouter.add(
@@ -518,18 +1390,37 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     if (!normalizedRelativePath) {
       return HttpServerResponse.text("Invalid attachment path", { status: 400 });
     }
+    if (
+      normalizedRelativePath.startsWith("objects/") ||
+      normalizedRelativePath.startsWith(".staging/")
+    ) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
 
     const isIdLookup =
       !normalizedRelativePath.includes("/") && !normalizedRelativePath.includes(".");
-    const filePath = isIdLookup
-      ? resolveAttachmentPathById({
+    const managedBlob =
+      isIdLookup && normalizedRelativePath.startsWith("att_v2_")
+        ? yield* (yield* ManagedAttachmentRepository).findClaimedById({
+            attachmentId: normalizedRelativePath,
+          })
+        : Option.none();
+    const filePath = Option.isSome(managedBlob)
+      ? resolveAttachmentRelativePath({
           attachmentsDir: config.attachmentsDir,
-          attachmentId: normalizedRelativePath,
+          relativePath: managedBlob.value.relativePath,
         })
-      : resolveAttachmentRelativePath({
-          attachmentsDir: config.attachmentsDir,
-          relativePath: normalizedRelativePath,
-        });
+      : isIdLookup && !normalizedRelativePath.startsWith("att_v2_")
+        ? resolveAttachmentPathById({
+            attachmentsDir: config.attachmentsDir,
+            attachmentId: normalizedRelativePath,
+          })
+        : !isIdLookup
+          ? resolveAttachmentRelativePath({
+              attachmentsDir: config.attachmentsDir,
+              relativePath: normalizedRelativePath,
+            })
+          : null;
     if (!filePath) {
       return HttpServerResponse.text(isIdLookup ? "Not Found" : "Invalid attachment path", {
         status: isIdLookup ? 404 : 400,
@@ -543,25 +1434,32 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     if (!fileInfo || fileInfo.type !== "File") {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
-
-    // Mirror local-image serving instead of using HttpServerResponse.file; the Effect
-    // route stack used by the desktop server can miss that helper's file services.
-    const data = yield* fileSystem
-      .readFile(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) {
+    if (
+      Option.isSome(managedBlob) &&
+      managedBlob.value.sizeBytes !== null &&
+      Number(fileInfo.size) !== managedBlob.value.sizeBytes
+    ) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    return HttpServerResponse.uint8Array(data, {
-      status: 200,
-      contentType: Mime.getType(filePath) ?? "application/octet-stream",
-      headers: { "Cache-Control": "public, max-age=31536000, immutable" },
+    // Mirror local-image serving instead of using HttpServerResponse.file; the Effect
+    // route stack used by the desktop server can miss that helper's file services.
+    return streamedFileResponse({
+      fileSystem,
+      path: filePath,
+      sizeBytes: Number(fileInfo.size),
+      // Attachment access is session/token gated and attachments are mutable
+      // lifecycle resources: deletion or session revocation must take effect on
+      // the next request, including when a shared proxy is present.
+      headers: {
+        "Cache-Control": "private, no-store",
+        Pragma: "no-cache",
+      },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
-const staticAndDevEffectRouteLayer = HttpRouter.add(
+export const staticAndDevEffectRouteLayer = HttpRouter.add(
   "GET",
   "*",
   Effect.gen(function* () {
@@ -594,10 +1492,36 @@ const staticAndDevEffectRouteLayer = HttpRouter.add(
     ) {
       return HttpServerResponse.text("Invalid static file path", { status: 400 });
     }
+    if (isSidecarRequestPath(relativePath)) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
 
     const isWithinStaticRoot = (candidate: string) =>
       candidate === staticRoot ||
       candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
+
+    // Lexical containment is not containment: stat and readFile follow
+    // symlinks, so a link inside the root pointing outside it would be served.
+    // Canonicalize before opening anything. The root itself is canonicalized
+    // too, otherwise a symlinked staticDir would fail its own check.
+    const canonicalStaticRoot = yield* fileSystem
+      .realPath(staticRoot)
+      .pipe(Effect.catch(() => Effect.succeed(staticRoot)));
+    const isWithinCanonicalRoot = (candidate: string) =>
+      candidate === canonicalStaticRoot ||
+      candidate.startsWith(
+        canonicalStaticRoot.endsWith(path.sep)
+          ? canonicalStaticRoot
+          : `${canonicalStaticRoot}${path.sep}`,
+      );
+    const resolvesInsideRoot = Effect.fn(function* (candidate: string) {
+      const real = yield* fileSystem
+        .realPath(candidate)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      // A path that cannot be canonicalized does not exist; the caller's own
+      // stat/readFile will fail it, and refusing here keeps 404 semantics.
+      return real === null ? false : isWithinCanonicalRoot(real);
+    });
 
     let filePath = path.resolve(staticRoot, relativePath);
     if (!isWithinStaticRoot(filePath)) {
@@ -610,369 +1534,83 @@ const staticAndDevEffectRouteLayer = HttpRouter.add(
       }
     }
 
+    // Serves a resolved static file, preferring build-time .br/.gz sidecars
+    // when the client accepts them. Content-Type always reflects the
+    // underlying file; Vary is set even on identity responses so shared
+    // caches never hand a compressed body to a client that cannot decode it.
+    // Every response carries an ETag derived from the served file (sidecar's
+    // when a sidecar is served, so validators differ per encoding), making
+    // no-cache revalidation a 304 instead of a full re-transfer.
+    const serveStaticFile = Effect.fn(function* (resolvedPath: string) {
+      const cacheHeaders = {
+        "Cache-Control": staticCacheControl(path.relative(staticRoot, resolvedPath)),
+        Vary: "Accept-Encoding",
+      };
+      const ifNoneMatch = request.headers["if-none-match"];
+      const baseContentType = Mime.getType(resolvedPath) ?? "application/octet-stream";
+      const contentType =
+        baseContentType === "text/html" ? "text/html; charset=utf-8" : baseContentType;
+      const respond = Effect.fn(function* (servedPath: string, encoding?: string) {
+        // Canonicalize before opening: a symlink inside the root pointing
+        // outside it passes the lexical guard but must not be served.
+        if (!(yield* resolvesInsideRoot(servedPath))) return null;
+        const info = yield* fileSystem
+          .stat(servedPath)
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        if (!info || info.type !== "File") return null;
+        const etag = staticEtag(Number(info.size), info.mtime?.getTime() ?? 0, encoding);
+        const encodingHeaders = encoding ? { "Content-Encoding": encoding } : {};
+        const headers = { ...cacheHeaders, ...encodingHeaders, ETag: etag };
+        if (ifNoneMatchSatisfies(ifNoneMatch, etag)) {
+          return HttpServerResponse.empty({ status: 304, headers });
+        }
+        const data = yield* fileSystem
+          .readFile(servedPath)
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        if (!data) return null;
+        return HttpServerResponse.uint8Array(data, { status: 200, contentType, headers });
+      });
+      const preference = negotiateStaticEncodingPreference(request.headers["accept-encoding"]);
+      // Candidates are ranked by client weight with identity (null) in its own
+      // ranked position, so a client preferring identity over a coding is not
+      // handed a sidecar it ranked lower.
+      for (const candidate of preference.candidates) {
+        if (candidate === null) {
+          const identityResponse = yield* respond(resolvedPath);
+          if (identityResponse) return identityResponse;
+          continue;
+        }
+        const sidecarPath = `${resolvedPath}${candidate.sidecarExtension}`;
+        // Sidecars share the traversal guard with their source file: appending
+        // an extension cannot escape the root, but keep the invariant explicit.
+        if (!isWithinStaticRoot(sidecarPath)) continue;
+        const sidecarResponse = yield* respond(sidecarPath, candidate.encoding);
+        if (sidecarResponse) return sidecarResponse;
+      }
+      // Nothing acceptable was servable. With identity excluded that is a 406
+      // per RFC 9110 §12.5.3; otherwise the file itself is missing.
+      if (!preference.identityAcceptable) {
+        return HttpServerResponse.text("Not Acceptable", {
+          status: 406,
+          headers: { Vary: "Accept-Encoding" },
+        });
+      }
+      return null;
+    });
+
     const fileInfo = yield* fileSystem
       .stat(filePath)
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!fileInfo || fileInfo.type !== "File") {
-      const indexPath = path.resolve(staticRoot, "index.html");
-      const indexData = yield* fileSystem
-        .readFile(indexPath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!indexData) return HttpServerResponse.text("Not Found", { status: 404 });
-      return HttpServerResponse.uint8Array(indexData, {
-        status: 200,
-        contentType: "text/html; charset=utf-8",
-      });
+      const fallback = yield* serveStaticFile(path.resolve(staticRoot, "index.html"));
+      return fallback ?? HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    const data = yield* fileSystem
-      .readFile(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) return HttpServerResponse.text("Internal Server Error", { status: 500 });
-    return HttpServerResponse.uint8Array(data, {
-      status: 200,
-      contentType: Mime.getType(filePath) ?? "application/octet-stream",
-    });
+    const response = yield* serveStaticFile(filePath);
+    return response ?? HttpServerResponse.text("Internal Server Error", { status: 500 });
   }),
 );
 
 const FALLBACK_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 
 const FALLBACK_SITE_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="site-favicon"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20M12 2a14.5 14.5 0 0 1 0 20M2 12h20"/></svg>`;
-
-type Respond = (
-  statusCode: number,
-  headers: Record<string, string | Array<string>>,
-  body?: string | Uint8Array,
-) => void;
-
-export interface HttpRequestHandlerOptions {
-  readonly serverConfig: ServerConfigShape;
-  readonly readiness: ServerReadiness;
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly projectFaviconResolver: ProjectFaviconResolverShape;
-  readonly path: Path.Path;
-  readonly serverAuth?: ServerAuthShape;
-  readonly sessionCredentials?: Pick<SessionCredentialServiceShape, "cookieName">;
-}
-
-function makeResponder(res: http.ServerResponse): Respond {
-  return (statusCode, headers, body) => {
-    res.writeHead(statusCode, headers);
-    res.end(body);
-  };
-}
-
-export function createHttpRequestHandler({
-  serverConfig,
-  readiness,
-  fileSystem,
-  projectFaviconResolver,
-  path,
-  serverAuth,
-  sessionCredentials,
-}: HttpRequestHandlerOptions): http.RequestListener {
-  const { port, staticDir, devUrl } = serverConfig;
-
-  return (req, res) => {
-    const respond = makeResponder(res);
-
-    void Effect.runPromise(
-      Effect.gen(function* () {
-        const url = new URL(req.url ?? "/", `http://localhost:${port}`);
-
-        if (url.pathname === "/health") {
-          const readinessSnapshot = yield* readiness.getSnapshot;
-          respond(
-            200,
-            { "Content-Type": "application/json; charset=utf-8" },
-            JSON.stringify({
-              status: "ok",
-              startupReady: readinessSnapshot.startupReady,
-              pushBusReady: readinessSnapshot.pushBusReady,
-              keybindingsReady: readinessSnapshot.keybindingsReady,
-              terminalSubscriptionsReady: readinessSnapshot.terminalSubscriptionsReady,
-              orchestrationSubscriptionsReady: readinessSnapshot.orchestrationSubscriptionsReady,
-            }),
-          );
-          return;
-        }
-
-        if (url.pathname === "/api/project-favicon") {
-          yield* serveProjectFavicon({
-            url,
-            res,
-            respond,
-            fileSystem,
-            projectFaviconResolver,
-          });
-          return;
-        }
-
-        if (url.pathname === EDITOR_ICON_ROUTE_PATH) {
-          yield* serveEditorIcon({
-            url,
-            respond,
-            serverConfig,
-            fileSystem,
-          });
-          return;
-        }
-
-        if (url.pathname.startsWith("/api/auth/")) {
-          if (!serverAuth || !sessionCredentials) {
-            respond(503, { "Content-Type": "text/plain" }, "Auth service unavailable");
-            return;
-          }
-          const handled = yield* serveAuthHttpRoute({
-            url,
-            req,
-            respond,
-            serverAuth,
-            sessionCredentials,
-          });
-          if (handled) return;
-        }
-
-        if (url.pathname.startsWith(ATTACHMENTS_ROUTE_PREFIX)) {
-          yield* serveAttachment({
-            url,
-            res,
-            respond,
-            serverConfig,
-            fileSystem,
-          });
-          return;
-        }
-
-        if (devUrl) {
-          respond(302, { Location: devUrl.href });
-          return;
-        }
-
-        if (!staticDir) {
-          respond(
-            503,
-            { "Content-Type": "text/plain" },
-            "No static directory configured and no dev URL set.",
-          );
-          return;
-        }
-
-        yield* serveStaticAsset({
-          url,
-          respond,
-          staticDir,
-          fileSystem,
-          path,
-        });
-      }),
-    ).catch(() => {
-      if (!res.headersSent) {
-        respond(500, { "Content-Type": "text/plain" }, "Internal Server Error");
-      }
-    });
-  };
-}
-
-const serveProjectFavicon = Effect.fn(function* (input: {
-  readonly url: URL;
-  readonly res: http.ServerResponse;
-  readonly respond: Respond;
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly projectFaviconResolver: ProjectFaviconResolverShape;
-}) {
-  const projectCwd = input.url.searchParams.get("cwd");
-  if (!projectCwd) {
-    input.respond(400, { "Content-Type": "text/plain" }, "Missing cwd parameter");
-    return;
-  }
-
-  const faviconPath = yield* input.projectFaviconResolver.resolvePath(projectCwd);
-  if (!faviconPath) {
-    if (input.url.searchParams.get("fallback") === "none") {
-      input.respond(204, { "Cache-Control": "public, max-age=3600" });
-      return;
-    }
-    input.respond(
-      200,
-      {
-        "Content-Type": "image/svg+xml",
-        "Cache-Control": "public, max-age=3600",
-      },
-      FALLBACK_FAVICON_SVG,
-    );
-    return;
-  }
-
-  const data = yield* input.fileSystem
-    .readFile(faviconPath)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  if (!data) {
-    input.respond(500, { "Content-Type": "text/plain" }, "Read error");
-    return;
-  }
-
-  input.respond(
-    200,
-    {
-      "Content-Type": Mime.getType(faviconPath) ?? "application/octet-stream",
-      "Cache-Control": "public, max-age=3600",
-    },
-    data,
-  );
-});
-
-const serveEditorIcon = Effect.fn(function* (input: {
-  readonly url: URL;
-  readonly respond: Respond;
-  readonly serverConfig: ServerConfigShape;
-  readonly fileSystem: FileSystem.FileSystem;
-}) {
-  if (!isLegacyTokenAuthorized({ config: input.serverConfig, url: input.url })) {
-    input.respond(401, { "Content-Type": "text/plain" }, "Unauthorized");
-    return;
-  }
-
-  const payload = yield* resolveEditorIconHttpPayload(input);
-  input.respond(
-    payload.statusCode,
-    { "Content-Type": payload.contentType, ...(payload.headers ?? {}) },
-    payload.body,
-  );
-});
-
-const serveAttachment = Effect.fn(function* (input: {
-  readonly url: URL;
-  readonly res: http.ServerResponse;
-  readonly respond: Respond;
-  readonly serverConfig: ServerConfigShape;
-  readonly fileSystem: FileSystem.FileSystem;
-}) {
-  const rawRelativePath = input.url.pathname.slice(ATTACHMENTS_ROUTE_PREFIX.length);
-  const normalizedRelativePath = normalizeAttachmentRelativePath(rawRelativePath);
-  if (!normalizedRelativePath) {
-    input.respond(400, { "Content-Type": "text/plain" }, "Invalid attachment path");
-    return;
-  }
-
-  const isIdLookup = !normalizedRelativePath.includes("/") && !normalizedRelativePath.includes(".");
-  const filePath = isIdLookup
-    ? resolveAttachmentPathById({
-        attachmentsDir: input.serverConfig.attachmentsDir,
-        attachmentId: normalizedRelativePath,
-      })
-    : resolveAttachmentRelativePath({
-        attachmentsDir: input.serverConfig.attachmentsDir,
-        relativePath: normalizedRelativePath,
-      });
-  if (!filePath) {
-    input.respond(
-      isIdLookup ? 404 : 400,
-      { "Content-Type": "text/plain" },
-      isIdLookup ? "Not Found" : "Invalid attachment path",
-    );
-    return;
-  }
-
-  const fileInfo = yield* input.fileSystem
-    .stat(filePath)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  if (!fileInfo || fileInfo.type !== "File") {
-    input.respond(404, { "Content-Type": "text/plain" }, "Not Found");
-    return;
-  }
-
-  const contentType = Mime.getType(filePath) ?? "application/octet-stream";
-  input.res.writeHead(200, {
-    "Content-Type": contentType,
-    "Cache-Control": "public, max-age=31536000, immutable",
-  });
-  const streamExit = yield* Stream.runForEach(input.fileSystem.stream(filePath), (chunk) =>
-    Effect.sync(() => {
-      if (!input.res.destroyed) {
-        input.res.write(chunk);
-      }
-    }),
-  ).pipe(Effect.exit);
-  if (Exit.isFailure(streamExit)) {
-    if (!input.res.destroyed) {
-      input.res.destroy();
-    }
-    return;
-  }
-  if (!input.res.writableEnded) {
-    input.res.end();
-  }
-});
-
-const serveStaticAsset = Effect.fn(function* (input: {
-  readonly url: URL;
-  readonly respond: Respond;
-  readonly staticDir: string;
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly path: Path.Path;
-}) {
-  const staticRoot = input.path.resolve(input.staticDir);
-  const staticRequestPath = input.url.pathname === "/" ? "/index.html" : input.url.pathname;
-  const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
-  const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
-  const staticRelativePath = input.path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
-  const hasPathTraversalSegment = staticRelativePath.startsWith("..");
-  if (
-    staticRelativePath.length === 0 ||
-    hasRawLeadingParentSegment ||
-    hasPathTraversalSegment ||
-    staticRelativePath.includes("\0")
-  ) {
-    input.respond(400, { "Content-Type": "text/plain" }, "Invalid static file path");
-    return;
-  }
-
-  const isWithinStaticRoot = (candidate: string) =>
-    candidate === staticRoot ||
-    candidate.startsWith(
-      staticRoot.endsWith(input.path.sep) ? staticRoot : `${staticRoot}${input.path.sep}`,
-    );
-
-  let filePath = input.path.resolve(staticRoot, staticRelativePath);
-  if (!isWithinStaticRoot(filePath)) {
-    input.respond(400, { "Content-Type": "text/plain" }, "Invalid static file path");
-    return;
-  }
-
-  const ext = input.path.extname(filePath);
-  if (!ext) {
-    filePath = input.path.resolve(filePath, "index.html");
-    if (!isWithinStaticRoot(filePath)) {
-      input.respond(400, { "Content-Type": "text/plain" }, "Invalid static file path");
-      return;
-    }
-  }
-
-  const fileInfo = yield* input.fileSystem
-    .stat(filePath)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  if (!fileInfo || fileInfo.type !== "File") {
-    const indexPath = input.path.resolve(staticRoot, "index.html");
-    const indexData = yield* input.fileSystem
-      .readFile(indexPath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!indexData) {
-      input.respond(404, { "Content-Type": "text/plain" }, "Not Found");
-      return;
-    }
-    input.respond(200, { "Content-Type": "text/html; charset=utf-8" }, indexData);
-    return;
-  }
-
-  const contentType = Mime.getType(filePath) ?? "application/octet-stream";
-  const data = yield* input.fileSystem
-    .readFile(filePath)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  if (!data) {
-    input.respond(500, { "Content-Type": "text/plain" }, "Internal Server Error");
-    return;
-  }
-  input.respond(200, { "Content-Type": contentType }, data);
-});

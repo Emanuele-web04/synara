@@ -1,0 +1,17 @@
+{
+  "title": "Providers",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "claude-code",
+    "codex",
+    "opencode",
+    "cursor",
+    "antigravity",
+    "grok",
+    "devin",
+    "pi",
+    "factory-droid",
+    "omp"
+  ]
+}

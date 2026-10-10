@@ -47,18 +47,29 @@ describe("createTerminalModeReplayTracker", () => {
     });
   });
 
-  it("tracks bracketed paste, focus reporting, mouse tracking, and cursor visibility", () => {
+  it("tracks bracketed paste, focus reporting, and cursor visibility", () => {
     withTracker((tracker) => {
       tracker.feed("\u001b[?2004h\u001b[?1004h\u001b[?1002h\u001b[?25l");
 
       const preamble = tracker.buildPreamble();
       expect(preamble).toContain("\u001b[?2004h");
       expect(preamble).toContain("\u001b[?1004h");
-      expect(preamble).toContain("\u001b[?1002h");
       expect(preamble).toContain("\u001b[?25l");
 
       tracker.feed("\u001b[?2004l");
       expect(tracker.buildPreamble()).not.toContain("?2004");
+    });
+  });
+
+  it("does not replay mouse tracking modes on renderer reattach", () => {
+    withTracker((tracker) => {
+      tracker.feed("\u001b[?9h\u001b[?1000h\u001b[?1002h\u001b[?1003h");
+
+      const preamble = tracker.buildPreamble();
+      expect(preamble).not.toContain("?9h");
+      expect(preamble).not.toContain("?1000h");
+      expect(preamble).not.toContain("?1002h");
+      expect(preamble).not.toContain("?1003h");
     });
   });
 

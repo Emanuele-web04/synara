@@ -1,27 +1,32 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@synara/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
-} from "@t3tools/contracts";
+  ThreadAsyncUserInputAnsweredPayload,
+  ThreadClaudeCacheSetPayload,
+  type OrchestrationMessageTextSegment,
+} from "@synara/contracts";
+import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-} from "@t3tools/shared/pinnedMessages";
-import {
-  addThreadMarker,
-  removeThreadMarker,
-  setThreadMarkerDone,
-  setThreadMarkerLabel,
-} from "@t3tools/shared/threadMarkers";
+} from "@synara/shared/pinnedMessages";
 import { Effect, Schema } from "effect";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
+  SpaceCreatedPayload,
+  SpaceDeletedPayload,
+  SpaceMetaUpdatedPayload,
+  SpaceOrderUpdatedPayload,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
@@ -35,20 +40,25 @@ import {
   ThreadPinnedMessageDoneSetPayload,
   ThreadPinnedMessageLabelSetPayload,
   ThreadPinnedMessageRemovedPayload,
-  ThreadMarkerAddedPayload,
-  ThreadMarkerDoneSetPayload,
-  ThreadMarkerLabelSetPayload,
-  ThreadMarkerRemovedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadConversationRolledBackPayload,
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
+  ThreadSidechatActivityRecordedPayload,
+  ThreadSidechatExpiredPayload,
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
+import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
+import {
+  canAdoptFirstTurnProvider,
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -61,10 +71,6 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   return "completed" as const;
 }
 
-function isProviderDiffPlaceholderRef(checkpointRef: string | null | undefined): boolean {
-  return checkpointRef?.startsWith("provider-diff:") === true;
-}
-
 function isTerminalLatestTurn(
   latestTurn: OrchestrationThread["latestTurn"] | null | undefined,
 ): boolean {
@@ -74,12 +80,92 @@ function isTerminalLatestTurn(
   return latestTurn.state === "completed" || latestTurn.state === "error";
 }
 
+// Turn lifecycle must settle with the session: once a session leaves "running",
+// no provider event will ever mark the turn complete on its own, so a running
+// latestTurn is settled here. Checkpoint diff events (thread.turn-diff-completed)
+// only enrich the terminal state afterwards — they are not the lifecycle authority.
+// A retained activeTurnId blocks settlement (except on error): stop-requested flows
+// deliberately emit "interrupted" while keeping the turn active until the provider's
+// terminal event decides the real outcome, and a premature settle here could never
+// be corrected because settlement only applies to running turns.
+function settleLatestTurnForSessionStatus(
+  latestTurn: OrchestrationThread["latestTurn"],
+  session: Pick<OrchestrationSession, "status" | "activeTurnId" | "updatedAt">,
+): OrchestrationThread["latestTurn"] {
+  if (latestTurn?.state !== "running") {
+    return latestTurn;
+  }
+  const settledState = settleTurnStateFromSession(session, latestTurn.state);
+  if (settledState === null) {
+    return latestTurn;
+  }
+  return {
+    ...latestTurn,
+    state: settledState,
+    completedAt: latestTurn.completedAt ?? session.updatedAt,
+  };
+}
+
+// Every projected event patches exactly one thread, and streaming assistant
+// deltas run this on the dispatch hot path, so patch the single affected slot
+// instead of mapping a closure over every thread.
 function updateThread(
   threads: ReadonlyArray<OrchestrationThread>,
   threadId: ThreadId,
   patch: ThreadPatch,
 ): OrchestrationThread[] {
-  return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+  const nextThreads = threads.slice();
+  const index = nextThreads.findIndex((thread) => thread.id === threadId);
+  if (index === -1) {
+    return nextThreads;
+  }
+  nextThreads[index] = { ...nextThreads[index]!, ...patch };
+  return nextThreads;
+}
+
+interface ProjectedProviderSessionBinding {
+  readonly status: OrchestrationSession["status"];
+  readonly providerName: string | null;
+  readonly providerInstanceId?: string | null | undefined;
+}
+
+export function canProjectTurnModelSelectionForSession(
+  session: ProjectedProviderSessionBinding | null | undefined,
+  requestedInstanceId: string,
+): boolean {
+  if (!session || session.status === "stopped" || session.status === "error") {
+    return true;
+  }
+  const boundInstanceId = session.providerInstanceId ?? session.providerName;
+  return !boundInstanceId || requestedInstanceId === boundInstanceId;
+}
+
+function canProjectTurnModelSelection(
+  thread: OrchestrationThread,
+  modelSelection: OrchestrationThread["modelSelection"] | undefined,
+): boolean {
+  if (modelSelection === undefined) {
+    return false;
+  }
+  return canProjectTurnModelSelectionForSession(
+    thread.session,
+    resolveModelSelectionInstanceId(modelSelection),
+  );
+}
+
+// Message ids are unique within a thread and streamed deltas land on the newest
+// message, so searching backwards finds the target in one step instead of
+// scanning the whole (capped at MAX_THREAD_MESSAGES) transcript.
+function findMessageIndexFromEnd(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  messageId: string,
+): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]!.id === messageId) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function decodeForEvent<A>(
@@ -122,10 +208,6 @@ function retainThreadMessagesAfterRevert(
           !retainedMessageIds.has(message.id) &&
           (message.turnId === null || retainedTurnIds.has(message.turnId)),
       )
-      .toSorted(
-        (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
-      )
       .slice(0, missingUserCount);
     for (const message of fallbackUserMessages) {
       retainedMessageIds.add(message.id);
@@ -143,10 +225,6 @@ function retainThreadMessagesAfterRevert(
           message.role === "assistant" &&
           !retainedMessageIds.has(message.id) &&
           (message.turnId === null || retainedTurnIds.has(message.turnId)),
-      )
-      .toSorted(
-        (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
       )
       .slice(0, missingAssistantCount);
     for (const message of fallbackAssistantMessages) {
@@ -213,13 +291,108 @@ function compareThreadActivities(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
+function upsertThreadActivity(
+  activities: ReadonlyArray<OrchestrationThread["activities"][number]>,
+  activity: OrchestrationThread["activities"][number],
+): ReadonlyArray<OrchestrationThread["activities"][number]> {
+  const existingIndex = activities.findIndex((entry) => entry.id === activity.id);
+  if (existingIndex >= 0 && compareThreadActivities(activities[existingIndex]!, activity) === 0) {
+    const next = [...activities];
+    next[existingIndex] = activity;
+    return next.slice(-MAX_THREAD_ACTIVITIES);
+  }
+
+  const withoutExisting =
+    existingIndex < 0
+      ? activities
+      : [...activities.slice(0, existingIndex), ...activities.slice(existingIndex + 1)];
+  const last = withoutExisting.at(-1);
+  if (!last || compareThreadActivities(last, activity) <= 0) {
+    return [...withoutExisting, activity].slice(-MAX_THREAD_ACTIVITIES);
+  }
+
+  let low = 0;
+  let high = withoutExisting.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareThreadActivities(withoutExisting[middle]!, activity) <= 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return [...withoutExisting.slice(0, low), activity, ...withoutExisting.slice(low)].slice(
+    -MAX_THREAD_ACTIVITIES,
+  );
+}
+
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
+    spaces: [],
     projects: [],
     threads: [],
     updatedAt: nowIso,
   };
+}
+
+/**
+ * Mirrors the SQLite message_text_segments projection in the in-memory read
+ * model: streamed assistant deltas accumulate into the current segment, a
+ * row-making provider event between deltas starts a new segment at its own
+ * time (segmentStartedAt), and completion keeps the boundaries when the
+ * collated segment text matches the final text. Single-segment messages and
+ * edits/rewrites/imports need no side table metadata and drop the segments.
+ */
+function deriveNextMessageTextSegments(
+  previous: ReadonlyArray<OrchestrationMessageTextSegment> | undefined,
+  input: {
+    readonly text: string;
+    readonly streaming: boolean;
+    readonly segmentStartedAt: string | undefined;
+    readonly sequence: number;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  },
+): ReadonlyArray<OrchestrationMessageTextSegment> | undefined {
+  if (input.streaming) {
+    if (input.segmentStartedAt) {
+      return [
+        ...(previous ?? []),
+        {
+          sequence: input.sequence,
+          startedAt: input.segmentStartedAt,
+          endedAt: input.updatedAt,
+          text: input.text,
+        },
+      ];
+    }
+    if (previous && previous.length > 0) {
+      const tail = previous[previous.length - 1]!;
+      return [
+        ...previous.slice(0, -1),
+        { ...tail, text: `${tail.text}${input.text}`, endedAt: input.updatedAt },
+      ];
+    }
+    return [
+      {
+        sequence: input.sequence,
+        startedAt: input.createdAt,
+        endedAt: input.updatedAt,
+        text: input.text,
+      },
+    ];
+  }
+
+  // Completion / edit / rewrite / import.
+  if (previous && previous.length > 1) {
+    const collatedSegmentText = previous.map((segment) => segment.text).join("");
+    if (collatedSegmentText === input.text || input.text.length === 0) {
+      const tail = previous[previous.length - 1]!;
+      return [...previous.slice(0, -1), { ...tail, endedAt: input.updatedAt }];
+    }
+  }
+  return undefined;
 }
 
 export function projectEvent(
@@ -233,6 +406,87 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "space.created":
+      return decodeForEvent(SpaceCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const existing = nextBase.spaces.find((entry) => entry.id === payload.spaceId);
+          const nextSpace = {
+            id: payload.spaceId,
+            name: payload.name,
+            icon: payload.icon,
+            sortOrder: payload.sortOrder,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            deletedAt: null,
+          };
+          return {
+            ...nextBase,
+            spaces: existing
+              ? nextBase.spaces.map((entry) => (entry.id === payload.spaceId ? nextSpace : entry))
+              : [...nextBase.spaces, nextSpace],
+          };
+        }),
+      );
+
+    case "space.meta-updated":
+      return decodeForEvent(SpaceMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          spaces: nextBase.spaces.map((space) =>
+            space.id === payload.spaceId
+              ? {
+                  ...space,
+                  ...(payload.name !== undefined ? { name: payload.name } : {}),
+                  ...(payload.icon !== undefined ? { icon: payload.icon } : {}),
+                  updatedAt: payload.updatedAt,
+                }
+              : space,
+          ),
+        })),
+      );
+
+    case "space.order-updated":
+      return decodeForEvent(SpaceOrderUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const orderBySpaceId = new Map(
+            payload.orderedSpaceIds.map((spaceId, index) => [spaceId, index] as const),
+          );
+          return {
+            ...nextBase,
+            spaces: nextBase.spaces.map((space) => {
+              const sortOrder = orderBySpaceId.get(space.id);
+              // A listed space whose position did not move is not a change; skipping it keeps
+              // this read model, the SQL projection, and the client store byte-identical.
+              return sortOrder === undefined || sortOrder === space.sortOrder
+                ? space
+                : { ...space, sortOrder, updatedAt: payload.updatedAt };
+            }),
+          };
+        }),
+      );
+
+    case "space.deleted":
+      return decodeForEvent(SpaceDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          spaces: nextBase.spaces.map((space) =>
+            space.id === payload.spaceId
+              ? { ...space, deletedAt: payload.deletedAt, updatedAt: payload.deletedAt }
+              : space,
+          ),
+          projects: nextBase.projects.map((project) =>
+            project.spaceId === payload.spaceId
+              ? {
+                  ...project,
+                  spaceId: null,
+                  updatedAt:
+                    project.updatedAt > payload.deletedAt ? project.updatedAt : payload.deletedAt,
+                }
+              : project,
+          ),
+        })),
+      );
+
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -245,6 +499,8 @@ export function projectEvent(
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
+            spaceId: payload.spaceId ?? null,
+            additionalFolders: payload.additionalFolders ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -279,6 +535,7 @@ export function projectEvent(
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+                  ...(payload.spaceId !== undefined ? { spaceId: payload.spaceId } : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,
@@ -310,6 +567,9 @@ export function projectEvent(
           event.type,
           "payload",
         );
+        const isStudio = isGroupContainerKind(
+          nextBase.projects.find((project) => project.id === payload.projectId)?.kind,
+        );
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
@@ -319,25 +579,42 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
-            envMode: payload.envMode,
-            branch: payload.branch,
-            worktreePath: payload.worktreePath,
-            associatedWorktreePath: payload.associatedWorktreePath,
-            associatedWorktreeBranch: payload.associatedWorktreeBranch,
-            associatedWorktreeRef: payload.associatedWorktreeRef,
-            createBranchFlowCompleted: payload.createBranchFlowCompleted,
+            envMode: isStudio ? "local" : payload.envMode,
+            branch: isStudio ? null : payload.branch,
+            worktreePath: isStudio ? null : payload.worktreePath,
+            workingDirectory: isStudio
+              ? (payload.workingDirectory ?? payload.worktreePath)
+              : payload.workingDirectory,
+            associatedWorktreePath: isStudio ? null : payload.associatedWorktreePath,
+            associatedWorktreeBranch: isStudio ? null : payload.associatedWorktreeBranch,
+            associatedWorktreeRef: isStudio ? null : payload.associatedWorktreeRef,
+            createBranchFlowCompleted: isStudio ? false : payload.createBranchFlowCompleted,
             isPinned: payload.isPinned,
             parentThreadId: payload.parentThreadId,
+            creationSource: payload.creationSource ?? null,
+            sourceThreadId: payload.sourceThreadId ?? null,
+            sourceTurnId: payload.sourceTurnId ?? null,
+            gatewayOperationId: payload.gatewayOperationId ?? null,
+            gatewayOperationIndex: payload.gatewayOperationIndex ?? null,
             subagentAgentId: payload.subagentAgentId,
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
+            ...(payload.forkSourceMessageId
+              ? { forkSourceMessageId: payload.forkSourceMessageId }
+              : {}),
             sidechatSourceThreadId: payload.sidechatSourceThreadId,
+            sidechatContext: payload.sidechatContext,
+            sidechatLastActivityAt: payload.sidechatLastActivityAt,
+            sidechatExpiredAt: payload.sidechatExpiredAt,
             lastKnownPr: payload.lastKnownPr ?? null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
+            settledAt: null,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             deletedAt: null,
             handoff: payload.handoff,
             messages: [],
@@ -357,12 +634,46 @@ export function projectEvent(
         };
       });
 
+    case "thread.sidechat-activity-recorded":
+      return decodeForEvent(
+        ThreadSidechatActivityRecordedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            sidechatLastActivityAt: payload.lastActivityAt,
+            updatedAt: payload.lastActivityAt,
+          }),
+        })),
+      );
+
+    case "thread.sidechat-expired":
+      return decodeForEvent(
+        ThreadSidechatExpiredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            sidechatExpiredAt: payload.expiredAt,
+            updatedAt: payload.expiredAt,
+          }),
+        })),
+      );
+
     case "thread.deleted":
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: payload.deletedAt,
           }),
         })),
@@ -376,6 +687,8 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt,
+              snoozedUntil: null,
+              snoozeReminderAt: null,
               updatedAt: payload.updatedAt ?? archivedAt,
             }),
           };
@@ -401,6 +714,9 @@ export function projectEvent(
         Effect.map((payload) => {
           const existingThread =
             nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          const isStudio = isGroupContainerKind(
+            nextBase.projects.find((project) => project.id === existingThread?.projectId)?.kind,
+          );
           const nextCreateBranchFlowCompleted =
             payload.createBranchFlowCompleted !== undefined
               ? payload.createBranchFlowCompleted
@@ -416,9 +732,30 @@ export function projectEvent(
               ...(payload.modelSelection !== undefined
                 ? { modelSelection: payload.modelSelection }
                 : {}),
-              ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
-              ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
-              ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+              ...(isStudio
+                ? {
+                    envMode: "local" as const,
+                    branch: null,
+                    worktreePath: null,
+                    workingDirectory:
+                      payload.workingDirectory !== undefined
+                        ? payload.workingDirectory
+                        : payload.worktreePath !== undefined
+                          ? payload.worktreePath
+                          : (existingThread?.workingDirectory ??
+                            existingThread?.worktreePath ??
+                            null),
+                  }
+                : {
+                    ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
+                    ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+                    ...(payload.worktreePath !== undefined
+                      ? { worktreePath: payload.worktreePath }
+                      : {}),
+                    ...(payload.workingDirectory !== undefined
+                      ? { workingDirectory: payload.workingDirectory }
+                      : {}),
+                  }),
               ...(payload.associatedWorktreePath !== undefined
                 ? { associatedWorktreePath: payload.associatedWorktreePath }
                 : {}),
@@ -431,7 +768,20 @@ export function projectEvent(
               ...(nextCreateBranchFlowCompleted !== undefined
                 ? { createBranchFlowCompleted: nextCreateBranchFlowCompleted }
                 : {}),
+              ...(isStudio
+                ? {
+                    associatedWorktreePath: null,
+                    associatedWorktreeBranch: null,
+                    associatedWorktreeRef: null,
+                    createBranchFlowCompleted: false,
+                  }
+                : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+              ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
+              ...(payload.snoozedUntil !== undefined ? { snoozedUntil: payload.snoozedUntil } : {}),
+              ...(payload.snoozeReminderAt !== undefined
+                ? { snoozeReminderAt: payload.snoozeReminderAt }
+                : {}),
               ...(payload.parentThreadId !== undefined
                 ? { parentThreadId: payload.parentThreadId }
                 : {}),
@@ -447,10 +797,16 @@ export function projectEvent(
               ...(payload.pinnedMessages !== undefined
                 ? { pinnedMessages: payload.pinnedMessages }
                 : {}),
-              ...(payload.threadMarkers !== undefined
-                ? { threadMarkers: payload.threadMarkers }
-                : {}),
+
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+              ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
+              ...(payload.goalStartedAt !== undefined
+                ? { goalStartedAt: payload.goalStartedAt }
+                : {}),
+              ...(payload.goalPausedAt !== undefined ? { goalPausedAt: payload.goalPausedAt } : {}),
+              ...(payload.goalAchievements !== undefined
+                ? { goalAchievements: payload.goalAchievements }
+                : {}),
               updatedAt: payload.updatedAt,
             }),
           };
@@ -548,76 +904,6 @@ export function projectEvent(
         }),
       );
 
-    case "thread.marker-added":
-      return decodeForEvent(ThreadMarkerAddedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: addThreadMarker(existingThread?.threadMarkers, payload.marker),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-removed":
-      return decodeForEvent(ThreadMarkerRemovedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: removeThreadMarker(existingThread?.threadMarkers, payload.markerId),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-done-set":
-      return decodeForEvent(ThreadMarkerDoneSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerDone(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.done,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-label-set":
-      return decodeForEvent(ThreadMarkerLabelSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerLabel(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.label,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
     case "thread.runtime-mode-set":
       return decodeForEvent(ThreadRuntimeModeSetPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
@@ -645,6 +931,17 @@ export function projectEvent(
         })),
       );
 
+    case "thread.claude-cache-set":
+      return decodeForEvent(ThreadClaudeCacheSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            claudeCacheReview: payload.review,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
     case "thread.turn-start-requested":
       return decodeForEvent(
         ThreadTurnStartRequestedPayload,
@@ -657,21 +954,71 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
-          const canAdoptFirstTurnProvider =
-            thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
+          const projectedModelSelection = deriveTurnStartModelSelection({
+            currentModelSelection: thread.modelSelection,
+            requestedModelSelection: canProjectTurnModelSelection(thread, payload.modelSelection)
+              ? payload.modelSelection
+              : undefined,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
+              hasLatestTurn: thread.latestTurn !== null,
+              hasSession: thread.session !== null,
+              messages: thread.messages,
+            }),
+          });
           const modelSelectionPatch =
-            payload.modelSelection !== undefined &&
-            (payload.modelSelection.provider === thread.modelSelection.provider ||
-              canAdoptFirstTurnProvider)
-              ? { modelSelection: payload.modelSelection }
+            projectedModelSelection !== thread.modelSelection
+              ? { modelSelection: projectedModelSelection }
               : {};
+          const turnStartSession = deriveTurnStartSession({
+            threadId: thread.id,
+            currentSession: thread.session,
+            providerName: projectedModelSelection.provider,
+            providerInstanceId:
+              projectedModelSelection.instanceId ??
+              thread.session?.providerInstanceId ??
+              projectedModelSelection.provider,
+            requestedRuntimeMode: payload.runtimeMode,
+            requestedAt: payload.createdAt,
+          });
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               ...modelSelectionPatch,
+              ...(turnStartSession !== null ? { session: turnStartSession } : {}),
               runtimeMode: payload.runtimeMode,
               interactionMode: payload.interactionMode,
+              ...(isSidechatThread(thread) ? { sidechatLastActivityAt: payload.createdAt } : {}),
               updatedAt: payload.createdAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.async-user-input-answered":
+      return decodeForEvent(
+        ThreadAsyncUserInputAnsweredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              messages: thread.messages.map((message) =>
+                message.id === payload.messageId && message.asyncUserInput
+                  ? {
+                      ...message,
+                      asyncUserInput: {
+                        ...message.asyncUserInput,
+                        response: payload.response,
+                        responseSequence: event.sequence,
+                      },
+                    }
+                  : message,
+              ),
             }),
           };
         }),
@@ -696,9 +1043,17 @@ export function projectEvent(
             id: payload.messageId,
             role: payload.role,
             text: payload.text,
+            ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
             ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
+            ...(payload.dispatchMode !== undefined ? { dispatchMode: payload.dispatchMode } : {}),
+            ...(payload.dispatchOrigin !== undefined
+              ? { dispatchOrigin: payload.dispatchOrigin }
+              : {}),
+            ...(payload.startsNewTurn !== undefined
+              ? { startsNewTurn: payload.startsNewTurn }
+              : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             source: payload.source,
@@ -709,34 +1064,95 @@ export function projectEvent(
           "message",
         );
 
-        const existingMessage = thread.messages.find((entry) => entry.id === message.id);
-        const messages = existingMessage
-          ? thread.messages.map((entry) =>
-              entry.id === message.id
-                ? {
-                    ...entry,
-                    text: message.streaming
-                      ? `${entry.text}${message.text}`
-                      : message.text.length > 0
-                        ? message.text
-                        : entry.text,
-                    streaming: message.streaming,
-                    source: message.source,
-                    updatedAt: message.updatedAt,
-                    turnId: resolveStableMessageTurnId({
-                      existingTurnId: entry.turnId,
-                      incomingTurnId: message.turnId,
-                    }),
-                    ...(message.attachments !== undefined
-                      ? { attachments: message.attachments }
-                      : {}),
-                    ...(message.skills !== undefined ? { skills: message.skills } : {}),
-                    ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
-                  }
-                : entry,
-            )
-          : [...thread.messages, message];
-        const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
+        // Hot path: one streamed delta must not cost a full copy-and-rebuild of
+        // the transcript. Update the one affected slot in a single shallow copy
+        // and only re-cap when the transcript actually grew past the limit.
+        const existingIndex = findMessageIndexFromEnd(thread.messages, message.id);
+        let cappedMessages: ReadonlyArray<OrchestrationMessage>;
+        if (existingIndex >= 0) {
+          const entry = thread.messages[existingIndex]!;
+          const resolvedText = message.streaming
+            ? `${entry.text}${message.text}`
+            : message.text.length > 0
+              ? message.text
+              : entry.text;
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(entry.textSegments, {
+                  // For streaming deltas the segment owns only this delta's
+                  // text (resolvedText is the whole accumulated message).
+                  text: message.streaming ? message.text : resolvedText,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
+          const nextMessages = thread.messages.slice();
+          const entryWithoutTextSegments = { ...entry };
+          delete entryWithoutTextSegments.textSegments;
+          nextMessages[existingIndex] = {
+            ...entryWithoutTextSegments,
+            ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),
+            text: resolvedText,
+            ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+            streaming: message.streaming,
+            source: message.source,
+            updatedAt: message.updatedAt,
+            turnId: resolveStableMessageTurnId({
+              existingTurnId: entry.turnId,
+              incomingTurnId: message.turnId,
+            }),
+            ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            ...(message.skills !== undefined ? { skills: message.skills } : {}),
+            ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+            ...(message.dispatchMode !== undefined
+              ? { dispatchMode: message.dispatchMode }
+              : entry.dispatchMode !== undefined
+                ? { dispatchMode: entry.dispatchMode }
+                : {}),
+            ...(message.dispatchOrigin !== undefined
+              ? { dispatchOrigin: message.dispatchOrigin }
+              : entry.dispatchOrigin !== undefined
+                ? { dispatchOrigin: entry.dispatchOrigin }
+                : {}),
+            ...(message.startsNewTurn !== undefined
+              ? { startsNewTurn: message.startsNewTurn }
+              : entry.startsNewTurn !== undefined
+                ? { startsNewTurn: entry.startsNewTurn }
+                : {}),
+          };
+          cappedMessages = nextMessages;
+        } else {
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(undefined, {
+                  text: message.text,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
+          cappedMessages =
+            thread.messages.length >= MAX_THREAD_MESSAGES
+              ? [
+                  ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
+                ]
+              : [
+                  ...thread.messages,
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
+                ];
+        }
 
         return {
           ...nextBase,
@@ -771,6 +1187,9 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            ...(isSidechatThread(thread) && !thread.sidechatExpiredAt
+              ? { sidechatLastActivityAt: session.updatedAt }
+              : {}),
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? thread.latestTurn?.turnId === session.activeTurnId &&
@@ -793,8 +1212,8 @@ export function projectEvent(
                           ? thread.latestTurn.assistantMessageId
                           : null,
                     }
-                : thread.latestTurn,
-            updatedAt: event.occurredAt,
+                : settleLatestTurnForSessionStatus(thread.latestTurn, session),
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -885,23 +1304,35 @@ export function projectEvent(
           (thread.latestTurn?.turnId === payload.turnId
             ? thread.latestTurn.assistantMessageId
             : null);
-        const latestTurn =
-          isProviderDiffPlaceholderRef(payload.checkpointRef) &&
-          payload.status === "missing" &&
-          thread.latestTurn?.turnId === payload.turnId &&
-          thread.latestTurn.state === "running"
-            ? thread.latestTurn
+        const previousLatestCheckpointTurnCount = thread.checkpoints.find(
+          (entry) => entry.turnId === thread.latestTurn?.turnId,
+        )?.checkpointTurnCount;
+        const preservesNewerLatestTurn =
+          payload.preserveLatestTurn === true ||
+          (previousLatestCheckpointTurnCount !== undefined &&
+            previousLatestCheckpointTurnCount > payload.checkpointTurnCount);
+        const matchingLatestTurn =
+          thread.latestTurn?.turnId === payload.turnId ? thread.latestTurn : null;
+        const latestTurn = preservesNewerLatestTurn
+          ? thread.latestTurn
+          : matchingLatestTurn !== null
+            ? {
+                // Checkpoints describe filesystem state; the provider session is
+                // the lifecycle authority. In particular, a successful empty git
+                // capture must not turn an interrupted, answer-less turn into a
+                // completed one merely because both checkpoint commands and
+                // runtime ingestion subscribe to the same terminal event.
+                ...matchingLatestTurn,
+                assistantMessageId: preservedAssistantMessageId,
+              }
             : {
+                // Historical/sessionless checkpoint projections have no matching
+                // lifecycle row to enrich, so retain the legacy reconstruction
+                // behavior for those imports and rollback paths.
                 turnId: payload.turnId,
                 state: checkpointStatusToLatestTurnState(payload.status),
-                requestedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? thread.latestTurn.requestedAt
-                    : payload.completedAt,
-                startedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                    : payload.completedAt,
+                requestedAt: payload.completedAt,
+                startedAt: payload.completedAt,
                 completedAt: payload.completedAt,
                 assistantMessageId: preservedAssistantMessageId,
               };
@@ -911,7 +1342,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
             latestTurn,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -929,10 +1360,15 @@ export function projectEvent(
             .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
             .slice(-MAX_THREAD_CHECKPOINTS);
           const retainedTurnIds = new Set(checkpoints.map((checkpoint) => checkpoint.turnId));
-          const messages = retainThreadMessagesAfterRevert(
+          const retainedMessages = retainThreadMessagesAfterRevert(
             thread.messages,
             retainedTurnIds,
             payload.turnCount,
+          );
+          const messages = clearRemovedAsyncUserInputResponses(
+            retainedMessages,
+            new Set(retainedMessages.map((message) => message.id)),
+            event.sequence,
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
@@ -1004,7 +1440,11 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               checkpoints,
-              messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
+              messages: clearRemovedAsyncUserInputResponses(
+                rollback.messages,
+                new Set(rollback.messages.map((message) => message.id)),
+                event.sequence,
+              ).slice(-MAX_THREAD_MESSAGES),
               proposedPlans,
               activities,
               latestTurn:
@@ -1024,6 +1464,23 @@ export function projectEvent(
         }),
       );
 
+    case "thread.turn-interrupt-requested": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+      return Effect.succeed(
+        activity
+          ? {
+              ...nextBase,
+              threads: updateThread(nextBase.threads, thread.id, {
+                activities: upsertThreadActivity(thread.activities, activity),
+                updatedAt: event.occurredAt,
+              }),
+            }
+          : nextBase,
+      );
+    }
+
     case "thread.activity-appended":
       return decodeForEvent(
         ThreadActivityAppendedPayload,
@@ -1037,12 +1494,12 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = [
-            ...thread.activities.filter((entry) => entry.id !== payload.activity.id),
-            payload.activity,
-          ]
-            .toSorted(compareThreadActivities)
-            .slice(-MAX_THREAD_ACTIVITIES);
+          const activities = upsertThreadActivity(
+            thread.activities,
+            payload.activity.sequence !== undefined
+              ? payload.activity
+              : { ...payload.activity, sequence: event.sequence, sequenceSource: "orchestration" },
+          );
 
           return {
             ...nextBase,

@@ -1,17 +1,17 @@
 /**
  * Optional integration check against a real `cursor-agent acp` install.
- * Enable with: T3_CURSOR_ACP_PROBE=1 bun run test --filter CursorAcpCliProbe
+ * Enable with: SYNARA_CURSOR_ACP_PROBE=1 bun run test --filter CursorAcpCliProbe
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect } from "vitest";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
 
 function flattenSelectOptionValues(
-  option: Extract<EffectAcpSchema.SessionConfigOption, { type: "select" }> | undefined,
+  option: Extract<Acp.SessionConfigOption, { type: "select" }> | undefined,
 ): ReadonlyArray<string> {
   return (
     option?.options.flatMap((entry) =>
@@ -20,7 +20,7 @@ function flattenSelectOptionValues(
   );
 }
 
-describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", () => {
+describe.runIf(process.env.SYNARA_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", () => {
   it.effect("initialize and authenticate against real cursor-agent acp", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
@@ -40,7 +40,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
               parameterizedModelPicker: true,
             },
           },
-          clientInfo: { name: "t3-probe", version: "0.0.0" },
+          clientInfo: { name: "synara-probe", version: "0.0.0" },
           authMethodId: "cursor_login",
         }),
       ),
@@ -92,7 +92,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
               parameterizedModelPicker: true,
             },
           },
-          clientInfo: { name: "t3-probe", version: "0.0.0" },
+          clientInfo: { name: "synara-probe", version: "0.0.0" },
         }),
       ),
       Effect.scoped,
@@ -122,8 +122,10 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
         }
       }
 
-      const setResult: EffectAcpSchema.SetSessionConfigOptionResponse =
-        yield* runtime.setConfigOption(modelConfigId, targetModelValue);
+      const setResult: Acp.SetSessionConfigOptionResponse = yield* runtime.setConfigOption(
+        modelConfigId,
+        targetModelValue,
+      );
 
       console.log("session/set_config_option result:", JSON.stringify(setResult, null, 2));
 
@@ -148,7 +150,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
               parameterizedModelPicker: true,
             },
           },
-          clientInfo: { name: "t3-probe", version: "0.0.0" },
+          clientInfo: { name: "synara-probe", version: "0.0.0" },
         }),
       ),
       Effect.scoped,

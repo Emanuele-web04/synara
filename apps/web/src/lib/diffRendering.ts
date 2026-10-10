@@ -6,6 +6,8 @@
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
+export type FileDiffStat = { additions: number; deletions: number };
+
 export const DIFF_THEME_NAMES = {
   // Keep diff syntax highlighting on the bundled GitHub themes for better parity with git tooling.
   light: "github-light",
@@ -38,8 +40,69 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   --diffs-header-font-family: var(--font-ui-family);
   /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
   --diffs-font-size: var(--app-font-size-chat-code, 11px);
+  /* Match the app chrome — set on :host so hunk rows/gutters/separators inherit. The fill
+     is the theme background unless the host surface clears it (--app-code-viewer-surface,
+     whole-window glass in the right dock; see index.css). */
+  --synara-code-surface: var(--app-code-viewer-surface, var(--background));
+  /* Sticky chrome that content scrolls under stays dense even on a clear viewer. */
+  --synara-code-sticky-surface: var(--app-code-viewer-sticky-surface, var(--synara-code-surface));
+  --diffs-bg: var(--synara-code-surface) !important;
+  --diffs-light-bg: var(--synara-code-surface) !important;
+  --diffs-dark-bg: var(--synara-code-surface) !important;
+  --diffs-token-light-bg: transparent;
+  --diffs-token-dark-bg: transparent;
+
+  --diffs-bg-context-override: var(--synara-code-surface) !important;
+  --diffs-bg-context-number-override: var(--synara-code-surface) !important;
+  /* Change/hover tints keep their theme backing: mixing a clear context surface would
+     reduce the accent to a nearly invisible alpha over arbitrary window backdrops. */
+  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 96%, var(--foreground)) !important;
+  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
+  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
+
+  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
+  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
+  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
+  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
+
+  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
+  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
+  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
+  --diffs-bg-deletion-emphasis-override: color-mix(
+    in srgb,
+    var(--background) 80%,
+    var(--destructive)
+  ) !important;
+
+  /* Force the derived tokens Pierre reads for hunk rows (not only the *-override knobs).
+     Do not pin --diffs-line-bg on :host — addition/deletion rows set that per line-type. */
+  --diffs-bg-context: var(--synara-code-surface) !important;
+  --diffs-bg-context-number: var(--synara-code-surface) !important;
+  --diffs-bg-buffer: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
+  --diffs-bg-separator: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
+  --diffs-bg-addition: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
+  --diffs-bg-addition-number: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
+  --diffs-bg-addition-hover: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
+  --diffs-bg-addition-emphasis: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
+  --diffs-bg-deletion: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
+  --diffs-bg-deletion-number: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
+  --diffs-bg-deletion-hover: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
+  --diffs-bg-deletion-emphasis: color-mix(in srgb, var(--background) 80%, var(--destructive)) !important;
+
   font-family: var(--font-chat-code-family) !important;
   font-size: var(--app-font-size-chat-code, 11px) !important;
+  background-color: var(--synara-code-surface) !important;
+}
+
+/* Pierre blends each changed row against --diffs-bg again, so a clear context surface would
+   wash the change tint out. Rows are backed by the theme, or on a clear viewer by a sheer
+   accent tint of their own (--app-code-viewer-*-row, index.css) so they stay glass. */
+[data-line-type="change-addition"] {
+  --diffs-bg: var(--app-code-viewer-addition-row, var(--background)) !important;
+}
+
+[data-line-type="change-deletion"] {
+  --diffs-bg: var(--app-code-viewer-deletion-row, var(--background)) !important;
 }
 
 [data-diffs-header],
@@ -48,32 +111,24 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-error-wrapper],
 [data-virtualizer-buffer] {
   --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
-  --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-token-light-bg: transparent;
-  --diffs-token-dark-bg: transparent;
+  --diffs-bg: var(--synara-code-surface) !important;
+  --diffs-light-bg: var(--synara-code-surface) !important;
+  --diffs-dark-bg: var(--synara-code-surface) !important;
+  --diffs-bg-context: var(--synara-code-surface) !important;
+  --diffs-bg-context-number: var(--synara-code-surface) !important;
+  background-color: var(--synara-code-surface) !important;
+}
 
-  --diffs-bg-context-override: color-mix(in srgb, var(--background) 97%, var(--foreground));
-  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 94%, var(--foreground));
-  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground));
-  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 90%, var(--foreground));
-
-  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success));
-  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success));
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success));
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success));
-
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive));
-  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive));
-  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive));
-  --diffs-bg-deletion-emphasis-override: color-mix(
-    in srgb,
-    var(--background) 80%,
-    var(--destructive)
-  );
-
-  background-color: var(--diffs-bg) !important;
+/* Unmodified hunk chrome — pin to theme background without wiping +/- tints. */
+[data-line-type="context"],
+[data-line-type="context-expanded"],
+[data-column-number]:where([data-line-type="context"], [data-line-type="context-expanded"]),
+[data-gutter-buffer="buffer"],
+[data-separator],
+[data-separator-wrapper],
+[data-separator-content] {
+  --diffs-line-bg: var(--synara-code-surface) !important;
+  background-color: var(--synara-code-surface) !important;
 }
 
 [data-diff],
@@ -89,11 +144,13 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-file-info] {
   font-family: var(--font-ui-family) !important;
   font-size: var(--app-font-size-ui, 12px) !important;
-  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  background-color: var(--synara-code-surface) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
 }
 
+/* Sticky header chrome. Layout for the custom slot only — do not zero-out
+   Pierre's default header padding (that clips path/+N text). */
 [data-diffs-header] {
   --diffs-header-font-family: var(--font-ui-family) !important;
   font-family: var(--font-ui-family) !important;
@@ -101,35 +158,60 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   position: sticky !important;
   top: 0;
   z-index: 4;
-  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  background-color: var(--synara-code-sticky-surface) !important;
   border-bottom: 1px solid var(--border) !important;
   cursor: pointer;
 }
 
-[data-header-content] {
+[data-diffs-header="custom"] {
+  display: flex !important;
   align-items: center !important;
+  min-height: 0 !important;
+  padding: 0 !important;
 }
 
-::slotted([slot="header-prefix"]) {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  flex-shrink: 0 !important;
-  line-height: 0 !important;
+::slotted([slot="header-custom"]) {
+  display: flex !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
 }
 
-/* Hide the default change-type icon (blue circle) — replaced by chevron + file-type icon. */
-[data-change-icon] {
-  display: none;
+/* On a clear viewer the sticky gutter has no fill to hide the code that scrolls under it,
+   so it takes the dense one as soon as the row scrolls sideways. Inert on an opaque viewer:
+   the host leaves the animation name unset. */
+@keyframes synara-code-gutter-backing {
+  from {
+    background-color: transparent;
+  }
+  to {
+    background-color: var(--synara-code-sticky-surface);
+  }
 }
 
-[data-title],
-[data-prev-name] {
+[data-overflow="scroll"] [data-gutter] {
+  /* Longhands: in the shorthand a fallback \`none\` would parse as the fill mode. */
+  animation-name: var(--app-code-viewer-gutter-animation, none);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+  animation-timeline: scroll(inline nearest);
+  animation-range: 0 1px;
+}
+
+/* Give gutters a little air so line numbers aren't clipped by the card edge. */
+[data-column-number] {
+  padding-left: 1.25ch !important;
+}
+
+/* Every number rendered inside a diff reads in the UI font (with tabular figures
+   so columns still line up), not the mono code font: gutter line numbers and the
+   "N unmodified lines" separators. The library pins these to --diffs-font-family
+   from the hunk body, so each needs an explicit override. */
+[data-line-number-content],
+[data-column-number],
+[data-unmodified-lines] {
   font-family: var(--font-ui-family) !important;
-  font-size: var(--app-font-size-ui, 12px) !important;
-  font-weight: 400 !important;
-  cursor: pointer;
-  color: var(--foreground) !important;
+  font-variant-numeric: tabular-nums !important;
 }
 `;
   diffPanelUnsafeCssCache.set(theme, css);
@@ -165,12 +247,21 @@ export function buildPatchCacheKey(patch: string, scope = "diff-panel"): string 
   return `${scope}:${normalizedPatch.length}:${primary}:${secondary}`;
 }
 
+export const PARTIAL_DIFF_COPY_NOTICE =
+  "[Synara: partial diff. Output was truncated at the size limit; some files or changes may be missing.]";
+
 // Returns copyable source text for diff surfaces without depending on virtualized DOM rows.
-export function resolveDiffCopyText(patch: string | undefined): string | null {
+// A truncation notice travels with partial clipboard content so it cannot be mistaken for a
+// complete patch after it leaves Synara.
+export function resolveDiffCopyText(patch: string | undefined, truncated = false): string | null {
   if (typeof patch !== "string") {
     return null;
   }
-  return patch.trim().length > 0 ? patch : null;
+  if (patch.trim().length === 0) {
+    return null;
+  }
+  const noticeSeparator = patch.endsWith("\n") ? "\n" : "\n\n";
+  return truncated ? `${patch}${noticeSeparator}${PARTIAL_DIFF_COPY_NOTICE}\n` : patch;
 }
 
 export type RenderablePatch =
@@ -184,6 +275,26 @@ export type RenderablePatch =
       reason: string;
     };
 
+const PATCH_FILE_BOUNDARY_PATTERN = /^diff --git /gm;
+
+export function splitPatchIntoFileSegments(patch: string): string[] {
+  const boundaries: number[] = [];
+  for (const match of patch.matchAll(PATCH_FILE_BOUNDARY_PATTERN)) {
+    boundaries.push(match.index);
+  }
+  if (boundaries.length <= 1) {
+    return [patch];
+  }
+  const segments: string[] = [];
+  let start = 0;
+  for (const boundary of boundaries.slice(1)) {
+    segments.push(patch.slice(start, boundary));
+    start = boundary;
+  }
+  segments.push(patch.slice(start));
+  return segments;
+}
+
 export function getRenderablePatch(
   patch: string | undefined,
   cacheScope = "diff-panel",
@@ -193,11 +304,11 @@ export function getRenderablePatch(
   if (normalizedPatch.length === 0) return null;
 
   try {
-    const parsedPatches = parsePatchFiles(
-      normalizedPatch,
-      buildPatchCacheKey(normalizedPatch, cacheScope),
+    const files = splitPatchIntoFileSegments(normalizedPatch).flatMap((segment) =>
+      parsePatchFiles(segment, buildPatchCacheKey(segment, cacheScope)).flatMap(
+        (parsedPatch) => parsedPatch.files,
+      ),
     );
-    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
     if (files.length > 0) {
       return { kind: "files", files };
     }
@@ -226,6 +337,33 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   return raw;
 }
 
+// Resolve the pre-change path for a parsed file diff (the old side of a
+// rename/move), stripping the conventional `a/` patch prefix. Returns null for
+// files that were not renamed or moved: the parser also fills `prevName` for
+// added files, where it is `/dev/null` or a copy of the new name.
+export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | null {
+  if (
+    fileDiff.prevName === undefined ||
+    (fileDiff.type !== "rename-pure" && fileDiff.type !== "rename-changed")
+  ) {
+    return null;
+  }
+  const raw = fileDiff.prevName;
+  if (raw.startsWith("a/") || raw.startsWith("b/")) {
+    return raw.slice(2);
+  }
+  return raw;
+}
+
+// Symlinks (120000) show their target path but the workspace read/write path
+// follows the link, and gitlinks (160000, submodules) are directories in the
+// working tree: neither can be edited in place as the text the diff shows.
+const UNEDITABLE_GIT_MODES = new Set(["120000", "160000"]);
+
+export function hasUneditableGitMode(fileDiff: FileDiffMetadata): boolean {
+  return UNEDITABLE_GIT_MODES.has(fileDiff.mode ?? fileDiff.prevMode ?? "");
+}
+
 // Stable identity for a parsed file diff, used as a React key and selection id.
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
@@ -245,11 +383,15 @@ export function splitRepoRelativePath(path: string): { dir: string; name: string
 
 // Natural-order comparator for parsed file diffs by working-tree path, so file
 // lists stay stable and human-friendly (numeric-aware, case-insensitive).
+let diffPathCollator: Intl.Collator | undefined;
+
+export function compareDiffPaths(left: string, right: string): number {
+  diffPathCollator ??= new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  return diffPathCollator.compare(left, right);
+}
+
 export function compareFileDiffByPath(left: FileDiffMetadata, right: FileDiffMetadata): number {
-  return resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
+  return compareDiffPaths(resolveFileDiffPath(left), resolveFileDiffPath(right));
 }
 
 export function sortFileDiffsByPath(files: ReadonlyArray<FileDiffMetadata>): FileDiffMetadata[] {
@@ -287,4 +429,79 @@ export function summarizePatchTotals(
 ): { additions: number; deletions: number; fileCount: number } | null {
   const renderable = getRenderablePatch(patch, "diff-panel:stats");
   return summarizeRenderablePatchStats(renderable);
+}
+
+// Per-file +N/-M parsed from a unified diff/patch, keyed by working-tree-relative
+// path (a/ b/ prefixes stripped via resolveFileDiffPath). Lets transcript
+// "Edited <file>" rows surface diff stats from a tool call's own patch when no
+// turn-diff summary is in scope (e.g. standalone work rows). Empty map when the
+// patch is missing or unparsable, so callers can fall back gracefully.
+export function fileDiffStatsByPath(patch: string | undefined): Map<string, FileDiffStat> {
+  const stats = new Map<string, FileDiffStat>();
+  const renderable = getRenderablePatch(patch, "tool-row:stats");
+  if (!renderable || renderable.kind !== "files") {
+    return stats;
+  }
+  for (const file of renderable.files) {
+    const path = resolveFileDiffPath(file);
+    if (path.length === 0) {
+      continue;
+    }
+    stats.set(path, summarizeFileDiffStats([file]));
+  }
+  return stats;
+}
+
+function normalizeDiffStatPath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+/g, "/");
+}
+
+function diffStatPathsReferToSameFile(left: string, right: string): boolean {
+  const normalizedLeft = normalizeDiffStatPath(left);
+  const normalizedRight = normalizeDiffStatPath(right);
+  return (
+    normalizedLeft === normalizedRight ||
+    normalizedLeft.endsWith(`/${normalizedRight}`) ||
+    normalizedRight.endsWith(`/${normalizedLeft}`)
+  );
+}
+
+export function resolveDiffEntryByPath<T>(
+  entriesByPath: ReadonlyMap<string, T>,
+  changedFilePath: string,
+): T | undefined {
+  const direct = entriesByPath.get(changedFilePath);
+  if (direct) {
+    return direct;
+  }
+
+  const matches = Array.from(entriesByPath.entries())
+    .filter(([path]) => diffStatPathsReferToSameFile(path, changedFilePath))
+    .map(([, entry]) => entry);
+  return matches.length === 1 ? matches.at(0) : undefined;
+}
+
+// Resolve a parsed patch stat for a visible changed-file row. Parsed patch paths are
+// usually repo-relative, while work-log changedFiles can be absolute or basename-only.
+export function resolveFileDiffStatByChangedPath(
+  statsByPath: ReadonlyMap<string, FileDiffStat>,
+  changedFilePath: string,
+  changedFileCount: number,
+): FileDiffStat | undefined {
+  if (statsByPath.size === 0) {
+    return undefined;
+  }
+
+  const match = resolveDiffEntryByPath(statsByPath, changedFilePath);
+  if (match) {
+    return match;
+  }
+
+  if (statsByPath.size === 1 && changedFileCount === 1) {
+    return statsByPath.values().next().value;
+  }
+  return undefined;
 }

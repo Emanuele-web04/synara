@@ -3,11 +3,11 @@
 // Layer: Web terminal orchestration helper
 // Exports: runProjectCommandInTerminal and default dimensions for script terminals.
 
-import type { NativeApi, TerminalSessionSnapshot, ThreadId } from "@t3tools/contracts";
+import type { NativeApi, TerminalSessionSnapshot, ThreadId } from "@synara/contracts";
 import {
   deriveTerminalCommandIdentity,
   type TerminalCliKind,
-} from "@t3tools/shared/terminalThreads";
+} from "@synara/shared/terminalThreads";
 
 import { projectScriptRuntimeEnv } from "./projectScripts";
 
@@ -28,6 +28,7 @@ export async function runProjectCommandInTerminal(input: {
   command: string;
   worktreePath?: string | null;
   env?: Record<string, string>;
+  onOpened?: () => void;
 }): Promise<{
   snapshot: TerminalSessionSnapshot;
   metadata: ProjectCommandTerminalMetadata | null;
@@ -48,6 +49,7 @@ export async function runProjectCommandInTerminal(input: {
     cols: PROJECT_COMMAND_TERMINAL_COLS,
     rows: PROJECT_COMMAND_TERMINAL_ROWS,
   });
+  input.onOpened?.();
   await input.api.terminal.write({
     threadId: input.threadId,
     terminalId: input.terminalId,

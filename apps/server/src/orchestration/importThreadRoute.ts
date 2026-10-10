@@ -1,29 +1,61 @@
-import {
-  getSessionInfo as getClaudeSessionInfo,
-  getSessionMessages as getClaudeSessionMessages,
-} from "@anthropic-ai/claude-agent-sdk";
+// FILE: importThreadRoute.ts
+// Purpose: Imports provider-native sessions and binds them to Synara thread projections.
+// Layer: Orchestration command handler
+// Exports: makeImportThreadHandler.
+
+import { execFile } from "node:child_process";
+import { promises as fsPromises } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+import { pathToFileURL } from "node:url";
+
+import type { SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   CommandId,
+  OMP_THINKING_LEVEL_OPTIONS,
+  type ModelSelection,
+  type ModelSlug,
+  type OmpThinkingLevel,
   type OrchestrationImportThreadInput,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ProviderStartOptions,
+  type ServerSettings,
   type ThreadHandoffImportedMessage,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
+import {
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+  type ResolvedProviderInstance,
+} from "@synara/shared/providerInstances";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
-} from "@t3tools/shared/threadWorkspace";
+} from "@synara/shared/threadWorkspace";
 import type { FileSystem, Path } from "effect";
 import { Data, Effect, Option } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils";
+import type { ServerConfigShape } from "../config";
+import { loadClaudeAgentSdk } from "../provider/claudeAgentSdk.ts";
+import { selectClaudeHistoryPage, type ClaudeHistoryPage } from "../provider/claudeHistoryPage.ts";
+import { buildClaudeInstanceProcessEnv } from "../provider/claudeEnvironment.ts";
+import { ensureProviderEnabled } from "../provider/enabledProviderAdapter";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
+import type { ProviderThreadSnapshot } from "../provider/Services/ProviderAdapter";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
+import type { ServerSettingsShape } from "../serverSettings";
 import { parseManagedWorktreeWorkspaceRoot } from "../workspace/managedWorktree";
 import {
   mapClaudeSessionMessages,
   mapCodexSnapshotMessages,
+  mapFactorySnapshotMessages,
+  mapOmpSnapshotMessages,
   mapOpenCodeSnapshotMessages,
 } from "./importedThreadMessages";
 
@@ -35,6 +67,183 @@ class ImportThreadError extends Data.TaggedError("ImportThreadError")<{
 
 function importMessagesError(message: string): ImportThreadError {
   return new ImportThreadError({ message });
+}
+
+function providerResumeCursorForImport(provider: ProviderKind, externalId: string): unknown {
+  switch (provider) {
+    case "claudeAgent":
+      return { resume: externalId };
+    case "droid":
+    case "omp":
+      return { schemaVersion: 1, sessionId: externalId };
+    case "opencode":
+      return { openCodeSessionId: externalId };
+    default:
+      return { threadId: externalId };
+  }
+}
+
+// The Claude agent SDK resolves its config dir from the process environment
+// (HOME/CLAUDE_CONFIG_DIR). Imports for instances with a custom home must not
+// mutate the server's process.env — concurrent health checks, text generation,
+// or session startups would observe the wrong Claude account — so the session
+// query runs in a short-lived child process that gets the custom environment.
+const CLAUDE_SESSION_QUERY_SCRIPT = `const [moduleUrl, method, sessionId, optionsJson] = process.argv.slice(2);
+const sdk = await import(moduleUrl);
+const options = JSON.parse(optionsJson);
+const selectPage = ${selectClaudeHistoryPage.toString()};
+const result =
+  method === "listSessions"
+    ? await sdk.listSessions(options ?? undefined)
+    : method === "getSessionMessagePage"
+      ? selectPage(await sdk.getSessionMessages(sessionId, options?.dir ? { dir: options.dir } : undefined), options?.before)
+    : await sdk[method](sessionId, options ?? undefined);
+process.stdout.write(JSON.stringify(result ?? null));
+`;
+
+type ClaudeSessionQueryMethod =
+  | "getSessionInfo"
+  | "getSessionMessages"
+  | "listSessions"
+  | "getSessionMessagePage";
+
+export function claudeHistoricalSessionChildEnvironment(
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return environment;
+}
+
+async function runClaudeSessionQueryInChildProcess<T>(input: {
+  readonly method: ClaudeSessionQueryMethod;
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: NodeJS.ProcessEnv;
+  readonly before?: string;
+}): Promise<T> {
+  const moduleUrl = pathToFileURL(
+    createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
+  ).href;
+  const scriptDir = await fsPromises.mkdtemp(nodePath.join(tmpdir(), "synara-claude-import-"));
+  const scriptPath = nodePath.join(scriptDir, "claudeSessionQuery.mjs");
+  try {
+    await fsPromises.writeFile(scriptPath, CLAUDE_SESSION_QUERY_SCRIPT, "utf8");
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [
+          scriptPath,
+          moduleUrl,
+          input.method,
+          input.sessionId,
+          JSON.stringify({
+            ...(input.dir ? { dir: input.dir } : {}),
+            ...(input.before ? { before: input.before } : {}),
+          }),
+        ],
+        {
+          env: claudeHistoricalSessionChildEnvironment(input.environment),
+          maxBuffer: 64 * 1024 * 1024,
+        },
+        (error, childStdout, childStderr) => {
+          if (error) {
+            const detail = childStderr.toString().trim();
+            reject(detail.length > 0 ? new Error(detail) : error);
+            return;
+          }
+          resolve(childStdout.toString());
+        },
+      );
+    });
+    return JSON.parse(stdout) as T;
+  } finally {
+    await fsPromises.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+export function readClaudeSessionMessagePageInEnvironment(input: {
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+  readonly before?: string;
+}): Promise<ClaudeHistoryPage> {
+  return queryClaudeHistoricalSession<ClaudeHistoryPage>({
+    method: "getSessionMessagePage",
+    ...input,
+  });
+}
+
+/** Lists one Claude account's sessions without touching the server's process.env. */
+export function listClaudeSessionsInEnvironment(
+  environment: NodeJS.ProcessEnv,
+): Promise<ReadonlyArray<SDKSessionInfo>> {
+  return runClaudeSessionQueryInChildProcess<ReadonlyArray<SDKSessionInfo>>({
+    method: "listSessions",
+    sessionId: "",
+    dir: undefined,
+    environment,
+  });
+}
+
+/** Reads one Claude account's session messages, in a child process when needed. */
+export function readClaudeSessionMessagesInEnvironment(input: {
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+}): Promise<ReadonlyArray<SessionMessage>> {
+  return queryClaudeHistoricalSession<ReadonlyArray<SessionMessage>>({
+    method: "getSessionMessages",
+    ...input,
+  });
+}
+
+async function queryClaudeHistoricalSession<T>(input: {
+  readonly method: ClaudeSessionQueryMethod;
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+  readonly before?: string;
+}): Promise<T> {
+  if (input.environment && Object.keys(input.environment).length > 0) {
+    return runClaudeSessionQueryInChildProcess<T>({
+      method: input.method,
+      sessionId: input.sessionId,
+      dir: input.dir,
+      environment: input.environment,
+      ...(input.before ? { before: input.before } : {}),
+    });
+  }
+  const options = input.dir ? { dir: input.dir } : undefined;
+  const sdk = await loadClaudeAgentSdk();
+  return (
+    input.method === "listSessions"
+      ? sdk.listSessions(options)
+      : input.method === "getSessionInfo"
+        ? sdk.getSessionInfo(input.sessionId, options)
+        : input.method === "getSessionMessagePage"
+          ? sdk
+              .getSessionMessages(input.sessionId, options)
+              .then((messages) => selectClaudeHistoryPage(messages, input.before))
+          : sdk.getSessionMessages(input.sessionId, options)
+  ) as Promise<T>;
+}
+
+export function claudeHistoricalSessionEnvironment(
+  providerOptions: ProviderStartOptions | undefined,
+  input?: {
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
+    readonly providerInstanceId?: ProviderInstanceId;
+  },
+): NodeJS.ProcessEnv | undefined {
+  const claudeOptions = providerOptions?.claudeAgent;
+  if (!claudeOptions && !input?.homeDir && !input?.isolationRootDir && !input?.providerInstanceId) {
+    return undefined;
+  }
+  return buildClaudeInstanceProcessEnv(claudeOptions?.homePath, claudeOptions?.environment, {
+    ...(input?.homeDir ? { homeDir: input.homeDir } : {}),
+    ...(input?.isolationRootDir ? { isolationRootDir: input.isolationRootDir } : {}),
+    ...(input?.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+  });
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -55,6 +264,24 @@ function mapProviderSessionStatusToOrchestrationStatus(
   }
 }
 
+export function resolveImportedThreadProviderOptionsForSettings(
+  settings: ServerSettings,
+  modelSelection: ModelSelection,
+): {
+  readonly instance: ResolvedProviderInstance;
+  readonly providerOptions: ProviderStartOptions | undefined;
+} {
+  const instanceId = resolveModelSelectionInstanceId(modelSelection);
+  const instance = resolveProviderInstance(settings, { instanceId });
+  if (!instance) {
+    throw importMessagesError(`Unknown provider instance '${instanceId}' for thread import.`);
+  }
+  if (!instance.enabled) {
+    throw importMessagesError(`Provider instance '${instanceId}' is disabled for thread import.`);
+  }
+  return { instance, providerOptions: providerStartOptionsFromInstance(instance) };
+}
+
 export interface ImportThreadHandlerOptions {
   readonly fileSystem: FileSystem.FileSystem;
   readonly orchestrationEngine: OrchestrationEngineShape;
@@ -63,6 +290,8 @@ export interface ImportThreadHandlerOptions {
   readonly projectionSnapshotQuery: ProjectionSnapshotQueryShape;
   readonly providerAdapterRegistry: ProviderAdapterRegistryShape;
   readonly providerService: ProviderServiceShape;
+  readonly serverConfig: Pick<ServerConfigShape, "homeDir" | "stateDir">;
+  readonly serverSettings: ServerSettingsShape;
 }
 
 export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
@@ -84,9 +313,22 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const ensureClaudeThreadImportable = Effect.fn(function* (input: {
     readonly cwd: string | undefined;
     readonly externalId: string;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions, {
+      homeDir: options.serverConfig.homeDir,
+      isolationRootDir: options.serverConfig.stateDir,
+      providerInstanceId: input.providerInstanceId,
+    });
     const claudeSessionInfo = yield* Effect.tryPromise({
-      try: () => getClaudeSessionInfo(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+      try: () =>
+        queryClaudeHistoricalSession<SDKSessionInfo | null | undefined>({
+          method: "getSessionInfo",
+          sessionId: input.externalId,
+          dir: input.cwd,
+          environment: historicalEnv,
+        }),
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0
@@ -98,7 +340,13 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     if (claudeSessionInfo) return;
 
     const sessionFoundElsewhere = yield* Effect.tryPromise({
-      try: () => getClaudeSessionInfo(input.externalId),
+      try: () =>
+        queryClaudeHistoricalSession<SDKSessionInfo | null | undefined>({
+          method: "getSessionInfo",
+          sessionId: input.externalId,
+          dir: undefined,
+          environment: historicalEnv,
+        }),
       catch: () => undefined,
     });
 
@@ -112,20 +360,27 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   });
 
   const resolveImportedProviderThreadContext = Effect.fn(function* (input: {
-    readonly provider: "codex" | "kilo" | "opencode";
+    readonly provider: "codex" | "droid" | "opencode" | "omp";
     readonly externalId: string;
+    readonly providerInstanceId: ProviderInstanceId;
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
+    readonly prefetchedSnapshot?: ProviderThreadSnapshot | null;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
     const adapter = yield* options.providerAdapterRegistry.getByProvider(input.provider);
-    if (!adapter.readExternalThread) return null;
+    const readExternalThread = adapter.readExternalThread;
+    if (!readExternalThread && input.prefetchedSnapshot === undefined) return null;
 
-    const snapshot = yield* adapter
-      .readExternalThread({
-        externalThreadId: input.externalId,
-        ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
-      })
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const snapshot =
+      input.prefetchedSnapshot !== undefined
+        ? input.prefetchedSnapshot
+        : yield* readExternalThread!({
+            externalThreadId: input.externalId,
+            providerInstanceId: input.providerInstanceId,
+            ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
+            ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+          }).pipe(Effect.catch(() => Effect.succeed(null)));
     const externalCwd = snapshot?.cwd?.trim();
     if (!externalCwd) return null;
 
@@ -229,11 +484,23 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly cwd: string | undefined;
     readonly externalId: string;
     readonly importedAt: string;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly providerOptions?: ProviderStartOptions;
     readonly threadId: ThreadId;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions, {
+      homeDir: options.serverConfig.homeDir,
+      isolationRootDir: options.serverConfig.stateDir,
+      providerInstanceId: input.providerInstanceId,
+    });
     const sessionMessages = yield* Effect.tryPromise({
       try: () =>
-        getClaudeSessionMessages(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+        queryClaudeHistoricalSession<SessionMessage[]>({
+          method: "getSessionMessages",
+          sessionId: input.externalId,
+          dir: input.cwd,
+          environment: historicalEnv,
+        }),
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0
@@ -255,7 +522,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
 
   const importOpenCodeCompatibleThreadHistory = Effect.fn(function* (input: {
     readonly importedAt: string;
-    readonly provider: "kilo" | "opencode";
+    readonly provider: "opencode";
     readonly threadId: ThreadId;
   }) {
     const adapter = yield* options.providerAdapterRegistry.getByProvider(input.provider);
@@ -266,7 +533,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
           importMessagesError(
             cause instanceof Error && cause.message.length > 0
               ? cause.message
-              : `Failed to read ${input.provider === "kilo" ? "Kilo" : "OpenCode"} session history.`,
+              : "Failed to read OpenCode session history.",
           ),
         ),
       );
@@ -279,6 +546,74 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         importedAt: input.importedAt,
       }),
       createdAt: input.importedAt,
+    });
+  });
+
+  const importDroidThreadHistory = Effect.fn(function* (input: {
+    readonly externalId: string;
+    readonly importedAt: string;
+    readonly threadId: ThreadId;
+  }) {
+    const adapter = yield* options.providerAdapterRegistry.getByProvider("droid");
+    if (!adapter.readExternalThread) {
+      return yield* Effect.fail(importMessagesError("Droid session import is unavailable."));
+    }
+    const snapshot = yield* adapter
+      .readExternalThread({ externalThreadId: input.externalId })
+      .pipe(
+        Effect.mapError((cause) =>
+          importMessagesError(
+            cause instanceof Error && cause.message.length > 0
+              ? cause.message
+              : "Failed to read Droid session history.",
+          ),
+        ),
+      );
+    yield* dispatchImportedMessages({
+      threadId: input.threadId,
+      messages: mapFactorySnapshotMessages({
+        threadId: input.threadId,
+        turns: snapshot.turns,
+        importedAt: input.importedAt,
+      }),
+      createdAt: input.importedAt,
+    });
+  });
+
+  const importOmpThreadHistory = Effect.fn(function* (input: {
+    readonly snapshot: ProviderThreadSnapshot;
+    readonly importedAt: string;
+    readonly threadId: ThreadId;
+  }) {
+    yield* dispatchImportedMessages({
+      threadId: input.threadId,
+      messages: mapOmpSnapshotMessages({
+        threadId: input.threadId,
+        turns: input.snapshot.turns,
+        importedAt: input.importedAt,
+      }),
+      createdAt: input.importedAt,
+    });
+  });
+
+  const resolveThreadProviderOptions = Effect.fn(function* (input: {
+    readonly modelSelection: ModelSelection;
+  }) {
+    const settings = yield* options.serverSettings.getSettings.pipe(
+      Effect.mapError((cause) =>
+        importMessagesError(
+          cause instanceof Error && cause.message.length > 0
+            ? cause.message
+            : "Failed to load provider instance settings.",
+        ),
+      ),
+    );
+    return yield* Effect.try({
+      try: () => resolveImportedThreadProviderOptionsForSettings(settings, input.modelSelection),
+      catch: (cause) =>
+        cause instanceof ImportThreadError
+          ? cause
+          : importMessagesError("Failed to resolve provider instance for thread import."),
     });
   });
 
@@ -295,6 +630,8 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       );
     }
 
+    yield* ensureProviderEnabled(thread.modelSelection.provider, options.serverSettings);
+
     const projectOption = yield* options.projectionSnapshotQuery.getProjectShellById(
       thread.projectId,
     );
@@ -305,23 +642,83 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? [
             {
               id: project.id,
+              kind: project.kind,
               workspaceRoot: project.workspaceRoot,
             },
           ]
         : [],
     });
     const externalId = body.externalId.trim();
+    const resolvedProvider = yield* resolveThreadProviderOptions({
+      modelSelection: thread.modelSelection,
+    });
+    const provider = resolvedProvider.instance.driver;
+    const providerOptions = resolvedProvider.providerOptions;
+
+    // OMP sessions are file-backed JSONL transcripts. Read the session file
+    // once up front: it supplies the transcript, the stored cwd for env
+    // detection, and the last-used model so the imported thread keeps running
+    // the model the source session used (omp has no static default model).
+    const ompImportSnapshot =
+      provider === "omp"
+        ? yield* Effect.gen(function* () {
+            const adapter = yield* options.providerAdapterRegistry.getByProvider("omp");
+            if (!adapter.readExternalThread) {
+              return yield* Effect.fail(
+                importMessagesError("Oh My Pi session import is unavailable."),
+              );
+            }
+            return yield* adapter
+              .readExternalThread({
+                externalThreadId: externalId,
+                providerInstanceId: resolvedProvider.instance.instanceId,
+                ...(cwd ? { cwd } : {}),
+                ...(providerOptions ? { providerOptions } : {}),
+              })
+              .pipe(
+                Effect.mapError((cause) =>
+                  importMessagesError(
+                    cause instanceof Error && cause.message.length > 0
+                      ? cause.message
+                      : `Oh My Pi session '${externalId}' was not found on this machine.`,
+                  ),
+                ),
+              );
+          })
+        : null;
+
+    const ompLastUsedModel = ompImportSnapshot?.lastUsedModel;
+    const ompThinkingLevel =
+      ompLastUsedModel?.thinkingLevel &&
+      (OMP_THINKING_LEVEL_OPTIONS as readonly string[]).includes(ompLastUsedModel.thinkingLevel)
+        ? (ompLastUsedModel.thinkingLevel as OmpThinkingLevel)
+        : undefined;
+    const effectiveModelSelection: ModelSelection =
+      ompLastUsedModel !== undefined
+        ? {
+            provider: "omp",
+            ...(thread.modelSelection.instanceId
+              ? { instanceId: thread.modelSelection.instanceId }
+              : {}),
+            model: ompLastUsedModel.model as ModelSlug,
+            ...(ompThinkingLevel ? { options: { thinkingLevel: ompThinkingLevel } } : {}),
+          }
+        : thread.modelSelection;
 
     const importedProviderContext =
-      (thread.modelSelection.provider === "codex" ||
-        thread.modelSelection.provider === "kilo" ||
-        thread.modelSelection.provider === "opencode") &&
+      (provider === "codex" ||
+        provider === "droid" ||
+        provider === "opencode" ||
+        provider === "omp") &&
       project
         ? yield* resolveImportedProviderThreadContext({
-            provider: thread.modelSelection.provider,
+            provider,
             externalId,
+            providerInstanceId: resolvedProvider.instance.instanceId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
+            ...(provider === "omp" ? { prefetchedSnapshot: ompImportSnapshot } : {}),
+            ...(providerOptions ? { providerOptions } : {}),
           })
         : null;
 
@@ -334,52 +731,82 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       });
     }
 
-    if (thread.modelSelection.provider === "claudeAgent") {
+    if (effectiveModelSelection !== thread.modelSelection) {
+      yield* options.orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+        threadId: thread.id,
+        modelSelection: effectiveModelSelection,
+      });
+    }
+
+    if (provider === "claudeAgent") {
       yield* ensureClaudeThreadImportable({
         cwd,
         externalId,
+        providerInstanceId: resolvedProvider.instance.instanceId,
+        ...(providerOptions ? { providerOptions } : {}),
       });
     }
 
+    const importResumeCursor = providerResumeCursorForImport(provider, externalId);
     const session = yield* options.providerService.startSession(thread.id, {
       threadId: thread.id,
-      provider: thread.modelSelection.provider,
+      provider,
       ...((importedProviderContext?.runtimeCwd ?? cwd)
         ? { cwd: importedProviderContext?.runtimeCwd ?? cwd }
         : {}),
-      modelSelection: thread.modelSelection,
-      resumeCursor:
-        thread.modelSelection.provider === "claudeAgent"
-          ? { resume: externalId }
-          : thread.modelSelection.provider === "kilo" ||
-              thread.modelSelection.provider === "opencode"
-            ? { openCodeSessionId: externalId }
-            : { threadId: externalId },
+      modelSelection: effectiveModelSelection,
+      ...(provider === "codex"
+        ? { forkSourceResumeCursor: importResumeCursor }
+        : { resumeCursor: importResumeCursor }),
       runtimeMode: thread.runtimeMode,
     });
 
-    if (thread.modelSelection.provider === "codex") {
-      yield* importCodexThreadHistory({
-        threadId: thread.id,
-        importedAt: session.updatedAt,
-      });
-    } else if (thread.modelSelection.provider === "claudeAgent") {
-      yield* importClaudeThreadHistory({
-        threadId: thread.id,
-        externalId,
-        cwd,
-        importedAt: session.updatedAt,
-      });
-    } else if (
-      thread.modelSelection.provider === "kilo" ||
-      thread.modelSelection.provider === "opencode"
-    ) {
-      yield* importOpenCodeCompatibleThreadHistory({
-        provider: thread.modelSelection.provider,
-        threadId: thread.id,
-        importedAt: session.updatedAt,
-      });
-    }
+    yield* Effect.gen(function* () {
+      if (provider === "codex") {
+        yield* importCodexThreadHistory({
+          threadId: thread.id,
+          importedAt: session.updatedAt,
+        });
+      } else if (provider === "claudeAgent") {
+        yield* importClaudeThreadHistory({
+          threadId: thread.id,
+          externalId,
+          cwd,
+          providerInstanceId: resolvedProvider.instance.instanceId,
+          ...(providerOptions ? { providerOptions } : {}),
+          importedAt: session.updatedAt,
+        });
+      } else if (provider === "droid") {
+        yield* importDroidThreadHistory({
+          threadId: thread.id,
+          externalId,
+          importedAt: session.updatedAt,
+        });
+      } else if (provider === "opencode") {
+        yield* importOpenCodeCompatibleThreadHistory({
+          provider,
+          threadId: thread.id,
+          importedAt: session.updatedAt,
+        });
+      } else if (provider === "omp") {
+        if (!ompImportSnapshot) {
+          return yield* Effect.fail(importMessagesError("Oh My Pi session import is unavailable."));
+        }
+        yield* importOmpThreadHistory({
+          threadId: thread.id,
+          snapshot: ompImportSnapshot,
+          importedAt: session.updatedAt,
+        });
+      }
+    }).pipe(
+      Effect.onError(() =>
+        // Startup precedes history materialization. Roll it back when import
+        // cannot finish so no provider child or persisted binding is orphaned.
+        options.providerService.stopSession({ threadId: thread.id }).pipe(Effect.ignore),
+      ),
+    );
 
     yield* options.orchestrationEngine.dispatch({
       type: "thread.session.set",
@@ -389,6 +816,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         threadId: thread.id,
         status: mapProviderSessionStatusToOrchestrationStatus(session.status),
         providerName: session.provider,
+        providerInstanceId: session.providerInstanceId ?? thread.modelSelection.instanceId,
         runtimeMode: thread.runtimeMode,
         activeTurnId: null,
         lastError: session.lastError ?? null,

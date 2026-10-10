@@ -22,10 +22,11 @@ interface ComposerStackedPanelRowProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export const ComposerStackedPanelRow = memo(function ComposerStackedPanelRow({
-  compact = false,
+  compact: compactProp,
   className,
   ...rest
 }: ComposerStackedPanelRowProps) {
+  const compact = compactProp ?? false;
   return (
     <div
       className={cn(
@@ -39,19 +40,19 @@ export const ComposerStackedPanelRow = memo(function ComposerStackedPanelRow({
   );
 });
 
-export const ComposerStackedPanelHeaderRow = memo(function ComposerStackedPanelHeaderRow({
+export const ComposerStackedPanelHeaderRow = function ComposerStackedPanelHeaderRow({
   className,
   ...rest
 }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn(COMPOSER_STACKED_PANEL_HEADER_ROW_CLASS_NAME, className)} {...rest} />;
-});
+};
 
-export const ComposerStackedPanelRowMain = memo(function ComposerStackedPanelRowMain({
+export const ComposerStackedPanelRowMain = function ComposerStackedPanelRowMain({
   className,
   ...rest
 }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn(COMPOSER_STACKED_PANEL_ROW_MAIN_CLASS_NAME, className)} {...rest} />;
-});
+};
 
 interface ComposerStackedPanelRowLabelProps {
   children: ReactNode;
@@ -62,8 +63,9 @@ interface ComposerStackedPanelRowLabelProps {
 export const ComposerStackedPanelRowLabel = memo(function ComposerStackedPanelRowLabel({
   children,
   className,
-  tone = "primary",
+  tone: toneProp,
 }: ComposerStackedPanelRowLabelProps) {
+  const tone = toneProp ?? "primary";
   return (
     <span
       className={cn(

@@ -1,18 +1,25 @@
-import { Effect } from "effect";
-import type * as EffectAcpSchema from "effect-acp/schema";
-import { describe, expect, it } from "vitest";
+import { Effect, Layer } from "effect";
+import type * as Acp from "@agentclientprotocol/sdk";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  AcpSessionRuntime,
+  type AcpSessionRuntimeOptions,
+  type AcpSessionRuntimeShape,
+} from "./AcpSessionRuntime.ts";
+import {
   applyCursorAcpModelSelection,
-  buildCursorAcpModelDescriptors,
+  buildCursorCliModelListCommand,
   buildCursorAcpModelDescriptorsFromAvailableModels,
   buildCursorAcpSpawnInput,
   flattenCursorAcpModelChoices,
+  makeCursorAcpRuntime,
   parseCursorCliModelList,
   type CursorAcpAvailableModel,
 } from "./CursorAcpSupport.ts";
 
-const parameterizedGpt54ConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [
+const parameterizedGpt54ConfigOptions: ReadonlyArray<Acp.SessionConfigOption> = [
   {
     id: "model",
     name: "Model",
@@ -58,73 +65,74 @@ const parameterizedGpt54ConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConf
   },
 ];
 
-const parameterizedCursorVariantConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> =
-  [
-    {
-      id: "model",
-      name: "Model",
-      category: "model",
-      type: "select",
-      currentValue: "gpt-5.3-codex[reasoning=medium,fast=false]",
-      options: [
-        { value: "gpt-5.3-codex[reasoning=medium,fast=false]", name: "GPT-5.3 Codex" },
-        {
-          value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]",
-          name: "Claude Opus 4.6",
-        },
-      ],
-    },
-    {
-      id: "reasoning",
-      name: "Reasoning",
-      category: "thought_level",
-      type: "select",
-      currentValue: "medium",
-      options: [
-        { value: "low", name: "Low" },
-        { value: "medium", name: "Medium" },
-        { value: "high", name: "High" },
-        { value: "extra-high", name: "Extra High" },
-      ],
-    },
-    {
-      id: "context",
-      name: "Context",
-      category: "model_config",
-      type: "select",
-      currentValue: "200k",
-      options: [
-        { value: "200k", name: "200K" },
-        { value: "1m", name: "1M" },
-      ],
-    },
-    {
-      id: "fast",
-      name: "Fast",
-      category: "model_config",
-      type: "select",
-      currentValue: "false",
-      options: [
-        { value: "false", name: "Off" },
-        { value: "true", name: "Fast" },
-      ],
-    },
-  ];
+const parameterizedCursorVariantConfigOptions: ReadonlyArray<Acp.SessionConfigOption> = [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "gpt-5.3-codex[reasoning=medium,fast=false]",
+    options: [
+      { value: "gpt-5.3-codex[reasoning=medium,fast=false]", name: "GPT-5.3 Codex" },
+      {
+        value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]",
+        name: "Claude Opus 4.6",
+      },
+    ],
+  },
+  {
+    id: "reasoning",
+    name: "Reasoning",
+    category: "thought_level",
+    type: "select",
+    currentValue: "medium",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "medium", name: "Medium" },
+      { value: "high", name: "High" },
+      { value: "extra-high", name: "Extra High" },
+    ],
+  },
+  {
+    id: "context",
+    name: "Context",
+    category: "model_config",
+    type: "select",
+    currentValue: "200k",
+    options: [
+      { value: "200k", name: "200K" },
+      { value: "1m", name: "1M" },
+    ],
+  },
+  {
+    id: "fast",
+    name: "Fast",
+    category: "model_config",
+    type: "select",
+    currentValue: "false",
+    options: [
+      { value: "false", name: "Off" },
+      { value: "true", name: "Fast" },
+    ],
+  },
+];
+
+const noCursorAgentCommandOptions = {
+  env: { PATH: "" },
+  pathExists: () => false,
+};
 
 describe("buildCursorAcpSpawnInput", () => {
   it("builds the default Cursor ACP command", () => {
-    expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toEqual({
+    expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toMatchObject({
       command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
-    });
-  });
-
-  it("maps the old ambiguous agent default to cursor-agent", () => {
-    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toEqual({
-      command: "cursor-agent",
-      args: ["acp"],
-      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -137,11 +145,89 @@ describe("buildCursorAcpSpawnInput", () => {
         },
         "/tmp/project",
       ),
-    ).toEqual({
+    ).toMatchObject({
       command: "/usr/local/bin/agent",
       args: ["-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+      providerEnvironment: { driver: "cursor" },
     });
+  });
+
+  it("passes api endpoint overrides through the Cursor launcher fallback", () => {
+    expect(
+      buildCursorAcpSpawnInput(
+        {
+          binaryPath: "/not-real/bin/cursor",
+          apiEndpoint: "http://localhost:3000",
+        },
+        "/tmp/project",
+        noCursorAgentCommandOptions,
+      ),
+    ).toMatchObject({
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "acp"],
+      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+      providerEnvironment: { driver: "cursor" },
+    });
+  });
+});
+
+describe("buildCursorCliModelListCommand", () => {
+  it("builds the default Cursor model list command", () => {
+    expect(buildCursorCliModelListCommand(undefined)).toEqual({
+      command: "cursor-agent",
+      args: ["models"],
+    });
+  });
+
+  it("uses the Cursor launcher fallback for model discovery", () => {
+    expect(
+      buildCursorCliModelListCommand(
+        {
+          binaryPath: "/not-real/bin/cursor",
+          apiEndpoint: "http://localhost:3000",
+        },
+        noCursorAgentCommandOptions,
+      ),
+    ).toEqual({
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "models"],
+    });
+  });
+});
+
+describe("makeCursorAcpRuntime", () => {
+  it("selects on-demand authentication so session start skips the OAuth login page", async () => {
+    const fakeRuntime = {} as AcpSessionRuntimeShape;
+    let capturedOptions: AcpSessionRuntimeOptions | undefined;
+    const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
+      capturedOptions = options;
+      return Layer.succeed(AcpSessionRuntime, fakeRuntime);
+    });
+
+    try {
+      const runtime = await Effect.runPromise(
+        makeCursorAcpRuntime({
+          childProcessSpawner: {} as ChildProcessSpawner.ChildProcessSpawner["Service"],
+          cursorSettings: undefined,
+          cwd: "/tmp/project",
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        }).pipe(Effect.scoped),
+      );
+
+      expect(runtime).toBe(fakeRuntime);
+      expect(capturedOptions?.authPolicy).toBe("on-demand");
+    } finally {
+      layerSpy.mockRestore();
+    }
   });
 });
 
@@ -276,65 +362,49 @@ claude-opus-4-7 - Claude Opus 4.7
   });
 });
 
-describe("buildCursorAcpModelDescriptors", () => {
-  it("returns Cursor runtime models without exposing separate trait pickers", () => {
-    expect(buildCursorAcpModelDescriptors(parameterizedGpt54ConfigOptions)).toEqual([
-      {
-        slug: "gpt-5.4-medium-fast",
-        name: "GPT-5.4",
-        upstreamProviderId: "openai",
-        upstreamProviderName: "OpenAI",
-      },
-    ]);
-  });
-
-  it("expands Cursor parameterized model choices into reasoning, context, and fast variants", () => {
-    const models = buildCursorAcpModelDescriptors(parameterizedCursorVariantConfigOptions);
-    expect(models).toHaveLength(24);
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "gpt-5.3-codex[reasoning=medium,fast=false]",
-        name: "GPT-5.3 Codex",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "gpt-5.3-codex[reasoning=high,fast=true]",
-        name: "GPT-5.3 Codex High Fast",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "gpt-5.3-codex[reasoning=extra-high,fast=true]",
-        name: "GPT-5.3 Codex Extra High Fast",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "claude-opus-4-6[thinking=true,context=1m,effort=high,fast=false]",
-        name: "Claude Opus 4.6 1M",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "claude-opus-4-6[thinking=true,context=200k,effort=extra-high,fast=true]",
-        name: "Claude Opus 4.6 Extra High Fast",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "claude-opus-4-6[thinking=true,context=1m,effort=extra-high,fast=true]",
-        name: "Claude Opus 4.6 Extra High 1M Fast",
-      }),
-    );
-    expect(models.every((model) => model.supportsFastMode !== true)).toBe(true);
-    expect(models.every((model) => model.supportedReasoningEfforts === undefined)).toBe(true);
-    expect(models.every((model) => model.contextWindowOptions === undefined)).toBe(true);
-  });
-});
-
 describe("applyCursorAcpModelSelection", () => {
-  it("selects Cursor auto explicitly when the ACP model picker exposes it", async () => {
+  it.each([
+    {
+      name: "selects Cursor auto explicitly when the ACP model picker exposes it",
+      currentValue: "composer-2[fast=true]",
+      choices: [
+        { value: "auto", name: "Auto" },
+        { value: "composer-2[fast=true]", name: "Composer 2" },
+      ],
+      model: "auto",
+      expected: "auto",
+    },
+    {
+      name: "maps Cursor auto to legacy ACP default model values named Auto",
+      currentValue: "composer-2[fast=true]",
+      choices: [
+        { value: "default[]", name: "Auto" },
+        { value: "composer-2[fast=true]", name: "Composer 2" },
+      ],
+      model: "auto",
+      expected: "default[]",
+    },
+    {
+      name: "maps legacy Cursor base slugs with fast mode defaulted off",
+      currentValue: "default[]",
+      choices: [
+        { value: "default[]", name: "Auto" },
+        { value: "composer-2[fast=true]", name: "Composer 2" },
+      ],
+      model: "composer-2",
+      expected: "composer-2[fast=false]",
+    },
+    {
+      name: "maps unsupported false boolean parameters to an available Cursor ACP model value",
+      currentValue: "grok-4-20[thinking=true]",
+      choices: [
+        { value: "default[]", name: "Auto" },
+        { value: "grok-4-20[thinking=true]", name: "Grok 4.20" },
+      ],
+      model: "grok-4-20[thinking=false]",
+      expected: "grok-4-20[thinking=true]",
+    },
+  ])("$name", async ({ currentValue, choices, model, expected }) => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
       | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
@@ -347,13 +417,10 @@ describe("applyCursorAcpModelSelection", () => {
           name: "Model",
           category: "model",
           type: "select",
-          currentValue: "composer-2[fast=true]",
-          options: [
-            { value: "auto", name: "Auto" },
-            { value: "composer-2[fast=true]", name: "Composer 2" },
-          ],
+          currentValue,
+          options: choices,
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -367,139 +434,13 @@ describe("applyCursorAcpModelSelection", () => {
     await Effect.runPromise(
       applyCursorAcpModelSelection({
         runtime,
-        model: "auto",
+        model,
         options: undefined,
         mapError: ({ cause }) => cause,
       }),
     );
 
-    expect(calls).toEqual([{ type: "model", value: "auto" }]);
-  });
-
-  it("maps Cursor auto to legacy ACP default model values named Auto", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
-
-    const runtime = {
-      getConfigOptions: Effect.succeed([
-        {
-          id: "model",
-          name: "Model",
-          category: "model",
-          type: "select",
-          currentValue: "composer-2[fast=true]",
-          options: [
-            { value: "default[]", name: "Auto" },
-            { value: "composer-2[fast=true]", name: "Composer 2" },
-          ],
-        },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
-    };
-
-    await Effect.runPromise(
-      applyCursorAcpModelSelection({
-        runtime,
-        model: "auto",
-        options: undefined,
-        mapError: ({ cause }) => cause,
-      }),
-    );
-
-    expect(calls).toEqual([{ type: "model", value: "default[]" }]);
-  });
-
-  it("maps legacy Cursor base slugs to parameterized ACP model values", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
-
-    const runtime = {
-      getConfigOptions: Effect.succeed([
-        {
-          id: "model",
-          name: "Model",
-          category: "model",
-          type: "select",
-          currentValue: "default[]",
-          options: [
-            { value: "default[]", name: "Auto" },
-            { value: "composer-2[fast=true]", name: "Composer 2" },
-          ],
-        },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
-    };
-
-    await Effect.runPromise(
-      applyCursorAcpModelSelection({
-        runtime,
-        model: "composer-2",
-        options: undefined,
-        mapError: ({ cause }) => cause,
-      }),
-    );
-
-    expect(calls).toEqual([{ type: "model", value: "composer-2[fast=true]" }]);
-  });
-
-  it("maps unsupported false boolean parameters to an available Cursor ACP model value", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
-
-    const runtime = {
-      getConfigOptions: Effect.succeed([
-        {
-          id: "model",
-          name: "Model",
-          category: "model",
-          type: "select",
-          currentValue: "grok-4-20[thinking=true]",
-          options: [
-            { value: "default[]", name: "Auto" },
-            { value: "grok-4-20[thinking=true]", name: "Grok 4.20" },
-          ],
-        },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
-    };
-
-    await Effect.runPromise(
-      applyCursorAcpModelSelection({
-        runtime,
-        model: "grok-4-20[thinking=false]",
-        options: undefined,
-        mapError: ({ cause }) => cause,
-      }),
-    );
-
-    expect(calls).toEqual([{ type: "model", value: "grok-4-20[thinking=true]" }]);
+    expect(calls).toEqual([{ type: "model", value: expected }]);
   });
 
   it("sets the base model before applying separate config options", async () => {
@@ -540,9 +481,69 @@ describe("applyCursorAcpModelSelection", () => {
 
     expect(calls).toEqual([
       { type: "model", value: "gpt-5.4-medium-fast" },
-      { type: "config", configId: "reasoning", value: "extra-high" },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
+    ]);
+  });
+
+  it("keeps GPT-5.4 fast=true after switching away from Auto", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+    let currentModel = "default";
+    const gpt54TraitOptions = parameterizedGpt54ConfigOptions.filter(
+      (option) => option.id !== "model",
+    );
+    const modelOption = (currentValue: string): Acp.SessionConfigOption => ({
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue,
+      options: [
+        { value: "default", name: "Auto" },
+        { value: "gpt-5.4", name: "GPT-5.4" },
+      ],
+    });
+
+    const runtime = {
+      getConfigOptions: Effect.sync(
+        (): ReadonlyArray<Acp.SessionConfigOption> =>
+          currentModel === "gpt-5.4"
+            ? [modelOption("gpt-5.4"), ...gpt54TraitOptions]
+            : [modelOption(currentModel)],
+      ),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          currentModel = value;
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "gpt-5.4",
+        options: {
+          reasoningEffort: "xhigh",
+          contextWindow: "1m",
+          fastMode: true,
+        },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      { type: "model", value: "gpt-5.4" },
+      { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
     ]);
   });
 
@@ -578,9 +579,9 @@ describe("applyCursorAcpModelSelection", () => {
         type: "model",
         value: "claude-opus-4-6[thinking=true,context=1m,effort=extra-high,fast=true]",
       },
-      { type: "config", configId: "reasoning", value: "extra-high" },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
     ]);
   });
 
@@ -649,7 +650,7 @@ describe("applyCursorAcpModelSelection", () => {
           type: "boolean",
           currentValue: false,
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -682,11 +683,400 @@ describe("applyCursorAcpModelSelection", () => {
         type: "model",
         value: "claude-opus-4-6[thinking=true,context=1m,effort=max,fast=true]",
       },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
       { type: "config", configId: "thinking", value: true },
+      { type: "config", configId: "context", value: "1m" },
       { type: "model", value: "gpt-5.3-codex-spark[reasoning=low]" },
+      { type: "config", configId: "fast", value: "false" },
       { type: "config", configId: "reasoning", value: "low" },
+    ]);
+  });
+
+  it("maps Cursor's namespaced Grok CLI id to the unprefixed ACP model value", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "default[]",
+          options: [
+            { value: "default[]", name: "Auto" },
+            {
+              value: "grok-4.5[effort=high,fast=true]",
+              name: "Cursor Grok 4.5",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "cursor-grok-4.5",
+        options: { reasoningEffort: "high", fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.5[effort=high,fast=false]",
+      },
+    ]);
+  });
+
+  it("keeps Cursor Grok fast mode off even when ACP advertises fast=true", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "default[]",
+          options: [
+            { value: "default[]", name: "Auto" },
+            {
+              value: "grok-4.6[effort=high,fast=true]",
+              name: "Cursor Grok 4.6",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { reasoningEffort: "high", fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=false]",
+      },
+    ]);
+  });
+
+  it("lets an explicit fastMode=false override a persisted parameterized fast model", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6[effort=high,fast=true]",
+          options: [
+            {
+              value: "grok-4.6[effort=high,fast=true]",
+              name: "Grok 4.6",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6[effort=high,fast=true]",
+        options: { fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=false]",
+      },
+    ]);
+  });
+
+  it("defaults Cursor fast mode off through the dedicated ACP config option", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6[effort=high,fast=true]",
+          options: [
+            {
+              value: "grok-4.6[effort=high,fast=true]",
+              name: "Grok 4.6",
+            },
+          ],
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "true",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: undefined,
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=false]",
+      },
+      { type: "config", configId: "fast", value: "false" },
+    ]);
+  });
+
+  it("does not inherit advertised low effort when enabling Cursor Grok fast mode", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6[effort=low,fast=false]",
+          options: [
+            {
+              value: "grok-4.6[effort=low,fast=false]",
+              name: "Grok 4.6",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { fastMode: true },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=true]",
+      },
+    ]);
+  });
+
+  it("does not apply requested Grok options to a fallback model", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+    const configOptions: ReadonlyArray<Acp.SessionConfigOption> = [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "gpt-5.4",
+        options: [{ value: "gpt-5.4", name: "GPT-5.4" }],
+      },
+      {
+        id: "fast",
+        name: "Fast",
+        category: "model_config",
+        type: "select",
+        currentValue: "false",
+        options: [
+          { value: "false", name: "Off" },
+          { value: "true", name: "Fast" },
+        ],
+      },
+      {
+        id: "reasoning",
+        name: "Reasoning",
+        category: "thought_level",
+        type: "select",
+        currentValue: "medium",
+        options: [
+          { value: "low", name: "Low" },
+          { value: "medium", name: "Medium" },
+          { value: "high", name: "High" },
+        ],
+      },
+    ];
+    const runtime = {
+      getConfigOptions: Effect.succeed(configOptions),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { reasoningEffort: "high", fastMode: true },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([{ type: "model", value: "gpt-5.4" }]);
+  });
+
+  it("applies Cursor Grok effort after fast so the fast variant keeps HIGH", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6",
+          options: [{ value: "grok-4.6", name: "Grok 4.6" }],
+        },
+        {
+          id: "effort",
+          name: "Effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: "low",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+            { value: "xhigh", name: "Extra High" },
+          ],
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "false",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { reasoningEffort: "high", fastMode: true },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      { type: "model", value: "grok-4.6" },
+      { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "effort", value: "high" },
     ]);
   });
 
@@ -711,7 +1101,7 @@ describe("applyCursorAcpModelSelection", () => {
             },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -768,7 +1158,7 @@ describe("applyCursorAcpModelSelection", () => {
             { value: "true", name: "Fast" },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -831,9 +1221,9 @@ describe("applyCursorAcpModelSelection", () => {
         type: "model",
         value: "claude-opus-4-6[thinking=true,context=1m,effort=extra-high,fast=true]",
       },
-      { type: "config", configId: "reasoning", value: "extra-high" },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
     ]);
   });
 
@@ -862,7 +1252,7 @@ describe("applyCursorAcpModelSelection", () => {
             },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -919,7 +1309,7 @@ describe("applyCursorAcpModelSelection", () => {
             },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });

@@ -13,8 +13,8 @@ import {
   OrchestrationThreadActivityTone,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
-import { Schema, ServiceMap } from "effect";
+} from "@synara/contracts";
+import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
@@ -56,6 +56,12 @@ export interface ProjectionThreadActivityRepositoryShape {
     row: ProjectionThreadActivity,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  /** Read one durable activity without the transcript window cap. */
+  readonly getById: (input: {
+    readonly threadId: ThreadId;
+    readonly activityId: EventId;
+  }) => Effect.Effect<Option.Option<ProjectionThreadActivity>, ProjectionRepositoryError>;
+
   /**
    * List projected thread activity rows for a thread.
    *
@@ -80,4 +86,4 @@ export interface ProjectionThreadActivityRepositoryShape {
 export class ProjectionThreadActivityRepository extends ServiceMap.Service<
   ProjectionThreadActivityRepository,
   ProjectionThreadActivityRepositoryShape
->()("t3/persistence/Services/ProjectionThreadActivities/ProjectionThreadActivityRepository") {}
+>()("synara/persistence/Services/ProjectionThreadActivities/ProjectionThreadActivityRepository") {}

@@ -3,11 +3,17 @@
 // Layer: Web composer helper
 // Exports: mention token formatters plus regex helpers used by composer parsing and prompt sync.
 
-import type { ProviderMentionReference, ProviderSkillReference } from "@t3tools/contracts";
+import type { ProviderMentionReference, ProviderSkillReference } from "@synara/contracts";
+import { isThreadMentionPath, threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 
 export function skillMentionPrefix(provider: string): string {
   return provider === "pi" ? "/skill:" : "/";
 }
+
+// The alternation must be unambiguous — a backslash may only match the escape
+// branch — or unclosed `@"` + a backslash run backtracks exponentially on the
+// per-keystroke composer parse (ReDoS).
+const QUOTED_MENTION_PATH_SOURCE = String.raw`((?:\\.|[^"\\])*)`;
 
 export function createComposerMentionTokenRegex(options: {
   includeTrailingTokenAtEnd: boolean;
@@ -15,18 +21,52 @@ export function createComposerMentionTokenRegex(options: {
 }): RegExp {
   const suffix = options.includeTrailingTokenAtEnd ? "(?=\\s|$)" : "(?=\\s)";
   return new RegExp(
-    `(^|\\s)@(?:"([^"]+)"|([^\\s@]+))${suffix}`,
+    `(^|\\s)@(?:"${QUOTED_MENTION_PATH_SOURCE}"|([^\\s@]+))${suffix}`,
     options.global === false ? "" : "g",
   );
 }
 
+export function decodeComposerMentionQuotedPath(path: string): string {
+  return path.replace(/\\(["\\])/g, "$1");
+}
+
 export function extractComposerMentionPath(match: RegExpExecArray | RegExpMatchArray): string {
-  return (match[2] ?? match[3] ?? "").trim();
+  return match[2] === undefined ? (match[3] ?? "") : decodeComposerMentionQuotedPath(match[2]);
+}
+
+export function composerMentionQuotedPathHasClosingQuote(path: string): boolean {
+  let precedingBackslashes = 0;
+  for (const character of path) {
+    if (character === "\\") {
+      precedingBackslashes += 1;
+      continue;
+    }
+    if (character === '"' && precedingBackslashes % 2 === 0) {
+      return true;
+    }
+    precedingBackslashes = 0;
+  }
+  return false;
+}
+
+function encodeComposerMentionQuotedPath(path: string): string {
+  return path.replace(/["\\]/g, "\\$&");
+}
+
+/**
+ * Paths that need quoting so spaces, parentheses, and shell-ish characters
+ * stay a single mention token (#351). Prefer quoting over relying on the
+ * unquoted `[^()\s@]+` trigger form.
+ */
+export function composerMentionPathNeedsQuoting(path: string): boolean {
+  return /[\s()@"'`$\\]/.test(path);
 }
 
 export function formatComposerMentionToken(path: string): string {
   const normalizedPath = path.startsWith("@") ? path.slice(1) : path;
-  return /\s/.test(normalizedPath) ? `@"${normalizedPath}"` : `@${normalizedPath}`;
+  return composerMentionPathNeedsQuoting(normalizedPath)
+    ? `@"${encodeComposerMentionQuotedPath(normalizedPath)}"`
+    : `@${normalizedPath}`;
 }
 
 function escapeRegExp(value: string): string {
@@ -107,10 +147,30 @@ export function providerMentionMatchesToken(
   );
 }
 
-export type MentionChipKind = "path" | "plugin";
+export type MentionChipKind = "path" | "plugin" | "thread";
 
 export function isPluginProviderMentionReference(mention: ProviderMentionReference): boolean {
   return mention.path.startsWith("plugin://");
+}
+
+export function isThreadProviderMentionReference(mention: ProviderMentionReference): boolean {
+  return isThreadMentionPath(mention.path);
+}
+
+export function threadIdFromProviderMentionReference(
+  mention: ProviderMentionReference,
+): string | null {
+  return threadIdFromThreadMentionPath(mention.path);
+}
+
+export function findThreadProviderMentionReferenceForToken(
+  token: string,
+  mentions: ReadonlyArray<ProviderMentionReference> | undefined,
+): ProviderMentionReference | undefined {
+  return mentions?.find(
+    (mention) =>
+      isThreadProviderMentionReference(mention) && providerMentionMatchesToken(mention, token),
+  );
 }
 
 export function resolveMentionChipKind(
@@ -120,8 +180,14 @@ export function resolveMentionChipKind(
     mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   },
 ): MentionChipKind {
+  if (options?.kind === "thread" || isThreadMentionPath(path)) {
+    return "thread";
+  }
   if (options?.kind === "plugin" || path.startsWith("plugin://")) {
     return "plugin";
+  }
+  if (findThreadProviderMentionReferenceForToken(path, options?.mentionReferences)) {
+    return "thread";
   }
   if (
     options?.mentionReferences?.some(

@@ -1,9 +1,55 @@
-import { MessageId, TurnId } from "@t3tools/contracts";
-import { readFileSync } from "node:fs";
+// FILE: MessagesTimeline.test.tsx
+// Purpose: Covers transcript row rendering and SSR-safe presentation contracts.
+// Layer: Web chat component tests
+// Depends on: renderToStaticMarkup and a mocked LegendList.
+
+import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
-import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+import { makeActivity } from "../../storeTestFixtures";
+import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
+import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+
+const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
+// Every settled turn opens with a header carrying its final state.
+const TURN_HEADER_MARKER = 'data-turn-header="completed"';
+const FORK_SOURCE = {
+  sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+  sourceTitle: "ciao (2)",
+};
+
+function makeForkImportedEntry() {
+  return {
+    id: "imported-entry",
+    kind: "message" as const,
+    createdAt: "2026-03-17T19:12:28.000Z",
+    message: {
+      id: MessageId.makeUnsafe("imported-message"),
+      role: "assistant" as const,
+      text: "Imported history",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      streaming: false,
+      source: "fork-import" as const,
+    },
+  };
+}
+
+function makeForkOwnedEntry() {
+  return {
+    id: "fork-entry",
+    kind: "message" as const,
+    createdAt: "2026-03-17T19:12:29.000Z",
+    message: {
+      id: MessageId.makeUnsafe("fork-message"),
+      role: "user" as const,
+      text: "Fork-only turn",
+      createdAt: "2026-03-17T19:12:29.000Z",
+      streaming: false,
+      source: "native" as const,
+    },
+  };
+}
 
 vi.mock("@legendapp/list/react", async () => {
   const React = await import("react");
@@ -13,6 +59,7 @@ vi.mock("@legendapp/list/react", async () => {
       data: Array<{ id: string }>;
       keyExtractor: (item: { id: string }) => string;
       renderItem: (args: { item: { id: string } }) => React.ReactNode;
+      ListFooterComponent?: React.ReactNode;
     },
     _ref: React.ForwardedRef<unknown>,
   ) {
@@ -21,12 +68,37 @@ vi.mock("@legendapp/list/react", async () => {
         {props.data.map((item) => (
           <div key={props.keyExtractor(item)}>{props.renderItem({ item })}</div>
         ))}
+        {props.ListFooterComponent}
       </div>
     );
   });
 
   return { LegendList };
 });
+
+// Baseline MessagesTimeline props shared across render tests; spread the
+// result and override individual props (or pass them as JSX after the spread).
+function makeTimelineBaseProps(nowIso: string | null = "2026-03-17T19:12:30.000Z") {
+  return {
+    hasMessages: true,
+    isWorking: false,
+    activeTurnInProgress: false,
+    activeTurnStartedAt: null,
+    turnDiffSummaryByAssistantMessageId: new Map(),
+    ...(nowIso === null ? {} : { nowIso }),
+    expandedWorkGroups: {},
+    onToggleWorkGroup: () => {},
+    onOpenTurnDiff: () => {},
+    revertTurnCountByUserMessageId: new Map(),
+    onRevertUserMessage: () => {},
+    isRevertingCheckpoint: false,
+    onImageExpand: () => {},
+    markdownCwd: undefined,
+    resolvedTheme: "dark" as const,
+    timestampFormat: "locale" as const,
+    workspaceRoot: undefined,
+  };
+}
 
 function matchMedia() {
   return {
@@ -54,6 +126,7 @@ beforeAll(() => {
     matchMedia,
     addEventListener: () => {},
     removeEventListener: () => {},
+    location: { origin: "http://localhost" },
     desktopBridge: undefined,
   });
   vi.stubGlobal("document", {
@@ -61,6 +134,11 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
+    // flushStorageBeforePageHide registers visibilitychange at module load of
+    // the MessagesTimeline import chain (via composerDraftStore).
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    visibilityState: "visible",
   });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
@@ -68,240 +146,411 @@ beforeAll(() => {
   });
 });
 
+// Warm the component module once: the first dynamic import pays the whole
+// component-graph transform, which exceeds the 5s per-test timeout on slow CI
+// runners (observed >10s under a full parallel suite). beforeAll keeps that
+// cost off any single test's clock; the explicit timeout keeps it off the
+// default 10s hook clock too.
+beforeAll(async () => {
+  await import("./MessagesTimeline");
+}, 120_000);
+
 describe("MessagesTimeline", () => {
-  it("keeps small transcripts on the simple non-virtualized path", async () => {
+  it("opts user and assistant transcript markdown into automatic direction mode", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
-            id: "entry-1",
+            id: "bidi-user",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
             message: {
-              id: MessageId.makeUnsafe("assistant-message-1"),
+              id: MessageId.makeUnsafe("bidi-user"),
+              role: "user",
+              text: "مرحبا بالعالم",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "bidi-assistant",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("bidi-assistant"),
               role: "assistant",
-              text: "stable transcript body",
-              createdAt: "2026-03-17T19:12:28.000Z",
+              text: "[مرحبا](https://example.com)",
+              createdAt: "2026-03-17T19:12:29.000Z",
               streaming: false,
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
-    expect(markup).not.toContain('data-index="0"');
-    expect(markup).not.toContain('class="relative" style="height:');
-    expect(markup).toContain('data-timeline-row-kind="message"');
+    expect(markup.match(/data-direction-mode="auto-blocks"/g)).toHaveLength(2);
   });
 
-  it("renders assistant math through the shared markdown renderer", async () => {
+  it("renders the launch header and the live Resumed clock when the provider reuses its turn id", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    const turnId = TurnId.makeUnsafe("same-turn");
+    const launchAt = "2026-03-17T19:12:00.000Z";
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps("2026-03-17T19:12:23.000Z")}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={turnId}
+        activeTurnStartedAt={launchAt}
         timelineEntries={[
           {
-            id: "entry-assistant-math",
+            id: "request",
             kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
+            createdAt: launchAt,
             message: {
-              id: MessageId.makeUnsafe("assistant-message-math"),
+              id: MessageId.makeUnsafe("request"),
+              role: "user",
+              text: "Launch delayed echo",
+              createdAt: launchAt,
+              streaming: false,
+              turnId,
+            },
+          },
+          {
+            id: "launch",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:04.000Z",
+            message: {
+              id: MessageId.makeUnsafe("launch"),
               role: "assistant",
-              text: ["Inline $a^2 + b^2 = c^2$", "", "$$", "\\sum_{n=1}^{4} n", "$$"].join("\n"),
-              createdAt: "2026-03-17T19:12:28.000Z",
+              text: "Launched.",
+              createdAt: "2026-03-17T19:12:04.000Z",
+              completedAt: "2026-03-17T19:12:04.000Z",
               streaming: false,
+              turnId,
+            },
+          },
+          {
+            id: "done",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:21.000Z",
+            entry: {
+              id: "done",
+              createdAt: "2026-03-17T19:12:21.000Z",
+              tone: "info",
+              label: "Done",
+              backgroundTaskCompletion: {
+                taskId: "task",
+                taskType: null,
+                description: "Delayed echo",
+                outcome: "finished",
+              },
+            },
+          },
+          {
+            id: "resumed",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:22.000Z",
+            message: {
+              id: MessageId.makeUnsafe("resumed"),
+              role: "assistant",
+              text: "Echo done.",
+              createdAt: "2026-03-17T19:12:22.000Z",
+              streaming: true,
+              turnId,
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
+        turnTimingByTurnId={
+          new Map([
+            [
+              turnId,
+              {
+                startedAt: launchAt,
+                completedAt: "2026-03-17T19:12:04.000Z",
+                interrupted: false,
+              },
+            ],
+          ])
+        }
       />,
     );
-
-    expect(markup).toContain('class="katex"');
-    expect(markup).toContain("katex-display");
+    expect(markup).toContain("Worked 4.0s");
+    expect(markup).toContain("Resumed: “Delayed echo” finished · ");
+    expect(markup).toContain('class="tabular-nums">2s</span>');
+    expect(markup.indexOf("Worked 4.0s")).toBeLessThan(markup.indexOf("Resumed:"));
+    expect(markup.match(/data-turn-header="live"/g)).toHaveLength(1);
   });
 
-  it("renders user message metadata outside the bubble shell", async () => {
+  it.each(["stopped", "interrupted"] as const)(
+    "renders the %s header after its request when the turn produced no content",
+    async (outcome) => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const turnId = TurnId.makeUnsafe("empty-turn");
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          timelineEntries={[
+            {
+              id: "empty-request",
+              kind: "message",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              message: {
+                id: MessageId.makeUnsafe("empty-request"),
+                role: "user",
+                text: "Inspect the repository",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                streaming: false,
+                turnId,
+              },
+            },
+          ]}
+          turnTimingByTurnId={
+            new Map([
+              [
+                turnId,
+                {
+                  startedAt: "2026-03-17T19:12:28.000Z",
+                  completedAt: "2026-03-17T19:12:30.000Z",
+                  interrupted: true,
+                  stoppedByUser: outcome === "stopped",
+                },
+              ],
+            ])
+          }
+        />,
+      );
+      const label = outcome === "stopped" ? "Stopped by you after 2.0s" : "Interrupted after 2.0s";
+      expect(markup).toContain(`data-turn-header="${outcome}"`);
+      expect(markup).toContain(label);
+      expect(markup.indexOf(label)).toBeGreaterThan(markup.indexOf("Inspect the repository"));
+    },
+  );
+
+  it("shows the literal failed command, exit code and stderr even when the provider uses an error tone", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
-            id: "entry-1",
-            kind: "message",
+            id: "failed-command",
+            kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-1"),
-              role: "user",
-              text: "ship the fix",
+            entry: {
+              id: "failed-command",
               createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
+              label: "Bash",
+              tone: "error",
+              activityKind: "tool.completed",
+              itemType: "command_execution",
+              toolStatus: "failed",
+              command: "missing-command --check",
+              toolDetails: {
+                kind: "command",
+                title: "Bash",
+                command: "missing-command --check",
+                output: { exitCode: 127, stderr: "missing-command: command not found" },
+              },
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map([[MessageId.makeUnsafe("message-1"), 1]])}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
+      />,
+    );
+    expect(markup).toContain('data-command-literal="true"');
+    expect(markup).toContain("missing-command --check");
+    expect(markup).toContain("Failed · exit 127");
+    expect(markup).toContain("missing-command: command not found");
+  });
+  // The first test pays the full dynamic-import cost of the MessagesTimeline
+  // module graph, which can exceed 10s under CI thread contention.
+  it("renders an accent deep link to the immediate fork source", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[makeForkImportedEntry(), makeForkOwnedEntry()]}
+        forkSource={FORK_SOURCE}
+        onOpenThread={() => {}}
       />,
     );
 
-    expect(markup).toContain("flex w-full justify-end");
-    expect(markup).toContain("group flex flex-col items-end gap-px max-w-[80%]");
-    expect(markup).toContain(
-      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+    expect(markup).toContain('data-fork-source-divider="true"');
+    expect(markup).toContain('href="/source-thread"');
+    expect(markup).toContain("Continued from chat");
+    expect(markup).toContain("text-[var(--color-text-accent)]");
+    expect(markup.indexOf("Imported history")).toBeLessThan(
+      markup.indexOf('data-fork-source-divider="true"'),
     );
-    expect(markup).toContain("rounded-[var(--radius-user-message)]");
-    expect(markup).toContain("py-[8px]");
-    expect(markup).toContain("group-hover:opacity-100");
+    expect(markup.indexOf('data-fork-source-divider="true"')).toBeLessThan(
+      markup.indexOf("Fork-only turn"),
+    );
+  }, 30_000);
+
+  it("renders session-context lifecycle evidence as a compact expandable row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "context-restart-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "context-restart-entry",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "The session's history was lost, so the model continues from a summary.",
+              tone: "error",
+              activityKind: "provider.context.changed",
+              providerContextLifecycle: {
+                provider: "opencode",
+                nativeHistory: "unavailable",
+                restartReason: "native-resume-failed",
+                sessionRestarted: true,
+                recapInjected: true,
+                recapCharacters: 4_200,
+                recapPreview: "Bounded summary preview",
+                recapPreviewTruncated: true,
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("history was lost, so the model continues from a summary.");
+    expect(markup).toContain('data-tool-detail-trigger="true"');
+    expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
+    expect(markup).not.toContain("Bounded summary preview");
   });
 
-  it("keeps user-bubble file and folder mention icons from being overridden by plugin names", async () => {
+  it("labels only the first message when another task created the conversation", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const baseProps = {
-      hasMessages: true,
-      isWorking: false,
-      activeTurnInProgress: false,
-      activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      nowIso: "2026-03-17T19:12:30.000Z",
-      expandedWorkGroups: {},
-      onToggleWorkGroup: () => {},
-      onOpenTurnDiff: () => {},
-      revertTurnCountByUserMessageId: new Map(),
-      onRevertUserMessage: () => {},
-      isRevertingCheckpoint: false,
-      onImageExpand: () => {},
-      markdownCwd: undefined,
-      resolvedTheme: "light" as const,
-      timestampFormat: "locale" as const,
-      workspaceRoot: undefined,
-    };
-
-    const folderMarkup = renderToStaticMarkup(
+    const markup = renderToStaticMarkup(
       <MessagesTimeline
-        {...baseProps}
+        {...makeTimelineBaseProps()}
+        crossTaskOrigin={{
+          sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+          sourceProvider: "codex",
+        }}
         timelineEntries={[
           {
-            id: "entry-folder-mention",
+            id: "entry-first-user",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
             message: {
-              id: MessageId.makeUnsafe("message-folder-mention"),
+              id: MessageId.makeUnsafe("first-user-message"),
               role: "user",
-              text: "Use @linear",
+              text: "Inspect the repository",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-second-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:13:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("second-user-message"),
+              role: "user",
+              text: "Continue",
+              createdAt: "2026-03-17T19:13:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        nowIso="2026-03-17T19:14:30.000Z"
+        onOpenThread={() => {}}
+        resolvedTheme="light"
+      />,
+    );
+
+    expect(markup.match(/data-cross-task-origin="true"/g)).toHaveLength(1);
+    expect(markup).toContain("Sent by Synara from another thread");
+    expect(markup).toContain('aria-label="Open source thread"');
+    expect(markup.indexOf("Sent by Synara from another thread")).toBeLessThan(
+      markup.indexOf("Inspect the repository"),
+    );
+  });
+
+  it("shows only the cross-task label (not the agent chip) when both apply", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        crossTaskOrigin={{
+          sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+          sourceProvider: "codex",
+        }}
+        timelineEntries={[
+          {
+            id: "entry-first-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("first-user-message"),
+              role: "user",
+              text: "Inspect the repository",
+              dispatchOrigin: "agent",
               createdAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
             },
           },
         ]}
+        nowIso="2026-03-17T19:14:30.000Z"
+        onOpenThread={() => {}}
+        resolvedTheme="light"
       />,
     );
 
-    expect(folderMarkup).toContain("/central-icons-reversed/folder-2.svg");
-    expect(folderMarkup).not.toContain("/central-icons-reversed/puzzle.svg");
+    expect(markup).toContain("Sent by Synara from another thread");
+    expect(markup).not.toContain("Sent by agent");
+  });
 
-    const tsxMarkup = renderToStaticMarkup(
+  it("names the group when a group coordinator started the thread", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
       <MessagesTimeline
-        {...baseProps}
+        {...makeTimelineBaseProps()}
+        crossTaskOrigin={{
+          sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+          sourceProvider: "codex",
+          coordinatorGroupName: "Release Synara",
+        }}
         timelineEntries={[
           {
-            id: "entry-tsx-file-mention",
+            id: "entry-first-user",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
             message: {
-              id: MessageId.makeUnsafe("message-tsx-file-mention"),
+              id: MessageId.makeUnsafe("first-user-message"),
               role: "user",
-              text: "Use @src/App.tsx",
+              text: "Inspect the repository",
+              dispatchOrigin: "agent",
               createdAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
             },
           },
         ]}
+        nowIso="2026-03-17T19:14:30.000Z"
+        onOpenThread={() => {}}
+        resolvedTheme="light"
       />,
     );
 
-    expect(tsxMarkup).toContain("/central-icons-reversed/react.svg");
-    expect(tsxMarkup).not.toContain("/central-icons-reversed/folder-2.svg");
-
-    const pluginMarkup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...baseProps}
-        timelineEntries={[
-          {
-            id: "entry-plugin-mention",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-plugin-mention"),
-              role: "user",
-              text: "Use @linear",
-              mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-      />,
-    );
-
-    expect(pluginMarkup).toContain("/central-icons-reversed/puzzle.svg");
+    expect(markup).toContain("Sent by the Release Synara coordinator");
+    expect(markup).toContain('aria-label="Open coordinator"');
+    expect(markup).not.toContain("Sent by Synara from another thread");
   });
 
   it("renders edit beside copy for user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-editable-user",
@@ -329,22 +578,12 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={
           new Map([[MessageId.makeUnsafe("message-editable-user"), 0]])
         }
-        onRevertUserMessage={() => {}}
         onEditUserMessage={() => true}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
+        editableUserMessageId={MessageId.makeUnsafe("message-editable-user")}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
@@ -358,10 +597,7 @@ describe("MessagesTimeline", () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-user-no-checkpoint",
@@ -389,20 +625,9 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
         onEditUserMessage={() => true}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
+        editableUserMessageId={MessageId.makeUnsafe("message-user-no-checkpoint")}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
@@ -416,7 +641,7 @@ describe("MessagesTimeline", () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
+        {...makeTimelineBaseProps()}
         isWorking
         activeTurnInProgress
         activeTurnId={TurnId.makeUnsafe("turn-user-running")}
@@ -435,22 +660,13 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:32.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={
           new Map([[MessageId.makeUnsafe("message-user-running"), 1]])
         }
-        onRevertUserMessage={() => {}}
         onEditUserMessage={() => true}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
+        editableUserMessageId={MessageId.makeUnsafe("message-user-running")}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
@@ -461,254 +677,40 @@ describe("MessagesTimeline", () => {
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Revert to this message"/);
   });
 
-  it("renders a steering chip above steered user messages", async () => {
+  it("renders a 'Sent by agent' chip above agent-dispatched user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
-            id: "entry-steered-user-message",
+            id: "entry-agent-user-message",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
             message: {
-              id: MessageId.makeUnsafe("message-steered-user"),
+              id: MessageId.makeUnsafe("message-agent-user"),
               role: "user",
-              text: "hello",
-              dispatchMode: "steer",
+              text: "status check from the coordinator",
+              dispatchOrigin: "agent",
               createdAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
-    expect(markup).toContain("Steering conversation");
-    expect(markup).toContain("mb-1.5");
-  });
-
-  it("pushes the steering chip higher when the user message has chips or photos", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-steered-user-message-media",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-steered-user-media"),
-              role: "user",
-              text: "hello",
-              dispatchMode: "steer",
-              attachments: [
-                {
-                  id: "assistant-selection-1",
-                  type: "assistant-selection",
-                  assistantMessageId: MessageId.makeUnsafe("assistant-1"),
-                  text: "draft this",
-                },
-                {
-                  id: "image-1",
-                  type: "image",
-                  name: "image.png",
-                  mimeType: "image/png",
-                  sizeBytes: 5,
-                },
-              ],
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Steering conversation");
-    expect(markup).toContain("mb-3");
-  });
-
-  it("renders plain user text without preformatted shrink-wrap markup", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-plain-user-message",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-plain-user"),
-              role: "user",
-              text: "tl\ndr",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain(
-      "block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
-    );
-    expect(markup).not.toContain("<pre");
-  });
-
-  it("collapses long user messages at the 600-char message budget and renders a separate Show more button", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const hiddenTail = "TAIL_SHOULD_STAY_HIDDEN";
-    const longText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-long-user-message",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-long-user"),
-              role: "user",
-              text: longText,
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Show more");
-    expect(markup).not.toContain(hiddenTail);
-  });
-
-  it("renders inline terminal labels with the composer chip UI", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-1",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-2"),
-              role: "user",
-              text: [
-                "yoo what's @terminal-1:1-5 mean",
-                "",
-                "<terminal_context>",
-                "- Terminal 1 lines 1-5:",
-                "  1 | julius@mac effect-http-ws-cli % bun i",
-                "  2 | bun install v1.3.9 (cf6cdbbb)",
-                "</terminal_context>",
-              ].join("\n"),
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("/central-icons-reversed/console.svg");
-    expect(markup).toContain("yoo what&#x27;s ");
+    expect(markup).toContain("Sent by agent");
+    expect(markup).not.toContain("Sent via Automation");
+    expect(markup).not.toContain("Steering conversation");
   });
 
   it("renders assistant selection chips from hidden prompt markup when attachments are missing", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-user-selection-fallback",
@@ -730,19 +732,7 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
@@ -751,141 +741,28 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("&lt;assistant_selection&gt;");
   });
 
-  it("renders trailing user skill tokens with the composer skill pill UI", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-user-skill-pill",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-user-skill"),
-              role: "user",
-              text: "$check-code",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Check Code");
-    expect(markup).toContain("text-[var(--info-foreground)]");
-    expect(markup).not.toContain("$check-code</div>");
-  });
-
-  it("renders trailing user subagent mentions with the composer agent pill UI", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-user-agent-pill",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-user-agent"),
-              role: "user",
-              text: "@spark(check the UI)",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("@spark");
-    expect(markup).toContain("inline-flex max-w-full select-none items-center gap-0.5");
-    expect(markup).toContain("mx-0.5");
-    expect(markup).toContain("rounded-md px-1.5 py-0.5");
-    expect(markup).toContain("(check the UI)");
-    expect(markup).not.toContain("@spark(check the UI)</div>");
-  });
-
-  it("renders context compaction entries in the normal work log", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-1",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-1",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Context compacted manually",
-              tone: "info",
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Context compacted manually");
-    expect(markup).not.toContain("Work log");
-  });
-
   it("keeps the generic working copy alongside the active compaction entry", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    const [compactionEntry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "work-compacting",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          kind: "context-compaction",
+          summary: "Compacting context",
+          tone: "info",
+          payload: {
+            itemType: "context_compaction",
+            status: "inProgress",
+            data: { item: { type: "contextCompaction", id: "compaction-1" } },
+          },
+        }),
+      ],
+      undefined,
+    );
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
+        {...makeTimelineBaseProps()}
         isWorking
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
@@ -894,60 +771,73 @@ describe("MessagesTimeline", () => {
             id: "entry-compacting",
             kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-compacting",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Compacting conversation...",
-              tone: "info",
-            },
+            entry: compactionEntry!,
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
-    expect(markup).toContain("Compacting conversation...");
-    expect(markup).toContain("Working for");
+    expect(markup).toContain("Compacting context");
+    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain('data-synara-working-loader="true"');
-    expect(markup).toContain("synara-working-status__text-base");
-    expect(markup).toContain("synara-working-status__text-shimmer");
-    expect(markup).toContain('aria-hidden="true"');
+    expect(markup).toContain("synara-working-loader__mark");
+    expect(markup).toContain(">Working <");
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
-  it("keeps the working loader glow clipped to the logo and text without hiding text", () => {
-    const css = readFileSync(new URL("../../index.css", import.meta.url), "utf8");
+  it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-live-status");
+    const assistantCreatedAt = "2026-03-17T19:12:29.000Z";
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          {
+            id: "entry-tasks-updated",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.500Z",
+            entry: {
+              id: "work-tasks-updated",
+              createdAt: "2026-03-17T19:12:28.500Z",
+              label: "Tasks updated",
+              tone: "info",
+              turnId: activeTurnId,
+            },
+          },
+          {
+            id: "entry-live-assistant",
+            kind: "message",
+            createdAt: assistantCreatedAt,
+            message: {
+              id: MessageId.makeUnsafe("message-live-assistant"),
+              role: "assistant",
+              text: "",
+              createdAt: assistantCreatedAt,
+              streaming: false,
+              turnId: activeTurnId,
+            },
+          },
+        ]}
+      />,
+    );
 
-    expect(css).toContain(".synara-working-loader__mark");
-    expect(css).toContain('mask: url("/synara-logo.svg") center / contain no-repeat;');
-    expect(css).toContain("overflow: hidden;");
-    expect(css).toContain(".synara-working-status__text-base");
-    expect(css).toContain(".synara-working-status__text-shimmer");
-    expect(css).toContain("@keyframes synara-working-icon-reflect");
-    expect(css).toContain("@keyframes synara-working-text-reflect");
-    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(markup).toContain("Tasks updated");
+    expect(markup).toContain("Thinking");
+    expect(markup).not.toContain(formatShortTimestamp(assistantCreatedAt, "locale"));
+    expect(markup).toMatch(/class="[^"]*\bpb-1\b[^"]*" data-timeline-row-kind="message"/);
   });
 
   it("folds work log summaries above the next assistant message footer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-work-inline",
@@ -974,24 +864,12 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
     expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
-    expect(markup).toContain("Worked for 1.0s");
+    expect(markup).toContain("Worked 1.0s");
     expect(markup).not.toContain("data-scroll-anchor-ignore");
     expect(markup).not.toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
@@ -999,239 +877,11 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log");
   });
 
-  it("attaches trailing work log summaries to the last assistant reply after completion", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-assistant-trailing",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-assistant-trailing"),
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
-            },
-          },
-          {
-            id: "entry-work-trailing",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:31.000Z",
-            entry: {
-              id: "work-trailing-1",
-              createdAt: "2026-03-17T19:12:31.000Z",
-              label: "turn",
-              tone: "info",
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:31.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain(">done</p>");
-    expect(markup).not.toContain("Work log");
-    expect(markup).not.toContain('data-timeline-row-kind="work"');
-  });
-
-  it("collapses every completed-turn tool call behind a single Worked-for toggle", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-inline-tools",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-inline-tool-1",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "tool 1",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-2",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.100Z",
-            entry: {
-              id: "work-inline-tool-2",
-              createdAt: "2026-03-17T19:12:28.100Z",
-              label: "tool 2",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-3",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.200Z",
-            entry: {
-              id: "work-inline-tool-3",
-              createdAt: "2026-03-17T19:12:28.200Z",
-              label: "tool 3",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-4",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.300Z",
-            entry: {
-              id: "work-inline-tool-4",
-              createdAt: "2026-03-17T19:12:28.300Z",
-              label: "tool 4",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-5",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.400Z",
-            entry: {
-              id: "work-inline-tool-5",
-              createdAt: "2026-03-17T19:12:28.400Z",
-              label: "tool 5",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-6",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.500Z",
-            entry: {
-              id: "work-inline-tool-6",
-              createdAt: "2026-03-17T19:12:28.500Z",
-              label: "tool 6",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-assistant-inline-tools",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-assistant-inline-tools"),
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Worked for");
-    expect(markup).toContain(">done</p>");
-    // Completed turns fold all tool work behind the single collapsed disclosure,
-    // which stays unmounted until expanded, so no inline tool rows leak out.
-    expect(markup).not.toContain("+2 more tool calls");
-    expect(markup).not.toContain("Tool 1");
-    expect(markup).not.toContain("Tool 5");
-  });
-
-  it("renders Cursor-style inline tool rows with a uniform label", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking
-        activeTurnInProgress
-        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
-        timelineEntries={[
-          {
-            id: "entry-cursor-search",
-            kind: "work",
-            createdAt: "2026-05-09T16:31:20.000Z",
-            entry: {
-              id: "work-cursor-search",
-              createdAt: "2026-05-09T16:31:20.000Z",
-              label: "Tool",
-              tone: "tool",
-              itemType: "dynamic_tool_call",
-              toolTitle: "Searched",
-              detail: "2 files found",
-            },
-          },
-          {
-            id: "entry-cursor-assistant",
-            kind: "message",
-            createdAt: "2026-05-09T16:31:24.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-cursor-assistant"),
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-05-09T16:31:24.000Z",
-              completedAt: "2026-05-09T16:31:25.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-05-09T16:31:25.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain(
-      '<span data-work-entry-display-text="true">Searched 2 files found</span>',
-    );
-    expect(markup).not.toContain("data-work-entry-action-word");
-  });
-
   it("renders Claude agent task output through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
+        {...makeTimelineBaseProps()}
         isWorking
         activeTurnInProgress
         activeTurnStartedAt="2026-05-09T16:31:20.000Z"
@@ -1257,19 +907,8 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-05-09T16:31:25.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
@@ -1278,126 +917,99 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("```tsx");
   });
 
-  it("keeps the latest inline tool calls visible while the turn is still active", async () => {
+  it("renders a lone reasoning update as iconless tool text", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-reasoning-lone");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
+        {...makeTimelineBaseProps(null)}
         isWorking
         activeTurnInProgress
+        activeTurnId={activeTurnId}
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
           {
-            id: "entry-inline-tools-live-1",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-inline-live-1",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "tool 1",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-live-2",
+            id: "entry-reasoning-trace",
             kind: "work",
             createdAt: "2026-03-17T19:12:28.100Z",
             entry: {
-              id: "work-inline-live-2",
+              id: "reasoning-trace",
               createdAt: "2026-03-17T19:12:28.100Z",
-              label: "tool 2",
+              turnId: activeTurnId,
+              label: "Reasoning trace",
+              toolTitle: "Reasoning trace",
+              detail: "**Inspecting apps/web/src/store.ts**\n\n<!-- -->",
               tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-live-3",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.200Z",
-            entry: {
-              id: "work-inline-live-3",
-              createdAt: "2026-03-17T19:12:28.200Z",
-              label: "tool 3",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-live-4",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.300Z",
-            entry: {
-              id: "work-inline-live-4",
-              createdAt: "2026-03-17T19:12:28.300Z",
-              label: "tool 4",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-live-5",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.400Z",
-            entry: {
-              id: "work-inline-live-5",
-              createdAt: "2026-03-17T19:12:28.400Z",
-              label: "tool 5",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-live-6",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.500Z",
-            entry: {
-              id: "work-inline-live-6",
-              createdAt: "2026-03-17T19:12:28.500Z",
-              label: "tool 6",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-assistant-inline-tools-live",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-assistant-inline-tools-live"),
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
-    expect(markup).not.toContain("Tool 1");
-    expect(markup).not.toContain("Tool 2");
-    expect(markup).toContain("Tool 3");
-    expect(markup).toContain("Tool 6");
-    expect(markup).toContain("+2 more tool calls");
+    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(1);
+    expect(markup).not.toContain('data-work-entry-icon="true"');
+    expect(markup).toContain("Inspecting apps/web/src/store.ts");
+    expect(markup).not.toContain("Reasoning trace Inspecting");
+  });
+
+  it.each([
+    {
+      provider: "Codex",
+      expectedText: "git status --short</code>",
+      activity: makeActivity({
+        id: "codex-live-tool",
+        createdAt: "2026-03-17T19:12:28.100Z",
+        turnId: "turn-provider-live-tool",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "codex-tool-1",
+              command: "/bin/zsh -lc 'git status --short'",
+              status: "inProgress",
+              commandActions: [{ type: "unknown", command: "git status --short" }],
+            },
+          },
+        },
+      }),
+    },
+  ])("renders $provider tool activity beside live Thinking", async ({ activity, expectedText }) => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-provider-live-tool");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={deriveWorkLogEntries([activity], activeTurnId).map((entry) => ({
+          id: entry.id,
+          kind: "work" as const,
+          createdAt: entry.createdAt,
+          entry,
+        }))}
+      />,
+    );
+
+    expect(markup).toContain('data-timeline-row-kind="work"');
+    expect(markup).toContain('data-work-entry-display-text="true"');
+    expect(markup).toContain('data-live-activity-meta="true"');
+    expect(markup).toContain(">Thinking<");
+    expect(markup).toContain(expectedText);
   });
 
   it("attaches trailing tool rows to the last assistant reply after completion", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-assistant-final",
@@ -1435,23 +1047,12 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:31.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
         resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
-    expect(markup).toContain("Worked for");
+    expect(markup).toContain("Worked ");
     expect(markup).toContain(">done</p>");
     // Trailing work folds into the terminal reply's collapsed disclosure rather
     // than leaving a detached work row at the end of the transcript.
@@ -1460,113 +1061,12 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
-  it("expands inline tool calls when the group is toggled open", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking
-        activeTurnInProgress
-        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        timelineEntries={[
-          {
-            id: "entry-inline-tools-expanded",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-inline-expanded-1",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "tool 1",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-expanded-2",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.100Z",
-            entry: {
-              id: "work-inline-expanded-2",
-              createdAt: "2026-03-17T19:12:28.100Z",
-              label: "tool 2",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-expanded-3",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.200Z",
-            entry: {
-              id: "work-inline-expanded-3",
-              createdAt: "2026-03-17T19:12:28.200Z",
-              label: "tool 3",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-expanded-4",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.300Z",
-            entry: {
-              id: "work-inline-expanded-4",
-              createdAt: "2026-03-17T19:12:28.300Z",
-              label: "tool 4",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-inline-tools-expanded-5",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.400Z",
-            entry: {
-              id: "work-inline-expanded-5",
-              createdAt: "2026-03-17T19:12:28.400Z",
-              label: "tool 5",
-              tone: "tool",
-            },
-          },
-          {
-            id: "entry-assistant-inline-tools-expanded",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-assistant-inline-tools-expanded"),
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{ "entry-inline-tools-expanded": true }}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="light"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Tool 5");
-    expect(markup).toContain("Show less");
-  });
-
   it("renders inline file-change tool calls as edited rows with diff stats", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-edit");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-inline-file-change",
@@ -1579,6 +1079,16 @@ describe("MessagesTimeline", () => {
               tone: "tool",
               requestKind: "file-change",
               changedFiles: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              toolDetails: {
+                kind: "file-change",
+                title: "Edited",
+                diff: [
+                  "diff --git a/apps/web/src/components/chat/MessagesTimeline.test.tsx b/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+                  "-old",
+                  "+new",
+                ].join("\n"),
+                files: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              },
             },
           },
           {
@@ -1614,18 +1124,6 @@ describe("MessagesTimeline", () => {
             ],
           ])
         }
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
@@ -1638,14 +1136,47 @@ describe("MessagesTimeline", () => {
     );
   });
 
-  it("renders command rows with a readable summary and keeps the full command on hover", async () => {
+  it("marks visible file-change rows with captured details as clickable", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "entry-file-change-details",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-file-change-details",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "File Change",
+              tone: "tool",
+              requestKind: "file-change",
+              changedFiles: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              toolDetails: {
+                kind: "file-change",
+                title: "Edited",
+                diff: "-old\n+new",
+                files: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-tool-detail-trigger="true"');
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
+    expect(markup).not.toContain('data-tool-details-inline="true"');
+    expect(markup).not.toContain("Diff");
+    expect(markup).not.toContain("Details");
+  });
+
+  it("renders command rows with the literal command and styled hover tooltip trigger", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-inline-command",
@@ -1663,300 +1194,399 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
-    expect(markup).toContain("Searched");
-    expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
+    // The command shows verbatim (minus the shell wrapper) instead of a guessed
+    // sentence, and the search wears the magnifier.
     expect(markup).toContain(
+      `Ran <code class="${INLINE_COMMAND_CHIP_CLASS_NAME}" data-command-literal="true">rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src</code>`,
+    );
+    expect(markup).toContain("magnifying-glass.svg");
+    expect(markup).not.toContain("data-work-entry-action-word");
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
+    expect(markup).not.toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
     );
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
   });
 
-  it("renders command text even when commandActions provide a short preview", async () => {
+  it("shows the Synara mark for every provider-specific tool row shape", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const baseProps = makeTimelineBaseProps();
+
+    // Provider-style server/tool identifier while the call is active.
+    const claudeMarkup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...baseProps}
         timelineEntries={[
           {
-            id: "entry-inline-command-actions",
-            kind: "work",
-            createdAt: "2026-05-09T10:06:54.443Z",
-            entry: {
-              id: "work-inline-command-actions",
-              createdAt: "2026-05-09T10:06:54.443Z",
-              label: "Ran command",
-              tone: "tool",
-              itemType: "command_execution",
-              toolTitle: "Listed",
-              preview: "web",
-              command: "find apps/web/src -maxdepth 2 -type d",
-              rawCommand: `/bin/zsh -lc "find apps/web/src -maxdepth 2 -type d | sort | sed -n '1,120p'"`,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-05-09T10:07:00.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Listed");
-    expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("find apps/web/src -maxdepth 2 -type d");
-    expect(markup).not.toContain(">Listed web<");
-  });
-
-  it("renders plain location details as file basenames", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-read-location",
+            id: "entry-inline-synara-claude",
             kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
             entry: {
-              id: "work-read-location",
+              id: "work-inline-synara-claude",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Read",
+              label: "MCP tool call",
               tone: "tool",
               itemType: "dynamic_tool_call",
-              toolTitle: "Read",
-              detail: "apps/web/src/session-logic.ts:12",
+              toolTitle: "Synara__synara_create_thread",
+              toolName: "Synara__synara_create_thread",
+              detail: "Synara__synara_create_thread",
+              activityKind: "tool.started",
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        onOpenTurnDiff={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
+    expect(claudeMarkup).toContain('data-tool-icon="synara"');
+    expect(claudeMarkup).not.toContain('data-tool-icon="mcp"');
+    expect(claudeMarkup).toContain("Synara is creating a thread");
+    expect(claudeMarkup).not.toContain("Synara__synara_create_thread");
 
-    expect(markup).toContain("Read");
-    expect(markup).toContain("session-logic.ts");
-    expect(markup).not.toContain("apps/web/src/session-logic.ts:12");
-  });
-
-  it("renders read target files without edit-row treatment", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    // A provider may misclassify an MCP action containing "create" or "list"
+    // as a file change. Tool identity still wins over that transport category.
+    const codexMarkup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...baseProps}
         timelineEntries={[
           {
-            id: "entry-read-target",
+            id: "entry-inline-synara-codex",
             kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
             entry: {
-              id: "work-read-target",
+              id: "work-inline-synara-codex",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Read",
+              label: "MCP tool call",
               tone: "tool",
-              itemType: "dynamic_tool_call",
-              toolTitle: "Read",
-              changedFiles: ["apps/web/src/session-logic.ts"],
+              itemType: "file_change",
+              toolTitle: "mcp__Synara__synara_list_threads",
+              detail: "mcp__Synara__synara_list_threads",
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        onOpenTurnDiff={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
+    expect(codexMarkup).toContain('data-tool-icon="synara"');
+    expect(codexMarkup).toContain("Synara listed threads");
+    expect(codexMarkup).not.toContain("mcp__Synara__synara_list_threads");
 
-    expect(markup).toContain("Read");
-    expect(markup).toContain("session-logic.ts");
-    expect(markup).not.toContain("data-file-change-row");
-  });
-
-  it("shows a globe icon next to compact web-search rows", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const failedMarkup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...baseProps}
         timelineEntries={[
           {
-            id: "entry-inline-web-search",
+            id: "entry-inline-synara-failed",
             kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
             entry: {
-              id: "work-inline-web-search",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Web search",
-              tone: "tool",
-              itemType: "web_search",
-              toolTitle: "Searched the web",
-              detail: "48 files found",
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Searched the web");
-    expect(markup).toContain("48 files found");
-    expect(markup).toContain("tabler-icon-world");
-  });
-
-  it("shows a GitHub icon next to compact GitHub MCP rows", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        timelineEntries={[
-          {
-            id: "entry-inline-github-mcp",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-inline-github-mcp",
+              id: "work-inline-synara-failed",
               createdAt: "2026-03-17T19:12:28.000Z",
               label: "MCP tool call",
               tone: "tool",
               itemType: "mcp_tool_call",
-              toolTitle: "Codex Apps: Github Fetch Pr",
-              toolName: "mcp__codex_apps__github__fetch_pr",
+              toolName: "mcp__synara__synara_create_threads",
+              toolStatus: "failed",
+              detail: "Claude rejected reasoningEffort",
+              activityKind: "tool.completed",
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
-
-    expect(markup).toContain("Codex Apps: Github Fetch Pr");
-    expect(markup).toContain('data-tool-icon="github"');
+    expect(failedMarkup).toContain("Synara couldn&#x27;t create threads");
+    expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
-  it("shows an MCP icon next to compact non-GitHub MCP rows", async () => {
+  it.each(["computer_click", "computer_browser_click"])(
+    "uses the requested cursor and contextual label for %s",
+    async (toolName) => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const [entry] = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "computer-human-label",
+            kind: "tool.completed",
+            summary: "Tool",
+            payload: {
+              itemType: "mcp_tool_call",
+              toolName,
+              arguments: { label: "Search", app: "Safari", x: 123, y: 456 },
+            },
+          }),
+        ],
+        undefined,
+      );
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          timelineEntries={[
+            {
+              id: "computer-row",
+              kind: "work",
+              createdAt: entry!.createdAt,
+              entry: entry!,
+            },
+          ]}
+        />,
+      );
+      expect(markup).toContain('data-tool-icon="computer"');
+      // The computer-use pointer is the mirrored Hugeicons navigation glyph.
+      expect(markup).toContain('data-slot="hugeicon"');
+      expect(markup).toContain('transform="translate(24 0) scale(-1 1)"');
+      expect(markup).toContain(
+        toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
+      );
+      expect(markup).not.toContain("Synara clicked the desktop");
+      expect(markup).not.toContain("123, 456");
+      expect(markup).not.toContain('data-tool-icon="mcp"');
+    },
+  );
+
+  it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    const baseProps = makeTimelineBaseProps();
+
+    const renderSingleToolRow = (entry: WorkLogEntry) =>
+      renderToStaticMarkup(
+        <MessagesTimeline
+          {...baseProps}
+          timelineEntries={[
+            {
+              id: `entry-${entry.id}`,
+              kind: "work",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              entry,
+            },
+          ]}
+        />,
+      );
+
+    const readThreadMarkup = renderSingleToolRow({
+      id: "work-synara-read-thread-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "MCP tool call",
+      tone: "tool",
+      itemType: "mcp_tool_call",
+      toolName: "mcp__synara__synara_read_thread",
+      detail: 'mcp__synara__synara_read_thread: {"threadId":"c357d8c5-b4c1-47d0"}',
+      activityKind: "tool.completed",
+    });
+    expect(readThreadMarkup).toContain("Synara read a thread");
+    expect(readThreadMarkup).not.toContain("mcp__synara__synara_read_thread:");
+    expect(readThreadMarkup).not.toContain("threadId");
+
+    const diagnoseMarkup = renderSingleToolRow({
+      id: "work-synara-diagnose-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "MCP tool call",
+      tone: "tool",
+      itemType: "mcp_tool_call",
+      toolName: "mcp__synara__synara_diagnose_thread",
+      detail: 'mcp__synara__synara_diagnose_thread: {"threadId":"09a1615d-084f-40b9"}',
+      activityKind: "tool.completed",
+    });
+    expect(diagnoseMarkup).toContain("Synara diagnosed a thread");
+    expect(diagnoseMarkup).not.toContain("mcp__synara__synara_diagnose_thread:");
+    expect(diagnoseMarkup).not.toContain("threadId");
+
+    const dynamicToolMarkup = renderSingleToolRow({
+      id: "work-dynamic-tool-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "ToolSearch",
+      tone: "tool",
+      itemType: "dynamic_tool_call",
+      toolName: "ToolSearch",
+      toolTitle: "ToolSearch",
+      detail: 'ToolSearch: {"query":"select:mcp__synara__synara_read_thread_events"}',
+      activityKind: "tool.completed",
+    });
+    expect(dynamicToolMarkup).toContain("ToolSearch");
+    expect(dynamicToolMarkup).not.toContain("&quot;query&quot;");
+
+    // Failed calls are exempt: the JSON-shaped detail may be the only place
+    // the error surfaces, so it stays visible inline.
+    const failedArgsMarkup = renderSingleToolRow({
+      id: "work-synara-failed-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "MCP tool call",
+      tone: "tool",
+      itemType: "mcp_tool_call",
+      toolName: "mcp__synara__synara_create_threads",
+      toolStatus: "failed",
+      detail: 'McpError: {"code":-32602,"message":"Invalid params"}',
+      activityKind: "tool.completed",
+    });
+    expect(failedArgsMarkup).toContain("Synara couldn&#x27;t create threads");
+    expect(failedArgsMarkup).toContain("Invalid params");
+  });
+
+  it("keeps Synara tool calls and adds a thread creation recap at the end of the turn", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const assistantMessageId = MessageId.makeUnsafe("message-synara-recap");
+    const workEntries = [
+      {
+        id: "entry-synara-create-tool",
+        kind: "work",
+        createdAt: "2026-03-17T19:12:28.000Z",
+        entry: {
+          id: "work-synara-create-tool",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "MCP tool call",
+          tone: "tool",
+          itemType: "mcp_tool_call",
+          toolName: "mcp__synara__synara_create_threads",
+          toolTitle: "Synara created threads",
+          activityKind: "tool.completed",
+        },
+      },
+      {
+        id: "entry-synara-create-recap",
+        kind: "work",
+        createdAt: "2026-03-17T19:12:29.000Z",
+        entry: {
+          id: "work-synara-create-recap",
+          createdAt: "2026-03-17T19:12:29.000Z",
+          label: "Created 2 Synara threads",
+          tone: "info",
+          activityKind: "synara.threads.created",
+          synaraThreadCreation: {
+            operationId: "gateway:create:two-workers",
+            requestedCount: 2,
+            createdCount: 2,
+            threads: [
+              {
+                threadId: "thread-terra",
+                title: "Explain the repository with Terra",
+                provider: "codex",
+                model: "gpt-5.6-terra",
+                environment: "local",
+                status: "task_dispatched",
+              },
+              {
+                threadId: "thread-claude",
+                title: "Explain the repository with Claude",
+                provider: "claudeAgent",
+                model: "claude-sonnet-5",
+                environment: "worktree",
+                status: "task_dispatched",
+              },
+            ],
+          },
+        },
+      },
+    ] as const;
+    const baseProps = {
+      ...makeTimelineBaseProps(),
+      nowIso: "2026-03-17T19:12:31.000Z",
+      onOpenThread: () => {},
+    };
+    const liveMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        isWorking
+        activeTurnInProgress
+        timelineEntries={[...workEntries]}
+      />,
+    );
+    expect(liveMarkup).toContain("Synara created threads");
+    expect(liveMarkup).not.toContain('data-synara-thread-creation-card="true"');
+
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...baseProps}
         timelineEntries={[
+          ...workEntries,
           {
-            id: "entry-inline-mcp",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-inline-mcp",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "MCP tool call",
-              tone: "tool",
-              itemType: "mcp_tool_call",
-              toolTitle: "Codex Apps: Slack Search",
-              toolName: "mcp__codex_apps__slack__search",
+            id: "entry-synara-recap-assistant",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:30.000Z",
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "Both threads are running.",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              completedAt: "2026-03-17T19:12:31.000Z",
+              streaming: false,
             },
           },
         ]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
-    expect(markup).toContain("Codex Apps: Slack Search");
-    expect(markup).toContain('data-tool-icon="mcp"');
+    // The original MCP tool call is preserved inside the settled turn's
+    // turn header disclosure; the recap is an additional final artifact.
+    expect(markup).toContain(TURN_HEADER_MARKER);
+    expect(markup).toContain('data-synara-thread-creation-card="true"');
+    expect(markup).toContain("2 threads created");
+    expect(markup).toContain("2/2 requested threads created");
+    expect(markup).toContain("Explain the repository with Terra");
+    expect(markup).toContain("Explain the repository with Claude");
+    expect(markup).toContain("GPT-5.6 Terra");
+    expect(markup).toContain("Claude Sonnet 5");
+    expect(markup.indexOf("Both threads are running.")).toBeLessThan(
+      markup.indexOf('data-synara-thread-creation-card="true"'),
+    );
+  });
+
+  it("shows the Computer setup card after the answer instead of inside the settled fold", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          nowIso="2026-03-17T19:12:31.000Z"
+          timelineEntries={[
+            {
+              id: "entry-computer-tool",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              entry: {
+                id: "work-computer-tool",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                label: "MCP tool call",
+                tone: "tool",
+                itemType: "mcp_tool_call",
+                toolTitle: "Listed windows",
+                activityKind: "tool.completed",
+              },
+            },
+            {
+              id: "entry-computer-setup",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              entry: {
+                id: "work-computer-setup",
+                createdAt: "2026-03-17T19:12:29.000Z",
+                label: "Computer setup required",
+                tone: "error",
+                computerSetupRequired: { missing: ["screenRecording"] },
+              },
+            },
+            {
+              id: "entry-computer-setup-assistant",
+              kind: "message",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              message: {
+                id: MessageId.makeUnsafe("message-computer-setup"),
+                role: "assistant",
+                text: "Synara needs macOS permissions first.",
+                createdAt: "2026-03-17T19:12:30.000Z",
+                completedAt: "2026-03-17T19:12:31.000Z",
+                streaming: false,
+              },
+            },
+          ]}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain(TURN_HEADER_MARKER);
+    expect(markup.match(/Computer control needs Screen Recording/g)).toHaveLength(1);
+    expect(markup.indexOf("Synara needs macOS permissions first.")).toBeLessThan(
+      markup.indexOf("Computer control needs Screen Recording"),
+    );
   });
 
   it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {
@@ -1964,10 +1594,7 @@ describe("MessagesTimeline", () => {
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-inline-multi-file-change",
@@ -2023,30 +1650,19 @@ describe("MessagesTimeline", () => {
             ],
           ])
         }
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
     // The tool work collapses, but the changed-files summary stays anchored at
     // the end of the turn with every file from the turn diff.
-    expect(markup).toContain("Worked for");
+    expect(markup).toContain(TURN_HEADER_MARKER);
     expect(markup).toContain("Edited 2 files");
     expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.test.tsx");
     expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.tsx");
     expect(markup).toContain("+1");
     expect(markup).toContain("-1");
     expect(markup).toContain("+2");
+    expect(markup).not.toContain(">apps/web/src/components/chat<");
   });
 
   it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {
@@ -2054,10 +1670,7 @@ describe("MessagesTimeline", () => {
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-summary-fallback");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-inline-summary-fallback",
@@ -2109,18 +1722,6 @@ describe("MessagesTimeline", () => {
             ],
           ])
         }
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />,
     );
 
@@ -2139,10 +1740,7 @@ describe("MessagesTimeline", () => {
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-diff");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={[
           {
             id: "entry-assistant-diff",
@@ -2164,6 +1762,10 @@ describe("MessagesTimeline", () => {
               assistantMessageId,
               {
                 turnId: TurnId.makeUnsafe("turn-diff-1"),
+                checkpointTurnCount: 1,
+                checkpointTurnCounts: [1],
+                checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/1"),
+                status: "ready",
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
                 files: [
@@ -2173,25 +1775,190 @@ describe("MessagesTimeline", () => {
             ],
           ])
         }
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
+        onUndoTurnFiles={() => {}}
       />,
     );
 
     expect(markup).toContain("Edited 1 file");
+    expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain("font-system-ui truncate font-normal");
+    expect(markup).toContain('data-edited-file-row="true"');
+    expect(markup).toContain('aria-label="Open apps/web/src/components/Sidebar.tsx options"');
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
+    expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
+      markup.indexOf("Edited 1 file"),
+    );
+  });
+
+  it("renders an automation-dispatched coordinator prompt as a normal user row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        conversationOnly
+        timelineEntries={[
+          {
+            id: "checkin-row",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("checkin-message"),
+              role: "user",
+              text: "Automation: Alpha events\nAutomation ID: automation-1\nRun: manual\n\nCoordinator events",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+              source: "native",
+              dispatchOrigin: "automation",
+            },
+          },
+        ]}
+      />,
+    );
+
+    // Check-in turns are suppressed upstream in deriveWorkLogEntries; the
+    // timeline no longer has a compact check-in row, so the prompt renders as
+    // a normal user bubble.
+    expect(markup).not.toContain("Coordinator check-in");
+    expect(markup).toContain("--app-user-message-background");
+    expect(markup).toContain("Sent via Automation");
+  });
+
+  it("keeps automation-origin user messages as bubbles outside coordinator conversations", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "automation-row",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("automation-message"),
+              role: "user",
+              text: "Automation: Alpha events\nRun: scheduled",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+              source: "native",
+              dispatchOrigin: "automation",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).not.toContain("Coordinator check-in");
+    expect(markup).toContain("--app-user-message-background");
+    expect(markup).toContain("Sent via Automation");
+  });
+
+  it("renders a server-posted worker settle row as a compact pill", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        conversationOnly
+        timelineEntries={[
+          {
+            id: "monitor-settle-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "monitor-settle-entry",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label: "✓ Mars rocket research finished",
+              tone: "info",
+              synaraWorkerNotice: {
+                kind: "settled",
+                marker: "✓",
+                phrase: "finished",
+                threads: [
+                  {
+                    threadId: "thread-mars",
+                    title: "Mars rocket research",
+                    outcome: "completed",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-worker-monitor-kind="settled"');
+    expect(markup).toContain("Mars rocket research");
+    expect(markup).toContain("finished");
+    expect(markup).toContain("<button");
+  });
+
+  it("renders the batch roll-up as a chat message with per-thread links and outcomes", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        conversationOnly
+        timelineEntries={[
+          {
+            id: "monitor-rollup-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "monitor-rollup-entry",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label:
+                "All 3 threads settled: Alpha research ✓, Beta survey ✓, Gamma page ⚠ needs approval",
+              tone: "info",
+              synaraWorkerNotice: {
+                kind: "rollup",
+                marker: null,
+                phrase: null,
+                threads: [
+                  {
+                    threadId: "thread-a",
+                    title: "Alpha research",
+                    outcome: "completed",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                  {
+                    threadId: "thread-b",
+                    title: "Beta survey",
+                    outcome: "completed",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                  {
+                    threadId: "thread-c",
+                    title: "Gamma page",
+                    outcome: "waiting-approval",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-worker-monitor-kind="rollup"');
+    expect(markup).toContain("All 3 threads settled:");
+    expect(markup).toContain("Alpha research");
+    expect(markup).toContain("Beta survey");
+    expect(markup).toContain("Gamma page");
+    expect(markup).toContain("needs your approval");
+    // Three thread links — no full work-entry chrome around them.
+    expect(markup.match(/<button/g)?.length).toBeGreaterThanOrEqual(3);
   });
 });

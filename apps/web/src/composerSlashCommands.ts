@@ -1,21 +1,22 @@
-import type { GitBranch, ProviderKind } from "@t3tools/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  THREAD_GOAL_MAX_CHARS,
+  type GitBranch,
+  type ProviderInteractionMode,
+  type ProviderKind,
+} from "@synara/contracts";
+import { DEFAULT_PROVIDER_ORDER } from "./providerOrdering";
+import {
+  BUILT_IN_COMPOSER_SLASH_COMMANDS,
+  isBuiltInComposerSlashCommandName,
+  normalizeComposerSlashCommandName,
+  type BuiltInComposerSlashCommand,
+} from "@synara/shared/composerSlashCommands";
 import { rankProviderDiscoveryItems } from "./lib/providerDiscovery";
 
-export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
-  "clear",
-  "compact",
-  "model",
-  "plan",
-  "default",
-  "review",
-  "fork",
-  "side",
-  "status",
-  "subagents",
-  "fast",
-] as const;
+export { BUILT_IN_COMPOSER_SLASH_COMMANDS };
 
-export type ComposerSlashCommand = (typeof BUILT_IN_COMPOSER_SLASH_COMMANDS)[number];
+export type ComposerSlashCommand = BuiltInComposerSlashCommand;
 
 export interface ComposerSlashCommandDefinition {
   command: ComposerSlashCommand;
@@ -31,10 +32,14 @@ export interface ComposerSlashInvocation {
 
 export type FastSlashCommandAction = "toggle" | "on" | "off" | "status" | "invalid";
 export type ForkSlashCommandTarget = "local" | "worktree";
-
-function normalizeSlashCommandName(value: string): string {
-  return value.trim().replace(/^\/+/, "").toLowerCase();
-}
+export type GoalSlashCommandAction =
+  | { readonly action: "show" }
+  | { readonly action: "clear" }
+  | { readonly action: "pause" }
+  | { readonly action: "resume" }
+  | { readonly action: "edit" }
+  | { readonly action: "set"; readonly goal: string }
+  | { readonly action: "too-long" };
 
 const CLAUDE_NATIVE_COMMAND_ALIASES: Record<string, readonly string[]> = {
   clear: ["reset", "new"],
@@ -42,7 +47,6 @@ const CLAUDE_NATIVE_COMMAND_ALIASES: Record<string, readonly string[]> = {
   desktop: ["app"],
   exit: ["quit"],
   feedback: ["bug"],
-  branch: ["fork"],
   mobile: ["ios", "android"],
   permissions: ["allowed-tools"],
   "remote-control": ["rc"],
@@ -53,7 +57,7 @@ function getProviderNativeSlashCommandAliases(
   provider: ProviderKind,
   command: string,
 ): readonly string[] {
-  const normalizedCommand = normalizeSlashCommandName(command);
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
   if (provider !== "claudeAgent") {
     return [];
   }
@@ -66,7 +70,7 @@ function expandProviderNativeSlashCommandNames(
 ): string[] {
   const expandedNames = new Set<string>();
   for (const commandName of commandNames) {
-    const normalizedCommandName = normalizeSlashCommandName(commandName);
+    const normalizedCommandName = normalizeComposerSlashCommandName(commandName);
     if (!normalizedCommandName) {
       continue;
     }
@@ -78,26 +82,79 @@ function expandProviderNativeSlashCommandNames(
   return [...expandedNames];
 }
 
+/**
+ * Providers where app-owned /review (target picker + structured prompt) must
+ * win over listing a native "review" command. OpenCode exposes /review in its
+ * command list but does not honor bare `/review` text turns (#218).
+ */
+export function providerUsesAppOwnedReviewSlashCommand(provider: ProviderKind): boolean {
+  return provider === "codex" || provider === "opencode";
+}
+
 function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   provider: ProviderKind,
   command: ComposerSlashCommand,
 ): boolean {
-  return provider === "codex" && command === "review";
+  return (
+    command === "debug" ||
+    command === "default" ||
+    command === "automation" ||
+    command === "computer-use" ||
+    command === "export" ||
+    command === "feedback" ||
+    // /fork is app-owned everywhere: it creates a Synara thread with fork
+    // lineage (native session forking per provider), which a provider-native
+    // "fork" text command cannot do.
+    command === "fork" ||
+    command === "goal" ||
+    command === "rename" ||
+    (providerUsesAppOwnedReviewSlashCommand(provider) && command === "review")
+  );
 }
 
 export function shouldHideProviderNativeCommandFromComposerMenu(
   provider: ProviderKind,
   command: string,
+  options: { readonly availableAppCommands?: ReadonlySet<string> } = {},
 ): boolean {
-  const normalizedCommand = normalizeSlashCommandName(command);
-  return provider === "codex" && normalizedCommand === "review";
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
+  const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
+  return (
+    normalizedCommand === "automation" ||
+    normalizedCommand === "computer-use" ||
+    normalizedCommand === "debug" ||
+    normalizedCommand === "default" ||
+    (normalizedCommand === "export" && appCommandIsAvailable) ||
+    (normalizedCommand === "feedback" && appCommandIsAvailable) ||
+    (normalizedCommand === "fork" && appCommandIsAvailable) ||
+    (normalizedCommand === "goal" && appCommandIsAvailable) ||
+    (normalizedCommand === "rename" && appCommandIsAvailable) ||
+    (providerUsesAppOwnedReviewSlashCommand(provider) && normalizedCommand === "review")
+  );
+}
+
+/**
+ * True when a discovered native "review" command should be sent as plain
+ * `/review` text. Codex/OpenCode use the app review UX instead (#218).
+ */
+export function providerSupportsTextNativeReviewCommand(
+  provider: ProviderKind,
+  nativeCommandNames: ReadonlyArray<{ readonly name: string } | string>,
+): boolean {
+  if (providerUsesAppOwnedReviewSlashCommand(provider)) {
+    return false;
+  }
+  return nativeCommandNames.some((command) => {
+    const name = typeof command === "string" ? command : command.name;
+    return name.trim().toLowerCase() === "review";
+  });
 }
 
 export function getProviderNativeSlashCommandSearchTerms(
   provider: ProviderKind,
   command: string,
 ): readonly string[] {
-  const normalizedCommand = normalizeSlashCommandName(command);
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
   return [normalizedCommand, ...getProviderNativeSlashCommandAliases(provider, normalizedCommand)];
 }
 
@@ -129,6 +186,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Switch this thread into plan mode",
     source: "app",
   },
+  debug: {
+    command: "debug",
+    label: "/debug",
+    description: "Switch this thread into evidence-first debug mode",
+    source: "app",
+  },
   default: {
     command: "default",
     label: "/default",
@@ -150,7 +213,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   side: {
     command: "side",
     label: "/side",
-    description: "Open a guarded sidechat from this thread",
+    description: "Open a guarded Side from this thread, optionally on another provider",
     source: "app",
   },
   status: {
@@ -165,17 +228,52 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Insert a prompt that asks the assistant to delegate work",
     source: "app",
   },
+  "computer-use": {
+    command: "computer-use",
+    label: "/computer-use",
+    description: "Use Synara Computer for this request only",
+    source: "app",
+  },
   fast: {
     command: "fast",
     label: "/fast",
     description: "Turn fast mode on or off for this thread",
     source: "app",
   },
+  export: {
+    command: "export",
+    label: "/export",
+    description: "Download this thread as a ZIP archive (thread.json + transcript.md)",
+    source: "app",
+  },
+  goal: {
+    command: "goal",
+    label: "/goal",
+    description: "Set, edit, pause, resume, or clear this thread's persistent goal",
+    source: "app",
+  },
+  rename: {
+    command: "rename",
+    label: "/rename",
+    description: "Regenerate this thread title, or set an exact title",
+    source: "app",
+  },
+  feedback: {
+    command: "feedback",
+    label: "/feedback",
+    description: "Send feedback to the Synara team",
+    source: "app",
+  },
+  automation: {
+    command: "automation",
+    label: "/automation",
+    description: "Create a scheduled automation from this prompt",
+    source: "app",
+  },
 };
 
 export function isBuiltInComposerSlashCommand(value: string): value is ComposerSlashCommand {
-  const normalizedValue = normalizeSlashCommandName(value);
-  return BUILT_IN_COMPOSER_SLASH_COMMANDS.some((command) => command === normalizedValue);
+  return isBuiltInComposerSlashCommandName(value);
 }
 
 export function parseComposerSlashInvocation(text: string): ComposerSlashInvocation | null {
@@ -186,11 +284,11 @@ export function parseComposerSlashInvocationForCommands(
   text: string,
   commands: ReadonlyArray<ComposerSlashCommand>,
 ): ComposerSlashInvocation | null {
-  const match = /^\/([a-z-]+)(?:\s+(.*))?$/i.exec(text.trim());
+  const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) {
     return null;
   }
-  const command = normalizeSlashCommandName(match[1] ?? "");
+  const command = normalizeComposerSlashCommandName(match[1] ?? "");
   if (!command || !commands.includes(command as ComposerSlashCommand)) {
     return null;
   }
@@ -198,12 +296,6 @@ export function parseComposerSlashInvocationForCommands(
     command: command as ComposerSlashCommand,
     args: (match[2] ?? "").trim(),
   };
-}
-
-export function getComposerSlashCommandDefinition(
-  command: ComposerSlashCommand,
-): ComposerSlashCommandDefinition {
-  return COMPOSER_SLASH_COMMAND_DEFINITIONS[command];
 }
 
 export function filterComposerSlashCommands(
@@ -232,7 +324,7 @@ export function canOfferForkSlashCommand(input: {
   terminalContextCount: number;
   selectedSkillCount: number;
   selectedMentionCount: number;
-  interactionMode: "default" | "plan";
+  interactionMode: ProviderInteractionMode;
 }): boolean {
   return (
     !hasMeaningfulComposerText(input.prompt) &&
@@ -244,23 +336,46 @@ export function canOfferForkSlashCommand(input: {
   );
 }
 
-export function canOfferSideSlashCommand(input: {
-  prompt: string;
+// Structural Side availability: attachments/mode/thread kind. Prompt emptiness is only
+// required when offering `/side` in the composer menu — executing `/side <provider>
+// [prompt]` intentionally carries args in the composer text.
+export function canExecuteSideSlashCommand(input: {
   imageCount: number;
   terminalContextCount: number;
   selectedSkillCount: number;
   selectedMentionCount: number;
-  interactionMode: "default" | "plan";
+  interactionMode: ProviderInteractionMode;
   isSidechat: boolean;
 }): boolean {
   return (
-    !hasMeaningfulComposerText(input.prompt) &&
     input.imageCount === 0 &&
     input.terminalContextCount === 0 &&
     input.selectedSkillCount === 0 &&
     input.selectedMentionCount === 0 &&
     input.interactionMode === "default" &&
     !input.isSidechat
+  );
+}
+
+export function canOfferSideSlashCommand(input: {
+  prompt: string;
+  imageCount: number;
+  terminalContextCount: number;
+  selectedSkillCount: number;
+  selectedMentionCount: number;
+  interactionMode: ProviderInteractionMode;
+  isSidechat: boolean;
+}): boolean {
+  return (
+    !hasMeaningfulComposerText(input.prompt) &&
+    canExecuteSideSlashCommand({
+      imageCount: input.imageCount,
+      terminalContextCount: input.terminalContextCount,
+      selectedSkillCount: input.selectedSkillCount,
+      selectedMentionCount: input.selectedMentionCount,
+      interactionMode: input.interactionMode,
+      isSidechat: input.isSidechat,
+    })
   );
 }
 
@@ -317,6 +432,33 @@ export function parseFastSlashCommandAction(text: string): FastSlashCommandActio
   return "invalid";
 }
 
+/** Prefilled objectives are literal even when they match a `/goal` control word. */
+export function buildGoalSlashCommandPrompt(goal: string): string {
+  return `/goal -- ${goal.trim()}`;
+}
+
+export function parseGoalSlashCommandArgs(args: string): GoalSlashCommandAction {
+  const trimmed = args.trim();
+  const literal = /^--(?:\s|$)/.test(trimmed);
+  const goal = literal ? trimmed.slice(2).trim() : trimmed;
+  if (!goal) {
+    return { action: "show" };
+  }
+  if (!literal) {
+    const control = goal.toLowerCase();
+    if (control === "clear") {
+      return { action: "clear" };
+    }
+    if (control === "pause" || control === "resume" || control === "edit") {
+      return { action: control };
+    }
+  }
+  if (goal.length > THREAD_GOAL_MAX_CHARS) {
+    return { action: "too-long" };
+  }
+  return { action: "set", goal };
+}
+
 export function resolveComposerSlashRootBranch(input: {
   branches: ReadonlyArray<GitBranch> | null | undefined;
   activeProjectCwd: string | null | undefined;
@@ -343,6 +485,7 @@ export function getAvailableComposerSlashCommands(input: {
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferExportCommand: boolean;
   providerNativeCommandNames?: ReadonlyArray<string>;
 }): ComposerSlashCommand[] {
   const collidingNativeCommandNames = new Set<ComposerSlashCommand>(
@@ -364,17 +507,37 @@ export function getAvailableComposerSlashCommands(input: {
           "model",
           ...(input.supportsFastSlashCommand ? (["fast"] as const) : []),
           "plan",
+          "debug",
           "default",
           ...(input.canOfferReviewCommand ? (["review"] as const) : []),
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          "computer-use",
+          ...(input.canOfferExportCommand ? (["export"] as const) : []),
+          "goal",
+          "rename",
+          "feedback",
+          "automation",
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
           // creates a Synara split/context clone before the provider sees the first turn.
+          // /fork is app-level for the same reason — it creates a Synara thread with fork
+          // lineage (native session forking under the hood), not a provider text command.
+          // /export is app-level too — Synara owns the thread transcript, so the download
+          // happens in the app rather than being forwarded to Claude's native /export.
+          ...(input.canOfferForkCommand ? (["fork"] as const) : []),
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          ...(input.canOfferExportCommand ? (["export"] as const) : []),
+          "goal",
+          "rename",
+          "debug",
+          "computer-use",
+          "default",
+          "feedback",
+          "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
 }
@@ -384,7 +547,7 @@ export function hasProviderNativeSlashCommand(
   commandNames: ReadonlyArray<string>,
   command: string,
 ): boolean {
-  const normalizedCommand = normalizeSlashCommandName(command);
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
   return expandProviderNativeSlashCommandNames(provider, commandNames).includes(normalizedCommand);
 }
 
@@ -404,6 +567,48 @@ export function buildSlashReviewComposerPrompt(args: string): string {
       : basePrompt;
   }
   return `${basePrompt}\nFocus especially on: ${trimmedArgs}`;
+}
+
+export interface SideSlashCommandArgs {
+  targetProvider: ProviderKind | null;
+  prompt: string;
+  unavailableProvider: ProviderKind | null;
+}
+
+function matchSideProviderToken(token: string): ProviderKind | null {
+  const normalized = token.toLowerCase();
+  return (
+    DEFAULT_PROVIDER_ORDER.find(
+      (provider) =>
+        provider.toLowerCase() === normalized ||
+        PROVIDER_DISPLAY_NAMES[provider].toLowerCase() === normalized,
+    ) ?? null
+  );
+}
+
+// `/side [provider] [prompt]`: an optional leading provider token (kind or
+// display name) starts the sidechat on that provider.
+export function parseSideSlashCommandArgs(
+  args: string,
+  input: {
+    currentProvider: ProviderKind;
+    availableTargetProviders: ReadonlyArray<ProviderKind>;
+  },
+): SideSlashCommandArgs {
+  const trimmedArgs = args.trim();
+  const firstToken = trimmedArgs.split(/\s+/, 1)[0] ?? "";
+  const matchedProvider = firstToken.length > 0 ? matchSideProviderToken(firstToken) : null;
+  if (!matchedProvider) {
+    return { targetProvider: null, prompt: trimmedArgs, unavailableProvider: null };
+  }
+  const prompt = trimmedArgs.slice(firstToken.length).trim();
+  if (matchedProvider === input.currentProvider) {
+    return { targetProvider: null, prompt, unavailableProvider: null };
+  }
+  if (!input.availableTargetProviders.includes(matchedProvider)) {
+    return { targetProvider: null, prompt, unavailableProvider: matchedProvider };
+  }
+  return { targetProvider: matchedProvider, prompt, unavailableProvider: null };
 }
 
 // `/fork` optionally accepts only an explicit target shorthand like `/fork local`.

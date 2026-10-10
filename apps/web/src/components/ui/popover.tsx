@@ -20,11 +20,11 @@ function PopoverTrigger({ className, children, ...props }: PopoverPrimitive.Trig
 function PopoverPopup({
   children,
   className,
-  side = "bottom",
-  align = "center",
-  sideOffset = 4,
-  alignOffset = 0,
-  tooltipStyle = false,
+  side: sideProp,
+  align: alignProp,
+  sideOffset: sideOffsetProp,
+  alignOffset: alignOffsetProp,
+  tooltipStyle: tooltipStyleProp,
   anchor,
   ...props
 }: PopoverPrimitive.Popup.Props & {
@@ -35,6 +35,11 @@ function PopoverPopup({
   tooltipStyle?: boolean;
   anchor?: PopoverPrimitive.Positioner.Props["anchor"];
 }) {
+  const side = sideProp ?? "bottom";
+  const align = alignProp ?? "center";
+  const sideOffset = sideOffsetProp ?? 4;
+  const alignOffset = alignOffsetProp ?? 0;
+  const tooltipStyle = tooltipStyleProp ?? false;
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Positioner
@@ -51,7 +56,7 @@ function PopoverPopup({
             APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
             "relative flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) outline-none transition-[width,height,scale,opacity] has-data-[slot=calendar]:rounded-xl data-starting-style:scale-98 data-starting-style:opacity-0",
             tooltipStyle &&
-              "w-fit text-balance rounded-md text-xs shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]",
+              "w-fit text-balance rounded-md text-ui leading-snug shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]",
             className,
           )}
           data-slot="popover-popup"
@@ -91,7 +96,7 @@ function PopoverTitle({ className, ...props }: PopoverPrimitive.Title.Props) {
 function PopoverDescription({ className, ...props }: PopoverPrimitive.Description.Props) {
   return (
     <PopoverPrimitive.Description
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn("text-muted-foreground text-ui leading-snug", className)}
       data-slot="popover-description"
       {...props}
     />
@@ -103,7 +108,6 @@ export {
   Popover,
   PopoverTrigger,
   PopoverPopup,
-  PopoverPopup as PopoverContent,
   PopoverTitle,
   PopoverDescription,
   PopoverClose,

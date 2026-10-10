@@ -3,8 +3,9 @@
 // Layer: Settings UI logic
 // Exports: origin metadata, canonical skill grouping, and section ordering helpers.
 
-import type { ProviderKind, ProviderSkillDescriptor } from "@t3tools/contracts";
-import { PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
+import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
+import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
 
 export interface SkillOriginInfo {
   readonly label: string;
@@ -40,25 +41,16 @@ export const ORIGIN_SECTION_ORDER = [
   "codex",
   "claude",
   "cursor",
-  "gemini",
+  "antigravity",
   "grok",
-  "kilo",
+  "droid",
   "opencode",
   "pi",
+  "devin",
+  "omp",
   "agents",
   "project",
 ] as const;
-export const PROVIDER_STACK_ORDER: readonly ProviderKind[] = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "gemini",
-  "grok",
-  "kilo",
-  "opencode",
-  "pi",
-] as const;
-
 export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
   switch (scope) {
     case "synara":
@@ -69,16 +61,20 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.claudeAgent, provider: "claudeAgent" };
     case "cursor":
       return { label: PROVIDER_DISPLAY_NAMES.cursor, provider: "cursor" };
-    case "gemini":
-      return { label: PROVIDER_DISPLAY_NAMES.gemini, provider: "gemini" };
+    case "devin":
+      return { label: PROVIDER_DISPLAY_NAMES.devin, provider: "devin" };
+    case "antigravity":
+      return { label: PROVIDER_DISPLAY_NAMES.antigravity, provider: "antigravity" };
     case "grok":
       return { label: PROVIDER_DISPLAY_NAMES.grok, provider: "grok" };
-    case "kilo":
-      return { label: PROVIDER_DISPLAY_NAMES.kilo, provider: "kilo" };
+    case "droid":
+      return { label: PROVIDER_DISPLAY_NAMES.droid, provider: "droid" };
     case "opencode":
       return { label: PROVIDER_DISPLAY_NAMES.opencode, provider: "opencode" };
     case "pi":
       return { label: PROVIDER_DISPLAY_NAMES.pi, provider: "pi" };
+    case "omp":
+      return { label: PROVIDER_DISPLAY_NAMES.omp, provider: "omp" };
     case "agents":
       return { label: "Shared (.agents)", provider: null };
     case "project":
@@ -106,8 +102,8 @@ export function providerDisplayName(provider: ProviderKind): string {
 }
 
 export function sortProviderStack(providers: ReadonlyArray<ProviderKind>): ProviderKind[] {
-  return [...providers].sort(
-    (left, right) => PROVIDER_STACK_ORDER.indexOf(left) - PROVIDER_STACK_ORDER.indexOf(right),
+  return providers.toSorted(
+    (left, right) => DEFAULT_PROVIDER_ORDER.indexOf(left) - DEFAULT_PROVIDER_ORDER.indexOf(right),
   );
 }
 
@@ -153,7 +149,7 @@ export function buildSettingsSkillGroups(
 
   return [...groups.entries()]
     .map(([key, unsortedSources]): SettingsSkillGroup | null => {
-      const sources = [...unsortedSources].sort((left, right) =>
+      const sources = unsortedSources.toSorted((left, right) =>
         sourceSortKey(left).localeCompare(sourceSortKey(right)),
       );
       const primarySkill = sources[0]?.skill;
@@ -183,11 +179,12 @@ export function buildSettingsSkillGroups(
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
-export function buildSettingsSkillSections(
-  skills: ReadonlyArray<ProviderSkillDescriptor>,
+/** Sections from already-built groups, so callers that need both do not run the grouping twice. */
+export function buildSettingsSkillSectionsFromGroups(
+  groups: ReadonlyArray<SettingsSkillGroup>,
 ): SettingsSkillSection[] {
   const sections = new Map<string, SettingsSkillGroup[]>();
-  for (const group of buildSettingsSkillGroups(skills)) {
+  for (const group of groups) {
     sections.set(group.section, [...(sections.get(group.section) ?? []), group]);
   }
 

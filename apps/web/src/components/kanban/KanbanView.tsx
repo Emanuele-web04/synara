@@ -4,121 +4,117 @@
 // Layer: Kanban route surface
 // Exports: KanbanView (default)
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
-import { Kbd, KbdGroup } from "~/components/ui/kbd";
-import { SidebarInset } from "~/components/ui/sidebar";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
+import { FilterPillGroup } from "~/components/FilterPillGroup";
+import { RouteInsetSurface } from "../RouteInsetSurface";
 import { useNowMs } from "~/hooks/useNowMs";
-import { splitShortcutLabel } from "~/keybindings";
-import { ArrowLeftIcon, PlusIcon } from "~/lib/icons";
-import { cn, isMacPlatform } from "~/lib/utils";
+import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
+import { ArrowLeftIcon } from "~/lib/icons";
+import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
 
-// Kanban-scoped "Create task" shortcut: ⌘⌥T on macOS, Ctrl+Alt+T elsewhere —
-// matching the app's mod convention (meta on mac, ctrl otherwise) and the ⌘⌥
-// "create new X" family. Matched on event.code so it survives Alt remapping the
-// produced character on some layouts.
-function getNavigatorPlatform(): string {
-  return typeof navigator === "undefined" ? "" : navigator.platform;
-}
-
-const NEW_TASK_SHORTCUT_LABEL = isMacPlatform(getNavigatorPlatform()) ? "⌥⌘T" : "Ctrl+Alt+T";
-const NEW_TASK_SHORTCUT_PARTS = splitShortcutLabel(NEW_TASK_SHORTCUT_LABEL);
-
-function isNewTaskShortcut(event: KeyboardEvent): boolean {
-  if (event.code !== "KeyT" || event.repeat || event.shiftKey || !event.altKey) {
-    return false;
-  }
-  return isMacPlatform(getNavigatorPlatform())
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
-}
 import { useStore } from "../../store";
-import {
-  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-} from "../chat/chatHeaderControls";
-import {
-  CHAT_BACKGROUND_CLASS_NAME,
-  CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
-} from "../chat/composerPickerStyles";
+import { NewTaskButton } from "../tasks/NewTaskButton";
+import { TasksViewSwitch } from "../tasks/TasksViewSwitch";
+import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
 import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import { useKanbanBoard } from "./useKanbanBoard";
 import { useKanbanCardContextMenu } from "./useKanbanCardContextMenu";
-import type { KanbanCard } from "./kanban.logic";
+import { overviewVisibleKanbanCards, type KanbanCard } from "./kanban.logic";
+import { useKanbanUiStore, type KanbanViewMode } from "../../kanbanUiStore";
+
+const BOARD_VIEW_OPTIONS: ReadonlyArray<{ value: KanbanViewMode; label: string }> = [
+  { value: "v2", label: "Attention" },
+  { value: "classic", label: "Classic" },
+];
 
 export default function KanbanView({ projectId }: { projectId: string | null }) {
   const navigate = useNavigate();
   const board = useKanbanBoard();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const desktopTopBarWindowControlsGutterClassName =
-    useDesktopTopBarWindowControlsGutterClassName();
+  const kanbanViewMode = useKanbanUiStore((state) => state.kanbanViewMode);
+  const setKanbanViewMode = useKanbanUiStore((state) => state.setKanbanViewMode);
 
   const projectBoard =
     projectId === null
       ? null
       : (board.projects.find((candidate) => candidate.projectId === projectId) ?? null);
-  const hasActiveCardWork = useMemo(
-    () =>
-      board.projects.some((project) =>
-        project.inProgress.some((card) => card.activeWorkStartedAt !== null),
-      ),
-    [board.projects],
+  const hasActiveCardWork = board.projects.some(
+    (project) =>
+      project.inProgress.some((card) => card.activeWorkStartedAt !== null) ||
+      project.awaitingYou.some((card) => card.activeWorkStartedAt !== null),
   );
   const nowMs = useNowMs(hasActiveCardWork);
+
+  // PR badges resolve like the sidebar's: live git status per checkout validates the
+  // persisted PR instead of trusting stale lastKnownPr metadata. Scoped to the cards the
+  // current surface renders (one board, or each overview column's capped list).
+  const allProjects = useStore((state) => state.projects);
+  const projectCwdById = useMemo(
+    () => new Map(allProjects.map((project) => [project.id, project.cwd] as const)),
+    [allProjects],
+  );
+  const renderedCardThreads = useMemo(() => {
+    const isV2 = kanbanViewMode === "v2";
+    const cards = projectBoard
+      ? [
+          ...projectBoard.inProgress,
+          ...(isV2 ? projectBoard.awaitingYou : []),
+          ...projectBoard.draft,
+          ...projectBoard.done,
+        ]
+      : board.projects.flatMap(
+          (candidate) => overviewVisibleKanbanCards(candidate, isV2).visibleCards,
+        );
+    return cards.flatMap((card) => (card.thread ? [card.thread] : []));
+  }, [board.projects, kanbanViewMode, projectBoard]);
+  const prByThreadId = useThreadPullRequests({
+    threads: renderedCardThreads,
+    projectCwdById,
+  });
 
   const [newTaskDialog, setNewTaskDialog] = useState<{
     key: number;
     projectId: ProjectId | null;
     sendAsDraft: boolean;
   } | null>(null);
-  const handleNewTask = useCallback(
-    (targetProjectId: ProjectId | null, options?: { sendAsDraft?: boolean }) => {
-      setNewTaskDialog({
-        key: Date.now(),
-        projectId: targetProjectId,
-        sendAsDraft: options?.sendAsDraft ?? false,
-      });
-    },
-    [],
-  );
+  const handleNewTask = (
+    targetProjectId: ProjectId | null,
+    options?: { sendAsDraft?: boolean },
+  ) => {
+    setNewTaskDialog({
+      key: Date.now(),
+      projectId: targetProjectId,
+      sendAsDraft: options?.sendAsDraft ?? false,
+    });
+  };
   const projectBoardId = projectBoard?.projectId ?? null;
-  const handleNewTaskInProjectBoard = useCallback(() => {
+  const handleNewTaskInProjectBoard = () => {
     handleNewTask(projectBoardId);
-  }, [handleNewTask, projectBoardId]);
+  };
   // The Draft column's "+" implies "add a card here" — seed the dialog's
   // "Send as draft" toggle so the task parks in Draft instead of dispatching.
-  const handleNewDraftInProjectBoard = useCallback(() => {
+  const handleNewDraftInProjectBoard = () => {
     handleNewTask(projectBoardId, { sendAsDraft: true });
-  }, [handleNewTask, projectBoardId]);
-  const newTaskProjectOptions = useMemo(
-    () =>
-      board.projects.map((project) => ({
-        id: project.projectId,
-        name: project.projectName,
-      })),
-    [board.projects],
-  );
+  };
+  const newTaskProjectOptions = board.projects.map((project) => ({
+    id: project.projectId,
+    name: project.projectName,
+  }));
 
   // Kanban-scoped ⌥⌘T: open the New task dialog targeting the current board (or
   // unscoped on the overview). A ref mirrors the open state so a repeat press
   // doesn't remount an already-open dialog and wipe a half-typed prompt — and so
   // the listener stays registered once instead of re-binding on every open/close.
   const isNewTaskDialogOpenRef = useRef(false);
-  isNewTaskDialogOpenRef.current = newTaskDialog !== null;
+  useEffect(() => {
+    isNewTaskDialogOpenRef.current = newTaskDialog !== null;
+  }, [newTaskDialog]);
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!isNewTaskShortcut(event) || isNewTaskDialogOpenRef.current) {
@@ -144,94 +140,54 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     }
   }, [navigate, projectBoard, projectId, threadsHydrated]);
 
-  const handleOpenCard = useCallback(
-    (card: KanbanCard) => {
-      void navigate({ to: "/$threadId", params: { threadId: card.threadId } });
-    },
-    [navigate],
-  );
+  const handleOpenCard = (card: KanbanCard) => {
+    void navigate({ to: "/$threadId", params: { threadId: card.threadId } });
+  };
 
   const { onCardContextMenu, renameDialog } = useKanbanCardContextMenu();
 
-  const handleOpenProject = useCallback(
-    (targetProjectId: ProjectId) => {
-      void navigate({ to: "/kanban/$projectId", params: { projectId: targetProjectId } });
-    },
-    [navigate],
-  );
+  const handleOpenProject = (targetProjectId: ProjectId) => {
+    void navigate({ to: "/kanban/$projectId", params: { projectId: targetProjectId } });
+  };
 
-  const handleBackToOverview = useCallback(() => {
+  const handleBackToOverview = () => {
     void navigate({ to: "/kanban" });
-  }, [navigate]);
+  };
 
   return (
-    <SidebarInset
-      className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-      surfaceClassName={CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME}
-    >
-      <div
-        className={cn(
-          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-          CHAT_BACKGROUND_CLASS_NAME,
-        )}
-      >
-        <header
-          className={cn(
-            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-            "drag-region",
-            desktopTopBarTrafficLightGutterClassName,
-            desktopTopBarWindowControlsGutterClassName,
-          )}
-        >
-          <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
-            <SidebarHeaderNavigationControls />
-            <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-              {projectBoard ? (
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={handleBackToOverview}
-                  aria-label="Back to all projects"
-                >
-                  <ArrowLeftIcon className="size-3.5" />
-                </Button>
-              ) : null}
-              <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground">
-                {projectBoard ? projectBoard.projectName : "Kanban"}
-              </h2>
-              <span className="shrink-0 text-xs text-muted-foreground/70">
-                {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
-              </span>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="sm"
-                      variant="chrome"
-                      className="ml-auto shrink-0 gap-1.5"
-                      disabled={newTaskProjectOptions.length === 0}
-                      onClick={handleNewTaskInProjectBoard}
-                    >
-                      <PlusIcon className="size-3.5" />
-                      New task
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="bottom">
-                  <span className="flex items-center gap-2">
-                    New task
-                    <KbdGroup>
-                      {NEW_TASK_SHORTCUT_PARTS.map((part) => (
-                        <Kbd key={part}>{part}</Kbd>
-                      ))}
-                    </KbdGroup>
-                  </span>
-                </TooltipPopup>
-              </Tooltip>
-            </div>
+    <RouteInsetSurface>
+      <RouteSurface>
+        <RouteSurfaceHeader>
+          <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
+            {projectBoard ? (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                onClick={handleBackToOverview}
+                aria-label="Back to all projects"
+              >
+                <ArrowLeftIcon className="size-3.5" />
+              </Button>
+            ) : null}
+            <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
+              {projectBoard ? projectBoard.projectName : "Kanban"}
+            </h2>
+            <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+              {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+            </span>
+            {projectBoard ? null : <TasksViewSwitch current="kanban" />}
+            <FilterPillGroup
+              ariaLabel="Board view"
+              value={kanbanViewMode}
+              options={BOARD_VIEW_OPTIONS}
+              onChange={setKanbanViewMode}
+            />
+            <NewTaskButton
+              disabled={newTaskProjectOptions.length === 0}
+              onClick={handleNewTaskInProjectBoard}
+            />
           </div>
-        </header>
+        </RouteSurfaceHeader>
 
         <div className="min-h-0 min-w-0 flex-1 pt-3">
           {projectBoard ? (
@@ -240,7 +196,9 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onOpenCard={handleOpenCard}
               onCardContextMenu={onCardContextMenu}
               onNewTask={handleNewDraftInProjectBoard}
+              prByThreadId={prByThreadId}
               nowMs={nowMs}
+              viewMode={kanbanViewMode}
             />
           ) : (
             <KanbanOverview
@@ -249,11 +207,13 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onOpenCard={handleOpenCard}
               onCardContextMenu={onCardContextMenu}
               onNewTask={handleNewTask}
+              prByThreadId={prByThreadId}
               nowMs={nowMs}
+              viewMode={kanbanViewMode}
             />
           )}
         </div>
-      </div>
+      </RouteSurface>
 
       {newTaskDialog ? (
         <KanbanNewTaskDialog
@@ -269,6 +229,6 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
         />
       ) : null}
       {renameDialog}
-    </SidebarInset>
+    </RouteInsetSurface>
   );
 }

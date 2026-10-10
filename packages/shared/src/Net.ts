@@ -60,6 +60,16 @@ const tryReservePort = (port: number): Effect.Effect<number, NetError> =>
     });
   });
 
+type PortReservation = (port: number) => Effect.Effect<number, NetError>;
+
+/** Prefer the requested port and ask the OS for an ephemeral fallback on bind failure. */
+export function resolveAvailablePort(
+  preferred: number,
+  reservePort: PortReservation = tryReservePort,
+): Effect.Effect<number, NetError> {
+  return Effect.catch(reservePort(preferred), () => reservePort(0));
+}
+
 export interface NetServiceShape {
   /**
    * Returns true when a TCP server can bind to {host, port}.
@@ -86,7 +96,7 @@ export interface NetServiceShape {
  * NetService - Service tag for startup networking helpers.
  */
 export class NetService extends ServiceMap.Service<NetService, NetServiceShape>()(
-  "@t3tools/shared/Net/NetService",
+  "@synara/shared/Net/NetService",
 ) {
   static readonly layer = Layer.sync(NetService, () => {
     /**
@@ -173,8 +183,7 @@ export class NetService extends ServiceMap.Service<NetService, NetServiceShape>(
           (ipv4, ipv6) => ipv4 && ipv6,
         ),
       reserveLoopbackPort,
-      findAvailablePort: (preferred) =>
-        Effect.catch(tryReservePort(preferred), () => tryReservePort(0)),
+      findAvailablePort: (preferred) => resolveAvailablePort(preferred),
     } satisfies NetServiceShape;
   });
 }

@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Layer, Option } from "effect";
+import fs from "node:fs";
+import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "./config";
@@ -7,11 +8,11 @@ import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
-  readPersistedServerRuntimeState,
+  PersistedServerRuntimeState,
 } from "./serverRuntimeState";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "dpcode-runtime-state-",
+  prefix: "synara-runtime-state-",
 }).pipe(Layer.provide(NodeServices.layer));
 const testLayer = Layer.merge(NodeServices.layer, serverConfigLayer);
 
@@ -19,23 +20,25 @@ const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("serverRuntimeState", () => {
-  it("persists, reads, and clears runtime state", async () => {
+  it("persists and clears runtime state", async () => {
     const result = await run(
       Effect.gen(function* () {
         const config = yield* ServerConfig;
         const state = makePersistedServerRuntimeState({ config, port: 4123 });
         yield* persistServerRuntimeState({ path: config.serverRuntimeStatePath, state });
-        const persisted = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+        const mode = fs.statSync(config.serverRuntimeStatePath).mode & 0o777;
+        const persisted = fs.readFileSync(config.serverRuntimeStatePath, "utf8");
         yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
-        const cleared = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-        return { persisted, cleared };
+        const cleared = !fs.existsSync(config.serverRuntimeStatePath);
+        return { persisted, cleared, mode };
       }),
     );
 
-    expect(Option.isSome(result.persisted)).toBe(true);
-    if (Option.isSome(result.persisted)) {
-      expect(result.persisted.value.origin).toBe("http://127.0.0.1:4123");
-    }
-    expect(Option.isNone(result.cleared)).toBe(true);
+    const persisted = Schema.decodeUnknownSync(Schema.fromJsonString(PersistedServerRuntimeState))(
+      result.persisted,
+    );
+    expect(persisted.origin).toBe("http://127.0.0.1:4123");
+    expect(result.cleared).toBe(true);
+    if (process.platform !== "win32") expect(result.mode).toBe(0o600);
   });
 });

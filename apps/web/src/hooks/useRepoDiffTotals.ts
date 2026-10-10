@@ -5,11 +5,9 @@
 // Layer: Chat git data hook
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
 
-import { summarizePatchTotals } from "~/lib/diffRendering";
-import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
-import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
+import { gitWorkingTreeDiffStatsQueryOptions } from "~/lib/gitReactQuery";
+import { useRepoDiffScope } from "~/repoDiffScopeStore";
 
 export interface RepoDiffTotals {
   additions: number;
@@ -23,26 +21,27 @@ export interface RepoDiffTotals {
 export function useRepoDiffTotals({
   gitCwd,
   isGitRepo,
-  refetchInterval = false,
+  refetchInterval: refetchIntervalProp,
 }: {
   gitCwd: string | null;
   isGitRepo: boolean;
   refetchInterval?: number | false;
 }): RepoDiffTotals {
+  const refetchInterval = refetchIntervalProp ?? false;
   // Match the Diff panel source selector so every surface shows the selected scope.
-  const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
-  const { data: selectedRepoDiff = null } = useQuery(
-    gitWorkingTreeDiffQueryOptions({
+  const { scope: repoDiffScope, compareRef: repoDiffCompareRef } = useRepoDiffScope(gitCwd);
+  // Counts only. These poll every few seconds during a live turn, and the patch they used to
+  // be derived from grows with the working tree, so fetching it here made a large diff cost
+  // megabytes of transfer plus a main-thread reparse per poll. The server counts the same
+  // patch it would have sent, so the displayed numbers are unchanged.
+  const { data: totals } = useQuery(
+    gitWorkingTreeDiffStatsQueryOptions({
       cwd: gitCwd,
       scope: repoDiffScope,
+      compareRef: repoDiffCompareRef,
       enabled: isGitRepo,
       refetchInterval,
     }),
-  );
-  // Patch parsing can be noticeable on large diffs; only redo it when the patch text changes.
-  const totals = useMemo(
-    () => summarizePatchTotals(selectedRepoDiff?.patch),
-    [selectedRepoDiff?.patch],
   );
   const additions = totals?.additions ?? 0;
   const deletions = totals?.deletions ?? 0;

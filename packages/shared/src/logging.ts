@@ -6,6 +6,7 @@ export interface RotatingFileSinkOptions {
   readonly maxBytes: number;
   readonly maxFiles: number;
   readonly throwOnError?: boolean;
+  readonly mode?: number;
 }
 
 export class RotatingFileSink {
@@ -13,6 +14,7 @@ export class RotatingFileSink {
   private readonly maxBytes: number;
   private readonly maxFiles: number;
   private readonly throwOnError: boolean;
+  private readonly mode: number | undefined;
   private currentSize = 0;
 
   constructor(options: RotatingFileSinkOptions) {
@@ -27,6 +29,7 @@ export class RotatingFileSink {
     this.maxBytes = options.maxBytes;
     this.maxFiles = options.maxFiles;
     this.throwOnError = options.throwOnError ?? false;
+    this.mode = options.mode;
 
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     this.pruneOverflowBackups();
@@ -42,7 +45,11 @@ export class RotatingFileSink {
         this.rotate();
       }
 
-      fs.appendFileSync(this.filePath, buffer);
+      if (this.mode === undefined) {
+        fs.appendFileSync(this.filePath, buffer);
+      } else {
+        fs.appendFileSync(this.filePath, buffer, { mode: this.mode });
+      }
       this.currentSize += buffer.length;
 
       if (this.currentSize > this.maxBytes) {

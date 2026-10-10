@@ -8,13 +8,21 @@
  */
 import {
   GitActionProgressEvent,
+  GitBlameLineInput,
+  GitReadFileAtRevInput,
+  GitReadFileAtRevResult,
+  GitBlameLineResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitPullRequestSnapshotInput,
+  GitPullRequestSnapshotResult,
+  GitResolvedPullRequest,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
+  GitWorkingTreeDiffStatsResult,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitRunStackedActionResult,
@@ -22,7 +30,7 @@ import {
   GitStatusResult,
   GitSummarizeDiffInput,
   GitSummarizeDiffResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type { GitManagerServiceError } from "../Errors.ts";
@@ -48,11 +56,37 @@ export interface GitManagerShape {
   ) => Effect.Effect<GitStatusResult, GitManagerServiceError>;
 
   /**
+   * Resolve the most relevant pull request for an already-captured branch.
+   * Unlike status(), lookup failures remain typed failures so callers can distinguish
+   * “no PR exists” from “GitHub is temporarily unavailable”.
+   */
+  readonly pullRequestForBranch: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+    readonly upstreamRef: string | null;
+  }) => Effect.Effect<GitResolvedPullRequest | null, GitManagerServiceError>;
+
+  /**
    * Read a unified patch for the current repository working tree.
    */
   readonly readWorkingTreeDiff: (
     input: GitReadWorkingTreeDiffInput,
   ) => Effect.Effect<GitReadWorkingTreeDiffResult, GitManagerServiceError>;
+
+  readonly blameLine: (
+    input: GitBlameLineInput,
+  ) => Effect.Effect<GitBlameLineResult, GitManagerServiceError>;
+
+  readonly readFileAtRev: (
+    input: GitReadFileAtRevInput,
+  ) => Effect.Effect<GitReadFileAtRevResult, GitManagerServiceError>;
+
+  /**
+   * Count the lines a scope's patch changes without returning the patch text.
+   */
+  readonly readWorkingTreeDiffStats: (
+    input: GitReadWorkingTreeDiffInput,
+  ) => Effect.Effect<GitWorkingTreeDiffStatsResult, GitManagerServiceError>;
 
   /**
    * Generate a read-only markdown summary for an existing diff patch.
@@ -66,7 +100,16 @@ export interface GitManagerShape {
    */
   readonly resolvePullRequest: (
     input: GitPullRequestRefInput,
+    /** Only polling callers opt into the background read gate. */
+    options?: { readonly background?: boolean },
   ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+
+  /**
+   * Load live CI checks and top-level review comments for a pull request.
+   */
+  readonly pullRequestSnapshot: (
+    input: GitPullRequestSnapshotInput,
+  ) => Effect.Effect<GitPullRequestSnapshotResult, GitManagerServiceError>;
 
   /**
    * Prepare a new thread workspace from a pull request in local or worktree mode.
@@ -79,7 +122,7 @@ export interface GitManagerShape {
    * Move a thread between Local and Worktree while preserving recoverable Git state.
    */
   readonly handoffThread: (
-    input: GitHandoffThreadInput,
+    input: Omit<GitHandoffThreadInput, "commandId" | "threadId">,
   ) => Effect.Effect<GitHandoffThreadResult, GitManagerServiceError>;
 
   /**
@@ -96,5 +139,5 @@ export interface GitManagerShape {
  * GitManager - Service tag for stacked Git workflow orchestration.
  */
 export class GitManager extends ServiceMap.Service<GitManager, GitManagerShape>()(
-  "t3/git/Services/GitManager",
+  "synara/git/Services/GitManager",
 ) {}

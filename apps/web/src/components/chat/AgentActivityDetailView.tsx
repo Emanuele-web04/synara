@@ -3,17 +3,11 @@
 // Layer: Chat presentation component
 // Depends on: agentActivity.logic and ChatMarkdown
 
-import { ThreadId } from "@t3tools/contracts";
-import { pluralize } from "@t3tools/shared/text";
-import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
+import { pluralize } from "@synara/shared/text";
+import { type CSSProperties, type ReactNode } from "react";
 import { BotIcon, ChevronLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import {
-  formatSubagentModelLabel,
-  humanizeSubagentStatus,
-  resolveSubagentPresentation,
-} from "../../lib/subagentPresentation";
-import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
+import type { WorkLogEntry } from "../../session-logic";
 import { formatShortTimestamp } from "../../timestampFormat";
 import type { TimestampFormat } from "../../appSettings";
 import ChatMarkdown from "../ChatMarkdown";
@@ -31,49 +25,35 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 
-const MIN_DETAIL_BOTTOM_INSET_PX = 64;
+const DETAIL_BOTTOM_INSET_PX = 64;
 
 interface AgentActivityDetailViewProps {
   detail: AgentActivityDetail;
-  bottomContentInsetPx?: number | undefined;
   chatFontSizePx: number;
   contentInsetRightPx?: number | undefined;
   markdownCwd: string | undefined;
   onBack: () => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
-  onOpenThread?: (threadId: ThreadId) => void;
   timestampFormat: TimestampFormat;
 }
 
-export const AgentActivityDetailView = memo(function AgentActivityDetailView({
+export function AgentActivityDetailView({
   detail,
-  bottomContentInsetPx,
   chatFontSizePx,
   contentInsetRightPx,
   markdownCwd,
   onBack,
   onImageExpand,
-  onOpenThread,
   timestampFormat,
 }: AgentActivityDetailViewProps) {
-  const chatTypographyStyle = useMemo(
-    () => getChatTranscriptTextStyle(chatFontSizePx),
-    [chatFontSizePx],
-  );
-  const footerTextStyle = useMemo(
-    () => getChatMessageFooterTextStyle(chatFontSizePx),
-    [chatFontSizePx],
-  );
-  const scrollStyle = useMemo<CSSProperties>(
-    () => ({
-      ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
-      paddingBottom: Math.max(bottomContentInsetPx ?? 0, MIN_DETAIL_BOTTOM_INSET_PX),
-    }),
-    [bottomContentInsetPx, contentInsetRightPx],
-  );
+  const chatTypographyStyle = getChatTranscriptTextStyle(chatFontSizePx);
+  const footerTextStyle = getChatMessageFooterTextStyle(chatFontSizePx);
+  const scrollStyle: CSSProperties = {
+    ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
+    paddingBottom: DETAIL_BOTTOM_INSET_PX,
+  };
   const prompt = findPrompt(detail.entries);
   const result = findResult(detail.entries);
-  const subagents = collectSubagents(detail.entries);
 
   return (
     <div
@@ -105,10 +85,10 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <h2 className="truncate text-[18px] font-medium leading-6 text-foreground/92">
+                <h2 className="truncate text-ui-lg font-medium leading-6 text-foreground/92">
                   {detail.title}
                 </h2>
-                <span className="rounded-full border border-border/45 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/56">
+                <span className="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/56">
                   {`${detail.entries.length} ${pluralize(detail.entries.length, "update")}`}
                 </span>
               </div>
@@ -145,21 +125,6 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
           </AgentActivitySection>
         ) : null}
 
-        {subagents.length > 0 ? (
-          <AgentActivitySection title="Agents">
-            <div className="space-y-2">
-              {subagents.map((subagent) => (
-                <SubagentDetailRow
-                  key={subagent.threadId}
-                  subagent={subagent}
-                  textStyle={chatTypographyStyle}
-                  {...(onOpenThread ? { onOpenThread } : {})}
-                />
-              ))}
-            </div>
-          </AgentActivitySection>
-        ) : null}
-
         <AgentActivitySection title="Activity">
           <div className="divide-y divide-border/45">
             {detail.entries.map((entry) => (
@@ -178,14 +143,12 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
       </div>
     </div>
   );
-});
+}
 
 function AgentActivitySection(props: { title: string; children: ReactNode }) {
   return (
     <section className="border-b border-border/45 py-4 last:border-b-0">
-      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/48">
-        {props.title}
-      </h3>
+      <h3 className="mb-2 text-ui-sm font-medium text-muted-foreground/48">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -201,7 +164,10 @@ function AgentActivityEventRow(props: {
 }) {
   const preview = formatAgentActivityEntryPreview(props.entry);
   const title = formatAgentActivityEntryTitle(props.entry);
-  const body = isReasoningUpdateWorkEntry(props.entry) ? preview : (preview ?? props.entry.detail);
+  const body =
+    isReasoningUpdateWorkEntry(props.entry) || props.entry.activityKind === "tool.summary"
+      ? (props.entry.detail ?? preview)
+      : (preview ?? props.entry.detail);
 
   return (
     <div className="py-3 first:pt-0 last:pb-0">
@@ -228,72 +194,9 @@ function AgentActivityEventRow(props: {
   );
 }
 
-function SubagentDetailRow(props: {
-  subagent: WorkLogSubagent;
-  textStyle: CSSProperties;
-  onOpenThread?: (threadId: ThreadId) => void;
-}) {
-  const presentation = resolveSubagentPresentation({
-    nickname: props.subagent.nickname,
-    role: props.subagent.role,
-    title: props.subagent.title,
-    fallbackId: props.subagent.threadId,
-  });
-  const modelLabel = formatSubagentModelLabel(props.subagent.model);
-  const statusLabel = humanizeSubagentStatus(props.subagent.rawStatus, props.subagent.isActive);
-  const canOpenThread = Boolean(props.onOpenThread);
-
-  return (
-    <div className="flex items-start gap-2.5 rounded-md border border-border/40 bg-background/45 px-3 py-2">
-      <span
-        className={cn(
-          "mt-2 size-1.5 shrink-0 rounded-full",
-          props.subagent.isActive ? "bg-sky-300/95" : "bg-muted-foreground/24",
-        )}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-medium text-foreground/86" style={props.textStyle}>
-          <span style={{ color: presentation.accentColor }}>
-            {presentation.nickname ?? presentation.primaryLabel}
-          </span>
-          {presentation.role ? (
-            <span className="ml-1 text-muted-foreground/50">({presentation.role})</span>
-          ) : null}
-        </div>
-        <div className="truncate text-muted-foreground/52" style={props.textStyle}>
-          {[modelLabel, statusLabel].filter(Boolean).join(" - ")}
-        </div>
-        {props.subagent.latestUpdate ? (
-          <div className="mt-1 text-muted-foreground/52" style={props.textStyle}>
-            {props.subagent.latestUpdate}
-          </div>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        className={cn(
-          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/62 transition-colors",
-          canOpenThread
-            ? "hover:border-foreground/15 hover:text-foreground/84"
-            : "cursor-default opacity-50",
-        )}
-        disabled={!canOpenThread}
-        onClick={() =>
-          props.onOpenThread?.(
-            ThreadId.makeUnsafe(props.subagent.resolvedThreadId ?? props.subagent.threadId),
-          )
-        }
-      >
-        Open
-      </button>
-    </div>
-  );
-}
-
 function findPrompt(entries: ReadonlyArray<WorkLogEntry>): string | null {
   for (const entry of entries) {
-    const prompt =
-      entry.subagentAction?.prompt ?? entry.subagents?.find((agent) => agent.prompt)?.prompt;
+    const prompt = entry.subagentAction?.prompt;
     if (prompt) {
       return prompt;
     }
@@ -309,14 +212,4 @@ function findResult(entries: ReadonlyArray<WorkLogEntry>): string | null {
     }
   }
   return null;
-}
-
-function collectSubagents(entries: ReadonlyArray<WorkLogEntry>): WorkLogSubagent[] {
-  const byThreadId = new Map<string, WorkLogSubagent>();
-  for (const entry of entries) {
-    for (const subagent of entry.subagents ?? []) {
-      byThreadId.set(subagent.threadId, { ...byThreadId.get(subagent.threadId), ...subagent });
-    }
-  }
-  return [...byThreadId.values()];
 }

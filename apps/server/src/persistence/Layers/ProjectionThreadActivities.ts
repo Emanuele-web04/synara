@@ -1,9 +1,9 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { NonNegativeInt } from "@t3tools/contracts";
-import { Effect, Layer, Schema, Struct } from "effect";
+import { EventId, ThreadId, NonNegativeInt } from "@synara/contracts";
+import { Effect, Layer, Option, Schema, Struct } from "effect";
 
-import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
+import { toPersistenceSqlError, toPersistenceSqlOrDecodeError } from "../Errors.ts";
 
 import {
   DeleteProjectionThreadActivitiesInput,
@@ -19,13 +19,6 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
     sequence: Schema.NullOr(NonNegativeInt),
   }),
 );
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown) =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
 
 const makeProjectionThreadActivityRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -94,6 +87,17 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       `,
   });
 
+  const getProjectionThreadActivityRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({ threadId: ThreadId, activityId: EventId }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, activityId }) => sql`
+      SELECT activity_id AS "activityId", thread_id AS "threadId", turn_id AS "turnId",
+        tone, kind, summary, payload_json AS "payload", sequence, created_at AS "createdAt"
+      FROM projection_thread_activities
+      WHERE thread_id = ${threadId} AND activity_id = ${activityId}
+    `,
+  });
+
   const deleteProjectionThreadActivityRows = SqlSchema.void({
     Request: DeleteProjectionThreadActivitiesInput,
     execute: ({ threadId }) =>
@@ -136,6 +140,22 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       ),
     );
 
+  const getById: ProjectionThreadActivityRepositoryShape["getById"] = (input) =>
+    getProjectionThreadActivityRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadActivityRepository.getById:query",
+          "ProjectionThreadActivityRepository.getById:decodeRow",
+        ),
+      ),
+      Effect.map(
+        Option.map(({ sequence, ...row }) => ({
+          ...row,
+          ...(sequence !== null ? { sequence } : {}),
+        })),
+      ),
+    );
+
   const deleteByThreadId: ProjectionThreadActivityRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadActivityRows(input).pipe(
       Effect.mapError(
@@ -145,6 +165,7 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
 
   return {
     upsert,
+    getById,
     listByThreadId,
     deleteByThreadId,
   } satisfies ProjectionThreadActivityRepositoryShape;

@@ -3,15 +3,42 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
+import {
+  MODEL_OPTIONS_BY_PROVIDER,
+  ProviderInstanceId,
+  type ServerSettings,
+} from "@synara/contracts";
+import { isProviderKind } from "@synara/shared/providerInstances";
+import { Schema } from "effect";
+
 type ModelProviderKind =
   | "codex"
   | "claudeAgent"
   | "cursor"
-  | "gemini"
+  | "antigravity"
   | "grok"
-  | "kilo"
+  | "droid"
   | "opencode"
-  | "pi";
+  | "pi"
+  | "devin"
+  | "omp";
+
+const NON_DROID_MODEL_SLUGS = new Set(
+  Object.entries(MODEL_OPTIONS_BY_PROVIDER).flatMap(([provider, models]) =>
+    provider === "droid" ? [] : models.map((model) => model.slug.toLowerCase()),
+  ),
+);
+const DROID_ONLY_MODEL_SLUGS = new Set(
+  MODEL_OPTIONS_BY_PROVIDER.droid
+    .map((model) => model.slug.toLowerCase())
+    .filter((slug) => !NON_DROID_MODEL_SLUGS.has(slug)),
+);
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
+
+const LEGACY_GEMINI_MODEL_LABELS: Readonly<Record<string, string>> = {
+  "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
+  "gemini-3-flash-preview": "Gemini 3.5 Flash",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -29,26 +56,53 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
 // Imported instance ids may be runtime names rather than Synara provider literals.
 function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
+  // OMP must win over the `pi` token check: "Oh My Pi" and "OMP" labels would
+  // otherwise attribute to Pi.
+  if (
+    /(^|[^a-z0-9])omp([^a-z0-9]|$)/u.test(lowerLabel) ||
+    lowerLabel.includes("oh-my-pi") ||
+    lowerLabel.includes("oh my pi")
+  ) {
+    return "omp";
+  }
   if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "pi";
+  }
+  if (lowerLabel.includes("devin")) {
+    return "devin";
   }
   if (lowerLabel.includes("opencode")) {
     return "opencode";
   }
   if (lowerLabel.includes("kilo")) {
-    return "kilo";
+    return "opencode";
   }
   if (lowerLabel.includes("cursor")) {
     return "cursor";
+  }
+  if (lowerLabel.includes("antigravity")) {
+    return "antigravity";
   }
   if (lowerLabel.includes("claude") || lowerLabel.includes("anthropic")) {
     return "claudeAgent";
   }
   if (lowerLabel.includes("gemini") || lowerLabel.includes("google")) {
-    return "gemini";
+    return "antigravity";
   }
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
+  }
+  // Windsurf shares Devin credentials, so its labels attribute to the Devin provider.
+  if (lowerLabel.includes("windsurf")) {
+    return "devin";
+  }
+  if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
+    return "droid";
+  }
+  // Word-boundary match only: a bare substring would also catch unrelated
+  // labels like "speech recognition".
+  if (/(^|[^a-z0-9])cognition([^a-z0-9]|$)/u.test(lowerLabel)) {
+    return "devin";
   }
   if (lowerLabel.includes("codex")) {
     return "codex";
@@ -61,13 +115,21 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "codex" ||
     provider === "claudeAgent" ||
     provider === "cursor" ||
-    provider === "gemini" ||
+    provider === "antigravity" ||
     provider === "grok" ||
-    provider === "kilo" ||
+    provider === "droid" ||
     provider === "opencode" ||
-    provider === "pi"
+    provider === "pi" ||
+    provider === "devin" ||
+    provider === "omp"
   ) {
     return provider;
+  }
+  if (provider === "gemini") {
+    return "antigravity";
+  }
+  if (provider === "kilo") {
+    return "opencode";
   }
   if (typeof provider === "string") {
     const providerFromLabel = inferProviderFromLabel(provider);
@@ -75,24 +137,43 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
       return providerFromLabel;
     }
   }
+  return inferSpecificModelProvider(model) ?? "codex";
+}
+
+function inferSpecificModelProvider(model: string): ModelProviderKind | undefined {
   const lowerModel = model.toLowerCase();
+  // Shared Claude/Gemini/OpenAI slugs remain ambiguous without an instance label;
+  // only Factory-exclusive built-ins are safe to attribute to Droid.
+  if (DROID_ONLY_MODEL_SLUGS.has(lowerModel)) {
+    return "droid";
+  }
   if (lowerModel.includes("claude")) {
     return "claudeAgent";
   }
   if (lowerModel.includes("gemini")) {
-    return "gemini";
+    return "antigravity";
   }
   if (lowerModel.includes("grok")) {
     return "grok";
   }
-  return "codex";
+  if (lowerModel.includes("devin")) {
+    return "devin";
+  }
+  return undefined;
 }
 
-function readLegacyProviderOptions(options: unknown, provider: ModelProviderKind): unknown {
+function readLegacyProviderOptions(
+  options: unknown,
+  provider: ModelProviderKind,
+  legacyProvider?: string,
+): unknown {
   if (!isRecord(options)) {
     return options;
   }
-  const providerScopedOptions = options[provider];
+  // Selections migrated from a renamed provider (e.g. kilo → opencode) keep
+  // their options scoped under the original provider key.
+  const providerScopedOptions =
+    options[provider] ?? (legacyProvider === undefined ? undefined : options[legacyProvider]);
   return providerScopedOptions === undefined ? options : providerScopedOptions;
 }
 
@@ -115,21 +196,87 @@ function normalizeModelOptions(input: unknown): unknown {
   return Object.fromEntries(entries);
 }
 
+function splitLegacyAntigravityModelLabel(model: string): {
+  model: string;
+  reasoningEffort?: string;
+} {
+  const match = model.trim().match(/^(.*?)\s+\(([^()]+)\)$/u);
+  if (!match?.[1] || !match[2]) {
+    return { model };
+  }
+  const reasoningEffort = match[2].trim().toLowerCase();
+  if (!new Set(["low", "medium", "high", "thinking"]).has(reasoningEffort)) {
+    return { model };
+  }
+  return {
+    model: match[1].trim(),
+    reasoningEffort,
+  };
+}
+
+function migrateLegacyGeminiModel(model: string): string {
+  const trimmed = model.trim();
+  return LEGACY_GEMINI_MODEL_LABELS[trimmed.toLowerCase()] ?? trimmed;
+}
+
 export function normalizeLegacyModelSelection(input: {
   readonly provider: unknown;
+  readonly instanceId?: unknown;
   readonly model: string;
   readonly options: unknown;
 }): Record<string, unknown> {
   const provider = inferLegacyModelProvider(input.provider, input.model);
-  const options = normalizeModelOptions(readLegacyProviderOptions(input.options, provider));
+  const migratedGeminiSelection = input.provider === "gemini";
+  const normalizedOptions = migratedGeminiSelection
+    ? undefined
+    : normalizeModelOptions(
+        readLegacyProviderOptions(
+          input.options,
+          provider,
+          typeof input.provider === "string" ? input.provider : undefined,
+        ),
+      );
+  const antigravityModel =
+    provider === "antigravity"
+      ? splitLegacyAntigravityModelLabel(
+          migratedGeminiSelection ? migrateLegacyGeminiModel(input.model) : input.model,
+        )
+      : null;
+  const options =
+    antigravityModel?.reasoningEffort &&
+    (normalizedOptions === undefined || isRecord(normalizedOptions))
+      ? {
+          ...(isRecord(normalizedOptions) ? normalizedOptions : {}),
+          reasoningEffort: antigravityModel.reasoningEffort,
+        }
+      : normalizedOptions;
+  const instanceId =
+    typeof input.instanceId === "string" && isProviderInstanceId(input.instanceId.trim())
+      ? input.instanceId.trim()
+      : undefined;
   return {
     provider,
-    model: input.model,
+    ...(instanceId !== undefined ? { instanceId } : {}),
+    model: antigravityModel?.model ?? input.model,
     ...(options === undefined ? {} : { options }),
   };
 }
 
-export function normalizePersistedModelSelection(input: unknown): unknown {
+function resolveProviderFromSettings(
+  settings: ServerSettings | undefined,
+  instanceId: string | undefined,
+): ModelProviderKind | undefined {
+  if (!settings || instanceId === undefined) {
+    return undefined;
+  }
+  const raw = settings.providerInstances[instanceId];
+  return raw && isProviderKind(raw.driver) ? raw.driver : undefined;
+}
+
+export function normalizePersistedModelSelection(
+  input: unknown,
+  settings?: ServerSettings,
+): unknown {
   if (!isRecord(input)) {
     return input;
   }
@@ -139,10 +286,22 @@ export function normalizePersistedModelSelection(input: unknown): unknown {
     return input;
   }
 
-  // Newer T3 Code writes provider-less selections as { instanceId, model } and
+  // Newer Synara writes provider-less selections as { instanceId, model } and
   // option rows as [{ id, value }]; Synara stores canonical provider/options objects.
+  const instanceId = readTrimmedString(input, "instanceId");
+  const providerFromSettings = resolveProviderFromSettings(settings, instanceId);
+  if (
+    input.provider === undefined &&
+    providerFromSettings === undefined &&
+    instanceId !== undefined &&
+    inferProviderFromLabel(instanceId) === undefined &&
+    inferSpecificModelProvider(model) === undefined
+  ) {
+    return input;
+  }
   return normalizeLegacyModelSelection({
-    provider: input.provider ?? input.instanceId,
+    provider: input.provider ?? providerFromSettings ?? instanceId,
+    instanceId,
     model,
     options: input.options,
   });

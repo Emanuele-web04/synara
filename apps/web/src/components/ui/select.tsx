@@ -1,5 +1,6 @@
 "use client";
 
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { useRender } from "@base-ui/react/use-render";
@@ -10,26 +11,29 @@ import * as React from "react";
 import { cn } from "~/lib/utils";
 import {
   APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
-  APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
+  COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME,
   COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME,
   COMPOSER_SURFACE_SHADOW_CLASS_NAME,
 } from "../chat/composerPickerStyles";
 
 const Select = SelectPrimitive.Root;
 
-type SelectPopupSurface = "default" | "composer" | "settings";
+// Every select popup uses a shared picker shell: "composer" is the app-wide
+// frosted picker (ComposerPickerSelectPopup), "settings" the settings variant
+// (SettingsSelectPopup). The legacy unstyled default surface was removed on
+// purpose — do not add it back.
+type SelectPopupSurface = "composer" | "settings";
 
-const settingsSelectOptionClassName =
-  "[&>svg]:-mx-0.5 flex cursor-default select-none items-center rounded-lg text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0 grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]";
+const settingsSelectOptionClassName = `[&>svg]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-ui text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0 grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]`;
 
-const SelectPopupSurfaceContext = React.createContext<SelectPopupSurface>("default");
+const SelectPopupSurfaceContext = React.createContext<SelectPopupSurface>("composer");
 
 // Keep neutral select chrome on the same token families Codex uses for menus and list hover.
 const selectTriggerVariants = cva(
-  "relative inline-flex cursor-pointer select-none items-center justify-between gap-2 border rounded-md text-left text-[length:var(--app-font-size-ui,12px)] outline-none transition-[color,background-color] data-disabled:pointer-events-none data-disabled:opacity-64 sm:text-[length:var(--app-font-size-ui,12px)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
+  "relative inline-flex cursor-pointer select-none items-center justify-between gap-2 border rounded-md text-left text-ui outline-none transition-[color,background-color] data-disabled:pointer-events-none data-disabled:opacity-64 sm:text-ui [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
   {
     defaultVariants: {
       size: "default",
@@ -37,8 +41,7 @@ const selectTriggerVariants = cva(
     },
     variants: {
       variant: {
-        default:
-          "w-full min-w-36 border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] text-[var(--color-text-foreground)] ring-[color:var(--color-border-focus)]/16 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 focus-visible:border-[color:var(--color-border-focus)] focus-visible:ring-2 aria-invalid:border-destructive/30 focus-visible:aria-invalid:border-destructive/50 focus-visible:aria-invalid:ring-destructive/12 dark:aria-invalid:ring-destructive/20 [&_svg:not([class*='opacity-'])]:opacity-80",
+        default: `${GLASS_RAISED_SURFACE_CLASS_NAME} w-full min-w-36 border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] text-[var(--color-text-foreground)] ring-[color:var(--color-border-focus)]/16 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 focus-visible:border-[color:var(--color-border-focus)] focus-visible:ring-2 aria-invalid:border-destructive/30 focus-visible:aria-invalid:border-destructive/50 focus-visible:aria-invalid:ring-destructive/12 dark:aria-invalid:ring-destructive/20 [&_svg:not([class*='opacity-'])]:opacity-80`,
         ghost:
           "border-transparent text-[var(--color-text-foreground-secondary)] focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60 data-pressed:bg-[var(--color-background-elevated-secondary)] [:hover,[data-pressed]]:bg-[var(--color-background-elevated-secondary)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)]",
       },
@@ -46,7 +49,7 @@ const selectTriggerVariants = cva(
         default: "min-h-9 px-[calc(--spacing(3)-1px)] sm:min-h-8",
         lg: "min-h-10 px-[calc(--spacing(3)-1px)] sm:min-h-9",
         sm: "min-h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:min-h-7",
-        xs: "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-[length:var(--app-font-size-ui-sm,11px)] sm:h-6 sm:text-[length:var(--app-font-size-ui-xs,10px)] [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
+        xs: "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-ui-sm sm:h-6 sm:text-ui-xs [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
       },
     },
   },
@@ -91,11 +94,13 @@ function SelectButton({ className, size, variant, render, children, ...props }: 
 
 function SelectTrigger({
   className,
-  size = "default",
-  variant = "default",
+  size: sizeProp,
+  variant: variantProp,
   children,
   ...props
 }: SelectPrimitive.Trigger.Props & VariantProps<typeof selectTriggerVariants>) {
+  const size = sizeProp === undefined ? "default" : sizeProp;
+  const variant = variantProp === undefined ? "default" : variantProp;
   return (
     <SelectPrimitive.Trigger
       className={cn(selectTriggerVariants({ size, variant }), className)}
@@ -124,13 +129,13 @@ function SelectPopup({
   className,
   shellClassName,
   children,
-  side = "bottom",
-  sideOffset = 4,
-  align = "start",
-  alignOffset = 0,
-  alignItemWithTrigger = true,
+  side: sideProp,
+  sideOffset: sideOffsetProp,
+  align: alignProp,
+  alignOffset: alignOffsetProp,
+  alignItemWithTrigger: alignItemWithTriggerProp,
   anchor,
-  surface = "default",
+  surface,
   ...props
 }: SelectPrimitive.Popup.Props & {
   side?: SelectPrimitive.Positioner.Props["side"];
@@ -139,38 +144,32 @@ function SelectPopup({
   alignOffset?: SelectPrimitive.Positioner.Props["alignOffset"];
   alignItemWithTrigger?: SelectPrimitive.Positioner.Props["alignItemWithTrigger"];
   anchor?: SelectPrimitive.Positioner.Props["anchor"];
-  surface?: SelectPopupSurface;
+  surface: SelectPopupSurface;
   /** Size/shell classes applied to the composer picker viewport wrapper. */
   shellClassName?: string;
 }) {
-  const isComposerLikeSurface = surface === "composer" || surface === "settings";
-  const viewportClassName = isComposerLikeSurface
-    ? cn(
-        COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
-        surface === "settings"
-          ? cn(
-              APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
-              "rounded-lg",
-              COMPOSER_SURFACE_SHADOW_CLASS_NAME,
-            )
-          : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
-        shellClassName,
-      )
-    : cn(
-        APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
-        "relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)]",
-      );
+  const side = sideProp ?? "bottom";
+  const sideOffset = sideOffsetProp ?? 4;
+  const align = alignProp ?? "start";
+  const alignOffset = alignOffsetProp ?? 0;
+  const alignItemWithTrigger = alignItemWithTriggerProp ?? true;
+  const viewportClassName = cn(
+    COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
+    surface === "settings"
+      ? cn(
+          APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+          "rounded-lg",
+          COMPOSER_SURFACE_SHADOW_CLASS_NAME,
+        )
+      : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
+    shellClassName,
+  );
 
-  const listClassName = isComposerLikeSurface
-    ? cn(
-        COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
-        "max-h-[min(var(--available-height),28rem)]",
-        className,
-      )
-    : cn(
-        "max-h-[min(var(--available-height),28rem)] overflow-y-auto overscroll-contain p-1",
-        className,
-      );
+  const listClassName = cn(
+    COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
+    "max-h-[min(var(--available-height),28rem)]",
+    className,
+  );
   const scrollArrowSurfaceClassName =
     surface === "settings"
       ? "before:from-[var(--app-settings-surface)]"
@@ -190,10 +189,7 @@ function SelectPopup({
           sideOffset={sideOffset}
         >
           <SelectPrimitive.Popup
-            className={cn(
-              "origin-(--transform-origin)",
-              isComposerLikeSurface ? "text-[var(--color-text-foreground)]" : "text-foreground",
-            )}
+            className="origin-(--transform-origin) text-[var(--color-text-foreground)]"
             data-slot="select-popup"
             {...props}
           >
@@ -210,8 +206,8 @@ function SelectPopup({
                 fully to both edges even when the positioner reports a tight height. */}
             <div className={viewportClassName}>
               <SelectPrimitive.List
-                className={cn(listClassName, isComposerLikeSurface ? "relative z-1" : null)}
-                data-slot={isComposerLikeSurface ? "menu-popup-body" : "select-list"}
+                className={cn(listClassName, "relative z-1")}
+                data-slot="menu-popup-body"
               >
                 {children}
               </SelectPrimitive.List>
@@ -232,24 +228,20 @@ function SelectPopup({
   );
 }
 
-const selectItemDefaultClassName =
-  "grid min-h-[1.625rem] in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-lg py-px text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-6 [&_svg:not([class*='size-'])]:size-3 [&_svg]:pointer-events-none [&_svg]:shrink-0";
-
 function SelectItem({
   className,
   children,
-  hideIndicator = false,
+  hideIndicator: hideIndicatorProp,
   ...props
 }: SelectPrimitive.Item.Props & {
   hideIndicator?: boolean;
 }) {
+  const hideIndicator = hideIndicatorProp ?? false;
   const popupSurface = React.useContext(SelectPopupSurfaceContext);
   const optionBaseClassName =
-    popupSurface === "composer"
-      ? COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME
-      : popupSurface === "settings"
-        ? settingsSelectOptionClassName
-        : selectItemDefaultClassName;
+    popupSurface === "settings"
+      ? settingsSelectOptionClassName
+      : COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME;
 
   return (
     <SelectPrimitive.Item
@@ -306,7 +298,7 @@ function SelectGroup(props: SelectPrimitive.Group.Props) {
 function SelectGroupLabel(props: SelectPrimitive.GroupLabel.Props) {
   return (
     <SelectPrimitive.GroupLabel
-      className="px-2 py-1.5 font-medium text-muted-foreground text-[length:var(--app-font-size-ui-xs,10px)]"
+      className="px-2 py-1.5 font-medium text-muted-foreground text-ui-xs"
       data-slot="select-group-label"
       {...props}
     />
@@ -320,7 +312,6 @@ export {
   selectTriggerVariants,
   SelectValue,
   SelectPopup,
-  SelectPopup as SelectContent,
   SelectItem,
   SelectSeparator,
   SelectGroup,

@@ -5,7 +5,7 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { memo, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { SearchIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -15,6 +15,7 @@ import { PickerPanelShell } from "./chat/PickerPanelShell";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { DiffStat } from "./chat/DiffStatLabel";
 import { IconButton } from "./ui/icon-button";
+import { TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME } from "./ui/button-group";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import {
   resolveFileDiffPath,
@@ -28,7 +29,7 @@ const DIFF_FILE_JUMP_ICON_SLOT_CLASS_NAME =
 const DIFF_FILE_JUMP_FILE_ICON_CLASS_NAME =
   "size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80";
 
-const DiffFileJumpRow = memo(function DiffFileJumpRow(props: {
+function DiffFileJumpRow(props: {
   fileDiff: FileDiffMetadata;
   resolvedTheme: "light" | "dark";
   isSelected: boolean;
@@ -36,7 +37,7 @@ const DiffFileJumpRow = memo(function DiffFileJumpRow(props: {
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
-  const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
+  const stat = summarizeFileDiffStats([props.fileDiff]);
 
   return (
     <MenuItem
@@ -58,20 +59,18 @@ const DiffFileJumpRow = memo(function DiffFileJumpRow(props: {
       </span>
       <div className="min-w-0 flex flex-1 items-center gap-2 overflow-hidden">
         <div className="min-w-0 flex flex-1 items-baseline gap-1.5 overflow-hidden">
-          <span className="shrink-0 text-[11.5px] font-medium text-foreground/85">{name}</span>
-          {dir ? (
-            <span className="truncate text-[11px] text-muted-foreground/55">{dir}</span>
-          ) : null}
+          <span className="shrink-0 text-ui-sm font-medium text-foreground/85">{name}</span>
+          {dir ? <span className="truncate text-ui-sm text-muted-foreground/55">{dir}</span> : null}
         </div>
         <DiffStat
           additions={stat.additions}
           deletions={stat.deletions}
-          className="shrink-0 text-[10px] tabular-nums"
+          className="shrink-0 text-ui-xs tabular-nums"
         />
       </div>
     </MenuItem>
   );
-});
+}
 
 export function DiffPanelFileJumpMenu(props: {
   renderableFiles: ReadonlyArray<FileDiffMetadata>;
@@ -81,10 +80,7 @@ export function DiffPanelFileJumpMenu(props: {
 }) {
   const [fileSearchQuery, setFileSearchQuery] = useState("");
 
-  const filteredFiles = useMemo(
-    () => filterRenderableFilesForSearch(props.renderableFiles, fileSearchQuery),
-    [fileSearchQuery, props.renderableFiles],
-  );
+  const filteredFiles = filterRenderableFilesForSearch(props.renderableFiles, fileSearchQuery);
 
   return (
     <Menu
@@ -99,7 +95,7 @@ export function DiffPanelFileJumpMenu(props: {
           <IconButton
             variant="ghost"
             size="icon-xs"
-            className="text-muted-foreground hover:text-foreground"
+            className={TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME}
             label="Jump to file"
             title="Jump to file"
           >
@@ -124,9 +120,9 @@ export function DiffPanelFileJumpMenu(props: {
           listMaxHeightClassName="max-h-64"
         >
           {props.renderableFiles.length === 0 ? (
-            <p className="px-2.5 py-3 text-[11px] text-muted-foreground">No files in this diff.</p>
+            <p className="px-2.5 py-3 text-ui-sm text-muted-foreground">No files in this diff.</p>
           ) : filteredFiles.length === 0 ? (
-            <p className="px-2.5 py-3 text-[11px] text-muted-foreground">No matching files.</p>
+            <p className="px-2.5 py-3 text-ui-sm text-muted-foreground">No matching files.</p>
           ) : (
             filteredFiles.map((fileDiff) => {
               const filePath = resolveFileDiffPath(fileDiff);

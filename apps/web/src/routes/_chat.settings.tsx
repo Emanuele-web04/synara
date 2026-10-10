@@ -4,63 +4,87 @@
 // Exports: Settings route component for `/settings`
 
 import {
+  type DesktopAudioInputDevice,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
-  type ServerProviderStatus,
-  type ThreadId,
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
-} from "@t3tools/contracts";
+  type SidechatExpiry,
+} from "@synara/contracts";
+import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
+import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
+import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { pluralize } from "@t3tools/shared/text";
-import {
-  type ReactNode,
-  type RefObject,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import {
-  closestCenter,
-  DndContext,
-  PointerSensor,
-  type DragEndEvent,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { CSS } from "@dnd-kit/utilities";
+import { useEffect, useMemo, useState } from "react";
+
 import {
   type AppSettings,
+  type FollowUpBehavior,
+  type GitHubLinkOpenTarget,
+  type MessageTrailAudioSource,
+  type VoiceEnterBehavior,
   DEFAULT_UI_DENSITY,
+  DEFAULT_CHAT_WIDTH,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
-  getCustomModelsForProvider,
-  getGitTextGenerationModelOptions,
-  MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
   MIN_TERMINAL_FONT_SIZE_PX,
-  MODEL_PROVIDER_SETTINGS,
+  defaultDesktopAppIconForFlavor,
   normalizeChatFontSizePx,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
-  patchCustomModels,
+  isGitTextGenerationSettingsDirty,
   TERMINAL_FONT_FAMILY_SUGGESTIONS,
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
-import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
+import { AppIconPicker } from "~/components/settings/AppIconPicker";
+import {
+  ArchivedSettingsPanel,
+  WorktreesSettingsPanel,
+} from "~/components/settings/ConversationStorageSettingsPanels";
+import {
+  AppSnapSettingsPanel,
+  BetaChannelSettingsPanel,
+  NotificationsSettingsPanel,
+} from "~/components/settings/DesktopSettingsPanels";
+import { ComputerSettingsPanel } from "~/components/settings/ComputerSettingsPanel";
+import { ModelsSettingsPanel } from "~/components/settings/ModelsSettingsPanel";
+import {
+  isProviderInstallSettingsDirty,
+  ProvidersSettingsPanel,
+} from "~/components/settings/ProvidersSettingsPanel";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
+import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
+import {
+  KeyboardShortcutsResetButton,
+  KeyboardShortcutsSettingsPanel,
+} from "../components/settings/KeyboardShortcutsSettingsPanel";
+import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
+import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
+import {
+  SettingResetButton,
+  SettingsSegmentedControl,
+  SettingsSelectControl,
+} from "../components/settings/SettingControls";
+import {
+  SettingsRow,
+  SettingsSection,
+  SettingsSectionShell,
+} from "../components/settings/SettingsPanelPrimitives";
+import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
+import { ThemeModePicker } from "../components/settings/ThemeModePicker";
+import { ThemePackEditor } from "../components/ThemePackEditor";
+import {
+  CHAT_CONTENT_CARD_CLASS_NAME,
+  CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+} from "../components/chat/composerPickerStyles";
+import {
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+} from "../components/chat/chatHeaderControls";
 import {
   Autocomplete,
   AutocompleteEmpty,
@@ -69,98 +93,41 @@ import {
   AutocompleteList,
   AutocompletePopup,
 } from "../components/ui/autocomplete";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 import { Input } from "../components/ui/input";
-import {
-  SettingResetButton,
-  SettingsSegmentedControl,
-  SettingsSelectControl,
-} from "../components/settings/SettingControls";
-import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { SelectItem } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
-import { ThemePackEditor } from "../components/ThemePackEditor";
-import {
-  SettingsCard,
-  SettingsRow,
-  SettingsSection,
-  SettingsSelectPopup,
-} from "../components/settings/SettingsPanelPrimitives";
-import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
-import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
-import {
-  CHAT_CONTENT_CARD_CLASS_NAME,
-  CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
-} from "../components/chat/composerPickerStyles";
-import {
-  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-} from "../components/chat/chatHeaderControls";
+import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { SidebarInset } from "../components/ui/sidebar";
-import { resolveAndPersistPreferredEditor } from "../editorPreferences";
-import { isElectron } from "../env";
+import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
+import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
-import { CentralIcon } from "../lib/central-icons";
-import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
+import { isElectron } from "../env";
+import { ResetIcon } from "../lib/icons";
 import {
-  deleteArchivedThreadFromClient,
-  deleteArchivedThreadsFromClient,
-} from "../lib/archivedThreadDelete";
-import {
-  ArchiveIcon,
-  ChevronDownIcon,
-  DeviceLaptopIcon,
-  DownloadIcon,
-  ExternalLinkIcon,
-  Loader2Icon,
-  MoonIcon,
-  PlusIcon,
-  RotateCcwIcon,
-  SunIcon,
-  XIcon,
-} from "../lib/icons";
-import {
-  serverConfigQueryOptions,
-  serverQueryKeys,
-  serverSettingsQueryOptions,
-  serverWorktreesQueryOptions,
-} from "../lib/serverReactQuery";
-import { cn, isMacPlatform } from "../lib/utils";
-import { newCommandId } from "../lib/utils";
+  cn,
+  getNavigatorPlatform,
+  isLinuxPlatform,
+  isMacPlatform,
+  isWindowsPlatform,
+} from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
-import {
-  buildNotificationSettingsSupportText,
-  readBrowserNotificationPermissionState,
-  requestBrowserNotificationPermission,
-} from "../notifications/taskCompletion";
+import { isProviderKind, sameProviderOrder } from "../providerOrdering";
 import {
   normalizeSettingsSection,
   SETTINGS_NAV_ITEMS,
   SETTINGS_TARGETS,
+  settingRowAnchorId,
 } from "../settingsNavigation";
-import {
-  SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
-  SETTINGS_EMPTY_STATE_CLASS_NAME,
-  SETTINGS_INSET_LIST_CLASS_NAME,
-  SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
-  SETTINGS_PANEL_SECTION_CLASS_NAME,
-  SETTINGS_RADIUS_CLASS_NAME,
-  SETTINGS_SECTION_LABEL_CLASS_NAME,
-} from "../settingsPanelStyles";
-import { useStore } from "../store";
-import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
-import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "../storeSelectors";
-import { formatRelativeTime } from "../lib/relativeTime";
-import { formatWorktreePathForDisplay } from "../worktreeCleanup";
-import { sameProviderOrder } from "../providerOrdering";
-import {
-  getVisibleProviderUpdateStatuses,
-  shouldShowProviderUpdateStatus,
-} from "../providerUpdates";
+import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
+import { isAudioLevelAvailable } from "../lib/audioLevel";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -186,37 +153,29 @@ const UI_DENSITY_OPTIONS = [
   description: string;
 }>;
 
-const THEME_OPTIONS = [
+const CHAT_WIDTH_OPTIONS = [
   {
-    value: "light",
-    label: "Light",
-    description: "Always use the light theme.",
-    icon: <SunIcon />,
+    value: "standard",
+    label: "Standard",
+    description: "Keeps the chat column at the default reading width (46rem).",
   },
   {
-    value: "dark",
-    label: "Dark",
-    description: "Always use the dark theme.",
-    icon: <MoonIcon />,
+    value: "wide",
+    label: "Wide",
+    description: "Gives tables and wide content more room (72rem).",
   },
   {
-    value: "system",
-    label: "System",
-    description: "Match your OS appearance setting.",
-    icon: <DeviceLaptopIcon />,
+    value: "full",
+    label: "Full",
+    description: "Lets the chat column use the full window width.",
   },
-] as const;
+] as const satisfies ReadonlyArray<{
+  value: ChatWidthMode;
+  label: string;
+  description: string;
+}>;
 
-const PROVIDER_SELECT_OPTIONS = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "gemini",
-  "grok",
-  "opencode",
-  "kilo",
-  "pi",
-] as const satisfies readonly ProviderKind[];
+const PROVIDER_SELECT_OPTIONS = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -235,277 +194,123 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   created_at: "Newest first",
 } as const;
 
-type InstallBinarySettingsKey =
-  | "claudeBinaryPath"
-  | "codexBinaryPath"
-  | "cursorBinaryPath"
-  | "geminiBinaryPath"
-  | "grokBinaryPath"
-  | "kiloBinaryPath"
-  | "openCodeBinaryPath"
-  | "piBinaryPath";
-type InstallProviderSettings = {
-  provider: ProviderKind;
-  title: string;
-  docs: ReadonlyArray<{
-    label: string;
-    href: string;
-  }>;
-  binaryPathKey: InstallBinarySettingsKey;
-  binaryPlaceholder: string;
-  binaryDescription: ReactNode;
-  homePathKey?: "codexHomePath";
-  homePlaceholder?: string;
-  homeDescription?: ReactNode;
-  apiEndpointKey?: "cursorApiEndpoint";
-  apiEndpointPlaceholder?: string;
-  apiEndpointDescription?: ReactNode;
-  serverUrlKey?: "kiloServerUrl" | "openCodeServerUrl";
-  serverUrlPlaceholder?: string;
-  serverUrlDescription?: ReactNode;
-  serverPasswordKey?: "kiloServerPassword" | "openCodeServerPassword";
-  serverPasswordPlaceholder?: string;
-  serverPasswordDescription?: ReactNode;
-  experimentalWebSocketsKey?: "openCodeExperimentalWebSockets";
-  experimentalWebSocketsDescription?: ReactNode;
-  agentDirKey?: "piAgentDir";
-  agentDirPlaceholder?: string;
-  agentDirDescription?: ReactNode;
-};
+const FOLLOW_UP_BEHAVIOR_OPTIONS = [
+  { value: "queue", label: "Queue" },
+  { value: "steer", label: "Steer" },
+] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
-const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> = [
-  { provider: "codex", title: PROVIDER_DISPLAY_NAMES.codex },
-  { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
-  { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
-  { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
-  { provider: "grok", title: PROVIDER_DISPLAY_NAMES.grok },
-  { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
-  { provider: "opencode", title: PROVIDER_DISPLAY_NAMES.opencode },
-  { provider: "pi", title: PROVIDER_DISPLAY_NAMES.pi },
-];
+const SIDECHAT_EXPIRY_OPTIONS = [
+  { value: "1h", label: "1 hour" },
+  { value: "24h", label: "24 hours" },
+  { value: "never", label: "Never" },
+] as const satisfies ReadonlyArray<{ value: SidechatExpiry; label: string }>;
 
-// Pure helper kept at module scope so the toggle handler stays trivial and the
-// dedupe logic is shared between the toggle and the schema normalizer.
-function setProviderHidden(
-  current: ReadonlyArray<ProviderKind>,
-  provider: ProviderKind,
-  hidden: boolean,
-): ProviderKind[] {
-  const withoutTarget = current.filter((entry) => entry !== provider);
-  return hidden ? [...withoutTarget, provider] : withoutTarget;
+const GITHUB_LINK_OPEN_TARGET_LABELS = {
+  app: "In Synara",
+  browser: "In-app browser",
+  external: "External browser",
+} as const satisfies Record<GitHubLinkOpenTarget, string>;
+
+const MESSAGE_TRAIL_AUDIO_SOURCE_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "system", label: "Mac audio" },
+  { value: "microphone", label: "Microphone" },
+  { value: "both", label: "Both" },
+] as const satisfies ReadonlyArray<{ value: MessageTrailAudioSource; label: string }>;
+
+// Select items need a non-empty value; "" in settings means the Mac's default input.
+const MAC_DEFAULT_MICROPHONE_VALUE = "mac-default";
+
+function microphoneLabel(device: DesktopAudioInputDevice): string {
+  return device.bluetooth ? `${device.name} (Bluetooth)` : device.name;
 }
 
-function SortableProviderVisibilityRow(props: {
-  option: { provider: ProviderKind; title: string };
-  isHidden: boolean;
-  onHiddenChange: (hidden: boolean) => void;
+function MessageTrailMicrophoneRow({
+  value,
+  defaultValue,
+  onChange,
+}: {
+  value: string;
+  defaultValue: string;
+  onChange: (microphoneId: string) => void;
 }) {
-  const {
-    attributes,
-    listeners,
-    setActivatorNodeRef,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: props.option.provider });
+  const [devices, setDevices] = useState<readonly DesktopAudioInputDevice[]>([]);
+
+  // Listing only reads device names; plugging a device in or out refreshes it.
+  useEffect(() => {
+    const audioLevel = window.desktopBridge?.audioLevel;
+    if (!audioLevel) return;
+    let cancelled = false;
+    const refresh = () => {
+      void audioLevel
+        .listMicrophones()
+        .then((next) => {
+          if (!cancelled) setDevices(next);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    navigator.mediaDevices?.addEventListener("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener("devicechange", refresh);
+    };
+  }, []);
+
+  const macDefault = devices.find((device) => device.default);
+  const selected = devices.find((device) => device.id === value);
+  const macDefaultLabel = macDefault
+    ? `Mac default: ${microphoneLabel(macDefault)}`
+    : "Mac default";
+  const valueContent = !value
+    ? macDefaultLabel
+    : selected
+      ? microphoneLabel(selected)
+      : "Not connected";
 
   return (
-    <div
-      ref={setNodeRef}
-      style={{
-        transform: CSS.Translate.toString(transform),
-        transition,
-      }}
-      className={cn(
-        `flex items-center justify-between gap-3 ${SETTINGS_RADIUS_CLASS_NAME} border border-[color:var(--color-border)] bg-transparent px-3 py-2.5`,
-        isDragging && "z-10 opacity-80 shadow-lg",
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <button
-          type="button"
-          ref={setActivatorNodeRef}
-          className={cn(
-            "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing",
-            SETTINGS_RADIUS_CLASS_NAME,
-          )}
-          aria-label={`Reorder ${props.option.title}`}
-          {...attributes}
-          {...listeners}
+    <SettingsRow
+      title="Message trail microphone"
+      description="Microphone the message trail listens to. Pick a built-in one if you use Bluetooth headphones: opening their microphone lowers their sound quality. If the chosen microphone is not connected, the trail ignores the microphone instead of falling back to another one."
+      resetAction={
+        value !== defaultValue ? (
+          <SettingResetButton
+            label="message trail microphone"
+            onClick={() => onChange(defaultValue)}
+          />
+        ) : null
+      }
+      control={
+        <SettingsSelectControl
+          value={value || MAC_DEFAULT_MICROPHONE_VALUE}
+          onValueChange={(next) => onChange(next === MAC_DEFAULT_MICROPHONE_VALUE ? "" : next)}
+          ariaLabel="Message trail microphone"
+          triggerClassName="w-full sm:w-64"
+          valueContent={valueContent}
         >
-          <CentralIcon name="dot-grid-2x3" className="size-4" />
-        </button>
-        <span className="min-w-0 text-sm text-foreground">{props.option.title}</span>
-      </div>
-      <Switch
-        checked={!props.isHidden}
-        onCheckedChange={(checked) => props.onHiddenChange(!Boolean(checked))}
-        aria-label={`Show ${props.option.title} in the provider picker`}
-      />
-    </div>
+          <SelectItem hideIndicator value={MAC_DEFAULT_MICROPHONE_VALUE}>
+            {macDefaultLabel}
+          </SelectItem>
+          {devices.map((device) => (
+            <SelectItem hideIndicator key={device.id} value={device.id}>
+              {microphoneLabel(device)}
+            </SelectItem>
+          ))}
+          {value && !selected ? (
+            <SelectItem hideIndicator value={value}>
+              Not connected
+            </SelectItem>
+          ) : null}
+        </SettingsSelectControl>
+      }
+    />
   );
 }
 
-const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
-  {
-    provider: "codex",
-    title: "Codex",
-    docs: [
-      { label: "Install", href: "https://help.openai.com/en/articles/11096431" },
-      { label: "Update", href: "https://help.openai.com/en/articles/11096431" },
-      { label: "Config", href: "https://github.com/openai/codex/blob/main/docs/config.md" },
-    ],
-    binaryPathKey: "codexBinaryPath",
-    binaryPlaceholder: "Codex binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>codex</code> from your PATH.
-      </>
-    ),
-    homePathKey: "codexHomePath",
-    homePlaceholder: "CODEX_HOME",
-    homeDescription: "Optional custom Codex home and config directory.",
-  },
-  {
-    provider: "claudeAgent",
-    title: "Claude",
-    docs: [
-      { label: "Install", href: "https://code.claude.com/docs/en/installation" },
-      { label: "Update", href: "https://code.claude.com/docs/en/installation#update-claude-code" },
-      { label: "Config", href: "https://code.claude.com/docs/en/settings" },
-    ],
-    binaryPathKey: "claudeBinaryPath",
-    binaryPlaceholder: "Claude binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>claude</code> from your PATH.
-      </>
-    ),
-  },
-  {
-    provider: "cursor",
-    title: "Cursor",
-    docs: [
-      { label: "Install", href: "https://docs.cursor.com/en/cli/installation" },
-      { label: "Update", href: "https://docs.cursor.com/en/cli/installation#updates" },
-      { label: "Config", href: "https://docs.cursor.com/en/cli/overview" },
-    ],
-    binaryPathKey: "cursorBinaryPath",
-    binaryPlaceholder: "Cursor Agent binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>cursor-agent</code> from your PATH.
-      </>
-    ),
-    apiEndpointKey: "cursorApiEndpoint",
-    apiEndpointPlaceholder: "https://api2.cursor.sh",
-    apiEndpointDescription: "Optional Cursor API endpoint override passed to `cursor-agent -e`.",
-  },
-  {
-    provider: "gemini",
-    title: "Gemini",
-    docs: [
-      { label: "Install", href: "https://google-gemini.github.io/gemini-cli/docs/get-started/" },
-      { label: "Update", href: "https://github.com/google-gemini/gemini-cli" },
-      {
-        label: "Config",
-        href: "https://google-gemini.github.io/gemini-cli/docs/get-started/configuration.html",
-      },
-    ],
-    binaryPathKey: "geminiBinaryPath",
-    binaryPlaceholder: "Gemini binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>gemini</code> from your PATH.
-      </>
-    ),
-  },
-  {
-    provider: "grok",
-    title: "Grok",
-    docs: [
-      { label: "Install", href: "https://docs.x.ai/build/overview" },
-      { label: "Headless", href: "https://docs.x.ai/build/cli/headless-scripting" },
-      { label: "Config", href: "https://docs.x.ai/build/overview" },
-    ],
-    binaryPathKey: "grokBinaryPath",
-    binaryPlaceholder: "Grok binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>grok</code> from your PATH.
-      </>
-    ),
-  },
-  {
-    provider: "kilo",
-    title: "Kilo",
-    docs: [
-      { label: "Install", href: "https://kilo.ai/docs/cli" },
-      { label: "Update", href: "https://kilo.ai/docs/cli" },
-      { label: "Config", href: "https://kilo.ai/docs/cli#configuration" },
-    ],
-    binaryPathKey: "kiloBinaryPath",
-    binaryPlaceholder: "Kilo binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>kilo</code> from your PATH.
-      </>
-    ),
-    serverUrlKey: "kiloServerUrl",
-    serverUrlPlaceholder: "http://127.0.0.1:4096",
-    serverUrlDescription: "Optional existing Kilo server URL. Leave blank to spawn a local server.",
-    serverPasswordKey: "kiloServerPassword",
-    serverPasswordPlaceholder: "Kilo server password",
-    serverPasswordDescription: "Optional password for an externally managed Kilo server.",
-  },
-  {
-    provider: "opencode",
-    title: "OpenCode",
-    docs: [
-      { label: "Install", href: "https://opencode.ai/docs/" },
-      { label: "Update", href: "https://opencode.ai/docs/cli/" },
-      { label: "Config", href: "https://opencode.ai/docs/config/" },
-    ],
-    binaryPathKey: "openCodeBinaryPath",
-    binaryPlaceholder: "OpenCode binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>opencode</code> from your PATH.
-      </>
-    ),
-    serverUrlKey: "openCodeServerUrl",
-    serverUrlPlaceholder: "http://127.0.0.1:4096",
-    serverUrlDescription:
-      "Optional existing OpenCode server URL. Leave blank to spawn a local server.",
-    serverPasswordKey: "openCodeServerPassword",
-    serverPasswordPlaceholder: "OpenCode server password",
-    serverPasswordDescription: "Optional password for an externally managed OpenCode server.",
-    experimentalWebSocketsKey: "openCodeExperimentalWebSockets",
-    experimentalWebSocketsDescription:
-      "Use Opencode's experimental OpenAI response WebSocket transport for managed local servers.",
-  },
-  {
-    provider: "pi",
-    title: "Pi",
-    docs: [
-      { label: "Install", href: "https://pi.dev/docs/latest" },
-      { label: "Update", href: "https://pi.dev/docs/latest/settings" },
-      { label: "Config", href: "https://pi.dev/docs/latest/settings" },
-    ],
-    binaryPathKey: "piBinaryPath",
-    binaryPlaceholder: "Pi binary path",
-    binaryDescription: (
-      <>
-        Leave blank to use <code>pi</code> from your PATH.
-      </>
-    ),
-    agentDirKey: "piAgentDir",
-    agentDirPlaceholder: "Pi agent directory",
-    agentDirDescription:
-      "Optional custom Pi agent directory for auth, models, skills, and commands.",
-  },
-];
+const VOICE_ENTER_BEHAVIOR_OPTIONS = [
+  { value: "stop", label: "Stop" },
+  { value: "send", label: "Stop and send" },
+] as const satisfies ReadonlyArray<{ value: VoiceEnterBehavior; label: string }>;
 
 // ── Settings UI primitives ────────────────────────────────────────────────
 
@@ -514,82 +319,6 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
-
-function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) {
-  return (
-    <div className={cn(SETTINGS_INSET_LIST_CLASS_NAME, "px-3 py-2.5")}>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-xs font-medium text-foreground">CLI docs</span>
-        <div className="flex flex-wrap gap-2">
-          {docs.map((doc) => (
-            <a
-              key={`${doc.label}:${doc.href}`}
-              href={doc.href}
-              target="_blank"
-              rel="noreferrer"
-              className={cn(
-                "inline-flex h-7 items-center gap-1.5 border border-[color:var(--color-border)] bg-transparent px-2.5 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground",
-                SETTINGS_RADIUS_CLASS_NAME,
-              )}
-            >
-              <span>{doc.label}</span>
-              <ExternalLinkIcon className="size-3" />
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function normalizeManagedWorktreePath(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : null;
-}
-
-function formatProviderVersion(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
-}
-
-function providerUpdateStatusLabel(provider: ServerProviderStatus): string | null {
-  const state = provider.updateState?.status;
-  if (state === "queued") {
-    return "Update queued";
-  }
-  if (state === "running") {
-    return "Updating";
-  }
-  if (state === "succeeded") {
-    return "Updated";
-  }
-  if (state === "failed") {
-    return "Update failed";
-  }
-  if (state === "unchanged") {
-    return "Still outdated";
-  }
-  const advisory = provider.versionAdvisory;
-  if (advisory?.status === "behind_latest" && advisory.latestVersion) {
-    const currentVersion = formatProviderVersion(advisory.currentVersion);
-    const latestVersion = formatProviderVersion(advisory.latestVersion);
-    return currentVersion ? `${currentVersion} -> ${latestVersion}` : `Latest ${latestVersion}`;
-  }
-  const currentVersion = formatProviderVersion(provider.version);
-  return currentVersion ? `Current ${currentVersion}` : null;
-}
-
-function providerUpdateFailureMessage(provider: ServerProviderStatus | undefined): string | null {
-  const state = provider?.updateState;
-  if (!state || (state.status !== "failed" && state.status !== "unchanged")) {
-    return null;
-  }
-  return state.output?.trim() || state.message || "The provider update did not complete.";
-}
-
 // Keys of AppSettings whose value is a plain boolean — the only ones that can be
 // driven by the shared on/off toggle row below.
 type BooleanSettingKey = {
@@ -598,111 +327,100 @@ type BooleanSettingKey = {
 
 // ── Route screen ───────────────────────────────────────────────────────────
 
-// Scroll a deep-linked settings section into view when it becomes the active `?target=…`.
-// `retriggerKey` lets a panel re-attempt after late-loading data mounts the target element.
-function useSettingsTargetScroll(
-  active: boolean,
-  ref: RefObject<HTMLElement | null>,
-  retriggerKey?: unknown,
-): void {
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const frame = window.requestAnimationFrame(() => {
-      ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [active, ref, retriggerKey]);
-}
-
 function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
+  const settingsProviderTarget =
+    typeof routeSearch.provider === "string" && isProviderKind(routeSearch.provider)
+      ? routeSearch.provider
+      : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
-  const { isDefaultActiveTheme, resetAllThemes, resolvedTheme, theme, setTheme } = useTheme();
-  const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const {
+    isDefaultActiveTheme,
+    resetAllThemes,
+    resolvedTheme,
+    theme,
+    setTheme,
+    systemUiFont,
+    setSystemUiFont,
+  } = useTheme();
+  const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
+    useAppSettings();
+  const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const queryClient = useQueryClient();
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
-  const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
-  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
-  const removeDeletedThreadFromClientState = useStore(
-    (store) => store.removeDeletedThreadFromClientState,
-  );
-  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  // Shell-level subscription on purpose: the full-thread selector invalidates on every
-  // streaming message/activity tick, which would re-render this whole route while a
-  // turn is running. Settings only needs thread metadata (and message emptiness below).
-  const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
-  const allThreadsMessageless = useStore(useMemo(() => createAllThreadsMessagelessSelector(), []));
-  const projects = useStore((store) => store.projects);
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const archivedThreads = useMemo(
-    () => threadShells.filter((thread) => thread.archivedAt != null),
-    [threadShells],
-  );
-  const shouldOfferRecoveryTools = useMemo(() => {
-    if (!threadsHydrated || projects.length === 0) {
-      return false;
-    }
-    return threadShells.length === 0 || allThreadsMessageless;
-  }, [allThreadsMessageless, projects.length, threadShells.length, threadsHydrated]);
-
-  const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
-  const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
-  const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
-  const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
-  const providerUpdatesRef = useRef<HTMLDivElement | null>(null);
-  const providerInstallsRef = useRef<HTMLDivElement | null>(null);
-  const environmentPanelRef = useRef<HTMLDivElement | null>(null);
-  const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
-    codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
-    claudeAgent: Boolean(settings.claudeBinaryPath),
-    cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
-    gemini: Boolean(settings.geminiBinaryPath),
-    grok: Boolean(settings.grokBinaryPath),
-    kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
-    opencode: Boolean(
-      settings.openCodeBinaryPath ||
-      settings.openCodeExperimentalWebSockets ||
-      settings.openCodeServerUrl ||
-      settings.openCodeServerPassword,
-    ),
-    pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
-  });
-  const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderKind>>(
-    () => new Set(),
+  const [resetEpoch, setResetEpoch] = useState(0);
+  const platform = getNavigatorPlatform();
+  const desktopFlavor = useMemo(
+    () =>
+      desktopFlavorFromProtocol(
+        typeof window === "undefined" ? undefined : window.location?.protocol,
+        import.meta.env.DEV,
+      ),
+    [],
   );
-  const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
-    useState<ProviderKind>("codex");
-  const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
-    Record<ProviderKind, string>
-  >({
-    codex: "",
-    claudeAgent: "",
-    cursor: "",
-    gemini: "",
-    grok: "",
-    kilo: "",
-    opencode: "",
-    pi: "",
-  });
-  const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
-    Partial<Record<ProviderKind, string | null>>
-  >({});
-  const [showAllCustomModels, setShowAllCustomModels] = useState(false);
-  const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
-    readBrowserNotificationPermissionState(),
-  );
-  const shouldShowFontSmoothing = isMacPlatform(
-    typeof navigator === "undefined" ? "" : navigator.platform,
-  );
+  const defaultDesktopAppIcon = defaultDesktopAppIconForFlavor(desktopFlavor);
+  const shouldShowFontSmoothing = isMacPlatform(platform);
+  const supportsCustomTitleBarSetting =
+    isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
+  const customTitleBarState = useDesktopCustomTitleBarState();
+  const customTitleBarRestartRequired =
+    customTitleBarState.supported && settings.useCustomTitleBar !== customTitleBarState.active;
+  const customTitleBarPreferenceDirty =
+    supportsCustomTitleBarSetting &&
+    (settings.useCustomTitleBar !== defaults.useCustomTitleBar ||
+      (customTitleBarState.supported &&
+        customTitleBarState.preference !== defaults.useCustomTitleBar));
+
+  function showCustomTitleBarRestartToast(): void {
+    toastManager.add({
+      type: "warning",
+      title: "Restart to apply title bar",
+      description: "The window frame updates the next time Synara launches.",
+      actionProps: {
+        "aria-label": "Restart Synara",
+        children: "Restart",
+        onClick: () => {
+          void window.desktopBridge?.customTitleBar?.relaunch();
+        },
+      },
+    });
+  }
+
+  async function persistCustomTitleBarPreference(
+    enabled: boolean,
+  ): Promise<{ readonly restartRequired: boolean } | null> {
+    try {
+      const bridge = window.desktopBridge?.customTitleBar;
+      if (!bridge) throw new Error("Desktop title bar bridge is unavailable.");
+      const state = await bridge.setPreference(enabled);
+      if (!state.supported || state.preference !== enabled) {
+        throw new Error("Desktop title bar preference was not persisted.");
+      }
+      return state;
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not update title bar",
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  async function applyCustomTitleBarPreference(enabled: boolean): Promise<void> {
+    const previous = settings.useCustomTitleBar;
+    updateSettings({ useCustomTitleBar: enabled });
+    const state = await persistCustomTitleBarPreference(enabled);
+    if (state === null) {
+      updateSettings({ useCustomTitleBar: previous });
+      return;
+    }
+    if (state.restartRequired) showCustomTitleBarRestartToast();
+  }
+
   const visibleTerminalFontFamilySuggestions = useMemo(() => {
     const query = settings.terminalFontFamily.trim().toLowerCase();
     if (!query) return TERMINAL_FONT_FAMILY_SUGGESTIONS;
@@ -711,182 +429,41 @@ function SettingsRouteView() {
     );
   }, [settings.terminalFontFamily]);
 
-  const hiddenProviderSet = useMemo(
-    () => new Set<ProviderKind>(settings.hiddenProviders),
-    [settings.hiddenProviders],
-  );
-  const hiddenProviderCount = hiddenProviderSet.size;
-  const providerVisibilityOptionsByProvider = useMemo(
-    () => new Map(PROVIDER_VISIBILITY_OPTIONS.map((option) => [option.provider, option])),
-    [],
-  );
-  const orderedProviderVisibilityOptions = useMemo(
-    () =>
-      settings.providerOrder.flatMap((provider) => {
-        const option = providerVisibilityOptionsByProvider.get(provider);
-        return option ? [option] : [];
-      }),
-    [providerVisibilityOptionsByProvider, settings.providerOrder],
-  );
-  const providerVisibilitySensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 4,
-      },
-    }),
+  const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
+  const isInstallSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
+  const hiddenProviderCount = new Set(settings.hiddenProviders).size;
+  const enabledProviderSelectOptions = PROVIDER_SELECT_OPTIONS.filter(
+    (provider) => !settings.disabledProviders.includes(provider),
   );
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
-  const codexBinaryPath = settings.codexBinaryPath;
-  const codexHomePath = settings.codexHomePath;
-  const claudeBinaryPath = settings.claudeBinaryPath;
-  const cursorBinaryPath = settings.cursorBinaryPath;
-  const cursorApiEndpoint = settings.cursorApiEndpoint;
-  const geminiBinaryPath = settings.geminiBinaryPath;
-  const grokBinaryPath = settings.grokBinaryPath;
-  const kiloBinaryPath = settings.kiloBinaryPath;
-  const kiloServerUrl = settings.kiloServerUrl;
-  const kiloServerPassword = settings.kiloServerPassword;
-  const openCodeBinaryPath = settings.openCodeBinaryPath;
-  const openCodeExperimentalWebSockets = settings.openCodeExperimentalWebSockets;
-  const openCodeServerUrl = settings.openCodeServerUrl;
-  const openCodeServerPassword = settings.openCodeServerPassword;
-  const piBinaryPath = settings.piBinaryPath;
-  const piAgentDir = settings.piAgentDir;
-  const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
-  const availableEditors = serverConfigQuery.data?.availableEditors;
-  const providerStatusByProvider = useMemo(
-    () =>
-      new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
-    [serverConfigQuery.data?.providers],
-  );
-  const outdatedProviderStatuses = useMemo(
-    () =>
-      getVisibleProviderUpdateStatuses({
-        providers: serverConfigQuery.data?.providers ?? [],
-        hiddenProviders: settings.hiddenProviders,
-        serverSettings: serverSettingsQuery.data ?? null,
-      }),
-    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
-  );
-  const outdatedProviderCount = outdatedProviderStatuses.length;
-  useSettingsTargetScroll(
-    activeSection === "providers" && settingsTarget === SETTINGS_TARGETS.providerUpdates,
-    providerUpdatesRef,
-    serverConfigQuery.data?.providers,
-  );
+  const isProviderActivityDirty =
+    settings.disabledProviders.length !== defaults.disabledProviders.length ||
+    settings.disabledProviders.some(
+      (provider, index) => provider !== defaults.disabledProviders[index],
+    );
 
-  // Deep-link target for the chat Environment panel's gear button (see EnvironmentPanel).
-  useSettingsTargetScroll(
-    activeSection === "general" && settingsTarget === SETTINGS_TARGETS.environmentPanel,
-    environmentPanelRef,
-  );
-  const managedWorktrees = serverWorktreesQuery.data?.worktrees;
-  const worktreesByWorkspaceRoot = useMemo(
-    () =>
-      (managedWorktrees ?? []).reduce<
-        Array<{
-          workspaceRoot: string;
-          worktrees: Array<{
-            path: string;
-            linkedThreads: typeof threadShells;
-          }>;
-        }>
-      >((groups, worktree) => {
-        const linkedThreads = threadShells.filter((thread) => {
-          const candidatePaths = [
-            normalizeManagedWorktreePath(thread.worktreePath),
-            normalizeManagedWorktreePath(thread.associatedWorktreePath),
-          ];
-          return candidatePaths.includes(worktree.path);
-        });
-        const existingGroup = groups.find(
-          (group) => group.workspaceRoot === worktree.workspaceRoot,
-        );
-        const nextWorktree = {
-          path: worktree.path,
-          linkedThreads,
-        };
-        if (existingGroup) {
-          existingGroup.worktrees.push(nextWorktree);
-        } else {
-          groups.push({
-            workspaceRoot: worktree.workspaceRoot,
-            worktrees: [nextWorktree],
-          });
-        }
-        return groups;
-      }, []),
-    [managedWorktrees, threadShells],
-  );
+  // Deep links and sidebar search targets all resolve to stable DOM ids in the active panel.
+  useEffect(() => {
+    if (!settingsTarget) return;
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .getElementById(settingsTarget)
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSection, settingsTarget]);
 
-  const gitTextGenerationModelOptions = getGitTextGenerationModelOptions(settings);
-  const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
-  const currentGitTextGenerationModel =
-    settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
-  const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
-  const defaultGitTextGenerationProvider = defaults.textGenerationProvider ?? "codex";
-  const defaultGitTextGenerationModel =
-    defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
-  const isGitTextGenerationModelDirty =
-    currentGitTextGenerationProvider !== defaultGitTextGenerationProvider ||
-    currentGitTextGenerationModel !== defaultGitTextGenerationModel;
-  const selectedGitTextGenerationModelLabel =
-    gitTextGenerationModelOptions.find(
-      (option) =>
-        option.provider === currentGitTextGenerationProvider &&
-        option.slug === currentGitTextGenerationModel,
-    )?.name ?? currentGitTextGenerationModel;
-  const selectedCustomModelProviderSettings = MODEL_PROVIDER_SETTINGS.find(
-    (providerSettings) => providerSettings.provider === selectedCustomModelProvider,
-  )!;
-  const selectedCustomModelInput = customModelInputByProvider[selectedCustomModelProvider];
-  const selectedCustomModelError = customModelErrorByProvider[selectedCustomModelProvider] ?? null;
-  const totalCustomModels =
-    settings.customCodexModels.length +
-    settings.customClaudeModels.length +
-    settings.customCursorModels.length +
-    settings.customGeminiModels.length +
-    settings.customGrokModels.length +
-    settings.customKiloModels.length +
-    settings.customOpenCodeModels.length +
-    settings.customPiModels.length;
-  const savedCustomModelRows = useMemo(
-    () =>
-      MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
-        getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
-          key: `${providerSettings.provider}:${slug}`,
-          provider: providerSettings.provider,
-          providerTitle: providerSettings.title,
-          slug,
-        })),
-      ),
-    [settings],
-  );
-  const visibleCustomModelRows = showAllCustomModels
-    ? savedCustomModelRows
-    : savedCustomModelRows.slice(0, 5);
-  const isInstallSettingsDirty =
-    settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
-    settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
-    settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
-    settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
-    settings.grokBinaryPath !== defaults.grokBinaryPath ||
-    settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-    settings.kiloServerUrl !== defaults.kiloServerUrl ||
-    settings.kiloServerPassword !== defaults.kiloServerPassword ||
-    settings.codexBinaryPath !== defaults.codexBinaryPath ||
-    settings.codexHomePath !== defaults.codexHomePath ||
-    settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-    settings.openCodeExperimentalWebSockets !== defaults.openCodeExperimentalWebSockets ||
-    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-    settings.openCodeServerPassword !== defaults.openCodeServerPassword ||
-    settings.piBinaryPath !== defaults.piBinaryPath ||
-    settings.piAgentDir !== defaults.piAgentDir;
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.anchorSentMessagesToTop !== defaults.anchorSentMessagesToTop
+      ? ["Move sent messages to top"]
+      : []),
+    ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
+      ? ["Delete worktree on archive"]
+      : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -894,10 +471,16 @@ function SettingsRouteView() {
       ? ["Thread sort order"]
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
-    ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
-      ? ["Workspace section"]
+    ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
+      ? ["Hubs section"]
+      : []),
+    ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
+      ? ["Automation runs"]
       : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
+    ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
+    ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["App icon"] : []),
+    ...(customTitleBarPreferenceDirty ? ["Custom title bar"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
@@ -913,12 +496,59 @@ function SettingsRouteView() {
     defaults.enableSystemTaskCompletionNotifications
       ? ["Desktop notifications"]
       : []),
+    ...(settings.notifyAfterSubagentsFinish !== defaults.notifyAfterSubagentsFinish
+      ? ["Wait for subagents"]
+      : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.collapseFinishedTurns !== defaults.collapseFinishedTurns
+      ? ["Fold finished turns"]
+      : []),
+    ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
+    ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
+      ? ["Message trail sound"]
+      : []),
+    ...(settings.messageTrailMicrophoneId !== defaults.messageTrailMicrophoneId
+      ? ["Message trail microphone"]
+      : []),
+    ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.sidechatExpiry !== defaults.sidechatExpiry ? ["Side chat expiry"] : []),
+    ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
+      ? ["Enter while dictating"]
+      : []),
+    ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
+      ? ["Automatically open simulator"]
+      : []),
+    ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
+    ...(!sameAppSnapShortcut(settings.appSnapShortcut, defaults.appSnapShortcut)
+      ? ["AppSnap shortcut"]
+      : []),
+    ...(settings.appSnapPlaySound !== defaults.appSnapPlaySound ? ["AppSnap capture sound"] : []),
+    ...(settings.computerControlEnabled !== defaults.computerControlEnabled
+      ? ["Computer control"]
+      : []),
+    ...(settings.autoOpenComputerPane !== defaults.autoOpenComputerPane
+      ? ["Computer preview auto-open"]
+      : []),
+    ...(settings.agentCursorColorMode !== defaults.agentCursorColorMode
+      ? ["Agent cursor colors"]
+      : []),
+    ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
+      ? ["Provider update checks"]
+      : []),
+    ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
+      ? ["Keep Synara responsive"]
+      : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
-    ...(settings.enableComposerSuggestions !== defaults.enableComposerSuggestions
-      ? ["Prompt suggestions"]
+    ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
+      ? ["Open pull requests and issues"]
+      : []),
+    ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
+      ? ["Pull request diff colors"]
+      : []),
+    ...(settings.githubInboxIncludeUpstreams !== defaults.githubInboxIncludeUpstreams
+      ? ["Include fork upstreams"]
       : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
@@ -930,176 +560,25 @@ function SettingsRouteView() {
       ? ["Terminal close confirmation"]
       : []),
     ...(isGitTextGenerationModelDirty ? ["Git writing model"] : []),
+    ...(settings.sourceControlWritingStyle !== defaults.sourceControlWritingStyle ||
+    settings.sourceControlCustomInstructions !== defaults.sourceControlCustomInstructions
+      ? ["Source control writing style"]
+      : []),
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
-    settings.customGeminiModels.length > 0 ||
+    settings.customAntigravityModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
-    settings.customKiloModels.length > 0 ||
+    settings.customDroidModels.length > 0 ||
     settings.customOpenCodeModels.length > 0 ||
     settings.customPiModels.length > 0
       ? ["Custom models"]
       : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
+    ...(isProviderActivityDirty ? ["Provider activity"] : []),
     ...(hiddenProviderCount > 0 ? ["Provider visibility"] : []),
     ...(isProviderOrderDirty ? ["Provider order"] : []),
   ];
-
-  const openKeybindingsFile = useCallback(() => {
-    if (!keybindingsConfigPath) return;
-    setOpenKeybindingsError(null);
-    setIsOpeningKeybindings(true);
-    const api = ensureNativeApi();
-    const editor = resolveAndPersistPreferredEditor(availableEditors ?? []);
-    if (!editor) {
-      setOpenKeybindingsError("No available editors found.");
-      setIsOpeningKeybindings(false);
-      return;
-    }
-    void api.shell
-      .openInEditor(keybindingsConfigPath, editor)
-      .catch((error) => {
-        setOpenKeybindingsError(
-          error instanceof Error ? error.message : "Unable to open keybindings file.",
-        );
-      })
-      .finally(() => {
-        setIsOpeningKeybindings(false);
-      });
-  }, [availableEditors, keybindingsConfigPath]);
-
-  useEffect(() => {
-    setBrowserNotificationPermission(readBrowserNotificationPermissionState());
-  }, []);
-
-  const addCustomModel = useCallback(
-    (provider: ProviderKind) => {
-      const customModelInput = customModelInputByProvider[provider];
-      const customModels = getCustomModelsForProvider(settings, provider);
-      const normalized = normalizeModelSlug(customModelInput, provider);
-      if (!normalized) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "Enter a model slug.",
-        }));
-        return;
-      }
-      if (getModelOptions(provider).some((option) => option.slug === normalized)) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That model is already built in.",
-        }));
-        return;
-      }
-      if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
-        }));
-        return;
-      }
-      if (customModels.includes(normalized)) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That custom model is already saved.",
-        }));
-        return;
-      }
-
-      updateSettings(patchCustomModels(provider, [...customModels, normalized]));
-      setCustomModelInputByProvider((existing) => ({
-        ...existing,
-        [provider]: "",
-      }));
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
-    },
-    [customModelInputByProvider, settings, updateSettings],
-  );
-
-  const removeCustomModel = useCallback(
-    (provider: ProviderKind, slug: string) => {
-      const customModels = getCustomModelsForProvider(settings, provider);
-      updateSettings(
-        patchCustomModels(
-          provider,
-          customModels.filter((model) => model !== slug),
-        ),
-      );
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
-    },
-    [settings, updateSettings],
-  );
-
-  const handleProviderOrderDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) {
-        return;
-      }
-      const fromIndex = settings.providerOrder.indexOf(active.id as ProviderKind);
-      const toIndex = settings.providerOrder.indexOf(over.id as ProviderKind);
-      if (fromIndex < 0 || toIndex < 0) {
-        return;
-      }
-      updateSettings({
-        providerOrder: arrayMove([...settings.providerOrder], fromIndex, toIndex),
-      });
-    },
-    [settings.providerOrder, updateSettings],
-  );
-
-  const runProviderUpdate = useCallback(
-    async (provider: ProviderKind) => {
-      if (updatingProviders.has(provider)) {
-        return;
-      }
-      setUpdatingProviders((current) => new Set(current).add(provider));
-      try {
-        const result = await ensureNativeApi().server.updateProvider({ provider });
-        const refreshedProvider = result.providers.find((status) => status.provider === provider);
-        const failureMessage = providerUpdateFailureMessage(refreshedProvider);
-        if (failureMessage) {
-          const manualCommand = refreshedProvider?.versionAdvisory?.updateCommand?.trim();
-          toastManager.add({
-            type: "error",
-            title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
-            description: manualCommand
-              ? `${failureMessage}\n\nCopy the command below to update manually in a terminal.`
-              : failureMessage,
-            ...(manualCommand ? { data: { copyText: manualCommand } } : {}),
-          });
-          return;
-        }
-        toastManager.add({
-          type: "success",
-          title: `${PROVIDER_DISPLAY_NAMES[provider]} update finished`,
-          description: "New sessions will use the refreshed provider.",
-        });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
-          description: error instanceof Error ? error.message : "The provider update failed.",
-        });
-      } finally {
-        await queryClient
-          .invalidateQueries({ queryKey: serverQueryKeys.config() })
-          .catch(() => undefined);
-        setUpdatingProviders((current) => {
-          const next = new Set(current);
-          next.delete(provider);
-          return next;
-        });
-      }
-    },
-    [queryClient, updatingProviders],
-  );
 
   async function restoreDefaults() {
     if (changedSettingLabels.length === 0) return;
@@ -1112,307 +591,17 @@ function SettingsRouteView() {
     );
     if (!confirmed) return;
 
+    if (customTitleBarPreferenceDirty) {
+      const state = await persistCustomTitleBarPreference(defaults.useCustomTitleBar);
+      if (state === null) return;
+      if (state.restartRequired) showCustomTitleBarRestartToast();
+    }
+
     setTheme("system");
     resetAllThemes();
-    resetSettings();
-    setOpenInstallProviders({
-      codex: false,
-      claudeAgent: false,
-      cursor: false,
-      gemini: false,
-      grok: false,
-      kilo: false,
-      opencode: false,
-      pi: false,
-    });
-    setSelectedCustomModelProvider("codex");
-    setCustomModelInputByProvider({
-      codex: "",
-      claudeAgent: "",
-      cursor: "",
-      gemini: "",
-      grok: "",
-      kilo: "",
-      opencode: "",
-      pi: "",
-    });
-    setCustomModelErrorByProvider({});
-    setShowAllCustomModels(false);
-    setShowRecoveryTools(false);
-    setOpenKeybindingsError(null);
+    await resetSettings();
+    setResetEpoch((current) => current + 1);
   }
-
-  async function setSystemNotificationsEnabled(nextEnabled: boolean) {
-    if (!nextEnabled) {
-      updateSettings({ enableSystemTaskCompletionNotifications: false });
-      return;
-    }
-
-    if (isElectron) {
-      updateSettings({ enableSystemTaskCompletionNotifications: true });
-      return;
-    }
-
-    const permission = await requestBrowserNotificationPermission();
-    setBrowserNotificationPermission(permission);
-
-    if (permission === "granted") {
-      updateSettings({ enableSystemTaskCompletionNotifications: true });
-      return;
-    }
-
-    updateSettings({ enableSystemTaskCompletionNotifications: false });
-    toastManager.add({
-      type: permission === "denied" ? "warning" : "error",
-      title: "Desktop notifications unavailable",
-      description: buildNotificationSettingsSupportText(permission),
-    });
-  }
-
-  async function sendTestNotification() {
-    const title = "Activity notification";
-    const body = "Notification test for chats and terminal agents.";
-
-    if (window.desktopBridge) {
-      const shown = await window.desktopBridge.notifications.show({ title, body, silent: false });
-      toastManager.add({
-        type: shown ? "success" : "warning",
-        title: shown ? "Test notification sent" : "Notifications unavailable",
-        description: shown
-          ? "Your operating system should show the notification."
-          : "Desktop notifications are not supported on this device.",
-      });
-      return;
-    }
-
-    const permission = await requestBrowserNotificationPermission();
-    setBrowserNotificationPermission(permission);
-    if (permission !== "granted") {
-      toastManager.add({
-        type: permission === "denied" ? "warning" : "error",
-        title: "Desktop notifications unavailable",
-        description: buildNotificationSettingsSupportText(permission),
-      });
-      return;
-    }
-
-    const notification = new Notification(title, { body, tag: "synara:test-notification" });
-    notification.addEventListener("click", () => {
-      window.focus();
-    });
-    toastManager.add({
-      type: "success",
-      title: "Test notification sent",
-      description: "Your browser should show the notification.",
-    });
-  }
-
-  // Rebuild the local project indexes after an older install leaves them out of sync.
-  const repairLocalState = useCallback(async () => {
-    if (isRepairingLocalState) {
-      return;
-    }
-
-    const api = readNativeApi() ?? ensureNativeApi();
-    const confirmed = await api.dialogs.confirm(
-      [
-        "Repair local state?",
-        "This rebuilds local project indexes and refreshes project snapshots.",
-        "It keeps existing chats in place, but it may take a moment.",
-      ].join("\n"),
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setIsRepairingLocalState(true);
-    try {
-      const snapshot = await api.orchestration.repairState();
-      syncServerReadModel(snapshot);
-      toastManager.add({
-        type: "success",
-        title: "Local state repaired",
-        description: "Project indexes were rebuilt without clearing existing chats.",
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Repair failed",
-        description: error instanceof Error ? error.message : "Unable to repair local state.",
-      });
-    } finally {
-      setIsRepairingLocalState(false);
-    }
-  }, [isRepairingLocalState, syncServerReadModel]);
-
-  const deleteManagedWorktree = useCallback(
-    async (input: { workspaceRoot: string; worktreePath: string }) => {
-      const api = readNativeApi() ?? ensureNativeApi();
-      const displayName = formatWorktreePathForDisplay(input.worktreePath);
-      const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
-      if (snapshot === null) {
-        toastManager.add({
-          type: "error",
-          title: "Could not verify linked conversations",
-          description: "Retry once the app reconnects to the server.",
-        });
-        return;
-      }
-
-      const linkedThreadsFromSnapshot = snapshot.threads.filter((thread) => {
-        const candidatePaths = [
-          normalizeManagedWorktreePath(thread.worktreePath),
-          normalizeManagedWorktreePath(thread.associatedWorktreePath ?? null),
-        ];
-        return candidatePaths.includes(input.worktreePath);
-      });
-      const linkedArchivedThreadIds = linkedThreadsFromSnapshot
-        .filter((thread) => (thread.archivedAt ?? null) !== null)
-        .map((thread) => thread.id);
-      const linkedActiveThreadCount = linkedThreadsFromSnapshot.filter(
-        (thread) => (thread.archivedAt ?? null) === null,
-      ).length;
-      const linkedConversationCount = linkedActiveThreadCount + linkedArchivedThreadIds.length;
-      const confirmed = await api.dialogs.confirm(
-        linkedConversationCount > 0
-          ? [
-              `Delete worktree "${displayName}"?`,
-              "",
-              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
-              linkedArchivedThreadIds.length > 0
-                ? "Archived conversations will be deleted first."
-                : "Deleting it can break reopening those chats in the same workspace.",
-              "",
-              "Delete the worktree anyway?",
-            ].join("\n")
-          : [`Delete worktree "${displayName}"?`, "This removes the Git worktree from disk."].join(
-              "\n",
-            ),
-      );
-      if (!confirmed) {
-        return;
-      }
-
-      try {
-        await deleteArchivedThreadsFromClient({
-          api: api.orchestration,
-          threadIds: linkedArchivedThreadIds,
-          removeDeletedThreadFromClientState,
-          syncServerShellSnapshot,
-        });
-
-        await removeWorktreeMutation.mutateAsync({
-          cwd: input.workspaceRoot,
-          path: input.worktreePath,
-          force: true,
-        });
-        await queryClient.invalidateQueries({
-          queryKey: serverQueryKeys.worktrees(),
-        });
-        toastManager.add({
-          type: "success",
-          title: "Worktree deleted",
-          description:
-            linkedArchivedThreadIds.length > 0
-              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
-              : `${displayName} was removed.`,
-        });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not delete worktree",
-          description: error instanceof Error ? error.message : "Unable to delete the worktree.",
-        });
-      }
-    },
-    [
-      queryClient,
-      removeDeletedThreadFromClientState,
-      removeWorktreeMutation,
-      syncServerShellSnapshot,
-    ],
-  );
-
-  const unarchiveThread = useCallback(async (threadId: ThreadId) => {
-    const api = readNativeApi();
-    if (!api) return;
-    try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.unarchive",
-        commandId: newCommandId(),
-        threadId,
-      });
-      toastManager.add({
-        type: "success",
-        title: "Thread restored",
-        description: "The thread has been moved back to the sidebar.",
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not restore thread",
-        description: error instanceof Error ? error.message : "Unable to restore the thread.",
-      });
-    }
-  }, []);
-
-  const deleteArchivedThread = useCallback(
-    async (threadId: ThreadId, threadTitle: string) => {
-      const api = readNativeApi();
-      if (!api) return;
-
-      const confirmed = await api.dialogs.confirm(
-        `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
-      );
-      if (!confirmed) return;
-
-      try {
-        await deleteArchivedThreadFromClient({
-          api: api.orchestration,
-          threadId,
-          removeDeletedThreadFromClientState,
-          syncServerShellSnapshot,
-        });
-        toastManager.add({
-          type: "success",
-          title: "Thread deleted",
-          description: "The archived thread has been permanently removed.",
-        });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not delete thread",
-          description: error instanceof Error ? error.message : "Unable to delete the thread.",
-        });
-      }
-    },
-    [removeDeletedThreadFromClientState, syncServerShellSnapshot],
-  );
-
-  const handleArchivedThreadContextMenu = useCallback(
-    async (threadId: ThreadId, threadTitle: string, position: { x: number; y: number }) => {
-      const api = readNativeApi();
-      if (!api) return;
-
-      const clicked = await api.contextMenu.show(
-        [
-          { id: "restore", label: "Restore" },
-          { id: "delete", label: "Delete", destructive: true },
-        ],
-        position,
-      );
-
-      if (clicked === "restore") {
-        await unarchiveThread(threadId);
-        return;
-      }
-
-      if (clicked === "delete") {
-        await deleteArchivedThread(threadId, threadTitle);
-      }
-    },
-    [deleteArchivedThread, unarchiveThread],
-  );
 
   // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
   // key, with the standard "reset to default" affordance shown only when changed.
@@ -1456,10 +645,12 @@ function SettingsRouteView() {
 
   const renderGeneralPanel = () => (
     <div className="space-y-6">
+      <SafariAccessSetupButton />
+      <BetaChannelSettingsPanel active={true} />
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
-          description="Choose the provider used for new chats."
+          description="Provider used for new chats until you pick a model. New chats then reuse your most recent model and options."
           resetAction={
             settings.defaultProvider !== defaults.defaultProvider ? (
               <SettingResetButton
@@ -1470,20 +661,30 @@ function SettingsRouteView() {
           }
           control={
             <SettingsSelectControl
-              value={settings.defaultProvider}
+              value={
+                settings.disabledProviders.includes(settings.defaultProvider)
+                  ? null
+                  : settings.defaultProvider
+              }
+              disabled={enabledProviderSelectOptions.length === 0}
               onValueChange={(value) => {
-                if (!isProviderSelectOption(value)) return;
+                if (!isProviderSelectOption(value) || settings.disabledProviders.includes(value))
+                  return;
                 updateSettings({ defaultProvider: value });
               }}
               ariaLabel="Default provider"
               valueContent={
-                <ProviderOptionLabel
-                  provider={settings.defaultProvider}
-                  label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
-                />
+                settings.disabledProviders.includes(settings.defaultProvider) ? (
+                  "Choose an enabled provider"
+                ) : (
+                  <ProviderOptionLabel
+                    provider={settings.defaultProvider}
+                    label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
+                  />
+                )
               }
             >
-              {PROVIDER_SELECT_OPTIONS.map((provider) => (
+              {enabledProviderSelectOptions.map((provider) => (
                 <SelectItem hideIndicator key={provider} value={provider}>
                   <ProviderOptionLabel
                     provider={provider}
@@ -1529,6 +730,37 @@ function SettingsRouteView() {
                 New worktree
               </SelectItem>
             </SettingsSelectControl>
+          }
+        />
+
+        {renderBooleanSettingRow({
+          settingKey: "archiveDeletesOrphanedWorktree",
+          title: "Delete worktree on archive",
+          description:
+            "After Archive's Undo period, remove a clean worktree only if the task has stopped and no other task uses it. Its branch remains available for recovery.",
+          resetLabel: "delete worktree on archive",
+          ariaLabel: "Delete worktree on archive",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "anchorSentMessagesToTop",
+          title: "Move sent messages to top",
+          description:
+            "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream.",
+          resetLabel: "move sent messages to top",
+          ariaLabel: "Move sent messages to top",
+        })}
+
+        <SettingsRow
+          title="Welcome tour"
+          description="Replay the first-run setup: feature tour, provider selection, appearance, and first project."
+          control={
+            <Button
+              variant="outline"
+              onClick={() => useOnboardingDialogStore.getState().openDialog()}
+            >
+              Open welcome tour
+            </Button>
           }
         />
       </SettingsSection>
@@ -1622,18 +854,48 @@ function SettingsRouteView() {
           ariaLabel: "Show the Chats section in the sidebar",
         })}
 
+        {GROUPS_ON
+          ? renderBooleanSettingRow({
+              settingKey: "showGroupsSection",
+              title: "Hubs",
+              description: "Show the Hubs tab in the sidebar switcher.",
+              resetLabel: "hubs section",
+              ariaLabel: "Show the Hubs section in the sidebar",
+            })
+          : null}
+
         {renderBooleanSettingRow({
-          settingKey: "showWorkspaceSection",
-          title: "Workspace",
+          settingKey: "showAutomationRunThreads",
+          title: "Automation runs",
           description:
-            "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible.",
-          resetLabel: "workspace section",
-          ariaLabel: "Show the Workspace section in the sidebar",
+            "Show the thread each standalone automation run creates. Runs stay listed on the automation's page either way; threads owned by dedicated or heartbeat automations always stay visible.",
+          resetLabel: "automation runs",
+          ariaLabel: "Show automation run threads in the sidebar",
         })}
       </SettingsSection>
 
-      <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
+      <div id={SETTINGS_TARGETS.environmentPanel} className="space-y-6">
         <SettingsSection title="Environment panel">
+          {renderBooleanSettingRow({
+            settingKey: "environmentPanelDefaultOpen",
+            title: "Open by default",
+            description:
+              "Open the chat Environment panel automatically on normal threads. When off, the panel stays closed until you open it. Your last open/close also updates this preference.",
+            resetLabel: "environment panel default open",
+            ariaLabel: "Open the Environment panel by default on normal threads",
+          })}
+        </SettingsSection>
+
+        <SettingsSection title="Code and status">
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentSubagents",
+            title: "Subagents",
+            description:
+              "Show a compact summary of the chat's subagents in the Environment panel. Click it to open the full list, running and done, in the right dock.",
+            resetLabel: "subagents section",
+            ariaLabel: "Show the Subagents section in the Environment panel",
+          })}
+
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentUsage",
             title: "Usage",
@@ -1652,6 +914,15 @@ function SettingsRouteView() {
           })}
 
           {renderBooleanSettingRow({
+            settingKey: "showEnvironmentPullRequest",
+            title: "Pull request",
+            description:
+              "Show the open pull request (CI checks and review comments) for the current branch in the chat Environment panel.",
+            resetLabel: "pull request section",
+            ariaLabel: "Show the Pull request section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
             settingKey: "showEnvironmentEditor",
             title: "Editor",
             description:
@@ -1659,7 +930,9 @@ function SettingsRouteView() {
             resetLabel: "editor section",
             ariaLabel: "Show the Editor section in the Environment panel",
           })}
+        </SettingsSection>
 
+        <SettingsSection title="Context and notes">
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentRecap",
             title: "Recap",
@@ -1677,12 +950,11 @@ function SettingsRouteView() {
           })}
 
           {renderBooleanSettingRow({
-            settingKey: "showEnvironmentMarkers",
-            title: "Text markers",
-            description:
-              "Show highlighted and underlined transcript text in the Environment panel.",
-            resetLabel: "text markers section",
-            ariaLabel: "Show the Text markers section in the Environment panel",
+            settingKey: "showEnvironmentInstructions",
+            title: "Project instructions",
+            description: "Show project-level instructions in the Environment panel.",
+            resetLabel: "project instructions section",
+            ariaLabel: "Show the Project instructions section in the Environment panel",
           })}
 
           {renderBooleanSettingRow({
@@ -1699,30 +971,21 @@ function SettingsRouteView() {
 
   const renderAppearancePanel = () => (
     <div className="space-y-6">
-      <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
-        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Theme and typography</h2>
-        <SettingsCard>
-          <SettingsRow
-            title="Theme"
-            description="Choose how Synara looks across the app."
-            resetAction={
-              theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-              ) : null
-            }
-            control={
-              <SettingsSegmentedControl
-                value={theme}
-                onValueChange={(value) => {
-                  if (value !== "system" && value !== "light" && value !== "dark") return;
-                  setTheme(value);
-                }}
-                ariaLabel="Theme preference"
-                options={THEME_OPTIONS}
-              />
-            }
-          />
-        </SettingsCard>
+      <SettingsSectionShell
+        title="Theme"
+        action={
+          theme !== "system" ? (
+            <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+          ) : null
+        }
+      >
+        {/* The mode picker is the one settings control that sits directly on the page
+            instead of inside a card — the mockups are the whole UI, so boxing them in
+            a card reads as chrome around chrome. The anchor keeps search deep-links
+            (`?target=setting-theme`) working without the SettingsRow. */}
+        <div id={settingRowAnchorId("Theme")} className="scroll-mt-24 pb-1.5">
+          <ThemeModePicker value={theme} onValueChange={setTheme} ariaLabel="Theme preference" />
+        </div>
 
         <div className="space-y-3">
           {(resolvedTheme === "dark"
@@ -1737,189 +1000,315 @@ function SettingsRouteView() {
             />
           ))}
         </div>
+      </SettingsSectionShell>
 
-        <SettingsCard>
+      {isElectron ? (
+        <SettingsSection title="App">
           <SettingsRow
-            title="UI density"
-            description="Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size."
+            title="App icon"
+            description="Choose the icon Synara uses in the dock or taskbar."
             resetAction={
-              settings.uiDensity !== defaults.uiDensity ? (
+              settings.desktopAppIcon !== defaultDesktopAppIcon ? (
                 <SettingResetButton
-                  label="UI density"
-                  onClick={() =>
-                    updateSettings({
-                      uiDensity: DEFAULT_UI_DENSITY,
-                    })
-                  }
+                  label="app icon"
+                  onClick={() => updateSettings({ desktopAppIcon: defaultDesktopAppIcon })}
                 />
               ) : null
             }
             control={
-              <SettingsSegmentedControl
-                value={settings.uiDensity}
-                onValueChange={(value) => {
-                  if (!isUiDensity(value)) {
-                    return;
+              <AppIconPicker
+                platform={platform}
+                value={settings.desktopAppIcon}
+                onValueChange={async (desktopAppIcon) => {
+                  if (desktopAppIcon !== settings.desktopAppIcon) {
+                    updateSettings({ desktopAppIcon });
                   }
-                  updateSettings({ uiDensity: value });
+                  await window.desktopBridge?.setAppIcon(desktopAppIcon);
                 }}
-                ariaLabel="UI density"
-                options={UI_DENSITY_OPTIONS}
               />
             }
           />
-
-          <SettingsRow
-            title="Base font size"
-            description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
-            resetAction={
-              settings.chatFontSizePx !== defaults.chatFontSizePx ? (
-                <SettingResetButton
-                  label="base font size"
-                  onClick={() =>
-                    updateSettings({
-                      chatFontSizePx: defaults.chatFontSizePx,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                <Input
-                  type="number"
-                  min={MIN_CHAT_FONT_SIZE_PX}
-                  max={MAX_CHAT_FONT_SIZE_PX}
-                  step={1}
-                  inputMode="numeric"
-                  className="w-full text-right sm:w-20"
-                  value={String(settings.chatFontSizePx)}
-                  onChange={(event) => {
-                    const nextValue = event.target.value.trim();
-                    if (nextValue.length === 0) return;
-                    updateSettings({
-                      chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
-                    });
-                  }}
-                  aria-label="Base font size in pixels"
-                />
-                <span className="text-xs text-muted-foreground">px</span>
-              </div>
-            }
-          />
-
-          <SettingsRow
-            title="Terminal font size"
-            description="Adjust terminal text independently from the app and chat font size."
-            resetAction={
-              settings.terminalFontSizePx !== defaults.terminalFontSizePx ? (
-                <SettingResetButton
-                  label="terminal font size"
-                  onClick={() =>
-                    updateSettings({
-                      terminalFontSizePx: defaults.terminalFontSizePx,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                <Input
-                  type="number"
-                  min={MIN_TERMINAL_FONT_SIZE_PX}
-                  max={MAX_TERMINAL_FONT_SIZE_PX}
-                  step={1}
-                  inputMode="numeric"
-                  className="w-full text-right sm:w-20"
-                  value={String(settings.terminalFontSizePx)}
-                  onChange={(event) => {
-                    const nextValue = event.target.value.trim();
-                    if (nextValue.length === 0) return;
-                    updateSettings({
-                      terminalFontSizePx: normalizeTerminalFontSizePx(Number(nextValue)),
-                    });
-                  }}
-                  aria-label="Terminal font size in pixels"
-                />
-                <span className="text-xs text-muted-foreground">px</span>
-              </div>
-            }
-          />
-
-          <SettingsRow
-            title="Terminal font"
-            description="Type any monospace font installed on this device (e.g. Fira Code). Leave empty for the default. Fonts that aren't installed fall back to the system monospace."
-            resetAction={
-              settings.terminalFontFamily !== defaults.terminalFontFamily ? (
-                <SettingResetButton
-                  label="terminal font"
-                  onClick={() =>
-                    updateSettings({
-                      terminalFontFamily: defaults.terminalFontFamily,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <div className="flex w-full items-center justify-end sm:w-auto">
-                <Autocomplete
-                  items={visibleTerminalFontFamilySuggestions}
-                  mode="none"
-                  openOnInputClick
-                  value={settings.terminalFontFamily}
-                  onValueChange={(value) => {
-                    updateSettings({
-                      terminalFontFamily: normalizeTerminalFontFamily(value),
-                    });
-                  }}
-                >
-                  <AutocompleteInput
-                    showTrigger
-                    showClear={settings.terminalFontFamily.length > 0}
-                    spellCheck={false}
-                    autoComplete="off"
-                    placeholder="Default (JetBrains Mono)"
-                    className="w-full sm:w-56"
-                    aria-label="Terminal font family"
+          {supportsCustomTitleBarSetting ? (
+            <SettingsRow
+              title="Use custom title bar"
+              description={
+                customTitleBarRestartRequired
+                  ? "Restart Synara to apply. Some Linux window managers work better with the system title bar."
+                  : "Replace the system title bar with Synara's frameless chrome and window controls. Restart required to apply."
+              }
+              status={customTitleBarRestartRequired ? "Restart required" : undefined}
+              resetAction={
+                settings.useCustomTitleBar !== defaults.useCustomTitleBar ? (
+                  <SettingResetButton
+                    label="custom title bar"
+                    onClick={() => {
+                      void applyCustomTitleBarPreference(defaults.useCustomTitleBar);
+                    }}
                   />
-                  <AutocompletePopup className="w-56 min-w-56 font-system-ui">
-                    <AutocompleteList>
-                      {visibleTerminalFontFamilySuggestions.map((suggestion, index) => (
-                        <AutocompleteItem
-                          key={suggestion}
-                          index={index}
-                          value={suggestion}
-                          className="font-normal text-[var(--color-text-foreground)]"
-                          onClick={() => {
-                            updateSettings({
-                              terminalFontFamily: normalizeTerminalFontFamily(suggestion),
-                            });
-                          }}
-                        >
-                          {suggestion}
-                        </AutocompleteItem>
-                      ))}
-                      <AutocompleteEmpty>No matching suggested fonts.</AutocompleteEmpty>
-                    </AutocompleteList>
-                  </AutocompletePopup>
-                </Autocomplete>
-              </div>
-            }
-          />
+                ) : null
+              }
+              control={
+                <div className="flex items-center gap-2">
+                  {customTitleBarRestartRequired ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() => {
+                        void window.desktopBridge?.customTitleBar?.relaunch();
+                      }}
+                    >
+                      Restart
+                    </Button>
+                  ) : null}
+                  <Switch
+                    checked={settings.useCustomTitleBar}
+                    onCheckedChange={(checked) => {
+                      void applyCustomTitleBarPreference(Boolean(checked));
+                    }}
+                    aria-label="Use custom title bar"
+                  />
+                </div>
+              }
+            />
+          ) : null}
+        </SettingsSection>
+      ) : null}
 
-          {shouldShowFontSmoothing
-            ? renderBooleanSettingRow({
-                settingKey: "enableNativeFontSmoothing",
-                title: "Font smoothing",
-                description: "Use macOS-style antialiasing for lighter, crisper text rendering.",
-                resetLabel: "font smoothing",
-                ariaLabel: "Enable font smoothing",
-              })
-            : null}
-        </SettingsCard>
-      </section>
+      <SettingsSection title="Typography and spacing">
+        <SettingsRow
+          title="Use system UI font"
+          description="Ignore the theme's custom UI font and render the interface with the native system font (SF Pro on macOS)."
+          resetAction={
+            !systemUiFont ? (
+              <SettingResetButton label="system UI font" onClick={() => setSystemUiFont(true)} />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={systemUiFont}
+              onCheckedChange={(checked) => setSystemUiFont(Boolean(checked))}
+              aria-label="Use system UI font"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="UI density"
+          description="Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size."
+          resetAction={
+            settings.uiDensity !== defaults.uiDensity ? (
+              <SettingResetButton
+                label="UI density"
+                onClick={() =>
+                  updateSettings({
+                    uiDensity: DEFAULT_UI_DENSITY,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.uiDensity}
+              onValueChange={(value) => {
+                if (!isUiDensity(value)) {
+                  return;
+                }
+                updateSettings({ uiDensity: value });
+              }}
+              ariaLabel="UI density"
+              options={UI_DENSITY_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Chat width"
+          description="Control how wide the chat column grows. Wide and Full give tables and wide content more room."
+          resetAction={
+            settings.chatWidth !== defaults.chatWidth ? (
+              <SettingResetButton
+                label="chat width"
+                onClick={() =>
+                  updateSettings({
+                    chatWidth: DEFAULT_CHAT_WIDTH,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.chatWidth}
+              onValueChange={(value) => {
+                if (!isChatWidthMode(value)) {
+                  return;
+                }
+                updateSettings({ chatWidth: value });
+              }}
+              ariaLabel="Chat width"
+              options={CHAT_WIDTH_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Base font size"
+          description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
+          resetAction={
+            settings.chatFontSizePx !== defaults.chatFontSizePx ? (
+              <SettingResetButton
+                label="base font size"
+                onClick={() =>
+                  updateSettings({
+                    chatFontSizePx: defaults.chatFontSizePx,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              <Input
+                type="number"
+                size="sm"
+                min={MIN_CHAT_FONT_SIZE_PX}
+                max={MAX_CHAT_FONT_SIZE_PX}
+                step={1}
+                inputMode="numeric"
+                variant="soft"
+                className="w-full text-right sm:w-20"
+                value={String(settings.chatFontSizePx)}
+                onChange={(event) => {
+                  const nextValue = event.target.value.trim();
+                  if (nextValue.length === 0) return;
+                  updateSettings({
+                    chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
+                  });
+                }}
+                aria-label="Base font size in pixels"
+              />
+              <span className="text-ui leading-snug text-muted-foreground">px</span>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="Terminal font size"
+          description="Adjust terminal text independently from the app and chat font size."
+          resetAction={
+            settings.terminalFontSizePx !== defaults.terminalFontSizePx ? (
+              <SettingResetButton
+                label="terminal font size"
+                onClick={() =>
+                  updateSettings({
+                    terminalFontSizePx: defaults.terminalFontSizePx,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              <Input
+                type="number"
+                size="sm"
+                min={MIN_TERMINAL_FONT_SIZE_PX}
+                max={MAX_TERMINAL_FONT_SIZE_PX}
+                step={1}
+                inputMode="numeric"
+                variant="soft"
+                className="w-full text-right sm:w-20"
+                value={String(settings.terminalFontSizePx)}
+                onChange={(event) => {
+                  const nextValue = event.target.value.trim();
+                  if (nextValue.length === 0) return;
+                  updateSettings({
+                    terminalFontSizePx: normalizeTerminalFontSizePx(Number(nextValue)),
+                  });
+                }}
+                aria-label="Terminal font size in pixels"
+              />
+              <span className="text-ui leading-snug text-muted-foreground">px</span>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="Terminal font"
+          description="Type any monospace font installed on this device (e.g. Fira Code). Leave empty for the default. Fonts that aren't installed fall back to the system monospace."
+          resetAction={
+            settings.terminalFontFamily !== defaults.terminalFontFamily ? (
+              <SettingResetButton
+                label="terminal font"
+                onClick={() =>
+                  updateSettings({
+                    terminalFontFamily: defaults.terminalFontFamily,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center justify-end sm:w-auto">
+              <Autocomplete
+                items={visibleTerminalFontFamilySuggestions}
+                mode="none"
+                openOnInputClick
+                value={settings.terminalFontFamily}
+                onValueChange={(value) => {
+                  updateSettings({
+                    terminalFontFamily: normalizeTerminalFontFamily(value),
+                  });
+                }}
+              >
+                <AutocompleteInput
+                  size="sm"
+                  variant="soft"
+                  showTrigger
+                  showClear={settings.terminalFontFamily.length > 0}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="Default (JetBrains Mono)"
+                  className="w-full sm:w-56"
+                  aria-label="Terminal font family"
+                />
+                <AutocompletePopup className="w-56 min-w-56 font-system-ui">
+                  <AutocompleteList>
+                    {visibleTerminalFontFamilySuggestions.map((suggestion, index) => (
+                      <AutocompleteItem
+                        key={suggestion}
+                        index={index}
+                        value={suggestion}
+                        className="font-normal text-[var(--color-text-foreground)]"
+                        onClick={() => {
+                          updateSettings({
+                            terminalFontFamily: normalizeTerminalFontFamily(suggestion),
+                          });
+                        }}
+                      >
+                        {suggestion}
+                      </AutocompleteItem>
+                    ))}
+                    <AutocompleteEmpty>No matching suggested fonts.</AutocompleteEmpty>
+                  </AutocompleteList>
+                </AutocompletePopup>
+              </Autocomplete>
+            </div>
+          }
+        />
+
+        {shouldShowFontSmoothing
+          ? renderBooleanSettingRow({
+              settingKey: "enableNativeFontSmoothing",
+              title: "Font smoothing",
+              description: "Use macOS-style antialiasing for lighter, crisper text rendering.",
+              resetLabel: "font smoothing",
+              ariaLabel: "Enable font smoothing",
+            })
+          : null}
+      </SettingsSection>
 
       <SettingsSection title="Time and reading">
         <SettingsRow
@@ -1968,58 +1357,84 @@ function SettingsRouteView() {
     </div>
   );
 
-  const renderNotificationsPanel = () => (
+  const renderBehaviorPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Activity alerts">
-        {renderBooleanSettingRow({
-          settingKey: "enableTaskCompletionToasts",
-          title: "Activity toasts",
-          description:
-            "Show an in-app toast when a chat or managed terminal agent finishes or needs input.",
-          resetLabel: "activity toasts",
-          ariaLabel: "Activity toast notifications",
-        })}
-
+      <SettingsSection title="Conversation">
         <SettingsRow
-          title="Desktop notifications"
-          description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
-          status={buildNotificationSettingsSupportText(browserNotificationPermission)}
+          title="Follow-up behavior"
+          description="Choose whether messages sent during an active turn wait in the queue or steer the current run. Ctrl/Cmd+Enter uses the opposite behavior for one message."
           resetAction={
-            settings.enableSystemTaskCompletionNotifications !==
-            defaults.enableSystemTaskCompletionNotifications ? (
+            settings.followUpBehavior !== defaults.followUpBehavior ? (
               <SettingResetButton
-                label="desktop notifications"
+                label="follow-up behavior"
                 onClick={() =>
                   updateSettings({
-                    enableSystemTaskCompletionNotifications:
-                      defaults.enableSystemTaskCompletionNotifications,
+                    followUpBehavior: defaults.followUpBehavior,
                   })
                 }
               />
             ) : null
           }
           control={
-            <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
-              <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
-                Test
-              </Button>
-              <Switch
-                checked={settings.enableSystemTaskCompletionNotifications}
-                onCheckedChange={(checked) => {
-                  void setSystemNotificationsEnabled(Boolean(checked));
-                }}
-                aria-label="Desktop activity notifications"
-              />
-            </div>
+            <SettingsSegmentedControl
+              value={settings.followUpBehavior}
+              onValueChange={(value) => updateSettings({ followUpBehavior: value })}
+              ariaLabel="Follow-up behavior"
+              options={FOLLOW_UP_BEHAVIOR_OPTIONS}
+            />
           }
         />
-      </SettingsSection>
-    </div>
-  );
 
-  const renderBehaviorPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Runtime behavior">
+        <SettingsRow
+          title="Side chat expiry"
+          description="Expire a side chat after it sits idle, unviewed and not running, for this long. Expired side chats are read-only and unload their provider session."
+          resetAction={
+            settings.sidechatExpiry !== defaults.sidechatExpiry ? (
+              <SettingResetButton
+                label="side chat expiry"
+                onClick={() =>
+                  updateSettings({
+                    sidechatExpiry: defaults.sidechatExpiry,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.sidechatExpiry}
+              onValueChange={(value) => updateSettings({ sidechatExpiry: value })}
+              ariaLabel="Side chat expiry"
+              options={SIDECHAT_EXPIRY_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Enter while dictating"
+          description="Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message once it is transcribed."
+          resetAction={
+            settings.voiceEnterBehavior !== defaults.voiceEnterBehavior ? (
+              <SettingResetButton
+                label="enter while dictating"
+                onClick={() =>
+                  updateSettings({
+                    voiceEnterBehavior: defaults.voiceEnterBehavior,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.voiceEnterBehavior}
+              onValueChange={(value) => updateSettings({ voiceEnterBehavior: value })}
+              ariaLabel="Enter while dictating"
+              options={VOICE_ENTER_BEHAVIOR_OPTIONS}
+            />
+          }
+        />
+
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
           title: "Assistant output",
@@ -2029,20 +1444,143 @@ function SettingsRouteView() {
         })}
 
         {renderBooleanSettingRow({
+          settingKey: "collapseFinishedTurns",
+          title: "Fold finished turns",
+          description:
+            'Hide a finished turn\'s tool calls and intermediate messages behind a single "Worked for…" line. A turn stays open while it runs or while its background subagents are still working. Turn this off to keep every step visible.',
+          resetLabel: "fold finished turns",
+          ariaLabel: "Fold finished turns",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "composerEffortSlider",
+          title: "Effort slider",
+          description:
+            "Show effort as a slider at the bottom of the composer's model picker, with fast mode and reset alongside it, instead of separate Effort and Speed rows.",
+          resetLabel: "effort slider",
+          ariaLabel: "Show effort slider in the composer",
+        })}
+
+        {isAudioLevelAvailable() ? (
+          <SettingsRow
+            title="Message trail sound"
+            description="Make the message marks on the left of long chats move with sound: what your Mac plays (a video, a meeting), your microphone, or whichever is louder. macOS asks for access the first time. Synara only reads how loud the sound is and never records it."
+            resetAction={
+              settings.messageTrailAudioSource !== defaults.messageTrailAudioSource ? (
+                <SettingResetButton
+                  label="message trail sound"
+                  onClick={() =>
+                    updateSettings({ messageTrailAudioSource: defaults.messageTrailAudioSource })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <SettingsSegmentedControl
+                value={settings.messageTrailAudioSource}
+                onValueChange={(value) => updateSettings({ messageTrailAudioSource: value })}
+                ariaLabel="Message trail sound"
+                options={MESSAGE_TRAIL_AUDIO_SOURCE_OPTIONS}
+              />
+            }
+          />
+        ) : null}
+
+        {isAudioLevelAvailable() &&
+        (settings.messageTrailAudioSource === "microphone" ||
+          settings.messageTrailAudioSource === "both") ? (
+          <MessageTrailMicrophoneRow
+            value={settings.messageTrailMicrophoneId}
+            defaultValue={defaults.messageTrailMicrophoneId}
+            onChange={(messageTrailMicrophoneId) => updateSettings({ messageTrailMicrophoneId })}
+          />
+        ) : null}
+
+        {renderBooleanSettingRow({
+          settingKey: "autoOpenDevicePane",
+          title: "Automatically open simulator",
+          description:
+            "Open the iOS Simulator pane when an agent uses a device. Turn this off to use Simulator.app without the mirrored pane reopening. You can still open the pane manually.",
+          resetLabel: "automatically open simulator",
+          ariaLabel: "Automatically open simulator",
+        })}
+      </SettingsSection>
+
+      <KeepAwakeSettingsSection
+        state={keepAwake}
+        mode={settings.keepAwakeMode}
+        defaultMode={defaults.keepAwakeMode}
+        onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
+      />
+
+      <SettingsSection title="Review">
+        <SettingsRow
+          title="Open pull requests and issues"
+          description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."
+          resetAction={
+            settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget ? (
+              <SettingResetButton
+                label="open pull requests and issues"
+                onClick={() =>
+                  updateSettings({
+                    githubLinkOpenTarget: defaults.githubLinkOpenTarget,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.githubLinkOpenTarget}
+              onValueChange={(value) => {
+                if (value !== "app" && value !== "browser" && value !== "external") {
+                  return;
+                }
+                updateSettings({
+                  githubLinkOpenTarget: value,
+                });
+              }}
+              ariaLabel="Open pull requests and issues"
+              triggerClassName="w-full sm:w-40"
+              valueContent={GITHUB_LINK_OPEN_TARGET_LABELS[settings.githubLinkOpenTarget]}
+            >
+              <SelectItem hideIndicator value="app">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.app}
+              </SelectItem>
+              <SelectItem hideIndicator value="browser">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.browser}
+              </SelectItem>
+              <SelectItem hideIndicator value="external">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.external}
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
+
+        {renderBooleanSettingRow({
+          settingKey: "showPullRequestDiffColors",
+          title: "Pull request diff colors",
+          description: "Show additions in green and deletions in red in pull request summaries.",
+          resetLabel: "pull request diff colors",
+          ariaLabel: "Show pull request diff colors",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "githubInboxIncludeUpstreams",
+          title: "Include fork upstreams",
+          description:
+            "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. Off reads only the project's own repository.",
+          resetLabel: "include fork upstreams",
+          ariaLabel: "Include fork upstreams in code review",
+        })}
+
+        {renderBooleanSettingRow({
           settingKey: "diffWordWrap",
           title: "Diff line wrapping",
           description:
             "Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session.",
           resetLabel: "diff line wrapping",
           ariaLabel: "Wrap diff lines by default",
-        })}
-
-        {renderBooleanSettingRow({
-          settingKey: "enableComposerSuggestions",
-          title: "Prompt suggestions",
-          description: "Show suggested prompts under the composer when starting a new thread.",
-          resetLabel: "prompt suggestions",
-          ariaLabel: "Show composer prompt suggestions",
         })}
       </SettingsSection>
 
@@ -2074,1130 +1612,22 @@ function SettingsRouteView() {
     </div>
   );
 
-  const renderWorktreesPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Managed worktrees">
-        <div className="space-y-4">
-          {serverWorktreesQuery.isLoading ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              Loading managed worktrees...
-            </div>
-          ) : serverWorktreesQuery.isError ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive",
-              )}
-            >
-              {serverWorktreesQuery.error instanceof Error
-                ? serverWorktreesQuery.error.message
-                : "Unable to load worktrees."}
-            </div>
-          ) : worktreesByWorkspaceRoot.length === 0 ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              No app-managed worktrees found yet.
-            </div>
-          ) : (
-            worktreesByWorkspaceRoot.map((group) => (
-              <section key={group.workspaceRoot} className="space-y-2">
-                <h3 className="px-1 font-mono text-[11px] text-muted-foreground">
-                  {group.workspaceRoot}
-                </h3>
-
-                <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                  {group.worktrees.map((worktree, index) => {
-                    const deleteDisabled = removeWorktreeMutation.isPending;
-                    return (
-                      <div
-                        key={worktree.path}
-                        className={cn(
-                          "flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-start sm:justify-between",
-                          index > 0 && "border-t border-[color:var(--color-border)]",
-                        )}
-                      >
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <div className="space-y-0.5">
-                            <div className="text-sm font-medium text-foreground">Worktree</div>
-                            <div className="font-mono text-[11px] text-muted-foreground">
-                              {worktree.path}
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                              Conversations
-                            </div>
-                            {worktree.linkedThreads.length > 0 ? (
-                              <div className="space-y-1">
-                                {worktree.linkedThreads.map((thread) => (
-                                  <div key={thread.id} className="text-sm text-foreground">
-                                    {thread.title}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-sm text-muted-foreground">
-                                No conversations linked to this worktree.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 flex-col items-end gap-2">
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            disabled={deleteDisabled}
-                            onClick={() =>
-                              void deleteManagedWorktree({
-                                workspaceRoot: group.workspaceRoot,
-                                worktreePath: worktree.path,
-                              })
-                            }
-                          >
-                            Delete
-                          </Button>
-                          {worktree.linkedThreads.length > 0 ? (
-                            <p className="max-w-40 text-right text-[11px] text-muted-foreground">
-                              Linked conversations exist. Deleting will ask for confirmation.
-                            </p>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))
-          )}
-        </div>
-      </SettingsSection>
-    </div>
-  );
-
-  const renderArchivedPanel = () => {
-    const archivedGroups = [
-      ...projects.map((project) => ({
-        project,
-        threads: archivedThreads
-          .filter((thread) => thread.projectId === project.id)
-          .toSorted((left, right) => {
-            const leftKey = left.archivedAt ?? left.updatedAt ?? left.createdAt;
-            const rightKey = right.archivedAt ?? right.updatedAt ?? right.createdAt;
-            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
-          }),
-      })),
-      ...(() => {
-        const knownProjectIds = new Set(projects.map((project) => project.id));
-        const orphanedThreads = archivedThreads
-          .filter((thread) => !knownProjectIds.has(thread.projectId))
-          .toSorted((left, right) => {
-            const leftKey = left.archivedAt ?? left.updatedAt ?? left.createdAt;
-            const rightKey = right.archivedAt ?? right.updatedAt ?? right.createdAt;
-            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
-          });
-        return orphanedThreads.length > 0
-          ? [
-              {
-                project: null,
-                threads: orphanedThreads,
-              },
-            ]
-          : [];
-      })(),
-    ].filter((group) => group.threads.length > 0);
-
-    return (
-      <div className="space-y-6">
-        {archivedGroups.length === 0 ? (
-          <SettingsSection title="Archived threads">
-            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
-              <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
-                <ArchiveIcon className="size-5" />
-              </div>
-              <div className="text-sm font-medium text-foreground">No archived threads</div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                Archived threads will appear here and can be restored to the sidebar.
-              </div>
-            </div>
-          </SettingsSection>
-        ) : (
-          archivedGroups.map(({ project, threads: projectThreads }) => (
-            <SettingsSection
-              key={project?.id ?? "unknown-project"}
-              title={project?.name ?? "Unknown project"}
-            >
-              <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                {projectThreads.map((thread, index) => (
-                  <div
-                    key={thread.id}
-                    className={cn(
-                      "flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
-                      index > 0 && "border-t border-[color:var(--color-border)]",
-                    )}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      void handleArchivedThreadContextMenu(thread.id, thread.title, {
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
-                    }}
-                  >
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {thread.title}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Archived {formatRelativeTime(thread.archivedAt ?? thread.createdAt)}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => void unarchiveThread(thread.id)}
-                      >
-                        Restore
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="destructive"
-                        onClick={() => void deleteArchivedThread(thread.id, thread.title)}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </SettingsSection>
-          ))
-        )}
-      </div>
-    );
-  };
-
-  const renderModelsPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Generation defaults">
-        <SettingsRow
-          title="Git writing model"
-          description="Used for generated commit messages, PR titles, and branch names."
-          resetAction={
-            isGitTextGenerationModelDirty ? (
-              <SettingResetButton
-                label="git writing model"
-                onClick={() =>
-                  updateSettings({
-                    textGenerationProvider: defaults.textGenerationProvider,
-                    textGenerationModel: defaults.textGenerationModel,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={currentGitTextGenerationValue}
-              onValueChange={(value) => {
-                if (!value) return;
-                const separatorIndex = value.indexOf(":");
-                const provider = value.slice(0, separatorIndex) as ProviderKind;
-                const model = value.slice(separatorIndex + 1);
-                if (!provider || !model) return;
-                updateSettings({
-                  textGenerationProvider: provider,
-                  textGenerationModel: model,
-                });
-              }}
-              ariaLabel="Git text generation model"
-              triggerClassName="w-full sm:w-52"
-              valueContent={selectedGitTextGenerationModelLabel}
-            >
-              {gitTextGenerationModelOptions.map((option) => (
-                <SelectItem
-                  hideIndicator
-                  key={`${option.provider}:${option.slug}`}
-                  value={`${option.provider}:${option.slug}`}
-                >
-                  {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
-                </SelectItem>
-              ))}
-            </SettingsSelectControl>
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Custom models">
-        <SettingsRow
-          title="Saved model slugs"
-          description="Add custom model slugs for supported providers."
-          resetAction={
-            totalCustomModels > 0 ? (
-              <SettingResetButton
-                label="custom models"
-                onClick={() => {
-                  updateSettings({
-                    customCodexModels: defaults.customCodexModels,
-                    customClaudeModels: defaults.customClaudeModels,
-                    customCursorModels: defaults.customCursorModels,
-                    customGeminiModels: defaults.customGeminiModels,
-                    customGrokModels: defaults.customGrokModels,
-                    customKiloModels: defaults.customKiloModels,
-                    customOpenCodeModels: defaults.customOpenCodeModels,
-                    customPiModels: defaults.customPiModels,
-                  });
-                  setCustomModelErrorByProvider({});
-                  setShowAllCustomModels(false);
-                }}
-              />
-            ) : null
-          }
-        >
-          <div className={cn("mt-4 pt-4", SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME)}>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Select
-                value={selectedCustomModelProvider}
-                onValueChange={(value) => {
-                  if (
-                    value !== "codex" &&
-                    value !== "claudeAgent" &&
-                    value !== "cursor" &&
-                    value !== "gemini" &&
-                    value !== "grok" &&
-                    value !== "kilo" &&
-                    value !== "opencode" &&
-                    value !== "pi"
-                  ) {
-                    return;
-                  }
-                  setSelectedCustomModelProvider(value);
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  className="w-full sm:w-40"
-                  aria-label="Custom model provider"
-                >
-                  <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
-                </SelectTrigger>
-                <SettingsSelectPopup align="start">
-                  {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
-                    <SelectItem
-                      hideIndicator
-                      key={providerSettings.provider}
-                      value={providerSettings.provider}
-                    >
-                      {providerSettings.title}
-                    </SelectItem>
-                  ))}
-                </SettingsSelectPopup>
-              </Select>
-              <Input
-                id="custom-model-slug"
-                value={selectedCustomModelInput}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setCustomModelInputByProvider((existing) => ({
-                    ...existing,
-                    [selectedCustomModelProvider]: value,
-                  }));
-                  if (selectedCustomModelError) {
-                    setCustomModelErrorByProvider((existing) => ({
-                      ...existing,
-                      [selectedCustomModelProvider]: null,
-                    }));
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  addCustomModel(selectedCustomModelProvider);
-                }}
-                placeholder={selectedCustomModelProviderSettings.example}
-                spellCheck={false}
-              />
-              <Button
-                className="shrink-0"
-                variant="outline"
-                onClick={() => addCustomModel(selectedCustomModelProvider)}
-              >
-                <PlusIcon className="size-3.5" />
-                Add
-              </Button>
-            </div>
-
-            {selectedCustomModelError ? (
-              <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
-            ) : null}
-
-            {totalCustomModels > 0 ? (
-              <div className={cn("mt-3", SETTINGS_INSET_LIST_CLASS_NAME)}>
-                {visibleCustomModelRows.map((row) => (
-                  <div
-                    key={row.key}
-                    className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-[color:var(--color-border)] px-4 py-2 first:border-t-0"
-                  >
-                    <span className="truncate text-xs text-muted-foreground">
-                      {row.providerTitle}
-                    </span>
-                    <code className="min-w-0 truncate text-sm text-foreground">{row.slug}</code>
-                    <button
-                      type="button"
-                      className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-                      aria-label={`Remove ${row.slug}`}
-                      onClick={() => removeCustomModel(row.provider, row.slug)}
-                    >
-                      <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
-                    </button>
-                  </div>
-                ))}
-
-                {savedCustomModelRows.length > 5 ? (
-                  <button
-                    type="button"
-                    className="mt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                    onClick={() => setShowAllCustomModels((value) => !value)}
-                  >
-                    {showAllCustomModels
-                      ? "Show less"
-                      : `Show more (${savedCustomModelRows.length - 5})`}
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </SettingsRow>
-      </SettingsSection>
-    </div>
-  );
-
-  const renderProvidersPanel = () => (
-    <div className="space-y-6">
-      {renderProviderUpdatesSection()}
-      <SettingsSection title="Provider picker">
-        <SettingsRow
-          title="Visible providers"
-          description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
-          status={
-            hiddenProviderCount > 0
-              ? `${hiddenProviderCount} ${pluralize(hiddenProviderCount, "provider")} hidden`
-              : isProviderOrderDirty
-                ? "Custom order"
-                : "All providers visible"
-          }
-          resetAction={
-            hiddenProviderCount > 0 || isProviderOrderDirty ? (
-              <SettingResetButton
-                label="provider picker"
-                onClick={() =>
-                  updateSettings({
-                    hiddenProviders: defaults.hiddenProviders,
-                    providerOrder: defaults.providerOrder,
-                  })
-                }
-              />
-            ) : null
-          }
-        >
-          <DndContext
-            sensors={providerVisibilitySensors}
-            collisionDetection={closestCenter}
-            modifiers={[restrictToVerticalAxis]}
-            onDragEnd={handleProviderOrderDragEnd}
-          >
-            <SortableContext
-              items={orderedProviderVisibilityOptions.map((option) => option.provider)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className="mt-4 space-y-2">
-                {orderedProviderVisibilityOptions.map((option) => (
-                  <SortableProviderVisibilityRow
-                    key={option.provider}
-                    option={option}
-                    isHidden={hiddenProviderSet.has(option.provider)}
-                    onHiddenChange={(hidden) =>
-                      updateSettings({
-                        hiddenProviders: setProviderHidden(
-                          settings.hiddenProviders,
-                          option.provider,
-                          hidden,
-                        ),
-                      })
-                    }
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-        </SettingsRow>
-      </SettingsSection>
-      {renderProviderInstallsSection()}
-    </div>
-  );
-
-  const renderProviderUpdatesSection = () => (
-    <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
-      <SettingsSection title="Updates">
-        <SettingsRow
-          title="Provider updates"
-          description="Update installed provider tools that Synara can safely update."
-          status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
-          }
-        >
-          {outdatedProviderStatuses.length > 0 ? (
-            <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
-              {outdatedProviderStatuses.map((providerStatus) => {
-                const updateAdvisory = providerStatus.versionAdvisory;
-                const updateState = providerStatus.updateState?.status;
-                const isProviderUpdateActive =
-                  updateState === "queued" ||
-                  updateState === "running" ||
-                  updatingProviders.has(providerStatus.provider);
-                const canUpdateProvider =
-                  updateAdvisory?.canUpdate === true && !isProviderUpdateActive;
-                const updateLabel = providerUpdateStatusLabel(providerStatus);
-
-                return (
-                  <div
-                    key={providerStatus.provider}
-                    className="flex min-h-11 items-center gap-3 border-t border-[color:var(--color-border)] px-3 py-2 first:border-t-0"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
-                      </div>
-                      {updateLabel ? (
-                        <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                          {updateLabel}
-                        </div>
-                      ) : null}
-                    </div>
-                    {updateAdvisory?.canUpdate ? (
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={!canUpdateProvider}
-                        title={
-                          updateAdvisory.updateCommand
-                            ? `Run ${updateAdvisory.updateCommand}`
-                            : undefined
-                        }
-                        onClick={() => void runProviderUpdate(providerStatus.provider)}
-                      >
-                        {isProviderUpdateActive ? (
-                          <Loader2Icon className="size-3.5 animate-spin" />
-                        ) : (
-                          <DownloadIcon className="size-3.5" />
-                        )}
-                        {isProviderUpdateActive ? "Updating" : "Update"}
-                      </Button>
-                    ) : (
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        Manual update
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-        </SettingsRow>
-      </SettingsSection>
-    </div>
-  );
-
-  const renderProviderInstallsSection = () => (
-    <div ref={providerInstallsRef} id={SETTINGS_TARGETS.providerInstalls}>
-      <SettingsSection title="Provider tools">
-        <SettingsRow
-          title="Installed CLIs"
-          description="Review provider versions and update tools. Open a row only when you need binary overrides."
-          status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
-          }
-          resetAction={
-            isInstallSettingsDirty ? (
-              <SettingResetButton
-                label="provider tools"
-                onClick={() => {
-                  updateSettings({
-                    claudeBinaryPath: defaults.claudeBinaryPath,
-                    codexBinaryPath: defaults.codexBinaryPath,
-                    codexHomePath: defaults.codexHomePath,
-                    cursorBinaryPath: defaults.cursorBinaryPath,
-                    cursorApiEndpoint: defaults.cursorApiEndpoint,
-                    geminiBinaryPath: defaults.geminiBinaryPath,
-                    grokBinaryPath: defaults.grokBinaryPath,
-                    kiloBinaryPath: defaults.kiloBinaryPath,
-                    kiloServerUrl: defaults.kiloServerUrl,
-                    kiloServerPassword: defaults.kiloServerPassword,
-                    openCodeBinaryPath: defaults.openCodeBinaryPath,
-                    openCodeExperimentalWebSockets: defaults.openCodeExperimentalWebSockets,
-                    openCodeServerUrl: defaults.openCodeServerUrl,
-                    openCodeServerPassword: defaults.openCodeServerPassword,
-                    piAgentDir: defaults.piAgentDir,
-                    piBinaryPath: defaults.piBinaryPath,
-                  });
-                  setOpenInstallProviders({
-                    codex: false,
-                    claudeAgent: false,
-                    cursor: false,
-                    gemini: false,
-                    grok: false,
-                    kilo: false,
-                    opencode: false,
-                    pi: false,
-                  });
-                }}
-              />
-            ) : null
-          }
-        >
-          <div className="mt-4">
-            <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-              {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
-                const isOpen = openInstallProviders[providerSettings.provider];
-                const isDirty =
-                  providerSettings.provider === "codex"
-                    ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
-                      settings.codexHomePath !== defaults.codexHomePath
-                    : providerSettings.provider === "claudeAgent"
-                      ? settings.claudeBinaryPath !== defaults.claudeBinaryPath
-                      : providerSettings.provider === "cursor"
-                        ? settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
-                          settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
-                        : providerSettings.provider === "gemini"
-                          ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
-                          : providerSettings.provider === "grok"
-                            ? settings.grokBinaryPath !== defaults.grokBinaryPath
-                            : providerSettings.provider === "kilo"
-                              ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-                                settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                settings.kiloServerPassword !== defaults.kiloServerPassword
-                              : providerSettings.provider === "pi"
-                                ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                  settings.piAgentDir !== defaults.piAgentDir
-                                : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                  settings.openCodeExperimentalWebSockets !==
-                                    defaults.openCodeExperimentalWebSockets ||
-                                  settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                  settings.openCodeServerPassword !==
-                                    defaults.openCodeServerPassword;
-                const binaryPathValue =
-                  providerSettings.binaryPathKey === "claudeBinaryPath"
-                    ? claudeBinaryPath
-                    : providerSettings.binaryPathKey === "cursorBinaryPath"
-                      ? cursorBinaryPath
-                      : providerSettings.binaryPathKey === "geminiBinaryPath"
-                        ? geminiBinaryPath
-                        : providerSettings.binaryPathKey === "grokBinaryPath"
-                          ? grokBinaryPath
-                          : providerSettings.binaryPathKey === "kiloBinaryPath"
-                            ? kiloBinaryPath
-                            : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                              ? openCodeBinaryPath
-                              : providerSettings.binaryPathKey === "piBinaryPath"
-                                ? piBinaryPath
-                                : codexBinaryPath;
-                const providerStatus = providerStatusByProvider.get(providerSettings.provider);
-                const showProviderUpdateStatus = providerStatus
-                  ? shouldShowProviderUpdateStatus({
-                      provider: providerStatus,
-                      hiddenProviderSet,
-                      serverSettings: serverSettingsQuery.data ?? null,
-                    })
-                  : false;
-                const providerUpdateSuppressed =
-                  providerStatus?.versionAdvisory?.status === "behind_latest" &&
-                  !showProviderUpdateStatus;
-                const providerUpdateLabel = providerStatus
-                  ? providerUpdateSuppressed
-                    ? null
-                    : providerUpdateStatusLabel(providerStatus)
-                  : null;
-                const updateAdvisory = providerStatus?.versionAdvisory;
-                const providerUpdateState = providerStatus?.updateState?.status;
-                const isProviderUpdateActive =
-                  providerUpdateState === "queued" ||
-                  providerUpdateState === "running" ||
-                  updatingProviders.has(providerSettings.provider);
-                const canUpdateProvider =
-                  showProviderUpdateStatus &&
-                  updateAdvisory?.status === "behind_latest" &&
-                  updateAdvisory.canUpdate &&
-                  !isProviderUpdateActive;
-                const shouldShowProviderUpdateButton =
-                  showProviderUpdateStatus &&
-                  updateAdvisory?.status === "behind_latest" &&
-                  updateAdvisory.canUpdate;
-
-                return (
-                  <Collapsible
-                    key={providerSettings.provider}
-                    open={isOpen}
-                    onOpenChange={(open) =>
-                      setOpenInstallProviders((existing) => ({
-                        ...existing,
-                        [providerSettings.provider]: open,
-                      }))
-                    }
-                  >
-                    <div className="border-t border-border/70 first:border-t-0">
-                      <div className="flex min-h-11 items-center gap-2 px-3 py-2">
-                        <button
-                          type="button"
-                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() =>
-                            setOpenInstallProviders((existing) => ({
-                              ...existing,
-                              [providerSettings.provider]: !existing[providerSettings.provider],
-                            }))
-                          }
-                        >
-                          <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-                            {providerSettings.title}
-                          </span>
-                          {isDirty ? (
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              Custom
-                            </span>
-                          ) : null}
-                          {providerUpdateLabel ? (
-                            <span
-                              className={cn(
-                                "shrink-0 text-[11px]",
-                                updateAdvisory?.status === "behind_latest"
-                                  ? "text-foreground"
-                                  : "text-muted-foreground",
-                              )}
-                            >
-                              {providerUpdateLabel}
-                            </span>
-                          ) : null}
-                          <ChevronDownIcon
-                            className={cn(
-                              "size-4 shrink-0 text-muted-foreground transition-transform",
-                              isOpen && "rotate-180",
-                            )}
-                          />
-                        </button>
-                        {shouldShowProviderUpdateButton ? (
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            disabled={!canUpdateProvider}
-                            title={
-                              updateAdvisory.updateCommand
-                                ? `Run ${updateAdvisory.updateCommand}`
-                                : undefined
-                            }
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void runProviderUpdate(providerSettings.provider);
-                            }}
-                          >
-                            {isProviderUpdateActive ? (
-                              <Loader2Icon className="size-3.5 animate-spin" />
-                            ) : (
-                              <DownloadIcon className="size-3.5" />
-                            )}
-                            {isProviderUpdateActive ? "Updating" : "Update"}
-                          </Button>
-                        ) : null}
-                      </div>
-
-                      <CollapsibleContent>
-                        <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
-                          <div className="space-y-3">
-                            <ProviderDocsLinks docs={providerSettings.docs} />
-                            {showProviderUpdateStatus &&
-                            updateAdvisory?.status === "behind_latest" ? (
-                              <div className="text-xs text-muted-foreground">
-                                {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
-                                  <>
-                                    <span>Command: </span>
-                                    <code className="font-mono">
-                                      {updateAdvisory.updateCommand}
-                                    </code>
-                                  </>
-                                ) : (
-                                  "A newer version is available, but Synara could not identify a safe one-click update command for this installation."
-                                )}
-                              </div>
-                            ) : null}
-
-                            <label
-                              htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
-                              className="block"
-                            >
-                              <span className="block text-xs font-medium text-foreground">
-                                {providerSettings.title} binary path
-                              </span>
-                              <Input
-                                id={`provider-install-${providerSettings.binaryPathKey}`}
-                                className="mt-1"
-                                value={binaryPathValue}
-                                onChange={(event) =>
-                                  updateSettings(
-                                    providerSettings.binaryPathKey === "claudeBinaryPath"
-                                      ? { claudeBinaryPath: event.target.value }
-                                      : providerSettings.binaryPathKey === "cursorBinaryPath"
-                                        ? { cursorBinaryPath: event.target.value }
-                                        : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                          ? { geminiBinaryPath: event.target.value }
-                                          : providerSettings.binaryPathKey === "grokBinaryPath"
-                                            ? { grokBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                              ? { kiloBinaryPath: event.target.value }
-                                              : providerSettings.binaryPathKey ===
-                                                  "openCodeBinaryPath"
-                                                ? { openCodeBinaryPath: event.target.value }
-                                                : providerSettings.binaryPathKey === "piBinaryPath"
-                                                  ? { piBinaryPath: event.target.value }
-                                                  : { codexBinaryPath: event.target.value },
-                                  )
-                                }
-                                placeholder={providerSettings.binaryPlaceholder}
-                                spellCheck={false}
-                              />
-                              <span className="mt-1 block text-xs text-muted-foreground">
-                                {providerSettings.binaryDescription}
-                              </span>
-                            </label>
-
-                            {providerSettings.homePathKey ? (
-                              <label
-                                htmlFor={`provider-install-${providerSettings.homePathKey}`}
-                                className="block"
-                              >
-                                <span className="block text-xs font-medium text-foreground">
-                                  CODEX_HOME path
-                                </span>
-                                <Input
-                                  id={`provider-install-${providerSettings.homePathKey}`}
-                                  className="mt-1"
-                                  value={codexHomePath}
-                                  onChange={(event) =>
-                                    updateSettings({
-                                      codexHomePath: event.target.value,
-                                    })
-                                  }
-                                  placeholder={providerSettings.homePlaceholder}
-                                  spellCheck={false}
-                                />
-                                {providerSettings.homeDescription ? (
-                                  <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.homeDescription}
-                                  </span>
-                                ) : null}
-                              </label>
-                            ) : null}
-
-                            {providerSettings.agentDirKey ? (
-                              <label
-                                htmlFor={`provider-install-${providerSettings.agentDirKey}`}
-                                className="block"
-                              >
-                                <span className="block text-xs font-medium text-foreground">
-                                  Pi agent directory
-                                </span>
-                                <Input
-                                  id={`provider-install-${providerSettings.agentDirKey}`}
-                                  className="mt-1"
-                                  value={piAgentDir}
-                                  onChange={(event) =>
-                                    updateSettings({
-                                      piAgentDir: event.target.value,
-                                    })
-                                  }
-                                  placeholder={providerSettings.agentDirPlaceholder}
-                                  spellCheck={false}
-                                />
-                                {providerSettings.agentDirDescription ? (
-                                  <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.agentDirDescription}
-                                  </span>
-                                ) : null}
-                              </label>
-                            ) : null}
-
-                            {providerSettings.apiEndpointKey ? (
-                              <label
-                                htmlFor={`provider-install-${providerSettings.apiEndpointKey}`}
-                                className="block"
-                              >
-                                <span className="block text-xs font-medium text-foreground">
-                                  Cursor API endpoint
-                                </span>
-                                <Input
-                                  id={`provider-install-${providerSettings.apiEndpointKey}`}
-                                  className="mt-1"
-                                  value={cursorApiEndpoint}
-                                  onChange={(event) =>
-                                    updateSettings({
-                                      cursorApiEndpoint: event.target.value,
-                                    })
-                                  }
-                                  placeholder={providerSettings.apiEndpointPlaceholder}
-                                  spellCheck={false}
-                                />
-                                {providerSettings.apiEndpointDescription ? (
-                                  <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.apiEndpointDescription}
-                                  </span>
-                                ) : null}
-                              </label>
-                            ) : null}
-
-                            {providerSettings.serverUrlKey ? (
-                              <label
-                                htmlFor={`provider-install-${providerSettings.serverUrlKey}`}
-                                className="block"
-                              >
-                                <span className="block text-xs font-medium text-foreground">
-                                  {providerSettings.title} server URL
-                                </span>
-                                <Input
-                                  id={`provider-install-${providerSettings.serverUrlKey}`}
-                                  className="mt-1"
-                                  value={
-                                    providerSettings.serverUrlKey === "kiloServerUrl"
-                                      ? kiloServerUrl
-                                      : openCodeServerUrl
-                                  }
-                                  onChange={(event) =>
-                                    updateSettings(
-                                      providerSettings.serverUrlKey === "kiloServerUrl"
-                                        ? { kiloServerUrl: event.target.value }
-                                        : { openCodeServerUrl: event.target.value },
-                                    )
-                                  }
-                                  placeholder={providerSettings.serverUrlPlaceholder}
-                                  spellCheck={false}
-                                />
-                                {providerSettings.serverUrlDescription ? (
-                                  <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.serverUrlDescription}
-                                  </span>
-                                ) : null}
-                              </label>
-                            ) : null}
-
-                            {providerSettings.serverPasswordKey ? (
-                              <label
-                                htmlFor={`provider-install-${providerSettings.serverPasswordKey}`}
-                                className="block"
-                              >
-                                <span className="block text-xs font-medium text-foreground">
-                                  {providerSettings.title} server password
-                                </span>
-                                <Input
-                                  id={`provider-install-${providerSettings.serverPasswordKey}`}
-                                  className="mt-1"
-                                  value={
-                                    providerSettings.serverPasswordKey === "kiloServerPassword"
-                                      ? kiloServerPassword
-                                      : openCodeServerPassword
-                                  }
-                                  onChange={(event) =>
-                                    updateSettings(
-                                      providerSettings.serverPasswordKey === "kiloServerPassword"
-                                        ? { kiloServerPassword: event.target.value }
-                                        : { openCodeServerPassword: event.target.value },
-                                    )
-                                  }
-                                  placeholder={providerSettings.serverPasswordPlaceholder}
-                                  spellCheck={false}
-                                />
-                                {providerSettings.serverPasswordDescription ? (
-                                  <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.serverPasswordDescription}
-                                  </span>
-                                ) : null}
-                              </label>
-                            ) : null}
-
-                            {providerSettings.experimentalWebSocketsKey ? (
-                              <label
-                                htmlFor={`provider-install-${providerSettings.experimentalWebSocketsKey}`}
-                                className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-background/60 px-3 py-2"
-                              >
-                                <span className="min-w-0">
-                                  <span className="block text-xs font-medium text-foreground">
-                                    OpenAI response WebSockets
-                                  </span>
-                                  {providerSettings.experimentalWebSocketsDescription ? (
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.experimentalWebSocketsDescription}
-                                    </span>
-                                  ) : null}
-                                </span>
-                                <Switch
-                                  id={`provider-install-${providerSettings.experimentalWebSocketsKey}`}
-                                  checked={openCodeExperimentalWebSockets}
-                                  onCheckedChange={(checked) =>
-                                    updateSettings({
-                                      openCodeExperimentalWebSockets: Boolean(checked),
-                                    })
-                                  }
-                                />
-                              </label>
-                            ) : null}
-                          </div>
-                        </div>
-                      </CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                );
-              })}
-            </div>
-          </div>
-        </SettingsRow>
-      </SettingsSection>
-    </div>
-  );
-
-  const renderAdvancedPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Developer tools">
-        <SettingsRow
-          title="Keybindings"
-          description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
-          status={
-            <>
-              <span className="block break-all font-mono text-[11px] text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
-              </span>
-              {openKeybindingsError ? (
-                <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
-              ) : (
-                <span className="mt-1 block">Opens in your preferred editor.</span>
-              )}
-            </>
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!keybindingsConfigPath || isOpeningKeybindings}
-              onClick={openKeybindingsFile}
-            >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
-            </Button>
-          }
-        />
-
-        <SettingsRow
-          title="Recovery tools"
-          description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
-          status={
-            shouldOfferRecoveryTools
-              ? "Visible because projects exist but no chat history is currently available."
-              : "Shown automatically only when recovery actions are relevant."
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
-              onClick={() => void repairLocalState()}
-            >
-              {isRepairingLocalState ? "Repairing..." : "Repair state"}
-            </Button>
-          }
-        >
-          {shouldOfferRecoveryTools ? (
-            <div className="mt-3 border-t border-border/70 pt-3">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between text-left"
-                onClick={() => setShowRecoveryTools((current) => !current)}
-              >
-                <span className="text-xs font-medium text-muted-foreground">What this does</span>
-                <ChevronDownIcon
-                  className={cn(
-                    "size-4 shrink-0 text-muted-foreground transition-transform",
-                    showRecoveryTools && "rotate-180",
-                  )}
-                />
-              </button>
-              {showRecoveryTools ? (
-                <div
-                  className={cn(
-                    "mt-3 px-3 py-3 text-xs text-muted-foreground",
-                    SETTINGS_INSET_LIST_CLASS_NAME,
-                  )}
-                >
-                  Rebuilds local project indexes and refreshes project snapshots. Existing chats
-                  stay in place.
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="About">
-        <SettingsRow
-          title="Version"
-          description="Current application version."
-          control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
-        />
-        <SettingsRow
-          title="Release history"
-          description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
-          control={
-            <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
-              View release history
-            </Button>
-          }
-        />
-      </SettingsSection>
-    </div>
-  );
-
-  const renderActivePanel = () => {
+  const renderRouteOwnedPanel = () => {
     switch (activeSection) {
       case "general":
         return renderGeneralPanel();
       case "appearance":
         return renderAppearancePanel();
-      case "notifications":
-        return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
-      case "worktrees":
-        return renderWorktreesPanel();
-      case "archived":
-        return renderArchivedPanel();
-      case "models":
-        return renderModelsPanel();
-      case "providers":
-        return renderProvidersPanel();
+      case "shortcuts":
+        return <KeyboardShortcutsSettingsPanel />;
+      case "profile":
+        return <ProfileSettingsPanel />;
       case "skills":
         return <SkillsSettingsPanel />;
       case "usage":
         return <ProviderUsageSettingsPanel />;
-      case "advanced":
-        return renderAdvancedPanel();
       default:
         return null;
     }
@@ -3211,14 +1641,11 @@ function SettingsRouteView() {
         CHAT_CONTENT_CARD_CLASS_NAME,
       )}
     >
-      <SidebarInset
-        className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-        surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
-      >
+      <RouteInsetSurface surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}>
         {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
           sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
           card's top-left — at the same header height + traffic-light gutter as the
-          chat/workspace headers — so the collapsed-state toggle sits by the traffic
+          chat and route headers — so the collapsed-state toggle sits by the traffic
           lights instead of floating in the centered settings body. It renders nothing
           while the sidebar is open (SidebarHeaderNavigationControls returns null), so it
           adds no navigation chrome in the common (open) state and never shifts the centered
@@ -3239,29 +1666,94 @@ function SettingsRouteView() {
         </div>
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-2xl px-6 py-8">
-              <div className="mb-8 flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h1 className="text-xl font-medium tracking-tight text-foreground">
-                    {activeSectionItem.label}
-                  </h1>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                    {activeSectionItem.description}
-                  </p>
+            <div
+              className={cn(
+                "mx-auto w-full px-6 py-8",
+                activeSection === "profile" ? "max-w-3xl" : "max-w-2xl",
+              )}
+            >
+              {activeSection !== "profile" ? (
+                <div className="mb-8 flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h1 className="flex items-center gap-2 text-xl font-medium tracking-tight text-foreground">
+                      {activeSectionItem.label}
+                      {activeSectionItem.badge ? (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full px-2 font-normal tracking-normal text-muted-foreground"
+                        >
+                          {activeSectionItem.badge}
+                        </Badge>
+                      ) : null}
+                    </h1>
+                    <p className="mt-1.5 text-ui leading-relaxed text-muted-foreground">
+                      {activeSectionItem.description}
+                    </p>
+                  </div>
+                  {activeSection === "shortcuts" ? (
+                    <KeyboardShortcutsResetButton />
+                  ) : (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={changedSettingLabels.length === 0}
+                      onClick={() => void restoreDefaults()}
+                    >
+                      <ResetIcon className="size-3.5" />
+                      Restore defaults
+                    </Button>
+                  )}
                 </div>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  className="shrink-0"
-                  disabled={changedSettingLabels.length === 0}
-                  onClick={() => void restoreDefaults()}
-                >
-                  <RotateCcwIcon className="size-3.5" />
-                  Restore defaults
-                </Button>
-              </div>
+              ) : null}
 
-              {renderActivePanel()}
+              {renderRouteOwnedPanel()}
+              {/* These workflow owners stay mounted so drafts, request guards, and pending
+                  mutations retain route lifetime while inactive panels render no DOM. */}
+              <div className="contents">
+                <NotificationsSettingsPanel
+                  active={activeSection === "notifications"}
+                  settings={settings}
+                  defaults={defaults}
+                  updateSettings={updateSettings}
+                />
+                <AppSnapSettingsPanel
+                  active={activeSection === "appsnap"}
+                  settings={settings}
+                  defaults={defaults}
+                  updateSettings={updateSettings}
+                />
+                <ComputerSettingsPanel
+                  active={activeSection === "computer"}
+                  settings={settings}
+                  defaults={defaults}
+                  updateSettings={updateSettings}
+                />
+                <WorktreesSettingsPanel active={activeSection === "worktrees"} />
+                <ArchivedSettingsPanel active={activeSection === "archived"} />
+                <ModelsSettingsPanel
+                  active={activeSection === "models"}
+                  settings={settings}
+                  defaults={defaults}
+                  updateSettings={updateSettings}
+                  resetEpoch={resetEpoch}
+                />
+                <ProvidersSettingsPanel
+                  active={activeSection === "providers"}
+                  providerTarget={settingsProviderTarget}
+                  settings={settings}
+                  defaults={defaults}
+                  updateSettings={updateSettings}
+                  updateSettingsAndWait={updateSettingsAndWait}
+                  resetEpoch={resetEpoch}
+                />
+                <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
+                <AdvancedSettingsPanel
+                  active={activeSection === "advanced"}
+                  onOpenReleaseHistory={() => setReleaseHistoryOpen(true)}
+                  resetEpoch={resetEpoch}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -3273,7 +1765,7 @@ function SettingsRouteView() {
           onOpenChange={setReleaseHistoryOpen}
           defaultExpandedVersion={APP_VERSION}
         />
-      </SidebarInset>
+      </RouteInsetSurface>
     </div>
   );
 }

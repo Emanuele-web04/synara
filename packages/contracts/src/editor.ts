@@ -19,7 +19,17 @@ type EditorDefinition = {
   readonly label: string;
   readonly commands: readonly [string, ...string[]] | null;
   readonly macApplications?: readonly [string, ...string[]];
+  readonly windowsUriScheme?: string;
+  readonly windowsStorePackages?: readonly [
+    WindowsStorePackageDefinition,
+    ...WindowsStorePackageDefinition[],
+  ];
   readonly launchStyle: EditorLaunchStyle;
+};
+
+type WindowsStorePackageDefinition = {
+  readonly packageName: string;
+  readonly publisherId: string;
 };
 
 export const EDITORS = [
@@ -42,6 +52,10 @@ export const EDITORS = [
     label: "VS Code",
     commands: ["code"],
     macApplications: ["Visual Studio Code"],
+    windowsUriScheme: "vscode",
+    windowsStorePackages: [
+      { packageName: "Microsoft.VisualStudioCode", publisherId: "8wekyb3d8bbwe" },
+    ],
     launchStyle: "goto",
   },
   {
@@ -49,6 +63,7 @@ export const EDITORS = [
     label: "VS Code Insiders",
     commands: ["code-insiders"],
     macApplications: ["Visual Studio Code - Insiders"],
+    windowsUriScheme: "vscode-insiders",
     launchStyle: "goto",
   },
   {
@@ -94,6 +109,13 @@ export const EDITORS = [
     launchStyle: "terminal-working-directory",
   },
   {
+    id: "muxy",
+    label: "Muxy",
+    commands: ["muxy"],
+    macApplications: ["Muxy"],
+    launchStyle: "terminal-working-directory",
+  },
+  {
     id: "terminal",
     label: "Terminal",
     commands: [
@@ -113,6 +135,13 @@ export const EDITORS = [
       "pwsh",
     ],
     macApplications: ["Terminal"],
+    launchStyle: "terminal-working-directory",
+  },
+  {
+    id: "iterm",
+    label: "iTerm",
+    commands: ["iterm2"],
+    macApplications: ["iTerm"],
     launchStyle: "terminal-working-directory",
   },
   {
@@ -212,6 +241,12 @@ export const EDITORS = [
     launchStyle: "line-column",
   },
   { id: "file-manager", label: "File Manager", commands: null, launchStyle: "direct-path" },
+  // Opens the target with the OS default handler (e.g. Preview for PDFs on macOS,
+  // the registered default viewer on Windows/Linux). Launched via the cross-platform
+  // `open` package server-side, so it has no commands/macApplications of its own and
+  // is intentionally excluded from `resolveAvailableEditors` — surfaces that want it
+  // (the PDF viewer) opt in explicitly rather than cluttering the code-editor menu.
+  { id: "system-default", label: "Default app", commands: null, launchStyle: "direct-path" },
 ] as const satisfies ReadonlyArray<EditorDefinition>;
 
 export const EditorId = Schema.Literals(EDITORS.map((e) => e.id));

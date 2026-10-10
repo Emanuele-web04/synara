@@ -9,9 +9,9 @@
 // through GitCore; on settle we invalidate the per-cwd git caches so both lists stay in sync.
 
 import { type FileDiffMetadata } from "@pierre/diffs/react";
-import { type ProjectId, type ThreadId } from "@t3tools/contracts";
+import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import {
@@ -28,13 +28,14 @@ import {
   gitUnstageFilesMutationOptions,
   gitWorkingTreeDiffQueryOptions,
 } from "~/lib/gitReactQuery";
-import { PlusIcon, RefreshCwIcon, RotateCcwIcon } from "~/lib/icons";
+import { PlusIcon, RefreshCwIcon, ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
-import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
+import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
+import { DiffTruncationWarning } from "../DiffTruncationWarning";
 import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chatHeaderControls";
 import { DiffStat } from "./DiffStatLabel";
 import { DockPaneHeader } from "./DockPaneHeader";
@@ -60,10 +61,7 @@ function parsePatchToSortedFiles(
   return renderable?.kind === "files" ? sortFileDiffsByPath(renderable.files) : [];
 }
 
-// Memoized so a stage/unstage in-flight toggle (which flips `actionDisabled`
-// across siblings) and unrelated parent re-renders stay cheap; the per-row stat
-// is only recomputed when the underlying file diff actually changes.
-const GitFileRow = memo(function GitFileRow(props: {
+function GitFileRow(props: {
   fileDiff: FileDiffMetadata;
   theme: "light" | "dark";
   isSelected: boolean;
@@ -75,7 +73,7 @@ const GitFileRow = memo(function GitFileRow(props: {
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
-  const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
+  const stat = summarizeFileDiffStats([props.fileDiff]);
   return (
     <div
       className={cn(
@@ -90,7 +88,7 @@ const GitFileRow = memo(function GitFileRow(props: {
         title={filePath}
       >
         <FileEntryIcon pathValue={filePath} kind="file" theme={props.theme} className="size-4" />
-        <span className="min-w-0 truncate text-[12px] text-foreground">
+        <span className="min-w-0 truncate text-ui text-foreground">
           {dir ? <span className="text-muted-foreground/70">{dir}</span> : null}
           <span>{name}</span>
         </span>
@@ -98,7 +96,7 @@ const GitFileRow = memo(function GitFileRow(props: {
       <DiffStat
         additions={stat.additions}
         deletions={stat.deletions}
-        className="shrink-0 text-[11px]"
+        className="shrink-0 text-ui-sm"
       />
       <IconButton
         size="icon-xs"
@@ -112,12 +110,12 @@ const GitFileRow = memo(function GitFileRow(props: {
         {props.actionIcon === "stage" ? (
           <PlusIcon className="size-3.5" />
         ) : (
-          <RotateCcwIcon className="size-3.5" />
+          <ResetIcon className="size-3.5" />
         )}
       </IconButton>
     </div>
   );
-});
+}
 
 function GitFileSection(props: {
   title: string;
@@ -133,21 +131,16 @@ function GitFileSection(props: {
   onSelect: (file: FileDiffMetadata) => void;
   onAction: (paths: string[]) => void;
 }) {
-  const stat = useMemo(() => summarizeFileDiffStats(props.files), [props.files]);
-  const allPaths = useMemo(
-    () => props.files.map((file) => resolveFileDiffPath(file)),
-    [props.files],
-  );
+  const stat = summarizeFileDiffStats(props.files);
+  const allPaths = props.files.map((file) => resolveFileDiffPath(file));
   return (
     <section className="min-w-0">
       <header className="flex items-center gap-2 px-1.5 py-1">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {props.title}
-        </span>
-        <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+        <span className="text-ui-sm font-semibold text-muted-foreground">{props.title}</span>
+        <span className="rounded-full bg-muted px-1.5 text-ui-xs font-medium text-muted-foreground">
           {props.files.length}
         </span>
-        <DiffStat additions={stat.additions} deletions={stat.deletions} className="text-[10px]" />
+        <DiffStat additions={stat.additions} deletions={stat.deletions} className="text-ui-xs" />
         {props.files.length > 0 ? (
           <Button
             type="button"
@@ -162,7 +155,7 @@ function GitFileSection(props: {
         ) : null}
       </header>
       {props.files.length === 0 ? (
-        <p className="px-1.5 py-1 text-[11px] text-muted-foreground/70">{props.emptyLabel}</p>
+        <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">{props.emptyLabel}</p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {props.files.map((file) => {
@@ -188,13 +181,7 @@ function GitFileSection(props: {
   );
 }
 
-// Isolated + memoized so the (heavy) diff viewer only re-renders when the
-// selected file or theme changes — not when stage/unstage mutations toggle the
-// pane's pending state.
-const SelectedFileDiff = memo(function SelectedFileDiff(props: {
-  fileDiff: FileDiffMetadata;
-  theme: "light" | "dark";
-}) {
+function SelectedFileDiff(props: { fileDiff: FileDiffMetadata; theme: "light" | "dark" }) {
   return (
     <FileDiffSurface className="h-full min-h-0 overflow-auto px-2 py-2">
       <div className="diff-render-file rounded-md">
@@ -202,7 +189,7 @@ const SelectedFileDiff = memo(function SelectedFileDiff(props: {
       </div>
     </FileDiffSurface>
   );
-});
+}
 
 export function GitPanel(props: {
   hostThreadId: ThreadId;
@@ -212,13 +199,15 @@ export function GitPanel(props: {
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme as "light" | "dark";
-  const thread = useStore(
-    useMemo(() => createThreadSelector(props.hostThreadId), [props.hostThreadId]),
+  // Shell-only, like DockTerminalPane: only `worktreePath` is read here, and the
+  // full thread selector would re-render the pane on every streamed token.
+  const threadWorkspace = useStore(
+    useMemo(() => createThreadWorkspaceMetadataSelector(props.hostThreadId), [props.hostThreadId]),
   );
   const project = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
-  const cwd = thread?.worktreePath ?? project?.cwd ?? null;
+  const cwd = threadWorkspace.worktreePath ?? project?.cwd ?? null;
 
   const [selected, setSelected] = useState<SelectedFile | null>(null);
 
@@ -228,70 +217,68 @@ export function GitPanel(props: {
   const stagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "staged" }));
   const unstagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "unstaged" }));
 
+  const stagedPatch = stagedQuery.data?.patch;
+  const unstagedPatch = unstagedQuery.data?.patch;
   const stagedFiles = useMemo(
-    () => parsePatchToSortedFiles(stagedQuery.data?.patch, `git-pane:staged:${theme}`),
-    [stagedQuery.data?.patch, theme],
+    () => parsePatchToSortedFiles(stagedPatch, `git-pane:staged:${theme}`),
+    [stagedPatch, theme],
   );
   const unstagedFiles = useMemo(
-    () => parsePatchToSortedFiles(unstagedQuery.data?.patch, `git-pane:unstaged:${theme}`),
-    [unstagedQuery.data?.patch, theme],
+    () => parsePatchToSortedFiles(unstagedPatch, `git-pane:unstaged:${theme}`),
+    [theme, unstagedPatch],
   );
 
   const stageMutation = useMutation(gitStageFilesMutationOptions({ cwd, queryClient }));
   const unstageMutation = useMutation(gitUnstageFilesMutationOptions({ cwd, queryClient }));
   const mutating = stageMutation.isPending || unstageMutation.isPending;
 
-  const stage = useCallback(
-    (paths: string[]) => {
-      if (!cwd || paths.length === 0) return;
-      stageMutation.mutate(paths);
-    },
-    [cwd, stageMutation],
-  );
-  const unstage = useCallback(
-    (paths: string[]) => {
-      if (!cwd || paths.length === 0) return;
-      unstageMutation.mutate(paths);
-    },
-    [cwd, unstageMutation],
-  );
+  const stage = (paths: string[]) => {
+    if (!cwd || paths.length === 0) return;
+    stageMutation.mutate(paths);
+  };
+  const unstage = (paths: string[]) => {
+    if (!cwd || paths.length === 0) return;
+    unstageMutation.mutate(paths);
+  };
 
-  const selectStaged = useCallback((file: FileDiffMetadata) => {
+  const selectStaged = (file: FileDiffMetadata) => {
     setSelected({ section: "staged", path: resolveFileDiffPath(file) });
-  }, []);
-  const selectUnstaged = useCallback((file: FileDiffMetadata) => {
+  };
+  const selectUnstaged = (file: FileDiffMetadata) => {
     setSelected({ section: "unstaged", path: resolveFileDiffPath(file) });
-  }, []);
+  };
 
-  const refresh = useCallback(() => {
+  const refresh = () => {
     if (!cwd) return;
     void queryClient.invalidateQueries({ queryKey: gitQueryKeys.workingTreeDiff(cwd, "staged") });
     void queryClient.invalidateQueries({
       queryKey: gitQueryKeys.workingTreeDiff(cwd, "unstaged"),
     });
-  }, [cwd, queryClient]);
+  };
 
   // Resolve the selected file by path, preferring its stored section but falling
   // back to the other list so the diff (and row highlight) follow a file across a
   // stage/unstage move instead of silently clearing.
-  const selectedResolved = useMemo(() => {
-    if (!selected) return null;
+  let selectedResolved: { section: GitPanelSection; file: FileDiffMetadata } | null = null;
+  if (selected) {
     const findInSection = (section: GitPanelSection) =>
       (section === "staged" ? stagedFiles : unstagedFiles).find(
         (file) => resolveFileDiffPath(file) === selected.path,
       ) ?? null;
     const preferred = findInSection(selected.section);
     if (preferred) {
-      return { section: selected.section, file: preferred };
+      selectedResolved = { section: selected.section, file: preferred };
+    } else {
+      const otherSection: GitPanelSection = selected.section === "staged" ? "unstaged" : "staged";
+      const fallback = findInSection(otherSection);
+      selectedResolved = fallback ? { section: otherSection, file: fallback } : null;
     }
-    const otherSection: GitPanelSection = selected.section === "staged" ? "unstaged" : "staged";
-    const fallback = findInSection(otherSection);
-    return fallback ? { section: otherSection, file: fallback } : null;
-  }, [selected, stagedFiles, unstagedFiles]);
+  }
   const selectedFileDiff = selectedResolved?.file ?? null;
   const selectedPath = selected?.path ?? null;
 
   const isLoading = stagedQuery.isLoading || unstagedQuery.isLoading;
+  const truncated = stagedQuery.data?.truncated === true || unstagedQuery.data?.truncated === true;
   const error =
     stagedQuery.error instanceof Error
       ? stagedQuery.error.message
@@ -325,16 +312,22 @@ export function GitPanel(props: {
       />
 
       <div className="flex max-h-[48%] min-h-0 shrink-0 flex-col gap-2 overflow-auto px-1.5 py-2">
+        {truncated ? (
+          <DiffTruncationWarning>
+            Synara stopped reading source-control changes at the diff size limit. Some files or
+            changes may be missing; bulk actions only affect the files shown.
+          </DiffTruncationWarning>
+        ) : null}
         {error ? (
           <Alert variant="error" size="sm" className="text-destructive">
             {error}
           </Alert>
         ) : null}
         {!error && isLoading && !hasChanges ? (
-          <p className="px-1.5 py-1 text-[11px] text-muted-foreground/70">Loading changes...</p>
+          <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">Loading changes...</p>
         ) : null}
         {!error && !isLoading && !hasChanges ? (
-          <p className="px-1.5 py-2 text-center text-[12px] text-muted-foreground/70">
+          <p className="px-1.5 py-2 text-center text-ui text-muted-foreground/70">
             No changes in the working tree.
           </p>
         ) : null}
@@ -374,7 +367,11 @@ export function GitPanel(props: {
 
       <div className="diff-panel-viewport min-h-0 min-w-0 flex-1 overflow-hidden border-t border-border/70">
         {selectedFileDiff ? (
-          <SelectedFileDiff fileDiff={selectedFileDiff} theme={theme} />
+          <SelectedFileDiff
+            key={`${buildFileDiffRenderKey(selectedFileDiff)}:${theme}`}
+            fileDiff={selectedFileDiff}
+            theme={theme}
+          />
         ) : (
           <PanelStateMessage density="compact">Select a file to view its diff.</PanelStateMessage>
         )}

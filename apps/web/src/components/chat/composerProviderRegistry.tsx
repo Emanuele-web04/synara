@@ -1,34 +1,31 @@
 // FILE: composerProviderRegistry.tsx
-// Purpose: Centralizes provider-specific composer state and trait picker rendering.
+// Purpose: Normalizes provider-specific composer state for display and dispatch.
 // Layer: Chat composer orchestration
-// Depends on: shared model helpers, trait picker components, and runtime model discovery metadata.
+// Depends on: shared model helpers and runtime model discovery metadata.
 
 import {
   type ModelSlug,
-  type ProviderAgentDescriptor,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
-  type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getDefaultContextWindow,
   getDefaultEffort,
-  getGeminiThinkingSelectionValue,
   hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
+  normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
-  normalizeGeminiModelOptions,
-  normalizeGrokModelOptions,
+  normalizeCursorModelOptions,
+  normalizeOmpModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
+  resolveDevinModelVariant,
   resolveLabeledOptionValue,
   trimOrNull,
-} from "@t3tools/shared/model";
-import type { ReactNode } from "react";
-import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
-import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
+} from "@synara/shared/model";
+import { classifyCodexReasoningEffortSupport } from "../../lib/codexReasoningEffort";
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 export type ComposerProviderStateInput = {
@@ -48,76 +45,7 @@ export type ComposerProviderState = {
   modelPickerIconClassName?: string;
 };
 
-type ProviderTraitRenderInput = {
-  threadId: ThreadId;
-  model: ModelSlug;
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
-  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
-  prompt: string;
-  includeFastMode?: boolean;
-  onPromptChange: (prompt: string) => void;
-};
-
-type ProviderTraitPickerRenderInput = ProviderTraitRenderInput & {
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  shortcutLabel?: string | null;
-};
-
-type ProviderRegistryEntry = {
-  getState: (input: ComposerProviderStateInput) => ComposerProviderState;
-  renderTraitsMenuContent: (input: ProviderTraitRenderInput) => ReactNode;
-  renderTraitsPicker: (input: ProviderTraitPickerRenderInput) => ReactNode;
-};
-
-function renderTraitsMenuContentForProvider(
-  provider: ProviderKind,
-  input: ProviderTraitRenderInput,
-): ReactNode {
-  return (
-    <TraitsMenuContent
-      provider={provider}
-      threadId={input.threadId}
-      model={input.model}
-      runtimeModel={input.runtimeModel}
-      runtimeModels={input.runtimeModels}
-      runtimeAgents={input.runtimeAgents}
-      modelOptions={input.modelOptions}
-      prompt={input.prompt}
-      {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
-      onPromptChange={input.onPromptChange}
-    />
-  );
-}
-
-function renderTraitsPickerForProvider(
-  provider: ProviderKind,
-  input: ProviderTraitPickerRenderInput,
-): ReactNode {
-  return (
-    <TraitsPicker
-      provider={provider}
-      threadId={input.threadId}
-      model={input.model}
-      runtimeModel={input.runtimeModel}
-      runtimeModels={input.runtimeModels}
-      runtimeAgents={input.runtimeAgents}
-      modelOptions={input.modelOptions}
-      prompt={input.prompt}
-      {...(input.open !== undefined ? { open: input.open } : {})}
-      {...(input.onOpenChange ? { onOpenChange: input.onOpenChange } : {})}
-      {...(input.shortcutLabel !== undefined ? { shortcutLabel: input.shortcutLabel } : {})}
-      {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
-      onPromptChange={input.onPromptChange}
-    />
-  );
-}
-
-function getProviderStateFromCapabilities(
-  input: ComposerProviderStateInput,
-): ComposerProviderState {
+export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
   const { provider, model, runtimeModel, prompt, modelOptions } = input;
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
 
@@ -129,14 +57,23 @@ function getProviderStateFromCapabilities(
       const providerOptions = modelOptions?.codex;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
       const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffortSupport = classifyCodexReasoningEffortSupport({
+        model,
+        effort: rawEffort,
+        ...(runtimeModel ? { runtimeModel } : {}),
+      });
       const reasoningEffort =
-        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+        rawEffort &&
+        reasoningEffortSupport !== "unsupported" &&
+        rawEffort !== defaultReasoningEffort
           ? rawEffort
           : undefined;
       const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(fastModeEnabled || providerOptions?.fastMode === false
+          ? { fastMode: fastModeEnabled }
+          : {}),
       };
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
@@ -150,48 +87,38 @@ function getProviderStateFromCapabilities(
     case "cursor": {
       const providerOptions = modelOptions?.cursor;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      const defaultReasoningEffort = getDefaultEffort(caps);
-      const reasoningEffort =
-        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
-          ? rawEffort
-          : undefined;
-      const rawContextWindow = trimOrNull(providerOptions?.contextWindow);
-      const defaultContextWindow = getDefaultContextWindow(caps);
-      const contextWindow =
-        rawContextWindow &&
-        hasContextWindowOption(caps, rawContextWindow) &&
-        rawContextWindow !== defaultContextWindow
-          ? rawContextWindow
-          : undefined;
-      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
-      const thinking =
-        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
-          ? providerOptions.thinking
-          : undefined;
-      const nextOptions = {
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(fastModeEnabled ? { fastMode: true } : {}),
-        ...(thinking !== undefined ? { thinking } : {}),
-        ...(contextWindow ? { contextWindow } : {}),
-      };
-      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+      normalizedOptions = normalizeCursorModelOptions(model, providerOptions, caps);
       break;
     }
-    case "gemini": {
-      const providerOptions = modelOptions?.gemini;
-      rawEffort = getGeminiThinkingSelectionValue(caps, providerOptions);
-      normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
+    case "antigravity": {
+      const providerOptions = modelOptions?.antigravity;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeAntigravityModelOptions(model, providerOptions, caps);
       break;
     }
     case "grok": {
       const providerOptions = modelOptions?.grok;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeGrokModelOptions(model, providerOptions);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? providerOptions?.reasoningEffort
+          : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
-    case "kilo":
+    case "droid": {
+      const providerOptions = modelOptions?.droid;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      // Droid's advertised "default" is the mutable current CLI preference.
+      // Once the user selects an effort, always dispatch it explicitly.
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) ? providerOptions?.reasoningEffort : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
+      break;
+    }
     case "opencode": {
-      const providerOptions = provider === "kilo" ? modelOptions?.kilo : modelOptions?.opencode;
+      const providerOptions = modelOptions?.opencode;
       rawEffort = trimOrNull(providerOptions?.variant);
       const variantOptions = caps.variantOptions ?? [];
       const reasoningVariant =
@@ -216,6 +143,62 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizePiModelOptions(providerOptions);
       break;
     }
+    case "devin": {
+      const providerOptions = modelOptions?.devin;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? rawEffort
+          : undefined;
+      const rawContextWindow = trimOrNull(providerOptions?.contextWindow);
+      const defaultContextWindow = getDefaultContextWindow(caps);
+      const contextWindow =
+        rawContextWindow &&
+        hasContextWindowOption(caps, rawContextWindow) &&
+        rawContextWindow !== defaultContextWindow
+          ? rawContextWindow
+          : undefined;
+      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
+      const requestedThinking =
+        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
+          ? providerOptions.thinking
+          : undefined;
+      const modelVariant = resolveDevinModelVariant({
+        model,
+        runtimeModel,
+        modelVariant: providerOptions?.modelVariant,
+        reasoningEffort: rawEffort && hasEffortLevel(caps, rawEffort) ? rawEffort : undefined,
+        fastMode: caps.supportsFastMode ? providerOptions?.fastMode : undefined,
+        thinking: requestedThinking,
+        contextWindow:
+          rawContextWindow && hasContextWindowOption(caps, rawContextWindow)
+            ? rawContextWindow
+            : undefined,
+      });
+      const nextOptions = {
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(requestedThinking !== undefined ? { thinking: requestedThinking } : {}),
+        ...(contextWindow ? { contextWindow } : {}),
+        ...(modelVariant &&
+        (Boolean(reasoningEffort) ||
+          fastModeEnabled ||
+          requestedThinking !== undefined ||
+          Boolean(contextWindow) ||
+          Boolean(providerOptions?.modelVariant))
+          ? { modelVariant }
+          : {}),
+      };
+      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+      break;
+    }
+    case "omp": {
+      const providerOptions = modelOptions?.omp;
+      rawEffort = trimOrNull(providerOptions?.thinkingLevel);
+      normalizedOptions = normalizeOmpModelOptions(providerOptions);
+      break;
+    }
   }
 
   const draftEffort = trimOrNull(rawEffort);
@@ -224,9 +207,17 @@ function getProviderStateFromCapabilities(
     ? caps.promptInjectedEffortLevels.includes(draftEffort)
     : false;
   const promptEffort =
-    provider === "kilo" || provider === "opencode"
+    provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
-      : draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
+      : draftEffort &&
+          !isPromptInjected &&
+          (provider === "codex"
+            ? classifyCodexReasoningEffortSupport({
+                model,
+                effort: draftEffort,
+                ...(runtimeModel ? { runtimeModel } : {}),
+              }) !== "unsupported"
+            : hasEffortLevel(caps, draftEffort))
         ? draftEffort
         : defaultEffort && hasEffortLevel(caps, defaultEffort)
           ? defaultEffort
@@ -242,118 +233,4 @@ function getProviderStateFromCapabilities(
     ...(ultrathinkActive ? { composerFrameClassName: "ultrathink-frame" } : {}),
     ...(ultrathinkActive ? { modelPickerIconClassName: "ultrathink-chroma" } : {}),
   };
-}
-
-const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
-  codex: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("codex", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("codex", input),
-  },
-  claudeAgent: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("claudeAgent", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("claudeAgent", input),
-  },
-  cursor: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
-  },
-  gemini: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
-  },
-  grok: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("grok", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("grok", input),
-  },
-  kilo: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("kilo", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("kilo", input),
-  },
-  opencode: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("opencode", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("opencode", input),
-  },
-  pi: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("pi", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("pi", input),
-  },
-};
-
-export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
-  return composerProviderRegistry[input.provider].getState(input);
-}
-
-export function renderProviderTraitsMenuContent(input: {
-  provider: ProviderKind;
-  threadId: ThreadId;
-  model: ModelSlug;
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
-  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
-  prompt: string;
-  includeFastMode?: boolean;
-  onPromptChange: (prompt: string) => void;
-}): ReactNode {
-  const selection = getComposerTraitSelection(
-    input.provider,
-    input.model,
-    input.prompt,
-    input.modelOptions,
-    input.runtimeModel,
-  );
-  if (
-    !hasVisibleComposerTraitControls(
-      selection,
-      input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
-    ) &&
-    ((input.provider !== "kilo" && input.provider !== "opencode") ||
-      (input.runtimeAgents?.length ?? 0) === 0)
-  ) {
-    return null;
-  }
-  return composerProviderRegistry[input.provider].renderTraitsMenuContent(input);
-}
-
-export function renderProviderTraitsPicker(input: {
-  provider: ProviderKind;
-  threadId: ThreadId;
-  model: ModelSlug;
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
-  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
-  prompt: string;
-  includeFastMode?: boolean;
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  shortcutLabel?: string | null;
-  onPromptChange: (prompt: string) => void;
-}): ReactNode {
-  const selection = getComposerTraitSelection(
-    input.provider,
-    input.model,
-    input.prompt,
-    input.modelOptions,
-    input.runtimeModel,
-  );
-  if (
-    !hasVisibleComposerTraitControls(
-      selection,
-      input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
-    ) &&
-    ((input.provider !== "kilo" && input.provider !== "opencode") ||
-      (input.runtimeAgents?.length ?? 0) === 0)
-  ) {
-    return null;
-  }
-  return composerProviderRegistry[input.provider].renderTraitsPicker(input);
 }

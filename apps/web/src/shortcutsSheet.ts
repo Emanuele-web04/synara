@@ -1,11 +1,19 @@
 // FILE: shortcutsSheet.ts
-// Purpose: Build the shortcut reference sections shown by the keyboard shortcuts sheet.
+// Purpose: Build the shortcut reference sections shown by the keyboard shortcuts sheet, and list
+//          the commands the Settings shortcut editor can bind.
 // Layer: UI helper
 // Depends on: keybinding label resolution, project script command mapping, and platform helpers.
 
-import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import {
+  SPACE_JUMP_KEYBINDING_COMMANDS,
+  STATIC_KEYBINDING_COMMANDS,
+  THREAD_JUMP_KEYBINDING_COMMANDS,
+  type KeybindingCommand,
+  type ResolvedKeybindingRule,
+  type ResolvedKeybindingsConfig,
+} from "@synara/contracts";
 import { isMacPlatform } from "./lib/utils";
-import { shortcutLabelForCommand } from "./keybindings";
+import { formatShortcutLabel, resolveKeybindingForCommand } from "./keybindings";
 import { commandForProjectScript } from "./projectScripts";
 import type { ProjectScript } from "./types";
 
@@ -18,6 +26,8 @@ export interface ShortcutSheetContext {
 
 export interface ShortcutSheetEntry {
   id: string;
+  command: KeybindingCommand | null;
+  binding: ResolvedKeybindingRule | null;
   label: string;
   description: string;
   shortcutLabel: string;
@@ -44,11 +54,30 @@ interface ShortcutDefinition {
   description: string;
 }
 
+const EFFORT_CYCLE_DEFINITION: ShortcutDefinition = {
+  command: "model.effort.next",
+  label: "Next model effort",
+  description: "Cycle the model's available effort levels and briefly show the selected level.",
+};
+
+// Space jumps address the switcher's visual tab order, so slot 1 is always Void.
+const SPACE_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
+  { length: 9 },
+  (_, index) => ({
+    command: `space.jump.${index + 1}` as KeybindingCommand,
+    label: index === 0 ? "Jump to Void" : `Jump to space ${index + 1}`,
+    description:
+      index === 0
+        ? "Switch straight to the Void tab of the space switcher."
+        : "Switch straight to this tab of the space switcher.",
+  }),
+);
+
 const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "sidebar.addProject",
     label: "Add project",
-    description: "Open the folder picker to import a local project into the sidebar.",
+    description: "Open the Create project dialog to import a local folder.",
   },
   {
     command: "sidebar.search",
@@ -56,14 +85,30 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open the sidebar search palette from anywhere in the app.",
   },
   {
+    command: "sidebar.activity",
+    label: "Toggle Activity",
+    description: "Show or hide running tasks, completed work, and items that need attention.",
+  },
+  {
     command: "sidebar.importThread",
     label: "Import thread",
     description: "Bring an existing conversation into the current workspace.",
   },
   {
+    command: "space.previous",
+    label: "Previous space",
+    description: "Switch to the previous project space and restore its last working context.",
+  },
+  {
+    command: "space.next",
+    label: "Next space",
+    description: "Switch to the next project space and restore its last working context.",
+  },
+  ...SPACE_JUMP_DEFINITIONS,
+  {
     command: "chat.new",
     label: "New thread",
-    description: "Start a fresh thread in the current project.",
+    description: "Start a fresh thread in the current project, or the most recent one.",
   },
   {
     command: "chat.newLatestProject",
@@ -96,11 +141,6 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Start a fresh thread with Cursor selected.",
   },
   {
-    command: "chat.newGemini",
-    label: "New Gemini thread",
-    description: "Start a fresh thread with Gemini selected.",
-  },
-  {
     command: "chat.split",
     label: "Split chat",
     description: "Open the current conversation in a second pane.",
@@ -121,9 +161,47 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open the composer provider and model picker.",
   },
   {
+    command: "model.next",
+    label: "Next model",
+    description:
+      "Cycle to the next model for the active provider (favorites first, then remaining models).",
+  },
+  {
+    command: "model.previous",
+    label: "Previous model",
+    description:
+      "Cycle to the previous model for the active provider (favorites first, then remaining models).",
+  },
+  EFFORT_CYCLE_DEFINITION,
+  {
     command: "traitsPicker.toggle",
     label: "Reasoning picker",
     description: "Open the composer reasoning and trait controls.",
+  },
+  {
+    command: "settings.usage",
+    label: "Open usage settings",
+    description: "Open Settings → Usage for provider quota and token totals.",
+  },
+  {
+    command: "composer.focus.toggle",
+    label: "Focus composer",
+    description: "Focus or blur the chat prompt composer.",
+  },
+  {
+    command: "chat.find",
+    label: "Find in thread",
+    description: "Search the current transcript and jump to each matching message.",
+  },
+  {
+    command: "search.files",
+    label: "Search files",
+    description: "Open the workspace file-name search palette.",
+  },
+  {
+    command: "search.content",
+    label: "Search snippets",
+    description: "Open the workspace content search palette across file snippets.",
   },
   {
     command: "terminal.toggle",
@@ -131,14 +209,64 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Show or hide the terminal surface for the active thread.",
   },
   {
+    command: "terminal.new",
+    label: "Focus terminal",
+    description: "Open or focus the terminal panel for this thread.",
+  },
+  {
+    command: "terminal.close",
+    label: "Close terminal",
+    description: "Close the terminal session for this thread.",
+  },
+  {
     command: "diff.toggle",
     label: "Toggle diff",
     description: "Open or close the working tree diff panel.",
   },
   {
+    command: "diff.change.next",
+    label: "Next change",
+    description: "Jump the diff viewport to the next changed file.",
+  },
+  {
+    command: "diff.change.previous",
+    label: "Previous change",
+    description: "Jump the diff viewport to the previous changed file.",
+  },
+  {
+    command: "sidechat.toggle",
+    label: "Toggle side chat",
+    description: "Open or hide a side chat beside the main conversation.",
+  },
+  {
     command: "browser.toggle",
     label: "Toggle browser",
     description: "Reveal the built-in browser panel for the active thread.",
+  },
+  {
+    command: "device.toggle",
+    label: "Toggle iOS Simulator",
+    description: "Reveal the iOS Simulator panel for the active thread. macOS servers only.",
+  },
+  {
+    command: "thread.copyId",
+    label: "Copy thread ID",
+    description: "Copy the active thread's ID to the clipboard.",
+  },
+  {
+    command: "thread.archive",
+    label: "Archive thread",
+    description: "Archive the active chat, with the same confirmation and undo as the thread menu.",
+  },
+  {
+    command: "thread.snooze",
+    label: "Snooze thread",
+    description: "Open the snooze date and time picker for the active chat.",
+  },
+  {
+    command: "thread.markUnread",
+    label: "Mark thread unread",
+    description: "Mark the active chat unread and restore its dismissed notification.",
   },
   {
     command: "chat.visible.previous",
@@ -151,9 +279,29 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Cycle to the next thread that is currently visible in the sidebar.",
   },
   {
+    command: "threadTab.previous",
+    label: "Previous tab",
+    description: "Switch to the open thread tab on the left of the active one.",
+  },
+  {
+    command: "threadTab.next",
+    label: "Next tab",
+    description: "Switch to the open thread tab on the right of the active one.",
+  },
+  {
     command: "editor.openFavorite",
     label: "Open in favorite editor",
     description: "Send the current thread or workspace target to your preferred editor.",
+  },
+  {
+    command: "editor.file.save",
+    label: "Save file",
+    description: "Write the focused editor's unsaved changes back to disk.",
+  },
+  {
+    command: "git.commitAndPush",
+    label: "Commit and push",
+    description: "Commit pending changes and push the active thread's repo.",
   },
 ] as const;
 
@@ -189,8 +337,105 @@ const WORKSPACE_DEFINITIONS: readonly ShortcutDefinition[] = [
   },
 ] as const;
 
+const SIDEBAR_TOGGLE_DEFINITION: ShortcutDefinition = {
+  command: "sidebar.toggle",
+  label: "Toggle sidebar",
+  description: "Collapse or reveal the sidebar shell.",
+};
+
+export interface ShortcutEditorDefinition {
+  id: string;
+  label: string;
+  description: string;
+  /**
+   * Commands the row edits together: one, the aliases of one action, or the nine
+   * members of a numbered family in key order.
+   */
+  commands: readonly KeybindingCommand[];
+  /** Set for a numbered family; one single-command definition per number key. */
+  members?: readonly ShortcutEditorDefinition[];
+}
+
+function singleCommandEditorDefinitions(
+  definitions: ReadonlyArray<ShortcutDefinition>,
+): ShortcutEditorDefinition[] {
+  return definitions.map((definition) => {
+    const commands = Array.isArray(definition.command) ? definition.command : [definition.command];
+    return {
+      id: commands[0] ?? definition.label,
+      label: definition.label,
+      description: definition.description,
+      commands,
+    };
+  });
+}
+
+/**
+ * Every built-in command in the order Settings → Keybindings lists it, bound or not.
+ * The two 1–9 families come back as one definition each so the editor can show and
+ * rebind them as a single shortcut.
+ */
+export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
+  const spaceJumpCommands = new Set<KeybindingCommand>(SPACE_JUMP_KEYBINDING_COMMANDS);
+  const definitions: ShortcutEditorDefinition[] = [
+    ...singleCommandEditorDefinitions([SIDEBAR_TOGGLE_DEFINITION]),
+    ...singleCommandEditorDefinitions(
+      AVAILABLE_NOW_DEFINITIONS.filter(
+        (definition) =>
+          Array.isArray(definition.command) ||
+          !spaceJumpCommands.has(definition.command as KeybindingCommand),
+      ),
+    ),
+    ...singleCommandEditorDefinitions(WORKSPACE_DEFINITIONS),
+    {
+      id: "thread.jump",
+      label: "Jump to visible thread 1–9",
+      description: "Focus a visible thread directly from the sidebar number row.",
+      commands: THREAD_JUMP_KEYBINDING_COMMANDS,
+      members: singleCommandEditorDefinitions(THREAD_JUMP_DEFINITIONS),
+    },
+    {
+      id: "space.jump",
+      label: "Jump to space 1–9",
+      description: "Switch straight to a tab of the space switcher. 1 is always Void.",
+      commands: SPACE_JUMP_KEYBINDING_COMMANDS,
+      members: singleCommandEditorDefinitions(SPACE_JUMP_DEFINITIONS),
+    },
+  ];
+
+  const covered = new Set(definitions.flatMap((definition) => definition.commands));
+  for (const command of STATIC_KEYBINDING_COMMANDS) {
+    if (covered.has(command) || command.startsWith("terminal.split")) continue;
+    definitions.push({
+      id: command,
+      label: command,
+      description: "Assign a shortcut to this built-in command.",
+      commands: [command],
+    });
+  }
+  return definitions;
+}
+
 function modSlashLabel(platform: string): string {
   return isMacPlatform(platform) ? "⌘/" : "Ctrl+/";
+}
+
+/** Human-readable sheet label for a keybinding command, e.g. `chat.new` → "New thread". */
+export function shortcutSheetCommandLabel(command: KeybindingCommand): string | null {
+  for (const definitions of [
+    [SIDEBAR_TOGGLE_DEFINITION],
+    AVAILABLE_NOW_DEFINITIONS,
+    WORKSPACE_DEFINITIONS,
+    THREAD_JUMP_DEFINITIONS,
+  ]) {
+    for (const definition of definitions) {
+      const commands = Array.isArray(definition.command)
+        ? definition.command
+        : [definition.command];
+      if (commands.includes(command)) return definition.label;
+    }
+  }
+  return null;
 }
 
 function definitionToEntry(
@@ -200,19 +445,19 @@ function definitionToEntry(
   context: ShortcutSheetContext,
 ): ShortcutSheetEntry | null {
   const commands = Array.isArray(definition.command) ? definition.command : [definition.command];
-  const shortcutLabel = commands.reduce<string | null>((resolved, command) => {
-    if (resolved) return resolved;
-    return shortcutLabelForCommand(keybindings, command, {
-      platform,
-      context,
-    });
-  }, null);
-  if (!shortcutLabel) return null;
+  const binding = commands.reduce<ResolvedKeybindingRule | null>(
+    (resolved, command) =>
+      resolved ?? resolveKeybindingForCommand(keybindings, command, { platform, context }),
+    null,
+  );
+  if (!binding) return null;
   return {
-    id: commands[0] ?? definition.label,
+    id: binding.command,
+    command: binding.command,
+    binding,
     label: definition.label,
     description: definition.description,
-    shortcutLabel,
+    shortcutLabel: formatShortcutLabel(binding.shortcut, platform),
   };
 }
 
@@ -235,7 +480,9 @@ export function buildShortcutSheetSections(
   const currentEntries: ShortcutSheetEntry[] = [
     {
       id: "shortcuts.show",
-      label: "Show keyboard shortcuts",
+      command: null,
+      binding: null,
+      label: "Show keybindings",
       description: "Open this sheet from anywhere without leaving your current context.",
       shortcutLabel: modSlashLabel(options.platform),
     },
@@ -248,11 +495,7 @@ export function buildShortcutSheetSections(
   ];
 
   const sidebarToggle = definitionToEntry(
-    {
-      command: "sidebar.toggle",
-      label: "Toggle sidebar",
-      description: "Collapse or reveal the sidebar shell.",
-    },
+    SIDEBAR_TOGGLE_DEFINITION,
     options.keybindings,
     options.platform,
     options.context,
@@ -313,21 +556,22 @@ export function buildShortcutSheetSections(
   }
 
   const projectScriptEntries = options.projectScripts
-    .map((script) => {
-      const shortcutLabel = shortcutLabelForCommand(
-        options.keybindings,
-        commandForProjectScript(script.id),
-        options.platform,
-      );
-      if (!shortcutLabel) return null;
+    .map<ShortcutSheetEntry | null>((script) => {
+      const command = commandForProjectScript(script.id);
+      const binding = resolveKeybindingForCommand(options.keybindings, command, {
+        platform: options.platform,
+      });
+      if (!binding) return null;
       return {
         id: script.id,
+        command,
+        binding,
         label: script.runOnWorktreeCreate ? `${script.name} setup script` : script.name,
         description: script.runOnWorktreeCreate
           ? "Run the project setup script directly from the keyboard."
           : "Run this project script without opening the scripts menu.",
-        shortcutLabel,
-      } satisfies ShortcutSheetEntry;
+        shortcutLabel: formatShortcutLabel(binding.shortcut, options.platform),
+      };
     })
     .filter((entry): entry is ShortcutSheetEntry => entry !== null);
 
@@ -340,5 +584,51 @@ export function buildShortcutSheetSections(
     });
   }
 
+  if (!currentEntries.some((entry) => entry.command === EFFORT_CYCLE_DEFINITION.command)) {
+    const composerEntries = definitionsToEntries(
+      [EFFORT_CYCLE_DEFINITION],
+      options.keybindings,
+      options.platform,
+      { ...options.context, composerFocus: true, terminalFocus: false },
+    );
+    if (composerEntries.length > 0) {
+      sections.push({
+        id: "composer-context",
+        title: "In composer",
+        description: "Available while the prompt composer or its effort picker has focus.",
+        tone: "muted",
+        entries: composerEntries,
+      });
+    }
+  }
+
   return sections;
+}
+
+// Match a single entry against a free-text query on the human-readable label, the
+// description, and the rendered shortcut label, so a user can search by action name
+// ("terminal"), intent ("split"), or even the key combo itself ("⌘N" / "ctrl+n").
+function shortcutSheetEntryMatchesQuery(entry: ShortcutSheetEntry, needle: string): boolean {
+  return (
+    entry.label.toLowerCase().includes(needle) ||
+    entry.description.toLowerCase().includes(needle) ||
+    entry.shortcutLabel.toLowerCase().includes(needle)
+  );
+}
+
+// Filter each section's entries against a free-text query, dropping sections that end up
+// empty. Shared by the keyboard-shortcuts dialog (Mod+/) and the settings reference panel
+// so the two surfaces search identically.
+export function filterShortcutSheetSections(
+  sections: ShortcutSheetSection[],
+  query: string,
+): ShortcutSheetSection[] {
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed.length === 0) return sections;
+  return sections
+    .map((section) => ({
+      ...section,
+      entries: section.entries.filter((entry) => shortcutSheetEntryMatchesQuery(entry, trimmed)),
+    }))
+    .filter((section) => section.entries.length > 0);
 }

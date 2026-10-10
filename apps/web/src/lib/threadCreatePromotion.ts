@@ -3,7 +3,7 @@
 // Layer: Web orchestration helper
 // Exports: promoteThreadCreate, isDuplicateThreadCreateError
 
-import type { ClientOrchestrationCommand, NativeApi, ThreadId } from "@t3tools/contracts";
+import type { ClientOrchestrationCommand, NativeApi, ThreadId } from "@synara/contracts";
 import { markPromotedDraftThreads } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -12,10 +12,14 @@ import { getThreadFromState } from "../threadDerivation";
 type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
 
 type PromoteThreadCreateResult = "created" | "exists" | "unavailable";
+interface PromoteThreadCreateOptions {
+  // Draft-aware callers use this when React knows the route is still local.
+  readonly force?: boolean;
+}
 
 const inFlightThreadCreateById = new Map<ThreadId, Promise<PromoteThreadCreateResult>>();
 
-export function isDuplicateThreadCreateError(error: unknown, threadId: ThreadId): boolean {
+function isDuplicateThreadCreateError(error: unknown, threadId: ThreadId): boolean {
   const message =
     error instanceof Error
       ? error.message
@@ -37,14 +41,16 @@ async function recoverPromotedThreadFromShellSnapshot(
   const snapshot = await api.orchestration.getShellSnapshot();
   useStore.getState().syncServerShellSnapshot(snapshot);
   markPromotedDraftThreads(new Set(snapshot.threads.map((thread) => thread.id)));
-  return getThreadFromState(useStore.getState(), threadId) !== null;
+  // getThreadFromState returns undefined for an unknown thread, never null.
+  return getThreadFromState(useStore.getState(), threadId) !== undefined;
 }
 
 async function dispatchPromoteThreadCreate(
   api: NativeApi,
   command: ThreadCreateCommand,
+  options: PromoteThreadCreateOptions = {},
 ): Promise<PromoteThreadCreateResult> {
-  if (getThreadFromState(useStore.getState(), command.threadId)) {
+  if (!options.force && getThreadFromState(useStore.getState(), command.threadId)) {
     markPromotedDraftThreads(new Set([command.threadId]));
     return "exists";
   }
@@ -71,6 +77,7 @@ async function dispatchPromoteThreadCreate(
 export async function promoteThreadCreate(
   command: ThreadCreateCommand,
   api: NativeApi | undefined = readNativeApi(),
+  options: PromoteThreadCreateOptions = {},
 ): Promise<PromoteThreadCreateResult> {
   if (!api) {
     return "unavailable";
@@ -81,7 +88,7 @@ export async function promoteThreadCreate(
     return "exists";
   }
 
-  const promise = dispatchPromoteThreadCreate(api, command).finally(() => {
+  const promise = dispatchPromoteThreadCreate(api, command, options).finally(() => {
     inFlightThreadCreateById.delete(command.threadId);
   });
   inFlightThreadCreateById.set(command.threadId, promise);

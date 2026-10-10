@@ -5,14 +5,19 @@
  * single effect-style text line in a thread-scoped file. Failures are
  * downgraded to warnings so provider runtime behavior is unaffected.
  */
-import fs from "node:fs";
 import path from "node:path";
 
-import type { ThreadId } from "@t3tools/contracts";
-import { RotatingFileSink } from "@t3tools/shared/logging";
+import type { ThreadId } from "@synara/contracts";
+import { RotatingFileSink } from "@synara/shared/logging";
 import { Effect, Exit, Logger, Scope } from "effect";
 
+import { stripDiagnosticImages } from "../stripDiagnosticImages.ts";
 import { toSafeThreadAttachmentSegment } from "../../attachmentStore.ts";
+import {
+  ensurePrivateDirectorySync,
+  ensurePrivateFileSync,
+  PRIVATE_FILE_MODE,
+} from "../../privatePathPermissions.ts";
 
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 10;
@@ -78,7 +83,7 @@ function toLogMessage(event: unknown): Effect.Effect<string | undefined> {
   return Effect.gen(function* () {
     const serialized = yield* Effect.sync(() => {
       try {
-        return { ok: true as const, value: JSON.stringify(event) };
+        return { ok: true as const, value: JSON.stringify(stripDiagnosticImages(event)) };
       } catch (error) {
         return { ok: false as const, error };
       }
@@ -109,6 +114,7 @@ function makeThreadWriter(input: {
   return Effect.gen(function* () {
     const sinkResult = yield* Effect.sync(() => {
       try {
+        ensurePrivateFileSync(input.filePath);
         return {
           ok: true as const,
           sink: new RotatingFileSink({
@@ -116,6 +122,7 @@ function makeThreadWriter(input: {
             maxBytes: input.maxBytes,
             maxFiles: input.maxFiles,
             throwOnError: true,
+            mode: PRIVATE_FILE_MODE,
           }),
         };
       } catch (error) {
@@ -183,7 +190,7 @@ export function makeEventNdjsonLogger(
 
     const directoryReady = yield* Effect.sync(() => {
       try {
-        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        ensurePrivateDirectorySync(path.dirname(filePath));
         return true;
       } catch (error) {
         return { ok: false as const, error };

@@ -8,20 +8,23 @@ import type {
   ModelSlug,
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderStartOptions,
   RuntimeMode,
   ServerProviderStatus,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { toastManager } from "~/components/ui/toast";
+import type { ProviderInstanceOption } from "~/appSettings";
 import type { DraftThreadEnvMode } from "~/composerDraftStore";
-import { useComposerDraftStore } from "~/composerDraftStore";
+import { providerInstanceModelSelectionKey, useComposerDraftStore } from "~/composerDraftStore";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { createAndSendKanbanTask, createKanbanDraftTask } from "~/lib/kanbanTaskCreate";
-import { resolveProviderSendAvailability } from "~/lib/providerAvailability";
+import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { buildModelSelection } from "~/providerModelOptions";
 import { truncateKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
 
@@ -29,7 +32,9 @@ interface UseKanbanTaskSubmitInput {
   readonly selectedProjectId: ProjectId | null;
   readonly hasSendableContent: boolean;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly selectedModel: ModelSlug | null;
+  readonly selectedModelSupportsAutoMode: boolean | undefined;
   readonly taskPreview: string;
   readonly trimmedPrompt: string;
   readonly scratchThreadId: ThreadId;
@@ -37,10 +42,17 @@ interface UseKanbanTaskSubmitInput {
   readonly interactionMode: ProviderInteractionMode;
   readonly envMode: DraftThreadEnvMode;
   readonly sendAsDraft: boolean;
+  /** New-task dialog "send as goal" toggle (off by default; dialog-owned state). */
+  readonly sendAsGoal?: boolean | undefined;
   readonly defaultProvider: ProviderKind;
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly providerOptionsForDispatch: ProviderStartOptions | undefined;
+  readonly providerInstances: ReadonlyArray<
+    Pick<ProviderInstanceOption, "instanceId" | "provider">
+  >;
   readonly providerStatuses: readonly ServerProviderStatus[];
+  readonly isPreparingImages: boolean;
+  readonly waitForPendingImages: () => Promise<void>;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -49,7 +61,9 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
+    selectedModelSupportsAutoMode,
     taskPreview,
     trimmedPrompt,
     scratchThreadId,
@@ -57,22 +71,31 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     interactionMode,
     envMode,
     sendAsDraft,
+    sendAsGoal = false,
     defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
+    isPreparingImages,
+    waitForPendingImages,
     onOpenChange,
   } = input;
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   // Synchronous re-entry guard: repeated Cmd+Enter can fire before React flushes
   // the loading state, and two passes here would create two tasks.
   const isCreatingRef = useRef(false);
 
   const canCreate =
-    selectedProjectId !== null && hasSendableContent && selectedModel !== null && !isCreating;
+    selectedProjectId !== null &&
+    hasSendableContent &&
+    selectedModel !== null &&
+    !isCreating &&
+    !isPreparingImages;
 
-  const handleCreate = useCallback(() => {
+  const handleCreate = async () => {
     if (
       !selectedProjectId ||
       !hasSendableContent ||
@@ -84,13 +107,28 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     isCreatingRef.current = true;
+    await waitForPendingImages();
     const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
-    const modelSelection =
-      scratchState?.modelSelectionByProvider[selectedProvider] ??
-      buildModelSelection(selectedProvider, selectedModel);
+    const storedModelSelection =
+      scratchState?.modelSelectionByProvider[
+        providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
+      ];
+    const storedModelSupportsAutoMode =
+      storedModelSelection?.provider === "claudeAgent"
+        ? storedModelSelection.supportsAutoMode
+        : undefined;
+    const modelSelection = buildModelSelection(
+      selectedProvider,
+      storedModelSelection?.model ?? selectedModel,
+      storedModelSelection?.options,
+      selectedProvider === "claudeAgent"
+        ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
+        : undefined,
+      { instanceId: selectedProviderInstanceId },
+    );
     const taskInput = {
       projectId: selectedProjectId,
       prompt: trimmedPrompt,
@@ -113,9 +151,11 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     // Send now: create + promote + dispatch straight to In Progress.
-    const sendAvailability = resolveProviderSendAvailability({
+    const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: modelSelection.provider,
+      instanceId: modelSelection.instanceId ?? selectedProviderInstanceId,
       statuses: providerStatuses,
+      refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
     if (!sendAvailability.usable) {
       toastManager.add({
@@ -132,13 +172,24 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       defaultProvider,
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
+      ...(sendAsGoal ? { sendAsGoal: true as const } : {}),
+      providerInstances,
     })
       .then(({ threadId, result }) => {
         if (result.kind === "dispatched") {
+          if (result.deferred) {
+            toastManager.add({
+              type: "info",
+              title: "Chat send in progress",
+              description: "The board stood down; the running chat send owns this turn.",
+            });
+            onOpenChange(false);
+            return;
+          }
           toastManager.add({
-            type: "success",
+            type: result.warning ? "warning" : "success",
             title: "Task started",
-            description: truncatedPrompt,
+            description: result.warning ?? truncatedPrompt,
           });
           onOpenChange(false);
           return;
@@ -178,26 +229,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
         isCreatingRef.current = false;
         setIsCreating(false);
       });
-  }, [
-    assistantDeliveryMode,
-    defaultProvider,
-    envMode,
-    hasSendableContent,
-    interactionMode,
-    isCreating,
-    navigate,
-    onOpenChange,
-    providerOptionsForDispatch,
-    providerStatuses,
-    runtimeMode,
-    scratchThreadId,
-    selectedModel,
-    selectedProjectId,
-    selectedProvider,
-    sendAsDraft,
-    taskPreview,
-    trimmedPrompt,
-  ]);
+  };
 
   return {
     isCreating,

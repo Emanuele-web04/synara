@@ -1,0 +1,957 @@
+// FILE: composerDraftModels.ts
+// Purpose: Normalizes provider-scoped model selections and resolves effective composer models.
+// Exports: Model state helpers used by persistence, actions, and the public facade.
+
+import {
+  GROK_REASONING_EFFORT_OPTIONS,
+  ProviderInstanceId,
+  ProviderKind,
+  type ClaudeCodeEffort,
+  type CodexReasoningEffort,
+  type CursorModelOptions,
+  type DevinModelOptions,
+  type DroidReasoningEffort,
+  type GrokReasoningEffort,
+  type ModelSelection,
+  type ModelSlug,
+  type OmpModelOptions,
+  type PiThinkingLevel,
+  type ProviderModelOptions,
+} from "@synara/contracts";
+import * as Schema from "effect/Schema";
+
+import {
+  getDefaultModel,
+  normalizeGrokModelOptions,
+  normalizeModelSlug,
+  normalizeOmpModelOptions,
+  resolveModelSlugForProvider,
+  resolveSelectableModel,
+} from "@synara/shared/model";
+import { resolveAppModelSelection } from "./appSettings";
+import type {
+  ComposerThreadDraftState,
+  ModelSelectionByProviderInstance,
+} from "./composerDraftDomain";
+import { classifyProviderReasoningEffortSupport } from "./lib/codexReasoningEffort";
+
+export const COMPOSER_PROVIDER_KINDS = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "devin",
+  "antigravity",
+  "grok",
+  "droid",
+  "opencode",
+  "pi",
+  "omp",
+] as const satisfies readonly ProviderKind[];
+
+const isProviderKind = Schema.is(ProviderKind);
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
+
+const GROK_REASONING_EFFORT_SET = new Set<string>(GROK_REASONING_EFFORT_OPTIONS);
+
+export const LegacyCodexFields = Schema.Struct({
+  effort: Schema.optionalKey(Schema.String),
+  codexFastMode: Schema.optionalKey(Schema.Boolean),
+  serviceTier: Schema.optionalKey(Schema.String),
+});
+
+export type LegacyCodexFields = typeof LegacyCodexFields.Type;
+
+const ANTIGRAVITY_REASONING_EFFORT_SET = new Set(["low", "medium", "high", "thinking"]);
+
+export interface EffectiveComposerModelState {
+  selectedModel: ModelSlug;
+  modelOptions: ProviderModelOptions | null;
+}
+
+function mergeProviderModelOptionsFromSelections(
+  ...selections: ReadonlyArray<ModelSelection | null | undefined>
+): ProviderModelOptions | null {
+  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
+  for (const selection of selections) {
+    if (!selection) continue;
+    if (selection.options) {
+      result[selection.provider] = selection.options;
+    } else {
+      delete result[selection.provider];
+    }
+  }
+  return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
+}
+
+function modelSelectionMatchesProviderInstance(
+  selection: ModelSelection | null | undefined,
+  provider: ProviderKind,
+  instanceId: ProviderInstanceId | null | undefined,
+): selection is ModelSelection {
+  if (!selection || selection.provider !== provider) {
+    return false;
+  }
+  return (selection.instanceId ?? selection.provider) === (instanceId ?? provider);
+}
+
+function deriveEffectiveComposerModelOptions(input: {
+  draft:
+    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
+    | null
+    | undefined;
+  selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
+  threadModelSelection: ModelSelection | null | undefined;
+  projectModelSelection: ModelSelection | null | undefined;
+}): ProviderModelOptions | null {
+  const selectionForTarget = (selection: ModelSelection | null | undefined) =>
+    selection?.provider !== input.selectedProvider ||
+    modelSelectionMatchesProviderInstance(
+      selection,
+      input.selectedProvider,
+      input.selectedProviderInstanceId,
+    )
+      ? selection
+      : null;
+  const baseOptions = mergeProviderModelOptionsFromSelections(
+    selectionForTarget(input.projectModelSelection),
+    selectionForTarget(input.threadModelSelection),
+  );
+  const draftSelections = input.draft?.modelSelectionByProvider;
+  if (!draftSelections) {
+    return baseOptions;
+  }
+
+  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = baseOptions
+    ? { ...baseOptions }
+    : {};
+  for (const selection of Object.values(draftSelections)) {
+    if (!selection) continue;
+    const provider = selection.provider;
+    if (
+      provider === input.selectedProvider &&
+      !modelSelectionMatchesProviderInstance(
+        selection,
+        input.selectedProvider,
+        input.selectedProviderInstanceId,
+      )
+    ) {
+      continue;
+    }
+    if (selection.options) {
+      result[provider] = selection.options;
+    } else {
+      delete result[provider];
+    }
+  }
+  return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
+}
+
+export function normalizeProviderKind(value: unknown): ProviderKind | null {
+  if (value === "gemini") {
+    return "antigravity";
+  }
+  if (value === "kilo") {
+    return "opencode";
+  }
+  return isProviderKind(value) ? value : null;
+}
+
+function trimStringOrUndefined(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | undefined {
+  const trimmed = trimStringOrUndefined(value);
+  return trimmed !== undefined && isProviderInstanceId(trimmed) ? trimmed : undefined;
+}
+
+export function providerInstanceModelSelectionKey(
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
+): ProviderInstanceId {
+  return normalizeProviderInstanceId(instanceId) ?? (provider as ProviderInstanceId);
+}
+
+export function modelSelectionStorageKey(selection: ModelSelection): ProviderInstanceId {
+  return providerInstanceModelSelectionKey(selection.provider, selection.instanceId);
+}
+
+export function readModelSelectionForProviderInstance(
+  selections: ModelSelectionByProviderInstance | null | undefined,
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
+): ModelSelection | undefined {
+  return selections?.[providerInstanceModelSelectionKey(provider, instanceId)];
+}
+
+export function normalizeModelSelectionMapByInstance(
+  selections: ModelSelectionByProviderInstance,
+): ModelSelectionByProviderInstance {
+  const result: ModelSelectionByProviderInstance = {};
+  for (const selection of Object.values(selections)) {
+    if (selection) {
+      result[modelSelectionStorageKey(selection)] = selection;
+    }
+  }
+  return result;
+}
+
+function booleanOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
+  return typeof value === "string" && GROK_REASONING_EFFORT_SET.has(value);
+}
+
+export function makeModelSelection(
+  provider: ProviderKind,
+  model: string,
+  options?: ProviderModelOptions[ProviderKind],
+  supportsAutoMode?: boolean,
+  instanceId?: ProviderInstanceId | null | undefined,
+): ModelSelection {
+  const instance = normalizeProviderInstanceId(instanceId);
+  switch (provider) {
+    case "antigravity":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? {
+              options: options as Extract<ModelSelection, { provider: "antigravity" }>["options"],
+            }
+          : {}),
+      };
+    case "codex":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "codex" }>["options"] }
+          : {}),
+      };
+    case "claudeAgent":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? {
+              options: options as Extract<ModelSelection, { provider: "claudeAgent" }>["options"],
+            }
+          : {}),
+        ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
+      };
+    case "cursor":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
+          : {}),
+      };
+    case "devin":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "devin" }>["options"] }
+          : {}),
+      };
+    case "grok":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
+          : {}),
+      };
+    case "droid":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "droid" }>["options"] }
+          : {}),
+      };
+    case "opencode":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
+          : {}),
+      };
+    case "pi":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
+          : {}),
+      };
+    case "omp":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "omp" }>["options"] }
+          : {}),
+      };
+  }
+}
+
+export function normalizeProviderModelOptions(
+  value: unknown,
+  provider?: ProviderKind | null,
+  legacy?: LegacyCodexFields,
+): ProviderModelOptions | null {
+  const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  const codexCandidate =
+    candidate?.codex && typeof candidate.codex === "object"
+      ? (candidate.codex as Record<string, unknown>)
+      : null;
+  const claudeCandidate =
+    candidate?.claudeAgent && typeof candidate.claudeAgent === "object"
+      ? (candidate.claudeAgent as Record<string, unknown>)
+      : null;
+  const cursorCandidate =
+    candidate?.cursor && typeof candidate.cursor === "object"
+      ? (candidate.cursor as Record<string, unknown>)
+      : null;
+  const devinCandidate =
+    candidate?.devin && typeof candidate.devin === "object"
+      ? (candidate.devin as Record<string, unknown>)
+      : null;
+  const antigravityCandidate =
+    candidate?.antigravity && typeof candidate.antigravity === "object"
+      ? (candidate.antigravity as Record<string, unknown>)
+      : null;
+  const grokCandidate =
+    candidate?.grok && typeof candidate.grok === "object"
+      ? (candidate.grok as Record<string, unknown>)
+      : null;
+  const droidCandidate =
+    candidate?.droid && typeof candidate.droid === "object"
+      ? (candidate.droid as Record<string, unknown>)
+      : null;
+  const openCodeCandidate =
+    candidate?.opencode && typeof candidate.opencode === "object"
+      ? (candidate.opencode as Record<string, unknown>)
+      : null;
+  const piCandidate =
+    candidate?.pi && typeof candidate.pi === "object"
+      ? (candidate.pi as Record<string, unknown>)
+      : null;
+  const ompCandidate =
+    candidate?.omp && typeof candidate.omp === "object"
+      ? (candidate.omp as Record<string, unknown>)
+      : null;
+
+  const codexReasoningEffort: CodexReasoningEffort | undefined =
+    trimStringOrUndefined(codexCandidate?.reasoningEffort) ??
+    (provider === "codex" ? trimStringOrUndefined(legacy?.effort) : undefined);
+  const codexFastMode =
+    codexCandidate?.fastMode === true
+      ? true
+      : codexCandidate?.fastMode === false
+        ? false
+        : (provider === "codex" && legacy?.codexFastMode === true) ||
+            (typeof legacy?.serviceTier === "string" && legacy.serviceTier === "fast")
+          ? true
+          : undefined;
+  const codex =
+    codexReasoningEffort !== undefined || codexFastMode !== undefined
+      ? {
+          ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
+          ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
+        }
+      : undefined;
+
+  const claudeThinking = booleanOrUndefined(claudeCandidate?.thinking);
+  const claudeEffort: ClaudeCodeEffort | undefined =
+    claudeCandidate?.effort === "low" ||
+    claudeCandidate?.effort === "medium" ||
+    claudeCandidate?.effort === "high" ||
+    claudeCandidate?.effort === "xhigh" ||
+    claudeCandidate?.effort === "max" ||
+    claudeCandidate?.effort === "ultrathink" ||
+    claudeCandidate?.effort === "ultracode"
+      ? claudeCandidate.effort
+      : undefined;
+  const claudeFastMode = booleanOrUndefined(claudeCandidate?.fastMode);
+  const claudeAutoCompactWindow =
+    trimStringOrUndefined(claudeCandidate?.autoCompactWindow) ??
+    trimStringOrUndefined(claudeCandidate?.contextWindow);
+  const claude =
+    claudeThinking !== undefined ||
+    claudeEffort !== undefined ||
+    claudeFastMode !== undefined ||
+    claudeAutoCompactWindow !== undefined
+      ? {
+          ...(claudeThinking !== undefined ? { thinking: claudeThinking } : {}),
+          ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
+          ...(claudeFastMode !== undefined ? { fastMode: claudeFastMode } : {}),
+          ...(claudeAutoCompactWindow !== undefined
+            ? { autoCompactWindow: claudeAutoCompactWindow }
+            : {}),
+        }
+      : undefined;
+
+  const cursorReasoningEffort = trimStringOrUndefined(cursorCandidate?.reasoningEffort);
+  const cursorFastMode = booleanOrUndefined(cursorCandidate?.fastMode);
+  const cursorThinking = booleanOrUndefined(cursorCandidate?.thinking);
+  const cursorContextWindow = trimStringOrUndefined(cursorCandidate?.contextWindow);
+  const cursor: CursorModelOptions | undefined =
+    cursorReasoningEffort !== undefined ||
+    cursorFastMode !== undefined ||
+    cursorThinking !== undefined ||
+    cursorContextWindow !== undefined
+      ? {
+          ...(cursorReasoningEffort !== undefined
+            ? { reasoningEffort: cursorReasoningEffort }
+            : {}),
+          ...(cursorFastMode !== undefined ? { fastMode: cursorFastMode } : {}),
+          ...(cursorThinking !== undefined ? { thinking: cursorThinking } : {}),
+          ...(cursorContextWindow !== undefined ? { contextWindow: cursorContextWindow } : {}),
+        }
+      : undefined;
+
+  const antigravityReasoningEffort = trimStringOrUndefined(antigravityCandidate?.reasoningEffort);
+  const antigravity =
+    antigravityReasoningEffort !== undefined
+      ? { reasoningEffort: antigravityReasoningEffort }
+      : undefined;
+  const grokReasoningEffort: GrokReasoningEffort | undefined = isGrokReasoningEffort(
+    grokCandidate?.reasoningEffort,
+  )
+    ? grokCandidate.reasoningEffort
+    : undefined;
+  const grok =
+    grokReasoningEffort !== undefined ? { reasoningEffort: grokReasoningEffort } : undefined;
+  const droidReasoningEffort: DroidReasoningEffort | undefined = trimStringOrUndefined(
+    droidCandidate?.reasoningEffort,
+  );
+  const droid =
+    droidReasoningEffort !== undefined ? { reasoningEffort: droidReasoningEffort } : undefined;
+  const openCodeVariant = trimStringOrUndefined(openCodeCandidate?.variant);
+  const openCodeAgent = trimStringOrUndefined(openCodeCandidate?.agent);
+  const opencode =
+    openCodeVariant !== undefined || openCodeAgent !== undefined
+      ? {
+          ...(openCodeVariant !== undefined ? { variant: openCodeVariant } : {}),
+          ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
+        }
+      : undefined;
+  const piThinkingLevel: PiThinkingLevel | undefined =
+    piCandidate?.thinkingLevel === "off" ||
+    piCandidate?.thinkingLevel === "minimal" ||
+    piCandidate?.thinkingLevel === "low" ||
+    piCandidate?.thinkingLevel === "medium" ||
+    piCandidate?.thinkingLevel === "high" ||
+    piCandidate?.thinkingLevel === "xhigh" ||
+    piCandidate?.thinkingLevel === "max"
+      ? piCandidate.thinkingLevel
+      : undefined;
+  const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  const devinFastMode = booleanOrUndefined(devinCandidate?.fastMode);
+  const devinReasoningEffort = trimStringOrUndefined(devinCandidate?.reasoningEffort);
+  const devinThinking = booleanOrUndefined(devinCandidate?.thinking);
+  const devinContextWindow = trimStringOrUndefined(devinCandidate?.contextWindow);
+  const devinModelVariant = trimStringOrUndefined(devinCandidate?.modelVariant);
+  const devin: DevinModelOptions | undefined =
+    devinReasoningEffort !== undefined ||
+    devinFastMode !== undefined ||
+    devinThinking !== undefined ||
+    devinContextWindow !== undefined ||
+    devinModelVariant !== undefined
+      ? {
+          ...(devinReasoningEffort !== undefined ? { reasoningEffort: devinReasoningEffort } : {}),
+          ...(devinFastMode !== undefined ? { fastMode: devinFastMode } : {}),
+          ...(devinThinking !== undefined ? { thinking: devinThinking } : {}),
+          ...(devinContextWindow !== undefined ? { contextWindow: devinContextWindow } : {}),
+          ...(devinModelVariant !== undefined ? { modelVariant: devinModelVariant } : {}),
+        }
+      : undefined;
+  const omp = normalizeOmpModelOptions(ompCandidate as OmpModelOptions | null | undefined);
+  if (
+    !codex &&
+    !claude &&
+    !cursor &&
+    !devin &&
+    !antigravity &&
+    !grok &&
+    !droid &&
+    !opencode &&
+    !pi &&
+    !omp
+  ) {
+    return null;
+  }
+  return {
+    ...(codex ? { codex } : {}),
+    ...(claude ? { claudeAgent: claude } : {}),
+    ...(cursor ? { cursor } : {}),
+    ...(devin ? { devin } : {}),
+    ...(antigravity ? { antigravity } : {}),
+    ...(grok ? { grok } : {}),
+    ...(droid ? { droid } : {}),
+    ...(opencode ? { opencode } : {}),
+    ...(pi ? { pi } : {}),
+    ...(omp ? { omp } : {}),
+  };
+}
+
+export function normalizeModelSelection(
+  value: unknown,
+  legacy?: {
+    provider?: unknown;
+    model?: unknown;
+    modelOptions?: unknown;
+    legacyCodex?: LegacyCodexFields;
+  },
+): ModelSelection | null {
+  const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  const rawProvider = candidate?.provider ?? legacy?.provider;
+  const migratedGeminiSelection = rawProvider === "gemini";
+  const provider = normalizeProviderKind(rawProvider);
+  if (provider === null) {
+    return null;
+  }
+  const rawModel = candidate?.model ?? legacy?.model;
+  if (typeof rawModel !== "string") {
+    return null;
+  }
+  const instanceId = normalizeProviderInstanceId(candidate?.instanceId);
+  const antigravityLegacyMatch =
+    provider === "antigravity" ? rawModel.trim().match(/^(.*?)\s+\(([^()]+)\)$/u) : null;
+  const antigravityLegacyEffort = antigravityLegacyMatch?.[2]?.trim().toLowerCase();
+  const hasLegacyAntigravityEffort =
+    antigravityLegacyMatch?.[1] !== undefined &&
+    antigravityLegacyEffort !== undefined &&
+    ANTIGRAVITY_REASONING_EFFORT_SET.has(antigravityLegacyEffort);
+  const normalizedRawModel = migratedGeminiSelection
+    ? getDefaultModel("antigravity")
+    : hasLegacyAntigravityEffort
+      ? antigravityLegacyMatch[1]!.trim()
+      : rawModel;
+  const model = normalizeModelSlug(normalizedRawModel, provider);
+  if (!model) {
+    return null;
+  }
+  const modelOptions = migratedGeminiSelection
+    ? null
+    : normalizeProviderModelOptions(
+        candidate?.options ? { [provider]: candidate.options } : legacy?.modelOptions,
+        provider,
+        provider === "codex" ? legacy?.legacyCodex : undefined,
+      );
+  const options =
+    provider === "codex"
+      ? modelOptions?.codex
+      : provider === "claudeAgent"
+        ? modelOptions?.claudeAgent
+        : provider === "antigravity"
+          ? modelOptions?.antigravity
+          : provider === "grok"
+            ? normalizeGrokModelOptions(model, modelOptions?.grok)
+            : provider === "droid"
+              ? modelOptions?.droid
+              : provider === "cursor"
+                ? modelOptions?.cursor
+                : provider === "opencode"
+                  ? modelOptions?.opencode
+                  : provider === "pi"
+                    ? modelOptions?.pi
+                    : provider === "devin"
+                      ? modelOptions?.devin
+                      : provider === "omp"
+                        ? modelOptions?.omp
+                        : undefined;
+  const normalizedOptions =
+    provider === "antigravity" && hasLegacyAntigravityEffort
+      ? {
+          reasoningEffort: modelOptions?.antigravity?.reasoningEffort ?? antigravityLegacyEffort,
+        }
+      : options;
+  return makeModelSelection(
+    provider,
+    model,
+    normalizedOptions,
+    provider === "claudeAgent" && typeof candidate?.supportsAutoMode === "boolean"
+      ? candidate.supportsAutoMode
+      : undefined,
+    instanceId,
+  );
+}
+
+export function reconcileProviderScopedModelSelection(
+  requested: ModelSelection,
+  current: ModelSelection | null | undefined,
+): ModelSelection {
+  if (
+    requested.options !== undefined ||
+    !modelSelectionMatchesProviderInstance(current, requested.provider, requested.instanceId)
+  ) {
+    return requested;
+  }
+  if (current.model === requested.model) {
+    const currentSupportsAutoMode =
+      current.provider === "claudeAgent" ? current.supportsAutoMode : undefined;
+    return makeModelSelection(
+      requested.provider,
+      requested.model,
+      current.options,
+      requested.provider === "claudeAgent"
+        ? (requested.supportsAutoMode ?? currentSupportsAutoMode)
+        : undefined,
+      requested.instanceId,
+    );
+  }
+  if (
+    current.provider !== "codex" &&
+    current.provider !== "cursor" &&
+    current.provider !== "claudeAgent"
+  ) {
+    return requested;
+  }
+  let preservedOptions = current.options;
+  const effort =
+    current.provider === "claudeAgent"
+      ? current.options?.effort
+      : current.provider === "codex" || current.provider === "cursor"
+        ? current.options?.reasoningEffort
+        : undefined;
+  if (
+    effort !== undefined &&
+    classifyProviderReasoningEffortSupport({
+      provider: requested.provider,
+      model: requested.model,
+      effort,
+    }) !== "supported"
+  ) {
+    if (current.provider === "claudeAgent") {
+      const { effort: _effort, ...remainingOptions } = current.options ?? {};
+      preservedOptions = Object.keys(remainingOptions).length > 0 ? remainingOptions : undefined;
+    } else if (current.provider === "codex" || current.provider === "cursor") {
+      const { reasoningEffort: _reasoningEffort, ...remainingOptions } = current.options ?? {};
+      preservedOptions = Object.keys(remainingOptions).length > 0 ? remainingOptions : undefined;
+    }
+  }
+  return makeModelSelection(
+    requested.provider,
+    requested.model,
+    preservedOptions,
+    requested.provider === "claudeAgent" ? requested.supportsAutoMode : undefined,
+    requested.instanceId,
+  );
+}
+
+export function stripNonStickyModelOptions(selection: ModelSelection): ModelSelection {
+  if (
+    selection.provider !== "claudeAgent" ||
+    (!selection.options?.contextWindow && !selection.options?.autoCompactWindow)
+  ) {
+    return selection;
+  }
+  const {
+    contextWindow: _contextWindow,
+    autoCompactWindow: _autoCompactWindow,
+    ...rest
+  } = selection.options;
+  return makeModelSelection(
+    selection.provider,
+    selection.model,
+    Object.keys(rest).length > 0 ? rest : undefined,
+    selection.supportsAutoMode,
+    selection.instanceId,
+  );
+}
+
+export function sanitizeStickyModelSelectionMap(
+  map: ModelSelectionByProviderInstance,
+): ModelSelectionByProviderInstance {
+  let next = map;
+  for (const [key, selection] of Object.entries(map)) {
+    if (
+      selection?.provider === "claudeAgent" &&
+      (selection.options?.contextWindow || selection.options?.autoCompactWindow)
+    ) {
+      if (next === map) next = { ...map };
+      next[key as ProviderInstanceId] = stripNonStickyModelOptions(selection);
+    }
+  }
+  return next;
+}
+
+export function legacySyncModelSelectionOptions(
+  modelSelection: ModelSelection | null,
+  modelOptions: ProviderModelOptions | null | undefined,
+): ModelSelection | null {
+  if (modelSelection === null) {
+    return null;
+  }
+  const normalizedOptions =
+    modelSelection.provider === "grok"
+      ? normalizeGrokModelOptions(modelSelection.model, modelOptions?.grok)
+      : modelOptions?.[modelSelection.provider];
+  return makeModelSelection(
+    modelSelection.provider,
+    modelSelection.model,
+    normalizedOptions,
+    modelSelection.provider === "claudeAgent" ? modelSelection.supportsAutoMode : undefined,
+    modelSelection.instanceId,
+  );
+}
+
+export function legacyMergeModelSelectionIntoProviderModelOptions(
+  modelSelection: ModelSelection | null,
+  currentModelOptions: ProviderModelOptions | null | undefined,
+): ProviderModelOptions | null {
+  if (modelSelection?.options === undefined) {
+    return normalizeProviderModelOptions(currentModelOptions);
+  }
+  return legacyReplaceProviderModelOptions(
+    normalizeProviderModelOptions(currentModelOptions),
+    modelSelection.provider,
+    modelSelection.options,
+  );
+}
+
+function legacyReplaceProviderModelOptions(
+  currentModelOptions: ProviderModelOptions | null | undefined,
+  provider: ProviderKind,
+  nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
+): ProviderModelOptions | null {
+  const { [provider]: _discardedProviderModelOptions, ...otherProviderModelOptions } =
+    currentModelOptions ?? {};
+  const normalizedNextProviderOptions = normalizeProviderModelOptions(
+    { [provider]: nextProviderOptions },
+    provider,
+  );
+
+  return normalizeProviderModelOptions({
+    ...otherProviderModelOptions,
+    ...(normalizedNextProviderOptions ? normalizedNextProviderOptions : {}),
+  });
+}
+
+export function legacyToModelSelectionByProvider(
+  modelSelection: ModelSelection | null,
+  modelOptions: ProviderModelOptions | null | undefined,
+): ModelSelectionByProviderInstance {
+  const result: ModelSelectionByProviderInstance = {};
+  // Add entries from the options bag (for non-active providers)
+  if (modelOptions) {
+    for (const provider of COMPOSER_PROVIDER_KINDS) {
+      const options = modelOptions[provider];
+      if (options && Object.keys(options).length > 0) {
+        const model =
+          modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider);
+        if (model) {
+          result[providerInstanceModelSelectionKey(provider)] = makeModelSelection(
+            provider,
+            model,
+            provider === "grok" ? normalizeGrokModelOptions(model, modelOptions.grok) : options,
+          );
+        }
+      }
+    }
+  }
+  // Add/overwrite the active selection (it's authoritative for its provider)
+  if (modelSelection) {
+    result[modelSelectionStorageKey(modelSelection)] = modelSelection;
+  }
+  return result;
+}
+
+export function deriveEffectiveComposerModelState(input: {
+  draft:
+    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
+    | null
+    | undefined;
+  selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
+  threadModelSelection: ModelSelection | null | undefined;
+  projectModelSelection: ModelSelection | null | undefined;
+  customModelsByProvider: Record<ProviderKind, readonly string[]>;
+  availableModelOptionsByProvider?: Partial<
+    Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>
+  >;
+}): EffectiveComposerModelState {
+  const selectionMatchesSelectedInstance = (
+    selection: ModelSelection | null | undefined,
+  ): selection is ModelSelection =>
+    modelSelectionMatchesProviderInstance(
+      selection,
+      input.selectedProvider,
+      input.selectedProviderInstanceId,
+    );
+  const resolveAvailableModel = (candidate: string | null | undefined): ModelSlug | null => {
+    const availableOptions = input.availableModelOptionsByProvider?.[input.selectedProvider];
+    if (!availableOptions || availableOptions.length === 0) {
+      return null;
+    }
+    return resolveSelectableModel(input.selectedProvider, candidate, availableOptions);
+  };
+  const baseModel = resolveModelSlugForProvider(
+    input.selectedProvider,
+    (selectionMatchesSelectedInstance(input.threadModelSelection)
+      ? input.threadModelSelection.model
+      : null) ??
+      (selectionMatchesSelectedInstance(input.projectModelSelection)
+        ? input.projectModelSelection.model
+        : null) ??
+      getDefaultModel(input.selectedProvider),
+  );
+  const persistedThreadModel = selectionMatchesSelectedInstance(input.threadModelSelection)
+    ? (normalizeModelSlug(input.threadModelSelection.model, input.selectedProvider) ??
+      input.threadModelSelection.model)
+    : null;
+  const persistedProjectModel = selectionMatchesSelectedInstance(input.projectModelSelection)
+    ? (normalizeModelSlug(input.projectModelSelection.model, input.selectedProvider) ??
+      input.projectModelSelection.model)
+    : null;
+  const activeSelection = readModelSelectionForProviderInstance(
+    input.draft?.modelSelectionByProvider,
+    input.selectedProvider,
+    input.selectedProviderInstanceId,
+  );
+  const selectedDraftModel = activeSelection?.model
+    ? resolveAppModelSelection(
+        input.selectedProvider,
+        input.customModelsByProvider,
+        activeSelection.model,
+      )
+    : null;
+  // pi and omp serve fully dynamic catalogs, so a draft model can be absent
+  // from the option list; keep it ahead of the first-catalog-entry fallback.
+  const unlistedDraftModel =
+    input.selectedProvider === "pi" || input.selectedProvider === "omp" ? selectedDraftModel : null;
+  const selectedModel =
+    resolveAvailableModel(activeSelection?.model) ??
+    resolveAvailableModel(
+      selectionMatchesSelectedInstance(input.threadModelSelection)
+        ? input.threadModelSelection.model
+        : null,
+    ) ??
+    resolveAvailableModel(
+      selectionMatchesSelectedInstance(input.projectModelSelection)
+        ? input.projectModelSelection.model
+        : null,
+    ) ??
+    resolveAvailableModel(selectedDraftModel) ??
+    persistedThreadModel ??
+    persistedProjectModel ??
+    unlistedDraftModel ??
+    input.availableModelOptionsByProvider?.[input.selectedProvider]?.[0]?.slug ??
+    selectedDraftModel ??
+    baseModel ??
+    getDefaultModel("codex");
+  const modelOptions = deriveEffectiveComposerModelOptions(input);
+
+  return {
+    selectedModel,
+    modelOptions,
+  };
+}
+
+export function resolvePreferredComposerModelSelection(input: {
+  draft:
+    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
+    | null
+    | undefined;
+  threadModelSelection: ModelSelection | null | undefined;
+  projectModelSelection: ModelSelection | null | undefined;
+  defaultProvider?: ProviderKind | null | undefined;
+  resolveProviderForInstanceId?: (
+    instanceId: ProviderInstanceId,
+  ) => ProviderKind | null | undefined;
+}): ModelSelection {
+  // The draft's selection is the user's most recently used target: a fresh draft
+  // is seeded from the sticky (last-used) state, so this precedence is what
+  // makes a new chat reopen with the model and options used last time. Project
+  // and global defaults only apply when nothing has been used yet.
+  const activeInstanceId = input.draft?.activeProvider ?? null;
+  const activeDraftSelection = activeInstanceId
+    ? input.draft?.modelSelectionByProvider[activeInstanceId]
+    : undefined;
+  const draftProviderWithSelection = activeDraftSelection?.provider ?? null;
+  const activeInstanceProvider = activeInstanceId
+    ? (activeDraftSelection?.provider ??
+      input.resolveProviderForInstanceId?.(activeInstanceId) ??
+      normalizeProviderKind(activeInstanceId))
+    : null;
+  const preferredProvider =
+    activeInstanceProvider ??
+    draftProviderWithSelection ??
+    input.threadModelSelection?.provider ??
+    input.projectModelSelection?.provider ??
+    input.defaultProvider ??
+    "codex";
+
+  const preferredPersistedSelection =
+    input.threadModelSelection?.provider === preferredProvider
+      ? input.threadModelSelection
+      : input.projectModelSelection?.provider === preferredProvider
+        ? input.projectModelSelection
+        : null;
+  const preferredInstanceId = providerInstanceModelSelectionKey(
+    preferredProvider,
+    activeInstanceProvider === preferredProvider
+      ? activeInstanceId
+      : preferredPersistedSelection?.instanceId,
+  );
+  const persistedSelection =
+    (modelSelectionMatchesProviderInstance(
+      input.threadModelSelection,
+      preferredProvider,
+      preferredInstanceId,
+    )
+      ? input.threadModelSelection
+      : null) ??
+    (modelSelectionMatchesProviderInstance(
+      input.projectModelSelection,
+      preferredProvider,
+      preferredInstanceId,
+    )
+      ? input.projectModelSelection
+      : null);
+  const draftSelection = readModelSelectionForProviderInstance(
+    input.draft?.modelSelectionByProvider,
+    preferredProvider,
+    preferredInstanceId,
+  );
+
+  // Pi and OMP have no static default model, so an empty draft falls back to Codex.
+  const fallbackProvider =
+    preferredProvider === "pi" || preferredProvider === "omp" ? "codex" : preferredProvider;
+  const fallbackInstanceId =
+    fallbackProvider === preferredProvider ? preferredInstanceId : fallbackProvider;
+
+  return (
+    draftSelection ??
+    persistedSelection ??
+    makeModelSelection(
+      fallbackProvider,
+      getDefaultModel(fallbackProvider),
+      undefined,
+      undefined,
+      fallbackInstanceId,
+    )
+  );
+}

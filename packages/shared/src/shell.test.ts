@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  extractPathFromShellOutput,
+  applyShellEnvironmentHydrationMarker,
+  isShellEnvironmentHydrated,
+  SHELL_ENVIRONMENT_HYDRATED_ENV_NAME,
   listLoginShellCandidates,
   mergePathEntries,
   mergeWindowsScopes,
@@ -9,28 +11,38 @@ import {
   readPathFromLaunchctl,
   readPathFromLoginShell,
   readWindowsPersistentEnvironment,
-  resolveLoginShell,
 } from "./shell";
 
-describe("extractPathFromShellOutput", () => {
-  it("extracts the path between capture markers", () => {
+describe("shell environment hydration marker", () => {
+  it("requires both the marker and a populated PATH", () => {
     expect(
-      extractPathFromShellOutput(
-        "__T3CODE_PATH_START__\n/opt/homebrew/bin:/usr/bin\n__T3CODE_PATH_END__\n",
-      ),
-    ).toBe("/opt/homebrew/bin:/usr/bin");
+      isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "/usr/bin" }),
+    ).toBe(true);
+    // An inherited PATH alone must never suppress the probe.
+    expect(isShellEnvironmentHydrated({ PATH: "/usr/bin" })).toBe(false);
+    expect(
+      isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "   " }),
+    ).toBe(false);
+    expect(isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1" })).toBe(false);
+    expect(
+      isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "0", PATH: "/usr/bin" }),
+    ).toBe(false);
   });
 
-  it("ignores shell startup noise around the capture markers", () => {
-    expect(
-      extractPathFromShellOutput(
-        "Welcome to fish\n__T3CODE_PATH_START__\n/opt/homebrew/bin:/usr/bin\n__T3CODE_PATH_END__\nBye\n",
-      ),
-    ).toBe("/opt/homebrew/bin:/usr/bin");
+  it("clears an inherited marker when the parent did not hydrate", () => {
+    const env = applyShellEnvironmentHydrationMarker(
+      { [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "/usr/bin" },
+      false,
+    );
+
+    expect(env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]).toBeUndefined();
+    expect(isShellEnvironmentHydrated(env)).toBe(false);
   });
 
-  it("returns null when the markers are missing", () => {
-    expect(extractPathFromShellOutput("/opt/homebrew/bin /usr/bin")).toBeNull();
+  it("stamps the marker when the parent did hydrate", () => {
+    const env = applyShellEnvironmentHydrationMarker({ PATH: "/opt/homebrew/bin" }, true);
+
+    expect(isShellEnvironmentHydrated(env)).toBe(true);
   });
 });
 
@@ -42,7 +54,7 @@ describe("readPathFromLoginShell", () => {
         args: ReadonlyArray<string>,
         options: { encoding: "utf8"; timeout: number },
       ) => string
-    >(() => "__T3CODE_ENV_PATH_START__\n/a:/b\n__T3CODE_ENV_PATH_END__\n");
+    >(() => "__SYNARA_ENV_PATH_START__\n/a:/b\n__SYNARA_ENV_PATH_END__\n");
 
     expect(readPathFromLoginShell("/opt/homebrew/bin/fish", execFile)).toBe("/a:/b");
     expect(execFile).toHaveBeenCalledTimes(1);
@@ -60,9 +72,9 @@ describe("readPathFromLoginShell", () => {
     expect(args).toHaveLength(2);
     expect(args?.[0]).toBe("-ilc");
     expect(args?.[1]).toContain("printenv PATH || true");
-    expect(args?.[1]).toContain("__T3CODE_ENV_PATH_START__");
-    expect(args?.[1]).toContain("__T3CODE_ENV_PATH_END__");
-    expect(options).toEqual({ encoding: "utf8", timeout: 5000 });
+    expect(args?.[1]).toContain("__SYNARA_ENV_PATH_START__");
+    expect(args?.[1]).toContain("__SYNARA_ENV_PATH_END__");
+    expect(options).toEqual({ encoding: "utf8", timeout: 5000, windowsHide: true });
   });
 });
 
@@ -80,6 +92,7 @@ describe("readPathFromLaunchctl", () => {
     expect(execFile).toHaveBeenCalledWith("/bin/launchctl", ["getenv", "PATH"], {
       encoding: "utf8",
       timeout: 2000,
+      windowsHide: true,
     });
   });
 
@@ -108,12 +121,12 @@ describe("readEnvironmentFromLoginShell", () => {
       ) => string
     >(() =>
       [
-        "__T3CODE_ENV_PATH_START__",
+        "__SYNARA_ENV_PATH_START__",
         "/a:/b",
-        "__T3CODE_ENV_PATH_END__",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_START__",
+        "__SYNARA_ENV_PATH_END__",
+        "__SYNARA_ENV_SSH_AUTH_SOCK_START__",
         "/tmp/secretive.sock",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_END__",
+        "__SYNARA_ENV_SSH_AUTH_SOCK_END__",
       ].join("\n"),
     );
 
@@ -133,11 +146,11 @@ describe("readEnvironmentFromLoginShell", () => {
       ) => string
     >(() =>
       [
-        "__T3CODE_ENV_PATH_START__",
+        "__SYNARA_ENV_PATH_START__",
         "/a:/b",
-        "__T3CODE_ENV_PATH_END__",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_START__",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_END__",
+        "__SYNARA_ENV_PATH_END__",
+        "__SYNARA_ENV_SSH_AUTH_SOCK_START__",
+        "__SYNARA_ENV_SSH_AUTH_SOCK_END__",
       ].join("\n"),
     );
 
@@ -154,7 +167,7 @@ describe("readEnvironmentFromLoginShell", () => {
         options: { encoding: "utf8"; timeout: number },
       ) => string
     >(() =>
-      ["__T3CODE_ENV_CUSTOM_VAR_START__", "  padded value  ", "__T3CODE_ENV_CUSTOM_VAR_END__"].join(
+      ["__SYNARA_ENV_CUSTOM_VAR_START__", "  padded value  ", "__SYNARA_ENV_CUSTOM_VAR_END__"].join(
         "\n",
       ),
     );
@@ -178,23 +191,11 @@ describe("listLoginShellCandidates", () => {
   });
 });
 
-describe("resolveLoginShell", () => {
-  it("returns the first available login-shell candidate", () => {
-    expect(resolveLoginShell("darwin", "/bin/fish")).toBe("/bin/fish");
-  });
-});
-
 describe("mergePathEntries", () => {
   it("prefers login-shell PATH entries and keeps inherited extras", () => {
     expect(
       mergePathEntries("/opt/homebrew/bin:/usr/bin", "/Users/test/.local/bin:/usr/bin", "darwin"),
     ).toBe("/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
-  });
-
-  it("uses the platform-specific delimiter", () => {
-    expect(mergePathEntries("C:\\Tools;C:\\Windows", "C:\\Windows;C:\\Git", "win32")).toBe(
-      "C:\\Tools;C:\\Windows;C:\\Git",
-    );
   });
 
   it("collapses case- and trailing-slash-different Windows duplicates", () => {

@@ -15,10 +15,10 @@ import {
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
-  MenuPopup,
   MenuSeparator,
   MenuTrigger,
 } from "./ui/menu";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { SidebarMenuButton } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
 
@@ -56,18 +56,14 @@ export function DebugFeatureFlagsMenu() {
         render={
           <SidebarMenuButton
             size="default"
-            className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+            className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-ui font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
           />
         }
       >
         <FlagIcon className="size-[15px]" />
         <span>Feature flags</span>
       </MenuTrigger>
-      <MenuPopup
-        align="start"
-        side="top"
-        className="min-w-72 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
-      >
+      <ComposerPickerMenuPopup align="start" side="top" className="min-w-72">
         <MenuGroup>
           <MenuGroupLabel>Local feature flags</MenuGroupLabel>
           {FEATURE_FLAGS.map((flag) => {
@@ -80,7 +76,7 @@ export function DebugFeatureFlagsMenu() {
                 >
                   <div className="flex min-w-0 flex-col gap-0.5">
                     <span>{flag.label}</span>
-                    <span className="text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/70">
+                    <span className="text-ui-xs leading-4 text-muted-foreground/70">
                       {flag.description}
                     </span>
                   </div>
@@ -100,7 +96,7 @@ export function DebugFeatureFlagsMenu() {
               >
                 <div className="flex min-w-0 flex-col gap-0.5">
                   <span>{flag.label}</span>
-                  <span className="text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/70">
+                  <span className="text-ui-xs leading-4 text-muted-foreground/70">
                     {flag.description}
                   </span>
                 </div>
@@ -109,10 +105,10 @@ export function DebugFeatureFlagsMenu() {
           })}
         </MenuGroup>
         <MenuSeparator />
-        <div className="px-2 py-1.5 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/58">
+        <div className="px-2 py-1.5 text-ui-xs leading-4 text-muted-foreground/58">
           Stored only in this browser profile.
         </div>
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 }

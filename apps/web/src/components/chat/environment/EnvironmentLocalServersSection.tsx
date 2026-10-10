@@ -5,9 +5,9 @@
 
 import type { ReactNode } from "react";
 
-import type { ServerLocalServerProcess } from "@t3tools/contracts";
+import type { ServerLocalServerProcess } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { localServerPrimaryLabel } from "@t3tools/shared/localServers";
+import { localServerPrimaryLabel } from "@synara/shared/localServers";
 
 import { LocalServerIdentity } from "../../LocalServerIdentity";
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
@@ -17,6 +17,7 @@ import {
   serverLocalServersQueryOptions,
   serverStopLocalServerMutationOptions,
 } from "~/lib/serverReactQuery";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -54,9 +55,10 @@ function LocalServersRefreshButton({
 
 /**
  * A single running server: status dot, name, and its `localhost:<port>` address,
- * plus a compact stop control. Only the stop button is interactive (and the only
- * red accent), so the row itself stays clean — no row-wide highlight. The right
- * padding keeps the stop button clear of the popup's overlay scrollbar.
+ * plus a plain stop icon. Only the stop button is interactive (and the only red
+ * accent), so the row itself stays clean — no row-wide highlight, no boxed
+ * button chrome. The right padding keeps the stop button clear of the popup's
+ * overlay scrollbar.
  */
 function LocalServerRow({
   server,
@@ -74,7 +76,7 @@ function LocalServerRow({
     : (server.stopDisabledReason ?? server.args ?? server.displayName);
 
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 rounded-[0.5rem] py-1 pl-2 pr-3">
+    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-[0.5rem] py-0.5 pl-2 pr-2.5">
       {/* Running indicator: a soft-haloed dot so an active server reads at a glance. */}
       <span className="relative flex size-2 shrink-0 items-center justify-center" aria-hidden>
         <span className="absolute size-2 rounded-full bg-success/25" />
@@ -89,7 +91,7 @@ function LocalServerRow({
         onClick={() => onStop(server)}
         aria-label={stopHint}
         title={stopHint}
-        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-[var(--color-background-elevated-secondary)] p-0 text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)] hover:text-destructive data-highlighted:border-destructive/40 data-highlighted:bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)] data-highlighted:text-destructive data-disabled:border-border/40 data-disabled:bg-transparent data-disabled:text-muted-foreground/30 data-disabled:hover:bg-transparent data-disabled:hover:text-muted-foreground/30"
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground/70 transition-colors hover:bg-[color-mix(in_srgb,var(--destructive)_12%,transparent)] hover:text-destructive data-highlighted:bg-[color-mix(in_srgb,var(--destructive)_12%,transparent)] data-highlighted:text-destructive data-disabled:text-muted-foreground/30 data-disabled:hover:bg-transparent data-disabled:hover:text-muted-foreground/30"
       >
         {stopping ? (
           <RefreshCwIcon className="size-3.5 animate-spin" />
@@ -114,14 +116,8 @@ function LocalServersPlaceholder({
   return (
     <div className="flex flex-col items-center gap-1 px-3 py-3 text-center">
       <span className="text-muted-foreground/40">{icon}</span>
-      <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
-        {title}
-      </span>
-      {subtitle ? (
-        <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/60">
-          {subtitle}
-        </span>
-      ) : null}
+      <span className="text-ui text-muted-foreground">{title}</span>
+      {subtitle ? <span className="text-ui-xs text-muted-foreground/60">{subtitle}</span> : null}
     </div>
   );
 }
@@ -144,10 +140,8 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
         <RefreshCwIcon className="size-3 animate-spin text-[var(--color-text-foreground-secondary)]" />
       ) : (
         <span className="flex items-center gap-1.5">
-          {serverCount > 0 ? (
-            <span className="size-1.5 rounded-full bg-success" aria-hidden />
-          ) : null}
-          <span className="text-[11px] tabular-nums text-[var(--color-text-foreground-secondary)]">
+          {serverCount > 0 ? <StatusDot className="bg-success" aria-hidden /> : null}
+          <span className="text-ui-sm tabular-nums text-[var(--color-text-foreground-secondary)]">
             {serverCount}
           </span>
         </span>
@@ -167,7 +161,7 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
         <div className="flex items-center justify-between gap-2 pb-0.5 pl-2 pr-3 pt-px">
-          <span className="truncate text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/50">
+          <span className="truncate text-ui-xs font-normal text-muted-foreground/50">
             {localServersQuery.isLoading ? "Scanning ports…" : describeServerCount(serverCount)}
           </span>
           <LocalServersRefreshButton

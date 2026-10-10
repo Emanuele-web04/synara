@@ -1,4 +1,4 @@
-import { memo, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import {
   buildCollapsedProposedPlanPreviewMarkdown,
   proposedPlanTitle,
@@ -10,7 +10,7 @@ import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { ProposedPlanActions } from "./ProposedPlanActions";
 
-export const ProposedPlanCard = memo(function ProposedPlanCard({
+export const ProposedPlanCard = function ProposedPlanCard({
   planMarkdown,
   cwd,
   workspaceRoot,
@@ -34,7 +34,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <Badge variant="secondary">Plan</Badge>
-          <p className="truncate text-sm font-medium text-foreground">{title}</p>
+          <p className="truncate text-ui-lg font-medium text-foreground">{title}</p>
         </div>
         <ProposedPlanActions planMarkdown={planMarkdown} workspaceRoot={workspaceRoot} />
       </div>
@@ -74,4 +74,4 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
       </div>
     </div>
   );
-});
+};

@@ -20,6 +20,9 @@ export interface OrchestrationReactorShape {
    * finalized on shutdown.
    */
   readonly start: Effect.Effect<void, never, Scope.Scope>;
+
+  /** Reconciles durable provider replay state after restart turn recovery. */
+  readonly reconcileSettledOpenTurns: Effect.Effect<void>;
 }
 
 /**
@@ -28,4 +31,4 @@ export interface OrchestrationReactorShape {
 export class OrchestrationReactor extends ServiceMap.Service<
   OrchestrationReactor,
   OrchestrationReactorShape
->()("t3/orchestration/Services/OrchestrationReactor") {}
+>()("synara/orchestration/Services/OrchestrationReactor") {}

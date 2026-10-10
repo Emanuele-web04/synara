@@ -1,0 +1,1127 @@
+import {
+  EventId,
+  RuntimeItemId,
+  RuntimeTaskId,
+  ThreadId,
+  TurnId,
+  type ProviderRuntimeEvent,
+} from "@synara/contracts";
+import { assert, it } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
+
+import {
+  PROVIDER_RUNTIME_EVENT_MAX_BYTES,
+  PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED,
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
+  ProviderRuntimeEventRepository,
+} from "../Services/ProviderRuntimeEvents.ts";
+import {
+  ProviderRuntimeEventRepositoryLive,
+  truncateUtf8ToBytes,
+} from "./ProviderRuntimeEvents.ts";
+import { SqlitePersistenceMemory } from "./Sqlite.ts";
+import { assignDerivedProviderRuntimeEventIds } from "../../provider/providerRuntimeEventIdentity.ts";
+
+const layer = it.layer(
+  ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+);
+
+const runtimeEvent = (eventId: string, delta: string): ProviderRuntimeEvent => ({
+  type: "content.delta",
+  eventId: EventId.makeUnsafe(eventId),
+  provider: "codex",
+  createdAt: "2026-07-14T00:00:00.000Z",
+  threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+  turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+  payload: {
+    streamKind: "assistant_text",
+    delta,
+  },
+});
+
+const insertLiveProjectionThread = (threadId: string, createdAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+      VALUES (${threadId}, 'project-runtime-journal', 'Runtime journal', ${createdAt}, ${createdAt})
+    `;
+  });
+
+const readOpenTurnReplayCount = (threadId: string) =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const rows = yield* repository.readAcceptedOpenTurnEvents({
+      consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      sequenceExclusive: 0,
+      limit: 50,
+    });
+    return rows.filter((row) => row.event.threadId === threadId).length;
+  });
+
+it.effect(
+  "filters checkpoint heads before limiting or decoding while preserving the raw reader",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const telemetry = yield* repository.append(
+        runtimeEvent("checkpoint-filter-telemetry", "text"),
+      );
+      yield* sql`UPDATE provider_runtime_events SET event_json = ${"invalid json"}
+      WHERE sequence = ${telemetry.sequence}`;
+      const fileChange = yield* repository.append({
+        ...runtimeEvent("checkpoint-filter-file", ""),
+        type: "item.completed",
+        itemId: RuntimeItemId.makeUnsafe("checkpoint-filter-file"),
+        payload: { itemType: "file_change", status: "completed" },
+      });
+      const terminal = yield* repository.append({
+        ...runtimeEvent("checkpoint-filter-terminal", ""),
+        type: "turn.completed",
+        payload: { state: "completed" },
+      });
+      const request = {
+        sequenceExclusive: 0,
+        throughSequenceInclusive: terminal.sequence,
+        limit: 1,
+        checkpointRelevantOnly: true,
+      };
+      assert.deepEqual(
+        (yield* repository.readAfter(request)).map((row) => row.sequence),
+        [fileChange.sequence],
+      );
+      assert.deepEqual(
+        (yield* repository.readAfter({ ...request, sequenceExclusive: fileChange.sequence })).map(
+          (row) => row.sequence,
+        ),
+        [terminal.sequence],
+      );
+      assert.lengthOf(
+        yield* repository.readAfter({ ...request, throughSequenceInclusive: telemetry.sequence }),
+        0,
+      );
+      assert.strictEqual(
+        (yield* Effect.flip(repository.readAfter({ ...request, checkpointRelevantOnly: false })))
+          ._tag,
+        "PersistenceDecodeError",
+      );
+      assert.strictEqual(
+        (yield* Effect.flip(
+          repository.readAfter({
+            sequenceExclusive: 0,
+            throughSequenceInclusive: terminal.sequence,
+            limit: 1,
+          }),
+        ))._tag,
+        "PersistenceDecodeError",
+      );
+      yield* sql`UPDATE provider_runtime_events SET event_json = ${"invalid terminal json"}
+      WHERE sequence = ${terminal.sequence}`;
+      const invalidTerminal = yield* Effect.flip(
+        repository.readAfter({ ...request, sequenceExclusive: fileChange.sequence }),
+      );
+      assert.strictEqual(invalidTerminal._tag, "PersistenceDecodeError");
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+const checkpointConsumer = "checkpoint-reactor.runtime.v1";
+const registerCheckpointConsumer = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    INSERT INTO provider_runtime_event_consumers (consumer_name, last_acked_sequence, created_at, updated_at)
+    VALUES (${checkpointConsumer}, 0, ${"2026-10-07T00:00:00.000Z"}, ${"2026-10-07T00:00:00.000Z"})
+  `;
+});
+const checkpointWarning = (index: number): ProviderRuntimeEvent => ({
+  type: "runtime.warning",
+  eventId: EventId.makeUnsafe(`checkpoint-warning-${index}`),
+  provider: "codex",
+  threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+  createdAt: "2026-10-07T00:00:00.000Z",
+  payload: { message: "Telemetry" },
+});
+
+it.effect(
+  "checkpoint ACK ahead of ingestion preserves unaccepted runtime rows and ingestion turn ownership",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* registerCheckpointConsumer;
+      yield* repository.append({
+        type: "turn.started",
+        eventId: EventId.makeUnsafe("checkpoint-ahead-start"),
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+        turnId: TurnId.makeUnsafe("checkpoint-ahead-turn"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: {},
+      });
+      let lastSequence = 0;
+      for (let index = 0; index < 600; index += 1) {
+        lastSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      }
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: checkpointConsumer,
+          throughSequence: lastSequence,
+          updatedAt: "2026-10-07T00:00:01.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        0,
+      );
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: lastSequence,
+        limit: 1000,
+      });
+      assert.lengthOf(rows, 601);
+      const openTurns = yield* sql`SELECT thread_id FROM provider_runtime_open_turns`;
+      assert.lengthOf(openTurns, 0);
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect(
+  "retains pending native checkpoint completion across repository restart without retaining old telemetry",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      yield* registerCheckpointConsumer;
+      const terminal = yield* repository.append({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("checkpoint-pending-terminal"),
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+        turnId: TurnId.makeUnsafe("checkpoint-pending-turn"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: { state: "completed" },
+      });
+      let lastSequence = terminal.sequence;
+      for (let index = 0; index < 600; index += 1) {
+        lastSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      }
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: lastSequence,
+          updatedAt: "2026-10-07T00:00:01.000Z",
+        }),
+      );
+      const restarted = yield* Effect.service(ProviderRuntimeEventRepository).pipe(
+        Effect.provide(ProviderRuntimeEventRepositoryLive),
+      );
+      const rows = yield* restarted.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: lastSequence,
+        limit: 1000,
+      });
+      assert.isTrue(rows.some((row) => row.event.eventId === "checkpoint-pending-terminal"));
+      assert.lengthOf(rows, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 1);
+      assert.strictEqual(yield* restarted.getConsumerCursor(checkpointConsumer), 0);
+      assert.isTrue(
+        yield* restarted.advanceConsumerCursor({
+          consumerName: checkpointConsumer,
+          eventSequence: terminal.sequence,
+          updatedAt: "2026-10-07T00:00:02.000Z",
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect(
+  "checkpoint batch ACK releases accepted native retention without another ingestion event",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* registerCheckpointConsumer;
+      const terminal = yield* repository.append({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("checkpoint-retention-release"),
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+        turnId: TurnId.makeUnsafe("checkpoint-retention-release"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: { state: "completed" },
+      });
+      let throughSequence = terminal.sequence;
+      for (let index = 0; index < 600; index++)
+        throughSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence,
+          updatedAt: "2026-10-07T00:00:01.000Z",
+        }),
+      );
+      const before =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE sequence = ${terminal.sequence}`;
+      assert.lengthOf(before, 1);
+      const checkpointStatements: string[] = [];
+      assert.isTrue(
+        yield* repository
+          .advanceConsumerCursorThrough({
+            consumerName: checkpointConsumer,
+            throughSequence,
+            updatedAt: "2026-10-07T00:00:02.000Z",
+          })
+          .pipe(
+            Effect.provideService(Statement.CurrentTransformer, (statement) =>
+              Effect.sync(() => {
+                checkpointStatements.push(statement.compile()[0]);
+                return statement;
+              }),
+            ),
+          ),
+      );
+      const checkpointReads = checkpointStatements.filter(
+        (query) => /^\s*SELECT/.test(query) && query.includes("FROM provider_runtime_events"),
+      );
+      assert.isAbove(checkpointReads.length, 0);
+      // Checkpoint ACK has no per-row bookkeeping: validate one stored target,
+      // rather than materializing metadata for the entire settled prefix.
+      const after =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE sequence = ${terminal.sequence}`;
+      assert.deepEqual(
+        {
+          remainingTerminalRows: after.length,
+          unboundedMetadataReads: checkpointReads.filter(
+            (query) => !/WHERE (?:\w+\.)?sequence\s*=/.test(query),
+          ).length,
+        },
+        { remainingTerminalRows: 0, unboundedMetadataReads: 0 },
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        throughSequence,
+      );
+      const openTurns = yield* sql`SELECT thread_id FROM provider_runtime_open_turns`;
+      assert.lengthOf(openTurns, 0);
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect(
+  "bounds checkpoint retention passes and continues through existing open-turn maintenance",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* registerCheckpointConsumer;
+      const activeThread = ThreadId.makeUnsafe("checkpoint-retention-active");
+      yield* insertLiveProjectionThread(activeThread, "2026-10-07T00:00:00.000Z");
+      const active = yield* repository.append({
+        type: "turn.started",
+        eventId: EventId.makeUnsafe("checkpoint-retention-active"),
+        provider: "codex",
+        threadId: activeThread,
+        turnId: TurnId.makeUnsafe("checkpoint-retention-active"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: {},
+      });
+      for (let index = 0; index < 1100; index++)
+        yield* repository.append({
+          type: "turn.completed",
+          eventId: EventId.makeUnsafe(`bounded-checkpoint-terminal-${index}`),
+          provider: "codex",
+          threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+          turnId: TurnId.makeUnsafe(`bounded-checkpoint-terminal-${index}`),
+          createdAt: "2026-10-07T00:00:00.000Z",
+          payload: { state: "completed" },
+        });
+      let throughSequence = 0;
+      for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED; index++)
+        throughSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:01.000Z",
+      });
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: checkpointConsumer,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:02.000Z",
+      });
+      const remaining = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM provider_runtime_events WHERE event_type = 'turn.completed'`;
+      const deleted = 1100 - remaining[0]!.count;
+      assert.isAbove(deleted, 0);
+      assert.isAtMost(deleted, 1024);
+      assert.isAbove(remaining[0]!.count, 0);
+      // Use the already-owned maintenance cadence; no private busy drain loop.
+      yield* repository.pruneSettledOpenTurns;
+      const settled =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE event_type = 'turn.completed'`;
+      assert.lengthOf(settled, 0);
+      const activeRows =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE sequence = ${active.sequence}`;
+      assert.lengthOf(activeRows, 1);
+      const replay = yield* repository.readAcceptedOpenTurnEvents({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        sequenceExclusive: 0,
+        limit: 10,
+      });
+      assert.isTrue(replay.some((row) => row.sequence === active.sequence));
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect("journals image metadata and replays it without the model image body", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const data = Buffer.alloc(512 * 1024, 123).toString("base64");
+    const image = { type: "image", data, mimeType: "image/png" };
+    const event = {
+      ...runtimeEvent("runtime-event-image", ""),
+      type: "item.completed",
+      itemId: RuntimeItemId.makeUnsafe("runtime-item-image"),
+      payload: { itemType: "mcp_tool_call", status: "completed", data: { content: [image] } },
+      raw: { source: "codex.app-server.notification", payload: { content: [image] } },
+    } satisfies ProviderRuntimeEvent;
+    const stored = yield* repository.append(event);
+    const replay = yield* repository.readAfter({
+      sequenceExclusive: 0,
+      throughSequenceInclusive: stored.sequence,
+      limit: 10,
+    });
+    assert.lengthOf(replay, 1);
+    assert.deepEqual(replay[0]?.event, stored.event);
+    assert.isBelow(JSON.stringify(replay).length, 2000);
+    assert.deepEqual(replay[0]?.event.raw?.payload, {
+      content: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          synaraImageOmitted: true,
+          encodedLength: data.length,
+          byteLength: 512 * 1024,
+        },
+      ],
+    });
+    assert.equal(image.data, data);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
+layer("ProviderRuntimeEventRepository", (it) => {
+  it.effect("journals exact events and advances its consumer cursor contiguously", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const first = yield* repository.append(runtimeEvent("runtime-event-1", "hello"));
+      const duplicate = yield* repository.append(runtimeEvent("runtime-event-1", "hello"));
+      const second = yield* repository.append(runtimeEvent("runtime-event-2", " world"));
+
+      assert.strictEqual(duplicate.sequence, first.sequence);
+      assert.isAbove(second.sequence, first.sequence);
+      assert.strictEqual(yield* repository.getHighWaterSequence, second.sequence);
+
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: second.sequence,
+        limit: 10,
+      });
+      assert.deepStrictEqual(
+        rows.map((row) => [row.sequence, row.event.eventId]),
+        [
+          [first.sequence, "runtime-event-1"],
+          [second.sequence, "runtime-event-2"],
+        ],
+      );
+      assert.deepStrictEqual(yield* repository.getThreadCoverage("thread-runtime-journal"), {
+        retainedCount: 2,
+        oldestSequence: first.sequence,
+        highWaterSequence: second.sequence,
+      });
+      assert.isTrue(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-runtime-journal"],
+        }),
+      );
+      assert.isFalse(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-with-no-pending-events"],
+        }),
+      );
+      assert.deepStrictEqual(
+        (yield* repository.readThreadEvents({
+          threadId: "thread-runtime-journal",
+          throughSequenceInclusive: second.sequence,
+          beforeSequenceExclusive: second.sequence,
+          turnId: "turn-runtime-journal",
+          eventTypes: ["content.delta"],
+          limit: 10,
+        })).map((row) => row.event.eventId),
+        ["runtime-event-1"],
+      );
+
+      const skipped = yield* repository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: second.sequence,
+        updatedAt: "2026-07-14T00:00:01.000Z",
+      });
+      assert.isFalse(skipped);
+      const advanced = yield* repository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: first.sequence,
+        updatedAt: "2026-07-14T00:00:01.000Z",
+      });
+      assert.isTrue(advanced);
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        first.sequence,
+      );
+      assert.isTrue(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-runtime-journal"],
+        }),
+      );
+      assert.deepStrictEqual(
+        (yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        })).map((row) => row.event.eventId),
+        ["runtime-event-1"],
+      );
+
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: second.sequence,
+          updatedAt: "2026-07-14T00:00:02.000Z",
+        }),
+      );
+      assert.isFalse(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-runtime-journal"],
+        }),
+      );
+      const terminal = yield* repository.append({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("runtime-event-terminal"),
+        provider: "codex",
+        createdAt: "2026-07-14T00:00:03.000Z",
+        threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+        payload: { state: "completed" },
+      });
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: terminal.sequence,
+          updatedAt: "2026-07-14T00:00:03.000Z",
+        }),
+      );
+      assert.lengthOf(
+        yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        }),
+        0,
+      );
+
+      const conflict = yield* Effect.flip(
+        repository.append(runtimeEvent("runtime-event-1", "different")),
+      );
+      assert.strictEqual(conflict._tag, "PersistenceDecodeError");
+    }),
+  );
+
+  it.effect("prunes replay rows after their projected turn settles", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const event = runtimeEvent("runtime-event-settled-turn", "stale replay");
+      const persisted = yield* repository.append(event);
+
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: persisted.sequence,
+          updatedAt: "2026-07-14T00:01:00.000Z",
+        }),
+      );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, checkpoint_files_json
+        ) VALUES (
+          ${event.threadId}, ${event.turnId}, 'running',
+          ${event.createdAt}, '[]'
+        )
+      `;
+
+      yield* repository.pruneSettledOpenTurns;
+      assert.lengthOf(
+        yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        }),
+        1,
+      );
+
+      yield* sql`
+        UPDATE projection_turns
+        SET state = 'interrupted', completed_at = ${"2026-07-14T00:01:01.000Z"}
+        WHERE thread_id = ${event.threadId} AND turn_id = ${event.turnId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+
+      assert.lengthOf(
+        yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        }),
+        0,
+      );
+    }),
+  );
+
+  it.effect("prunes replay rows whose thread is purged, deleted, or archived", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const orphanThreadId = ThreadId.makeUnsafe("thread-runtime-orphaned");
+      const orphanTurnId = TurnId.makeUnsafe("turn-runtime-orphaned");
+      const event: ProviderRuntimeEvent = {
+        ...runtimeEvent("runtime-event-orphaned-turn", "orphaned replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      };
+      const persisted = yield* repository.append(event);
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: persisted.sequence,
+          updatedAt: "2026-07-14T00:01:00.000Z",
+        }),
+      );
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // No projection thread row at all (hard-purged): the open turn is dead.
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
+
+      // Re-open the turn under a live thread: the replay row must survive.
+      const reopened = yield* repository.append({
+        ...runtimeEvent("runtime-event-orphaned-turn-2", "live replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      });
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: reopened.sequence,
+          updatedAt: "2026-07-14T00:01:01.000Z",
+        }),
+      );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // Archiving does not interrupt a turn the projection still considers
+      // running, so that replay row must survive the archive.
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, checkpoint_files_json
+        ) VALUES (
+          ${orphanThreadId}, ${orphanTurnId}, 'running', ${event.createdAt}, '[]'
+        )
+      `;
+      yield* sql`
+        UPDATE projection_threads
+        SET archived_at = ${"2026-07-14T00:02:00.000Z"}
+        WHERE thread_id = ${event.threadId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // An archived thread whose turn the projection never tracked (or has
+      // settled) has nothing left to replay.
+      yield* sql`
+        DELETE FROM projection_turns
+        WHERE thread_id = ${orphanThreadId} AND turn_id = ${orphanTurnId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
+    }),
+  );
+
+  it.effect("compacts oversized raw provider payloads without losing the canonical event", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversized = {
+        ...runtimeEvent("runtime-event-oversized-raw", "terminal-safe"),
+        raw: {
+          source: "codex.eventmsg" as const,
+          method: "codex/event/task_complete",
+          payload: {
+            transcript: "x".repeat(PROVIDER_RUNTIME_EVENT_MAX_BYTES),
+          },
+        },
+      } satisfies ProviderRuntimeEvent;
+
+      const persisted = yield* repository.append(oversized);
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: persisted.sequence - 1,
+        throughSequenceInclusive: persisted.sequence,
+        limit: 1,
+      });
+
+      assert.strictEqual(persisted.event.eventId, oversized.eventId);
+      assert.deepStrictEqual(persisted.event.payload, oversized.payload);
+      const compactedRaw = rows[0]?.event.raw?.payload as
+        | {
+            readonly synaraTruncated?: unknown;
+            readonly reason?: unknown;
+            readonly originalBytes?: unknown;
+          }
+        | undefined;
+      assert.deepInclude(compactedRaw, {
+        synaraTruncated: true,
+        reason: "provider runtime event exceeded the durable journal size limit",
+      });
+      assert.isNumber(compactedRaw?.originalBytes);
+    }),
+  );
+
+  it.effect("journals an oversized Pi item.completed by truncating payload string leaves", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversizedResult = "x".repeat(PROVIDER_RUNTIME_EVENT_MAX_BYTES * 2);
+      const oversizedEvent = {
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("runtime-event-oversized-pi"),
+        provider: "pi",
+        createdAt: "2026-07-14T00:03:00.000Z",
+        threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+        itemId: RuntimeItemId.makeUnsafe("item-oversized-pi"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Run bash",
+          detail: oversizedResult,
+          data: { toolCallId: "call-1", toolName: "bash", result: oversizedResult },
+        },
+        raw: {
+          source: "pi.sdk.event",
+          messageType: "tool_result",
+          payload: { result: oversizedResult },
+        },
+      } satisfies ProviderRuntimeEvent;
+
+      const persisted = yield* repository.append(oversizedEvent);
+      assert.strictEqual(persisted.event.eventId, oversizedEvent.eventId);
+      if (persisted.event.type === "item.completed") {
+        const detail = persisted.event.payload.detail;
+        assert.isString(detail);
+        if (typeof detail === "string") {
+          assert.isBelow(detail.length, oversizedResult.length);
+        }
+        const data = persisted.event.payload.data as { readonly result?: string } | undefined;
+        const dataResult = data?.result;
+        assert.isString(dataResult);
+        if (typeof dataResult === "string") {
+          assert.isBelow(dataResult.length, oversizedResult.length);
+        }
+      }
+      const rawPayload = persisted.event.raw?.payload as
+        | {
+            readonly synaraTruncated?: unknown;
+            readonly originalBytes?: unknown;
+          }
+        | undefined;
+      assert.deepInclude(rawPayload, { synaraTruncated: true });
+      const originalBytes = rawPayload?.originalBytes;
+      assert.isNumber(originalBytes);
+      if (typeof originalBytes === "number") {
+        assert.isAbove(originalBytes, PROVIDER_RUNTIME_EVENT_MAX_BYTES);
+      }
+
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: persisted.sequence - 1,
+        throughSequenceInclusive: persisted.sequence,
+        limit: 1,
+      });
+      assert.strictEqual(rows[0]?.event.eventId, "runtime-event-oversized-pi");
+
+      const duplicate = yield* repository.append(oversizedEvent);
+      assert.strictEqual(duplicate.sequence, persisted.sequence);
+    }),
+  );
+
+  it.effect("journals an oversized raw-less event by truncating its payload leaves", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversizedDelta = "y".repeat(PROVIDER_RUNTIME_EVENT_MAX_BYTES * 2);
+      const oversizedEvent = runtimeEvent("runtime-event-oversized-payload", oversizedDelta);
+
+      const persisted = yield* repository.append(oversizedEvent);
+      assert.strictEqual(persisted.event.eventId, oversizedEvent.eventId);
+      assert.strictEqual(persisted.event.raw, undefined);
+      if (persisted.event.type === "content.delta") {
+        assert.isBelow(persisted.event.payload.delta.length, oversizedDelta.length);
+      }
+    }),
+  );
+
+  it.effect("still rejects an event whose oversized bulk is not string leaves", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversizedEvent = {
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("runtime-event-oversized-numbers"),
+        provider: "pi",
+        createdAt: "2026-07-14T00:04:00.000Z",
+        threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Number flood",
+          data: {
+            values: Array.from({ length: PROVIDER_RUNTIME_EVENT_MAX_BYTES / 5 }, (_, i) => i),
+          },
+        },
+      } satisfies ProviderRuntimeEvent;
+
+      const failure = yield* Effect.flip(repository.append(oversizedEvent));
+      assert.strictEqual(failure._tag, "PersistenceDecodeError");
+    }),
+  );
+
+  it("truncateUtf8ToBytes never splits a UTF-8 code point", () => {
+    const emoji = "🙂".repeat(10_000);
+    const truncated = truncateUtf8ToBytes(emoji, 999);
+    assert.isBelow(Buffer.byteLength(truncated, "utf8"), 1_000);
+    assert.isFalse(truncated.includes("\uFFFD"));
+    assert.strictEqual(Buffer.from(truncated, "utf8").toString("utf8"), truncated);
+  });
+
+  it.effect("journals every canonical event derived from one provider notification", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const common = {
+        eventId: EventId.makeUnsafe("native-task-complete"),
+        provider: "codex" as const,
+        createdAt: "2026-07-14T00:02:00.000Z",
+        threadId: ThreadId.makeUnsafe("thread-derived-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-derived-runtime-journal"),
+      };
+      const derived = assignDerivedProviderRuntimeEventIds([
+        {
+          ...common,
+          type: "task.completed",
+          payload: { taskId: RuntimeTaskId.makeUnsafe("task-1"), status: "completed" },
+        },
+        {
+          ...common,
+          type: "turn.proposed.completed",
+          payload: { planMarkdown: "# Plan" },
+        },
+      ]);
+
+      const persisted = yield* Effect.forEach(derived, repository.append, {
+        concurrency: 1,
+      });
+      assert.deepStrictEqual(
+        persisted.map(({ event }) => event.eventId),
+        ["native-task-complete:task.completed:0", "native-task-complete:turn.proposed.completed:1"],
+      );
+      assert.notStrictEqual(persisted[0]?.sequence, persisted[1]?.sequence);
+    }),
+  );
+});
+
+// Fresh (isolated in-memory) database: retention behaviour is asserted through
+// exact row counts, which only hold when no other test shares the journal.
+const retentionLayer = it.layer(
+  Layer.fresh(ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory))),
+);
+
+retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
+  const threadId = ThreadId.makeUnsafe("thread-retention");
+  const deltaEvent = (turn: string, index: number): ProviderRuntimeEvent => ({
+    type: "content.delta",
+    eventId: EventId.makeUnsafe(`retention-${turn}-${index}`),
+    provider: "codex",
+    createdAt: "2026-07-14T01:00:00.000Z",
+    threadId,
+    turnId: TurnId.makeUnsafe(`turn-retention-${turn}`),
+    payload: { streamKind: "assistant_text", delta: `chunk-${index}` },
+  });
+  const terminalEvent = (turn: string): ProviderRuntimeEvent => ({
+    type: "turn.completed",
+    eventId: EventId.makeUnsafe(`retention-${turn}-terminal`),
+    provider: "codex",
+    createdAt: "2026-07-14T01:00:01.000Z",
+    threadId,
+    turnId: TurnId.makeUnsafe(`turn-retention-${turn}`),
+    payload: { state: "completed" },
+  });
+
+  it.effect("retains open-turn replay while throttling retention scans", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const journalSize = Effect.map(
+        sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_events`,
+        (rows) => rows[0]?.count ?? 0,
+      );
+      const replayable = Effect.map(
+        repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10_000,
+        }),
+        (rows) => rows.length,
+      );
+      const acceptEvent = (event: ProviderRuntimeEvent) =>
+        Effect.gen(function* () {
+          const persisted = yield* repository.append(event);
+          const accepted = yield* repository.advanceConsumerCursor({
+            consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+            eventSequence: persisted.sequence,
+            updatedAt: event.createdAt,
+          });
+          assert.isTrue(accepted);
+        });
+
+      // A long open turn: every accepted event must stay replayable, including
+      // the ones that crossed a throttled scan boundary.
+      const openTurnEvents = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 88;
+      for (let index = 0; index < openTurnEvents; index += 1) {
+        yield* acceptEvent(deltaEvent("a", index));
+      }
+      assert.strictEqual(yield* replayable, openTurnEvents);
+      assert.strictEqual(yield* journalSize, openTurnEvents);
+
+      // The terminal event settles the turn and forces a scan, leaving exactly
+      // the bounded diagnostic tail behind.
+      yield* acceptEvent(terminalEvent("a"));
+      assert.strictEqual(yield* replayable, 0);
+      assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+
+      // A shorter follow-up turn stays below the scan interval: no scan runs,
+      // which is exactly the quadratic-delete behaviour this throttle removes.
+      const followUpEvents = 300;
+      for (let index = 0; index < followUpEvents; index += 1) {
+        yield* acceptEvent(deltaEvent("b", index));
+      }
+      assert.strictEqual(yield* replayable, followUpEvents);
+      assert.strictEqual(
+        yield* journalSize,
+        PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + followUpEvents,
+      );
+
+      // Settling the follow-up turn releases the deferred backlog immediately.
+      yield* acceptEvent(terminalEvent("b"));
+      assert.strictEqual(yield* replayable, 0);
+      assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+    }),
+  );
+  it.effect("acknowledges a drained page in one transaction with per-row bookkeeping", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const journalSize = Effect.map(
+        sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_events`,
+        (rows) => rows[0]?.count ?? 0,
+      );
+      const replayableTurns = Effect.map(
+        repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10_000,
+        }),
+        (rows) => rows.map((row) => String(row.event.turnId)),
+      );
+      const cursorBefore = yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
+
+      // One page: a turn that settles inside it, then an open follow-up turn.
+      const settledEvents = 40;
+      const openEvents = 25;
+      let last = cursorBefore;
+      for (let index = 0; index < settledEvents; index += 1) {
+        last = (yield* repository.append(deltaEvent("c", index))).sequence;
+      }
+      last = (yield* repository.append(terminalEvent("c"))).sequence;
+      for (let index = 0; index < openEvents; index += 1) {
+        last = (yield* repository.append(deltaEvent("d", index))).sequence;
+      }
+      const sizeBeforeAck = yield* journalSize;
+
+      // The target must be a stored row the cursor can reach contiguously.
+      assert.isFalse(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last + 1,
+          updatedAt: "2026-07-14T02:00:00.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        cursorBefore,
+      );
+      assert.strictEqual(yield* journalSize, sizeBeforeAck);
+
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last,
+          updatedAt: "2026-07-14T02:00:00.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        last,
+      );
+      // Same outcome as row-by-row acknowledgement: the settled turn released
+      // its replay backlog (the terminal forced a scan) while every event of
+      // the still-open turn stays replayable.
+      const replayable = yield* replayableTurns;
+      assert.strictEqual(replayable.length, openEvents);
+      assert.isTrue(replayable.every((turn) => turn === "turn-retention-d"));
+      // The scan ran once, at the end of the page: the bounded diagnostic tail
+      // may already include the open turn's rows, so the journal holds between
+      // the tail and tail-plus-open-turn rows, never fewer.
+      const sizeAfterAck = yield* journalSize;
+      assert.isAtLeast(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+      assert.isAtMost(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + openEvents);
+      assert.isBelow(sizeAfterAck, sizeBeforeAck);
+
+      // Idempotent once the cursor is already there.
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last,
+          updatedAt: "2026-07-14T02:00:01.000Z",
+        }),
+      );
+      assert.strictEqual(yield* journalSize, sizeAfterAck);
+    }),
+  );
+});
+
+it.effect("amortizes checkpoint retention passes across small checkpoint ACKs", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    yield* registerCheckpointConsumer;
+    const sequences: number[] = [];
+    for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 8; index++)
+      sequences.push((yield* repository.append(checkpointWarning(index))).sequence);
+    const statements: string[] = [];
+    const capture = Effect.provideService(Statement.CurrentTransformer, (statement) =>
+      Effect.sync(() => {
+        statements.push(statement.compile()[0]);
+        return statement;
+      }),
+    );
+    const prunes = () =>
+      statements.filter((query) => query.includes("DELETE FROM provider_runtime_events")).length;
+    for (const throughSequence of sequences.slice(0, 8))
+      assert.isTrue(
+        yield* repository
+          .advanceConsumerCursorThrough({
+            consumerName: checkpointConsumer,
+            throughSequence,
+            updatedAt: "2026-10-07T00:00:01.000Z",
+          })
+          .pipe(capture),
+      );
+    assert.strictEqual(prunes(), 0);
+    assert.isTrue(
+      yield* repository
+        .advanceConsumerCursorThrough({
+          consumerName: checkpointConsumer,
+          throughSequence: sequences.at(-1)!,
+          updatedAt: "2026-10-07T00:00:02.000Z",
+        })
+        .pipe(capture),
+    );
+    assert.strictEqual(prunes(), 1);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
+it.effect("releases superseded file notifications behind a stalled checkpoint cursor", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    yield* registerCheckpointConsumer;
+    const fileChange = (id: string): ProviderRuntimeEvent => ({
+      ...runtimeEvent(id, ""),
+      type: "item.completed",
+      itemId: RuntimeItemId.makeUnsafe(id),
+      payload: { itemType: "file_change", status: "completed" },
+    });
+    yield* repository.append(fileChange("superseded-file"));
+    yield* repository.append(fileChange("newest-file-before-terminal"));
+    yield* repository.append({
+      ...runtimeEvent("superseded-terminal", ""),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    let throughSequence = (yield* repository.append(fileChange("file-after-terminal"))).sequence;
+    for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 8; index++)
+      throughSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+    assert.isTrue(
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:01.000Z",
+      }),
+    );
+    const retained = yield* sql<{ readonly eventId: string }>`
+        SELECT json_extract(event_json, '$.eventId') AS "eventId" FROM provider_runtime_events
+        WHERE thread_id = 'thread-runtime-journal' ORDER BY sequence`;
+    // The checkpoint cursor never moved: only the superseded notification is
+    // released; each turn's newest file row and its terminal stay replayable.
+    assert.deepEqual(
+      retained.map((row) => row.eventId),
+      ["newest-file-before-terminal", "superseded-terminal", "file-after-terminal"],
+    );
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);

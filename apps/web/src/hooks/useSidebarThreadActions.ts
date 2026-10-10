@@ -1,0 +1,1137 @@
+// FILE: useSidebarThreadActions.ts
+// Purpose: Owns Sidebar thread pinning, Done/undo, snooze, archive/undo, deletion, and project-batch actions.
+// Layer: Web Sidebar controller hook
+// Exports: useSidebarThreadActions
+
+import { type ProjectId, ThreadId } from "@synara/contracts";
+import { pluralize } from "@synara/shared/text";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import type { AppSettings } from "../appSettings";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { showConfirmDialogFallback } from "../confirmDialogFallback";
+import {
+  getFallbackThreadIdAfterDelete,
+  getFallbackThreadIdAfterSnooze,
+  derivePinnedThreadIdsForSidebar,
+  excludeHiddenProjectAgentCoordinatorThreads,
+  isLatestPinnedThreadMutation,
+} from "../components/Sidebar.logic";
+import {
+  isThreadSettledForActivity,
+  resolveActivityRecencyMs,
+} from "../components/SidebarActivityView.logic";
+import {
+  coordinatorThreadIdSet,
+  useProjectAgentSummariesStore,
+} from "../components/chat/project/useProjectAgentSummaries";
+import { toastManager } from "../components/ui/toast";
+import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
+import { releaseOrphanedWorktreeAfterArchive } from "../lib/archiveThreadWorktreeCleanup";
+import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
+import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import {
+  archiveThreadFromClient,
+  isThreadAlreadyUnarchivedError,
+  unarchiveThreadFromClient,
+} from "../lib/threadArchive";
+import {
+  dispatchThreadSnoozedUntil,
+  formatSnoozeDeadline,
+  resolveSnoozeDeadline,
+  type SnoozeDuration,
+} from "../lib/threadSnooze";
+import {
+  createOptimisticSettledMutation,
+  recordOptimisticSettledMutationSequence,
+  reconcileOptimisticSettledMutation,
+  setThreadSettledFromClient,
+  type OptimisticSettledMutation,
+} from "../lib/threadSettle";
+import { newCommandId, randomUUID } from "../lib/utils";
+import { readNativeApi } from "../nativeApi";
+import { usePinnedThreadsStore } from "../pinnedThreadsStore";
+import { reconcileOptimisticPinState } from "../pinning.logic";
+import {
+  resolveSplitViewFocusedThreadId,
+  resolveSplitViewPaneIdForThread,
+  type SplitView,
+  useSplitViewStore,
+} from "../splitViewStore";
+import { useStore } from "../store";
+import { useTemporaryThreadStore } from "../temporaryThreadStore";
+import { getThreadFromState } from "../threadDerivation";
+import { useThreadSelectionStore } from "../threadSelectionStore";
+import type { Project, SidebarThreadSummary } from "../types";
+
+const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
+/**
+ * How long a confirmed settle override may outlive its projection push. Well
+ * past normal push latency: the expiry is a last resort against a lost or
+ * reordered push, not part of the happy path, where reconciliation clears the
+ * override as soon as the projection agrees.
+ */
+const SETTLE_OVERRIDE_MAX_LIFETIME_MS = 15_000;
+
+/**
+ * Unarchives a thread, treating "it was already unarchived" as success.
+ *
+ * The undo toast can fire after the thread came back some other way (a second client, a replayed
+ * command), and that race is not an error worth showing. Kept at module scope because React Compiler
+ * cannot lower a `throw` inside a `try`/`catch`, and inlining this would cost the whole sidebar
+ * actions hook its compilation.
+ */
+async function unarchiveThreadIgnoringAlreadyRestored(threadId: ThreadId): Promise<void> {
+  try {
+    const api = readNativeApi();
+    if (!api) throw new Error("Unable to connect to the app server.");
+    await unarchiveThreadFromClient(api.orchestration, threadId);
+  } catch (error) {
+    if (!isThreadAlreadyUnarchivedError(error, threadId)) throw error;
+  }
+}
+
+interface DeleteProjectThreadsOptions {
+  readonly confirmMessage?: string | null;
+  readonly showEmptyToast?: boolean;
+  readonly showResultToast?: boolean;
+  readonly worktreeCleanupMode?: "prompt" | "skip";
+}
+
+export function useSidebarThreadActions(input: {
+  readonly activeSplitView: SplitView | null | undefined;
+  readonly appSettings: Pick<
+    AppSettings,
+    | "archiveDeletesOrphanedWorktree"
+    | "confirmThreadArchive"
+    | "confirmThreadDelete"
+    | "sidebarThreadSortOrder"
+  >;
+  readonly clearTerminalState: (threadId: ThreadId) => void;
+  /** Limits the post-snooze focus fallback to chats reachable from the active Space. */
+  readonly filterThreadsToActiveSpace?: (
+    threads: readonly SidebarThreadSummary[],
+  ) => readonly SidebarThreadSummary[];
+  readonly handleNewChat: (options?: { fresh?: boolean }) => Promise<unknown>;
+  readonly projectById: ReadonlyMap<ProjectId, Project>;
+  readonly routeSplitViewId: string | null;
+  readonly routeThreadId: ThreadId | null;
+  readonly sidebarThreads: readonly SidebarThreadSummary[];
+  readonly sidebarTreeThreads: readonly SidebarThreadSummary[];
+  readonly sidebarThreadSummaryById: Readonly<Record<string, SidebarThreadSummary>>;
+  readonly threadsHydrated: boolean;
+}) {
+  const {
+    activeSplitView,
+    appSettings,
+    clearTerminalState,
+    filterThreadsToActiveSpace,
+    handleNewChat,
+    projectById,
+    routeSplitViewId,
+    routeThreadId,
+    sidebarThreads,
+    sidebarTreeThreads,
+    sidebarThreadSummaryById,
+    threadsHydrated,
+  } = input;
+  const hiddenCoordinatorThreadIds = () =>
+    coordinatorThreadIdSet(useProjectAgentSummariesStore.getState().summariesByProjectId.values());
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
+  const clearProjectDraftThreadById = useComposerDraftStore(
+    (store) => store.clearProjectDraftThreadById,
+  );
+  const persistedPinnedThreadIds = usePinnedThreadsStore((store) => store.pinnedThreadIds);
+  const pinThreadLocally = usePinnedThreadsStore((store) => store.pinThread);
+  const unpinThread = usePinnedThreadsStore((store) => store.unpinThread);
+  const prunePinnedThreads = usePinnedThreadsStore((store) => store.prunePinnedThreads);
+  const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
+  const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
+  const removeFromSelection = useThreadSelectionStore((store) => store.removeFromSelection);
+
+  const archivePendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
+  const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
+  const archiveCleanupSequenceByThreadIdRef = useRef<Map<ThreadId, number>>(new Map());
+  const acceptedArchiveSequenceByThreadIdRef = useRef<Map<ThreadId, number>>(new Map());
+  const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
+  const optimisticPinnedStateByThreadIdRef = useRef(new Map<ThreadId, boolean>());
+  const latestPinnedMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
+  const latestSettledMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
+  const settleOverrideExpiryTimeoutsRef = useRef(new Map<ThreadId, number>());
+  const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
+  const [optimisticPinnedStateByThreadId, setOptimisticPinnedStateByThreadId] = useState<
+    ReadonlyMap<ThreadId, boolean>
+  >(() => new Map());
+
+  useEffect(() => {
+    sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;
+  }, [sidebarThreadSummaryById]);
+
+  const pinnedThreadIds = useMemo(
+    () =>
+      derivePinnedThreadIdsForSidebar({
+        threads: sidebarTreeThreads,
+        persistedPinnedThreadIds,
+        optimisticPinnedStateByThreadId,
+      }),
+    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarTreeThreads],
+  );
+  const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
+
+  const setOptimisticThreadPinned = useCallback((threadId: ThreadId, isPinned: boolean) => {
+    optimisticPinnedStateByThreadIdRef.current.set(threadId, isPinned);
+    setOptimisticPinnedStateByThreadId((current) => {
+      if (current.get(threadId) === isPinned) return current;
+      const next = new Map(current);
+      next.set(threadId, isPinned);
+      return next;
+    });
+  }, []);
+  const clearOptimisticThreadPinned = useCallback((threadId: ThreadId) => {
+    optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+    setOptimisticPinnedStateByThreadId((current) => {
+      if (!current.has(threadId)) return current;
+      const next = new Map(current);
+      next.delete(threadId);
+      return next;
+    });
+  }, []);
+  const dispatchThreadPinnedState = useCallback(async (threadId: ThreadId, isPinned: boolean) => {
+    const api = readNativeApi();
+    if (!api) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.meta.update",
+      commandId: newCommandId(),
+      threadId,
+      isPinned,
+    });
+  }, []);
+  const setThreadPinned = useCallback(
+    async (threadId: ThreadId, isPinned: boolean) => {
+      const api = readNativeApi();
+      if (!api) return;
+      const requestVersion =
+        (latestPinnedMutationVersionByThreadIdRef.current.get(threadId) ?? 0) + 1;
+      latestPinnedMutationVersionByThreadIdRef.current.set(threadId, requestVersion);
+
+      setOptimisticThreadPinned(threadId, isPinned);
+      if (isPinned) {
+        pinThreadLocally(threadId);
+      } else {
+        unpinThread(threadId);
+      }
+
+      try {
+        await dispatchThreadPinnedState(threadId, isPinned);
+      } catch (error) {
+        if (
+          !isLatestPinnedThreadMutation({
+            threadId,
+            requestVersion,
+            latestMutationVersionByThreadId: latestPinnedMutationVersionByThreadIdRef.current,
+          })
+        ) {
+          return;
+        }
+        const confirmedPinned = sidebarThreadSummaryByIdRef.current[threadId]?.isPinned === true;
+        if (confirmedPinned) {
+          pinThreadLocally(threadId);
+        } else {
+          unpinThread(threadId);
+        }
+        clearOptimisticThreadPinned(threadId);
+        throw error;
+      }
+    },
+    [
+      clearOptimisticThreadPinned,
+      dispatchThreadPinnedState,
+      pinThreadLocally,
+      setOptimisticThreadPinned,
+      unpinThread,
+    ],
+  );
+  const toggleThreadPinned = useCallback(
+    (threadId: ThreadId) => {
+      const isPinned = pinnedThreadIdSet.has(threadId);
+      void setThreadPinned(threadId, !isPinned).catch((error) => {
+        console.error("Failed to update pinned thread state", { threadId, error });
+        toastManager.add({
+          type: "error",
+          title: isPinned ? "Unable to unpin thread" : "Unable to pin thread",
+        });
+      });
+    },
+    [pinnedThreadIdSet, setThreadPinned],
+  );
+
+  const [optimisticSettledMutationByThreadId, setOptimisticSettledMutationByThreadId] = useState<
+    ReadonlyMap<ThreadId, OptimisticSettledMutation>
+  >(() => new Map());
+
+  const optimisticSettledStateByThreadId = useMemo(
+    () =>
+      new Map(
+        Array.from(
+          optimisticSettledMutationByThreadId,
+          ([threadId, mutation]) => [threadId, mutation.desiredSettled] as const,
+        ),
+      ),
+    [optimisticSettledMutationByThreadId],
+  );
+  const closeNavigationInputRef = useRef({
+    routeThreadId,
+    routeSplitViewId,
+    routeVersion: 0,
+    sidebarTreeThreads,
+    optimisticSettledStateByThreadId,
+    handleNewChat,
+  });
+  useEffect(() => {
+    const shellSnapshotSequence = useStore.getState().shellSnapshotSequence ?? 0;
+    for (const [threadId, sequence] of acceptedArchiveSequenceByThreadIdRef.current) {
+      if (shellSnapshotSequence >= sequence) {
+        acceptedArchiveSequenceByThreadIdRef.current.delete(threadId);
+      }
+    }
+    closeNavigationInputRef.current = {
+      routeThreadId,
+      routeSplitViewId,
+      routeVersion:
+        closeNavigationInputRef.current.routeVersion +
+        Number(
+          closeNavigationInputRef.current.routeThreadId !== routeThreadId ||
+            closeNavigationInputRef.current.routeSplitViewId !== routeSplitViewId,
+        ),
+      sidebarTreeThreads,
+      optimisticSettledStateByThreadId,
+      handleNewChat,
+    };
+  }, [
+    routeThreadId,
+    routeSplitViewId,
+    sidebarTreeThreads,
+    optimisticSettledStateByThreadId,
+    handleNewChat,
+  ]);
+
+  const navigateAfterThreadClosed = useCallback(
+    async (
+      threadId: ThreadId,
+      routeVersionAtDispatch: number | null,
+      excludedThreadIds?: ReadonlySet<ThreadId>,
+    ) => {
+      // Read after the command is accepted: a newer route or thread list wins.
+      const current = closeNavigationInputRef.current;
+      if (current.routeThreadId !== threadId || current.routeVersion !== routeVersionAtDispatch)
+        return;
+      const shellSnapshotSequence = useStore.getState().shellSnapshotSequence ?? 0;
+      const fallbackThread = excludeHiddenProjectAgentCoordinatorThreads(
+        current.sidebarTreeThreads,
+        hiddenCoordinatorThreadIds(),
+      )
+        .filter((thread) => {
+          const archiveSequence = acceptedArchiveSequenceByThreadIdRef.current.get(thread.id);
+          // A receipt can arrive before the archive disappears from the sidebar.
+          return (
+            thread.id !== threadId &&
+            thread.archivedAt == null &&
+            !thread.parentThreadId &&
+            !excludedThreadIds?.has(thread.id) &&
+            !archivePendingThreadIdsRef.current.has(thread.id) &&
+            (archiveSequence === undefined || shellSnapshotSequence >= archiveSequence) &&
+            !isThreadSettledForActivity(thread, current.optimisticSettledStateByThreadId)
+          );
+        })
+        .toSorted(
+          (left, right) =>
+            resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
+            left.id.localeCompare(right.id),
+        )[0];
+      if (fallbackThread) {
+        await navigate({
+          to: "/$threadId",
+          params: { threadId: fallbackThread.id },
+          replace: true,
+          search: () => ({}),
+        });
+      } else {
+        await current.handleNewChat();
+      }
+    },
+    [navigate],
+  );
+
+  const clearOptimisticThreadSettled = useCallback((threadId: ThreadId) => {
+    setOptimisticSettledMutationByThreadId((current) => {
+      if (!current.has(threadId)) return current;
+      const next = new Map(current);
+      next.delete(threadId);
+      return next;
+    });
+  }, []);
+
+  const setThreadSettled = useCallback(
+    async (threadId: ThreadId, isSettled: boolean) => {
+      const api = readNativeApi();
+      if (!api) throw new Error("Unable to connect to the app server.");
+      const routeVersionAtDispatch =
+        closeNavigationInputRef.current.routeThreadId === threadId
+          ? closeNavigationInputRef.current.routeVersion
+          : null;
+      const requestVersion =
+        (latestSettledMutationVersionByThreadIdRef.current.get(threadId) ?? 0) + 1;
+      latestSettledMutationVersionByThreadIdRef.current.set(threadId, requestVersion);
+      const isLatestRequest = () =>
+        latestSettledMutationVersionByThreadIdRef.current.get(threadId) === requestVersion;
+
+      const previousExpiry = settleOverrideExpiryTimeoutsRef.current.get(threadId);
+      if (previousExpiry !== undefined) {
+        window.clearTimeout(previousExpiry);
+        settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+      }
+      const serverSettledAtDispatch =
+        (sidebarThreadSummaryByIdRef.current[threadId]?.settledAt ?? null) !== null;
+      setOptimisticSettledMutationByThreadId((current) => {
+        const next = new Map(current);
+        next.set(
+          threadId,
+          createOptimisticSettledMutation({
+            desiredSettled: isSettled,
+            serverSettledAtDispatch,
+          }),
+        );
+        return next;
+      });
+      try {
+        const commandSequence = await setThreadSettledFromClient(
+          api.orchestration,
+          threadId,
+          isSettled,
+        );
+        if (isLatestRequest()) {
+          setOptimisticSettledMutationByThreadId((current) => {
+            const mutation = current.get(threadId);
+            if (!mutation) return current;
+            const next = new Map(current);
+            next.set(threadId, recordOptimisticSettledMutationSequence(mutation, commandSequence));
+            return next;
+          });
+        }
+      } catch (error) {
+        // A newer toggle owns the override now; dropping it here would revert to
+        // a state the user has already moved on from.
+        if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
+        throw error;
+      }
+      // The command is durable, so the override only bridges the gap until the
+      // projection push lands. Expiring it keeps a lost or reordered push from
+      // pinning the row to a stale state forever.
+      if (!isLatestRequest()) return false;
+      const expiry = window.setTimeout(() => {
+        settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+        if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
+      }, SETTLE_OVERRIDE_MAX_LIFETIME_MS);
+      settleOverrideExpiryTimeoutsRef.current.set(threadId, expiry);
+      if (isSettled) await navigateAfterThreadClosed(threadId, routeVersionAtDispatch);
+      return isLatestRequest();
+    },
+    [clearOptimisticThreadSettled, navigateAfterThreadClosed],
+  );
+
+  const setThreadSettledWithToast = useCallback(
+    (threadId: ThreadId, isSettled: boolean) => {
+      const returnToThreadOnUndo = routeThreadId === threadId;
+      const updateSettled = (settled: boolean) =>
+        setThreadSettled(threadId, settled).catch((error) => {
+          console.error("Failed to update settled thread state", { threadId, error });
+          toastManager.add({
+            type: "error",
+            title: settled ? "Unable to mark thread as done" : "Unable to undo done",
+          });
+          return false;
+        });
+      void updateSettled(isSettled).then((confirmed) => {
+        if (!confirmed || !isSettled) return;
+        toastManager.add({
+          id: `done-undo:${threadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+            archiveUndo: {
+              message: "Marked as done",
+              onUndo: async () => {
+                const restored = await updateSettled(false);
+                if (restored && returnToThreadOnUndo) {
+                  void navigate({
+                    to: "/$threadId",
+                    params: { threadId },
+                    replace: true,
+                  });
+                }
+                return restored;
+              },
+            },
+          },
+        });
+      });
+    },
+    [navigate, routeThreadId, setThreadSettled],
+  );
+
+  const setThreadSnoozedUntil = dispatchThreadSnoozedUntil;
+
+  // Snooze confirms asynchronously; these refs let the confirmation see the
+  // route and thread list as they are then, not as they were when it started.
+  const snoozeFallbackThreadsRef = useRef(sidebarTreeThreads);
+  useEffect(() => {
+    snoozeFallbackThreadsRef.current = filterThreadsToActiveSpace
+      ? filterThreadsToActiveSpace(sidebarTreeThreads)
+      : sidebarTreeThreads;
+  }, [filterThreadsToActiveSpace, sidebarTreeThreads]);
+
+  const snoozeThread = useCallback(
+    (threadId: ThreadId, duration: SnoozeDuration) => {
+      const deadline = resolveSnoozeDeadline(duration, Date.now());
+      const previousSnoozedUntil = sidebarThreadSummaryById[threadId]?.snoozedUntil ?? null;
+      const navigationAtDispatch = closeNavigationInputRef.current;
+      const routeVersionAtDispatch =
+        navigationAtDispatch.routeThreadId === threadId &&
+        navigationAtDispatch.routeSplitViewId === null
+          ? navigationAtDispatch.routeVersion
+          : null;
+      void setThreadSnoozedUntil(threadId, deadline.toISOString()).then((confirmed) => {
+        if (!confirmed) return;
+        // Same compact Undo toast as archive, so chat-level undo reads alike.
+        toastManager.add({
+          id: `snooze-undo:${threadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+            archiveUndo: {
+              message: `Snoozed until ${formatSnoozeDeadline(deadline.toISOString())}`,
+              onUndo: () => setThreadSnoozedUntil(threadId, previousSnoozedUntil),
+            },
+          },
+        });
+        // A split opening or an away-and-back visit is newer navigation too.
+        const currentNavigation = closeNavigationInputRef.current;
+        if (
+          routeVersionAtDispatch === null ||
+          currentNavigation.routeVersion !== routeVersionAtDispatch ||
+          currentNavigation.routeThreadId !== threadId ||
+          currentNavigation.routeSplitViewId !== null
+        )
+          return;
+        const fallbackThreadId = getFallbackThreadIdAfterSnooze({
+          threads: excludeHiddenProjectAgentCoordinatorThreads(
+            snoozeFallbackThreadsRef.current,
+            hiddenCoordinatorThreadIds(),
+          ).filter((thread) => !thread.parentThreadId),
+          snoozedThreadId: threadId,
+        });
+        if (fallbackThreadId) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: fallbackThreadId },
+            replace: true,
+          });
+        } else {
+          void handleNewChat();
+        }
+      });
+    },
+    [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById],
+  );
+
+  // Drop optimistic settle entries once the server-confirmed state agrees, so
+  // later pushes from other clients are no longer masked by a stale override.
+  useEffect(() => {
+    if (optimisticSettledMutationByThreadId.size === 0) return;
+    let settle: number | undefined;
+    const scheduleReconciliation = () => {
+      if (settle !== undefined) window.clearTimeout(settle);
+      settle = window.setTimeout(() => {
+        settle = undefined;
+        const projectionSequence = useStore.getState().shellSnapshotSequence ?? 0;
+        setOptimisticSettledMutationByThreadId((current) => {
+          let next: Map<ThreadId, OptimisticSettledMutation> | null = null;
+          for (const [threadId, mutation] of current) {
+            const serverThread = sidebarThreadSummaryByIdRef.current[threadId];
+            if (!serverThread) {
+              if (next === null) next = new Map(current);
+              next.delete(threadId);
+              continue;
+            }
+            const reconciliation = reconcileOptimisticSettledMutation(
+              mutation,
+              (serverThread.settledAt ?? null) !== null,
+              projectionSequence,
+            );
+            if (reconciliation.acknowledged) {
+              if (next === null) next = new Map(current);
+              next.delete(threadId);
+              const expiry = settleOverrideExpiryTimeoutsRef.current.get(threadId);
+              if (expiry !== undefined) window.clearTimeout(expiry);
+              settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+            } else if (reconciliation.mutation !== mutation) {
+              if (next === null) next = new Map(current);
+              next.set(threadId, reconciliation.mutation);
+            }
+          }
+          return next ?? current;
+        });
+      }, 0);
+    };
+    scheduleReconciliation();
+    const unsubscribe = useStore.subscribe((state, previousState) => {
+      if (state.shellSnapshotSequence !== previousState.shellSnapshotSequence) {
+        scheduleReconciliation();
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (settle !== undefined) window.clearTimeout(settle);
+    };
+  }, [sidebarThreads, optimisticSettledMutationByThreadId]);
+
+  useEffect(() => {
+    const expiryTimeouts = settleOverrideExpiryTimeoutsRef.current;
+    return () => {
+      for (const timeout of expiryTimeouts.values()) window.clearTimeout(timeout);
+      expiryTimeouts.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (optimisticPinnedStateByThreadId.size === 0) return;
+    const serverPinnedStateByThreadId = new Map(
+      sidebarThreads.map((thread) => [thread.id, thread.isPinned === true] as const),
+    );
+    const settle = window.setTimeout(() => {
+      setOptimisticPinnedStateByThreadId((current) => {
+        const reconciled = reconcileOptimisticPinState({
+          optimisticPinnedStateById: current,
+          serverPinnedStateById: serverPinnedStateByThreadId,
+        });
+        for (const threadId of reconciled.settledIds) {
+          optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+        }
+        return reconciled.optimisticPinnedStateById;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
+  }, [sidebarThreads, optimisticPinnedStateByThreadId]);
+
+  useEffect(() => {
+    if (!threadsHydrated) return;
+    prunePinnedThreads(sidebarThreads.map((thread) => thread.id));
+  }, [sidebarThreads, threadsHydrated, prunePinnedThreads]);
+
+  useEffect(() => {
+    if (!threadsHydrated || persistedPinnedThreadIds.length === 0) return;
+    const threadsById = new Map(sidebarThreads.map((thread) => [thread.id, thread] as const));
+    for (const threadId of persistedPinnedThreadIds) {
+      const thread = threadsById.get(threadId);
+      if (
+        !thread ||
+        thread.isPinned === true ||
+        optimisticPinnedStateByThreadIdRef.current.has(threadId) ||
+        legacyPinMigrationThreadIdsRef.current.has(threadId)
+      ) {
+        continue;
+      }
+      legacyPinMigrationThreadIdsRef.current.add(threadId);
+      void dispatchThreadPinnedState(threadId, true)
+        .catch((error) => {
+          console.error("Failed to migrate pinned thread state", { threadId, error });
+        })
+        .finally(() => {
+          legacyPinMigrationThreadIdsRef.current.delete(threadId);
+        });
+    }
+  }, [dispatchThreadPinnedState, sidebarThreads, threadsHydrated, persistedPinnedThreadIds]);
+
+  const deleteThread = useCallback(
+    async (
+      threadId: ThreadId,
+      opts: {
+        deletedThreadIds?: ReadonlySet<ThreadId>;
+        reconcileDeletedThread?: boolean;
+        worktreeCleanupMode?: "prompt" | "skip";
+      } = {},
+    ): Promise<void> => {
+      await deleteActiveThreadFromClient({
+        threadId,
+        ...(opts.deletedThreadIds !== undefined ? { deletedThreadIds: opts.deletedThreadIds } : {}),
+        ...(opts.reconcileDeletedThread !== undefined
+          ? { reconcileDeletedThread: opts.reconcileDeletedThread }
+          : {}),
+        ...(opts.worktreeCleanupMode !== undefined
+          ? { worktreeCleanupMode: opts.worktreeCleanupMode }
+          : {}),
+        prepareForDelete: () => ({
+          shouldNavigateToFallback: routeThreadId === threadId,
+          fallbackThreadId: getFallbackThreadIdAfterDelete({
+            threads: sidebarThreads,
+            deletedThreadId: threadId,
+            deletedThreadIds: opts.deletedThreadIds ?? new Set<ThreadId>(),
+            sortOrder: appSettings.sidebarThreadSortOrder,
+          }),
+          deletedPaneInActiveSplit: activeSplitView
+            ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
+            : null,
+        }),
+        onDeleted: ({ thread, prepared }) => {
+          unpinThread(threadId);
+          clearComposerDraftForThread(threadId);
+          clearProjectDraftThreadById(thread.projectId, thread.id);
+          clearTerminalState(threadId);
+          removeThreadFromSplitViews(threadId);
+          clearTemporaryThread(threadId);
+
+          if (routeSplitViewId && prepared?.deletedPaneInActiveSplit) {
+            const nextActiveSplitView =
+              useSplitViewStore.getState().splitViewsById[routeSplitViewId] ?? null;
+            const nextFocusedThreadId = nextActiveSplitView
+              ? resolveSplitViewFocusedThreadId(nextActiveSplitView)
+              : null;
+            if (nextActiveSplitView && nextFocusedThreadId) {
+              void navigate({
+                to: "/$threadId",
+                params: { threadId: nextFocusedThreadId },
+                replace: true,
+                search: () => ({ splitViewId: nextActiveSplitView.id }),
+              });
+            } else if (prepared.shouldNavigateToFallback && prepared.fallbackThreadId) {
+              void navigate({
+                to: "/$threadId",
+                params: { threadId: prepared.fallbackThreadId },
+                replace: true,
+              });
+            } else if (prepared.shouldNavigateToFallback) {
+              void handleNewChat();
+            }
+          } else if (prepared?.shouldNavigateToFallback) {
+            if (prepared.fallbackThreadId) {
+              void navigate({
+                to: "/$threadId",
+                params: { threadId: prepared.fallbackThreadId },
+                replace: true,
+              });
+            } else {
+              void handleNewChat();
+            }
+          }
+        },
+        removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+      });
+    },
+    [
+      activeSplitView,
+      appSettings.sidebarThreadSortOrder,
+      clearComposerDraftForThread,
+      clearProjectDraftThreadById,
+      clearTemporaryThread,
+      clearTerminalState,
+      handleNewChat,
+      navigate,
+      removeThreadFromSplitViews,
+      removeWorktreeMutation,
+      routeSplitViewId,
+      routeThreadId,
+      sidebarThreads,
+      unpinThread,
+    ],
+  );
+
+  const confirmAndDeleteThread = useCallback(
+    async (threadId: ThreadId) => {
+      const thread = sidebarThreadSummaryById[threadId];
+      if (!thread) return;
+      if (appSettings.confirmThreadDelete) {
+        const api = readNativeApi();
+        const confirmationMessage = [
+          `Delete thread "${thread.title}"?`,
+          "This permanently clears conversation history for this thread.",
+        ].join("\n");
+        const confirmed = api
+          ? await api.dialogs.confirm(confirmationMessage)
+          : await showConfirmDialogFallback(confirmationMessage);
+        if (!confirmed) return;
+      }
+      await deleteThread(threadId);
+    },
+    [deleteThread, appSettings.confirmThreadDelete, sidebarThreadSummaryById],
+  );
+
+  const releaseArchivedWorktree = useCallback(
+    (threadId: ThreadId, archiveSequence: number) => {
+      if (archiveCleanupSequenceByThreadIdRef.current.get(threadId) !== archiveSequence) return;
+      archiveCleanupSequenceByThreadIdRef.current.delete(threadId);
+      void releaseOrphanedWorktreeAfterArchive({
+        threadId,
+        archiveSequence,
+        enabled: appSettings.archiveDeletesOrphanedWorktree,
+        removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+      }).catch((error: unknown) => {
+        console.error("Failed to release worktree after archiving thread", { threadId, error });
+      });
+    },
+    [appSettings.archiveDeletesOrphanedWorktree, removeWorktreeMutation],
+  );
+
+  const archiveThread = useCallback(
+    async (
+      threadId: ThreadId,
+      options?: { waitForUndo?: boolean; excludedThreadIds?: ReadonlySet<ThreadId> },
+    ): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api) return false;
+      const thread = getThreadFromState(useStore.getState(), threadId);
+      if (!thread) return false;
+      const pendingThreadIds = archivePendingThreadIdsRef.current;
+      if (pendingThreadIds.has(threadId)) return false;
+      const routeVersionAtDispatch =
+        closeNavigationInputRef.current.routeThreadId === threadId
+          ? closeNavigationInputRef.current.routeVersion
+          : null;
+
+      pendingThreadIds.add(threadId);
+      const runArchive = async (): Promise<boolean> => {
+        const archiveSequence = await archiveThreadFromClient(api.orchestration, threadId);
+        archiveCleanupSequenceByThreadIdRef.current.set(threadId, archiveSequence);
+        acceptedArchiveSequenceByThreadIdRef.current.set(threadId, archiveSequence);
+        // Undo owns its visible lifetime. Other archive entry points get the
+        // same grace period, allowing provider and terminal cleanup to settle.
+        if (appSettings.archiveDeletesOrphanedWorktree && !options?.waitForUndo) {
+          globalThis.setTimeout(
+            () => releaseArchivedWorktree(threadId, archiveSequence),
+            ARCHIVE_UNDO_TOAST_DURATION_MS,
+          );
+        }
+        await navigateAfterThreadClosed(
+          threadId,
+          routeVersionAtDispatch,
+          options?.excludedThreadIds,
+        );
+        return true;
+      };
+      return runArchive().finally(() => {
+        pendingThreadIds.delete(threadId);
+      });
+    },
+    [
+      appSettings.archiveDeletesOrphanedWorktree,
+      releaseArchivedWorktree,
+      navigateAfterThreadClosed,
+    ],
+  );
+
+  const restoreArchivedThreadFromToast = useCallback(
+    async (restoreInput: {
+      threadId: ThreadId;
+      returnToThreadOnUndo: boolean;
+    }): Promise<boolean> => {
+      const pendingThreadIds = archiveUndoPendingThreadIdsRef.current;
+      if (pendingThreadIds.has(restoreInput.threadId)) return false;
+      pendingThreadIds.add(restoreInput.threadId);
+      const runRestore = async (): Promise<boolean> => {
+        try {
+          const currentThread = getThreadFromState(useStore.getState(), restoreInput.threadId);
+          if (!currentThread) {
+            toastManager.add({
+              type: "error",
+              title: "Could not restore thread",
+              description: "The thread no longer exists.",
+            });
+            return false;
+          }
+          await unarchiveThreadIgnoringAlreadyRestored(restoreInput.threadId);
+          archiveCleanupSequenceByThreadIdRef.current.delete(restoreInput.threadId);
+          acceptedArchiveSequenceByThreadIdRef.current.delete(restoreInput.threadId);
+          if (restoreInput.returnToThreadOnUndo) {
+            void navigate({
+              to: "/$threadId",
+              params: { threadId: restoreInput.threadId },
+              replace: true,
+            });
+          }
+          return true;
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not restore thread",
+            description: error instanceof Error ? error.message : "Unable to restore the thread.",
+          });
+          return false;
+        }
+      };
+      return runRestore().finally(() => {
+        pendingThreadIds.delete(restoreInput.threadId);
+      });
+    },
+    [navigate],
+  );
+
+  const showArchiveUndoToast = useCallback(
+    (threadId: ThreadId, archiveSequence: number, options?: { returnToThreadOnUndo?: boolean }) => {
+      toastManager.add({
+        id: `archive-undo:${threadId}:${randomUUID()}`,
+        timeout: 0,
+        // Covers swipe/Escape dismissal as well as the visible timer. A pending
+        // Undo must never turn a disappearing toast into a cleanup request.
+        onClose: () => {
+          if (archiveUndoPendingThreadIdsRef.current.has(threadId)) return;
+          releaseArchivedWorktree(threadId, archiveSequence);
+        },
+        data: {
+          allowCrossThreadVisibility: true,
+          dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+          archiveUndo: {
+            onNoUndo: () => releaseArchivedWorktree(threadId, archiveSequence),
+            onUndo: () =>
+              restoreArchivedThreadFromToast({
+                threadId,
+                returnToThreadOnUndo: options?.returnToThreadOnUndo === true,
+              }),
+            onViewArchived: () => {
+              void navigate({ to: "/settings", search: { section: "archived" } });
+            },
+          },
+        },
+      });
+    },
+    [navigate, releaseArchivedWorktree, restoreArchivedThreadFromToast],
+  );
+
+  const archiveThreadWithUndo = useCallback(
+    async (threadId: ThreadId) => {
+      try {
+        const returnToThreadOnUndo = routeThreadId === threadId;
+        const archived = await archiveThread(threadId, { waitForUndo: true });
+        if (archived) {
+          const archiveSequence = archiveCleanupSequenceByThreadIdRef.current.get(threadId);
+          if (archiveSequence !== undefined) {
+            showArchiveUndoToast(threadId, archiveSequence, { returnToThreadOnUndo });
+          }
+        }
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not archive thread",
+          description: error instanceof Error ? error.message : "Unable to archive the thread.",
+        });
+      }
+    },
+    [archiveThread, routeThreadId, showArchiveUndoToast],
+  );
+
+  const confirmAndArchiveThread = useCallback(
+    async (threadId: ThreadId) => {
+      const thread = sidebarThreadSummaryById[threadId];
+      if (!thread) return;
+      if (appSettings.confirmThreadArchive) {
+        const api = readNativeApi();
+        const confirmationMessage = [
+          `Archive thread "${thread.title}"?`,
+          "Archived threads are hidden from the sidebar but can be restored later.",
+        ].join("\n");
+        const confirmed = api
+          ? await api.dialogs.confirm(confirmationMessage)
+          : await showConfirmDialogFallback(confirmationMessage);
+        if (!confirmed) return;
+      }
+      await archiveThreadWithUndo(threadId);
+    },
+    [archiveThreadWithUndo, appSettings.confirmThreadArchive, sidebarThreadSummaryById],
+  );
+
+  const archiveAllThreadsInProject = useCallback(
+    async (projectId: ProjectId): Promise<void> => {
+      const api = readNativeApi();
+      const project = projectById.get(projectId);
+      if (!api || !project) return;
+      const projectThreads = excludeHiddenProjectAgentCoordinatorThreads(
+        sidebarThreads.filter(
+          (thread) => thread.projectId === projectId && thread.archivedAt == null,
+        ),
+        hiddenCoordinatorThreadIds(),
+      );
+      if (projectThreads.length === 0) {
+        toastManager.add({
+          type: "info",
+          title: "Nothing to archive",
+          description: `"${project.name}" has no threads to archive.`,
+        });
+        return;
+      }
+      const archiveLines = [
+        `Archive ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
+        "Archived threads are hidden from the sidebar but can be restored later.",
+      ];
+      const confirmed = api
+        ? await api.dialogs.confirm(archiveLines.join("\n"))
+        : await showConfirmDialogFallback(archiveLines.join("\n"));
+      if (!confirmed) return;
+
+      let archivedCount = 0;
+      let failureCount = 0;
+      const excludedThreadIds = new Set(projectThreads.map((thread) => thread.id));
+      for (const thread of projectThreads) {
+        try {
+          if (await archiveThread(thread.id, { excludedThreadIds })) archivedCount += 1;
+          else failureCount += 1;
+        } catch (error) {
+          failureCount += 1;
+          console.error("Failed to archive thread during bulk archive", {
+            threadId: thread.id,
+            projectId,
+            error,
+          });
+        }
+      }
+      removeFromSelection(projectThreads.map((thread) => thread.id));
+      if (archivedCount > 0) {
+        toastManager.add({
+          type: failureCount > 0 ? "warning" : "success",
+          title: archivedCount === 1 ? "Thread archived" : `Archived ${archivedCount} threads`,
+          description:
+            failureCount > 0
+              ? `Failed to archive ${failureCount} ${pluralize(failureCount, "thread")}.`
+              : `"${project.name}" cleared.`,
+        });
+      } else if (failureCount > 0) {
+        toastManager.add({
+          type: "error",
+          title: "Failed to archive threads",
+          description: `Could not archive ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
+        });
+      }
+    },
+    [archiveThread, projectById, sidebarThreads, removeFromSelection],
+  );
+
+  const deleteProjectThreads = useCallback(
+    async (projectId: ProjectId, options?: DeleteProjectThreadsOptions) => {
+      const api = readNativeApi();
+      const project = projectById.get(projectId);
+      if (!api || !project) return null;
+      const allProjectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
+      const visibleProjectThreads = excludeHiddenProjectAgentCoordinatorThreads(
+        allProjectThreads,
+        hiddenCoordinatorThreadIds(),
+      );
+      const deletingWholeProject = options?.confirmMessage === null;
+      const projectThreads = deletingWholeProject ? allProjectThreads : visibleProjectThreads;
+      if (visibleProjectThreads.length === 0 && !deletingWholeProject) {
+        if (options?.showEmptyToast ?? true) {
+          toastManager.add({
+            type: "info",
+            title: "Nothing to delete",
+            description: `"${project.name}" has no threads to delete.`,
+          });
+        }
+        return {
+          deletedCount: 0,
+          failureCount: 0,
+          totalCount: 0,
+          projectName: project.name,
+        };
+      }
+      const confirmationMessage =
+        options?.confirmMessage === undefined
+          ? [
+              `Delete ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
+              "This permanently clears conversation history for these threads.",
+            ].join("\n")
+          : options.confirmMessage;
+      if (confirmationMessage !== null) {
+        const confirmed = await api.dialogs.confirm(confirmationMessage);
+        if (!confirmed) return null;
+      }
+
+      const deletedIds = new Set<ThreadId>(projectThreads.map((thread) => thread.id));
+      // Built once, outside the loop's `try`: React Compiler cannot lower a conditional spread
+      // inside a try block and would skip this hook entirely.
+      const worktreeCleanupOverride = options?.worktreeCleanupMode
+        ? { worktreeCleanupMode: options.worktreeCleanupMode }
+        : {};
+      const successfullyDeletedIds: ThreadId[] = [];
+      let deletedCount = 0;
+      let failureCount = 0;
+      for (const thread of projectThreads) {
+        try {
+          await deleteThread(thread.id, {
+            deletedThreadIds: deletedIds,
+            reconcileDeletedThread: false,
+            ...worktreeCleanupOverride,
+          });
+          successfullyDeletedIds.push(thread.id);
+          deletedCount += 1;
+        } catch (error) {
+          failureCount += 1;
+          console.error("Failed to delete thread during bulk delete", {
+            threadId: thread.id,
+            projectId,
+            error,
+          });
+        }
+      }
+      void reconcileDeletedThreadsFromClient({
+        threadIds: successfullyDeletedIds,
+        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
+      });
+      removeFromSelection([...deletedIds]);
+      if (options?.showResultToast ?? true) {
+        if (deletedCount > 0) {
+          toastManager.add({
+            type: failureCount > 0 ? "warning" : "success",
+            title: deletedCount === 1 ? "Thread deleted" : `Deleted ${deletedCount} threads`,
+            description:
+              failureCount > 0
+                ? `Failed to delete ${failureCount} ${pluralize(failureCount, "thread")}.`
+                : `"${project.name}" cleared.`,
+          });
+        } else if (failureCount > 0) {
+          toastManager.add({
+            type: "error",
+            title: "Failed to delete threads",
+            description: `Could not delete ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
+          });
+        }
+      }
+      return {
+        deletedCount,
+        failureCount,
+        totalCount: projectThreads.length,
+        projectName: project.name,
+      };
+    },
+    [deleteThread, projectById, sidebarThreads, removeFromSelection],
+  );
+
+  return {
+    pinnedThreadIds,
+    pinnedThreadIdSet,
+    toggleThreadPinned,
+    setThreadSettledWithToast,
+    setThreadSnoozedUntil,
+    snoozeThread,
+    settledOverrideByThreadId: optimisticSettledStateByThreadId,
+    deleteThread,
+    confirmAndDeleteThread,
+    archiveThread,
+    archiveThreadWithUndo,
+    confirmAndArchiveThread,
+    archiveAllThreadsInProject,
+    deleteProjectThreads,
+  } as const;
+}

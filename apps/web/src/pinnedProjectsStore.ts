@@ -3,7 +3,7 @@
 // Layer: UI state store
 // Exports: usePinnedProjectsStore
 
-import { MAX_PINNED_PROJECTS, type ProjectId } from "@t3tools/contracts";
+import { MAX_PINNED_PROJECTS, type ProjectId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { normalizePinnedIds, pinId, prunePinnedIds, unpinId } from "./pinning.logic";

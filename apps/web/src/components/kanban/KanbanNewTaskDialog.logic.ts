@@ -1,7 +1,7 @@
 // FILE: KanbanNewTaskDialog.logic.ts
 // Purpose: Pure helpers for the kanban new-task composer dialog.
 // Layer: Kanban UI logic (no React/store side effects)
-// Exports: transcript merge, terminal-context reconciliation, task preview helpers.
+// Exports: transcript merge and task preview helpers.
 
 export function appendKanbanTaskTranscript(current: string, transcript: string): string {
   const trimmed = transcript.trim();
@@ -12,26 +12,6 @@ export function appendKanbanTaskTranscript(current: string, transcript: string):
     return trimmed;
   }
   return `${current.trimEnd()} ${trimmed}`;
-}
-
-export function syncKanbanTaskTerminalContextsByIds<T extends { id: string }>(
-  contexts: ReadonlyArray<T>,
-  ids: ReadonlyArray<string>,
-): T[] {
-  const contextsById = new Map(contexts.map((context) => [context.id, context]));
-  return ids.flatMap((id) => {
-    const context = contextsById.get(id);
-    return context ? [context] : [];
-  });
-}
-
-export function areKanbanTaskTerminalContextIdsEqual<T extends { id: string }>(
-  contexts: ReadonlyArray<T>,
-  ids: ReadonlyArray<string>,
-): boolean {
-  return (
-    contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index])
-  );
 }
 
 export function buildKanbanTaskPreview(input: {

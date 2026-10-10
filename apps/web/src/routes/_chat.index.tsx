@@ -1,90 +1,106 @@
 // FILE: _chat.index.tsx
 // Purpose: Restores the last chat route on app launch, falling back to a fresh home-chat draft.
+//          Also the landing for a Space that has nothing to open.
 // Layer: Routing
-// Depends on: sidebar UI persistence plus shared new-chat handler for the empty-state fallback.
+// Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
 
-import { ThreadId } from "@t3tools/contracts";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { SpaceId, type ProjectId } from "@synara/contracts";
+import { createFileRoute } from "@tanstack/react-router";
 
-import { SplashScreen } from "../components/SplashScreen";
+import {
+  RestoreOrCreateChatRoute,
+  type RestoreRouteResolver,
+} from "../components/RestoreOrCreateChatRoute";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
-import { resolveRestorableThreadRoute } from "../chatRouteRestore";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
-import { useSplitViewStore } from "../splitViewStore";
+import { VOID_SPACE_KEY } from "../lib/spaceGrouping";
+import { collectGroupProjectIds } from "../lib/groupProjects";
+import { resolveSplitViewThreadIds, useSplitViewStore } from "../splitViewStore";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { resolveChatIndexRestoreRoute, type ChatIndexLandingSpace } from "./-chatIndexRoute.logic";
+
+/**
+ * Set by the Space switcher when the selected Space has nothing to open (`spaceKey`, so Void
+ * survives as a string). It scopes the restore below to that Space — without it this landing
+ * happily reopens the *previous* Space's thread, and the route-to-Space sync then writes that
+ * Space back over the user's click.
+ */
+export interface ChatIndexSearch {
+  readonly space?: string | undefined;
+}
 
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
-  const navigate = useNavigate();
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
+  const landingSpaceKey = Route.useSearch({ select: (search) => search.space });
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
-  const splitViewsHydrated = useSplitViewStore((state) => state.hasHydrated);
-  const splitViewsById = useSplitViewStore((state) => state.splitViewsById);
-  const splitViewIds = useMemo(
-    () => Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
-    [splitViewsById],
-  );
-  const [attempt, setAttempt] = useState(0);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const projects = useStore((state) => state.projects);
+  const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
+  const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
+  const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
+  // A Space landing reuses the stored home-chat draft instead of minting one (same reasoning as
+  // the /groups landing): a fresh draft per visit would litter the Chats container every time
+  // someone clicked through their empty Spaces.
+  const createFreshChat = () =>
+    landingSpaceKey === undefined ? handleNewChat({ fresh: true }) : handleNewChat();
 
-  useEffect(() => {
-    if (!threadsHydrated || !splitViewsHydrated) {
-      return;
+  const workspacePaths = { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot };
+  // Home chats restore the last visited route, except group threads — those belong to the
+  // /groups surface, and restoring one from "/" would silently switch the user into the Groups
+  // segment. A group lastThreadRoute falls through to a fresh home-chat draft instead.
+  const groupProjectIds = collectGroupProjectIds(projects, workspacePaths);
+  // Only plain, still-unsent chat drafts qualify as restore targets: a non-"chat" entry point
+  // isn't a home-chat draft, and `promotedTo` means the draft already became a real thread, so
+  // its stale id is no longer valid (matches the filtering findGroupDraftThreadId applies).
+  const draftProjectIdByThreadId = new Map<string, ProjectId>();
+  for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
+    if (draft.entryPoint === "chat" && draft.promotedTo === undefined) {
+      draftProjectIdByThreadId.set(threadId, draft.projectId);
     }
+  }
 
-    let cancelled = false;
-    setErrorMessage(null);
+  const landingSpace: ChatIndexLandingSpace | null =
+    landingSpaceKey === undefined
+      ? null
+      : {
+          spaceId: landingSpaceKey === VOID_SPACE_KEY ? null : SpaceId.makeUnsafe(landingSpaceKey),
+          projectById: new Map(projects.map((project) => [project.id, project])),
+          workspacePaths,
+        };
 
-    void (async () => {
-      const restorableRoute = resolveRestorableThreadRoute({
-        lastThreadRoute: readSidebarUiState().lastThreadRoute,
-        availableThreadIds: new Set(threadIds),
-        availableSplitViewIds: new Set(splitViewIds),
-      });
-      if (restorableRoute) {
-        if (cancelled) {
-          return;
-        }
-        await navigate({
-          to: "/$threadId",
-          params: { threadId: ThreadId.makeUnsafe(restorableRoute.threadId) },
-          replace: true,
-          search: () => ({
-            splitViewId: restorableRoute.splitViewId,
-          }),
-        });
-        return;
-      }
-
-      const result = await handleNewChat({ fresh: true });
-      if (cancelled || result.ok) {
-        return;
-      }
-      setErrorMessage(result.error);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    attempt,
-    handleNewChat,
-    navigate,
-    splitViewIds,
-    splitViewsHydrated,
-    threadIds,
-    threadsHydrated,
-  ]);
+  const resolveRestoreRoute: RestoreRouteResolver = ({ availableSplitViewIds }) => {
+    const lastThreadRoute = readSidebarUiState().lastThreadRoute;
+    const rememberedSplitView = lastThreadRoute?.splitViewId
+      ? useSplitViewStore.getState().splitViewsById[lastThreadRoute.splitViewId]
+      : undefined;
+    return resolveChatIndexRestoreRoute({
+      lastThreadRoute,
+      availableSplitViewIds,
+      threadIds,
+      sidebarThreadSummaryById,
+      groupProjectIds,
+      draftProjectIdByThreadId,
+      rememberedSplitViewThreadIds: rememberedSplitView
+        ? resolveSplitViewThreadIds(rememberedSplitView)
+        : undefined,
+      landingSpace,
+    });
+  };
 
   return (
-    <SplashScreen
-      errorMessage={errorMessage}
-      onRetry={errorMessage ? () => setAttempt((value) => value + 1) : null}
+    <RestoreOrCreateChatRoute
+      resolveRestoreRoute={resolveRestoreRoute}
+      createFreshChat={createFreshChat}
     />
   );
 }
 
 export const Route = createFileRoute("/_chat/")({
+  validateSearch: (raw: Record<string, unknown>): ChatIndexSearch =>
+    typeof raw.space === "string" && raw.space.length > 0 ? { space: raw.space } : {},
   component: ChatIndexRouteView,
 });

@@ -1,11 +1,9 @@
 // FILE: ComposerActiveTaskListCard.tsx
 // Purpose: Active task-list card stacked flush above the composer. Wraps
-// ActiveTaskListCard in the shared stacked-header frame and exposes the measured
-// element ref so the transcript can inset its bottom padding by the card height.
+// ActiveTaskListCard in the shared stacked-header frame. The card participates in
+// normal composer flow and does not need to expose a measurement ref.
 // Layer: Chat composer UI
 // Exports: ComposerActiveTaskListCard
-
-import { memo, type RefObject } from "react";
 
 import type { ActiveTaskListState } from "../../session-logic";
 import { ActiveTaskListCard } from "./ActiveTaskListCard";
@@ -13,8 +11,6 @@ import { ComposerStackedPanel } from "./ComposerStackedPanel";
 
 interface ComposerActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
-  // Measured element used to inset the transcript's bottom padding by the card height.
-  cardRef: RefObject<HTMLDivElement | null>;
   backgroundTaskCount: number;
   compact: boolean;
   onCompactChange: (compact: boolean) => void;
@@ -22,18 +18,17 @@ interface ComposerActiveTaskListCardProps {
   attachedToPrevious?: boolean;
 }
 
-export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCard({
+export function ComposerActiveTaskListCard({
   activeTaskList,
-  cardRef,
   backgroundTaskCount,
   compact,
   onCompactChange,
   onOpenSidebar,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: ComposerActiveTaskListCardProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   return (
     <ComposerStackedPanel
-      ref={cardRef}
       passthroughSideMargins
       attachedToPrevious={attachedToPrevious}
       data-testid="active-task-list-card"
@@ -47,4 +42,4 @@ export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCa
       />
     </ComposerStackedPanel>
   );
-});
+}

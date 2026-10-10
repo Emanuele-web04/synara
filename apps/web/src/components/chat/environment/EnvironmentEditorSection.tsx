@@ -5,10 +5,10 @@
 //          editor (same entries as the header OpenInPicker).
 // Layer: Environment panel section
 
-import type { EditorId, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
 
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
-import { LayoutSidebarIcon } from "~/lib/icons";
+import { EditorViewIcon } from "~/lib/icons";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuRadioGroup, MenuRadioItem, MenuShortcut, MenuTrigger } from "../../ui/menu";
@@ -24,12 +24,12 @@ import {
 export function EnvironmentEditorSection({
   keybindings,
   availableEditors,
-  openInCwd,
+  openInTarget,
   onOpenEditorView,
 }: {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  openInCwd: string | null;
+  openInTarget: string | null;
   /** Open the in-app editor workspace view; omitted on surfaces that can't host it. */
   onOpenEditorView?: () => void;
 }) {
@@ -43,7 +43,7 @@ export function EnvironmentEditorSection({
   } = useEditorLaunchers({
     keybindings,
     availableEditors,
-    openInCwd,
+    openInTarget,
   });
 
   // Render the section whenever there is at least one entry to show — the in-app
@@ -59,7 +59,7 @@ export function EnvironmentEditorSection({
     <EnvironmentLabeledSection label="Editor">
       {onOpenEditorView ? (
         <EnvironmentRow
-          icon={<LayoutSidebarIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+          icon={<EditorViewIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
           label="Editor view"
           onClick={onOpenEditorView}
         />
@@ -67,7 +67,7 @@ export function EnvironmentEditorSection({
       {options.length === 0 ? null : (
         <Menu>
           <MenuTrigger
-            disabled={!openInCwd}
+            disabled={!openInTarget}
             render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} />}
           >
             <EnvironmentRowBody

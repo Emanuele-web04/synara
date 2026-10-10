@@ -1,19 +1,26 @@
 import { spawn, spawnSync } from "node:child_process";
-import { watch } from "node:fs";
+import { statSync, watch } from "node:fs";
 import { join } from "node:path";
 import waitOn from "wait-on";
 
-import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
+import { buildWindowMaterialAddon } from "./build-window-material-addon.mjs";
+import { configureMacLauncher, desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
 const port = Number(process.env.ELECTRON_RENDERER_PORT ?? 5733);
 const devServerUrl = `http://localhost:${port}`;
 const requiredFiles = [
   "dist-electron/main.js",
   "dist-electron/preload.js",
+  "dist-electron/guestPreload.js",
   "../server/dist/index.mjs",
 ];
 const watchedDirectories = [
-  { directory: "dist-electron", files: new Set(["main.js", "preload.js"]) },
+  {
+    directory: "dist-electron",
+    files: new Set(["main.js", "preload.js", "guestPreload.js"]),
+  },
   { directory: "../server/dist", files: new Set(["index.mjs"]) },
 ];
 const forcedShutdownTimeoutMs = 1_500;
@@ -21,12 +28,16 @@ const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
 const staleComputerUseGracePeriodMs = 300;
 
+if (process.platform === "darwin") {
+  buildAppSnapHelper({ arch: process.arch });
+  buildWindowMaterialAddon({ arch: process.arch });
+}
+
 await waitOn({
   resources: [`tcp:${port}`, ...requiredFiles.map((filePath) => `file:${filePath}`)],
 });
 
-const childEnv = { ...process.env };
-delete childEnv.ELECTRON_RUN_AS_NODE;
+const childEnv = createSourceDesktopEnvironment();
 
 let shuttingDown = false;
 let restartTimer = null;
@@ -43,51 +54,65 @@ function killChildTreeByPid(pid, signal) {
   spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
 }
 
+function escapeExtendedRegex(value) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function listPidsByExactProcessName(processName) {
+  const result = spawnSync("pgrep", ["-x", processName], { encoding: "utf8" });
+  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  if (!output) {
+    return [];
+  }
+  return output
+    .split("\n")
+    .map((value) => Number(value.trim()))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+function readProcessCommand(pid) {
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+  return typeof result.stdout === "string" ? result.stdout.trim() : "";
+}
+
 function cleanupStaleDevApps() {
   if (process.platform === "win32") {
     return;
   }
 
-  spawnSync("pkill", ["-f", "--", `--t3code-dev-root=${desktopDir}`], { stdio: "ignore" });
+  const executable = escapeExtendedRegex(resolveElectronPath());
+  const devRoot = escapeExtendedRegex(desktopDir);
+  const commandPattern = `^${executable}[[:space:]]+--synara-dev-root=${devRoot}([[:space:]]|$)`;
+  spawnSync("pkill", ["-f", "--", commandPattern], { stdio: "ignore" });
 }
 
 function listStaleComputerUsePids() {
-  if (process.platform === "win32") {
+  // Only macOS exposes a verifiable Synara (Dev) executable path for these
+  // helpers. Linux process command lines do not currently carry a dev-owner
+  // marker, so reaping by the generic script name could kill another install.
+  if (process.platform !== "darwin") {
     return [];
   }
 
-  const result = spawnSync("pgrep", ["-fal", "Synara \\(Dev\\).*(computerUseMcp\\.mjs mcp)"], {
-    encoding: "utf8",
+  const candidatePids = listPidsByExactProcessName("Electron");
+
+  return candidatePids.filter((pid) => {
+    const command = readProcessCommand(pid);
+    if (!/Synara \(Dev\)\.app\/Contents\/MacOS\/Electron/.test(command)) {
+      return false;
+    }
+    if (!/computerUseMcp\.mjs\s+mcp(?:\s|$)/.test(command)) {
+      return false;
+    }
+    // Leave the current worktree's helper alone and only reap stale runtimes
+    // from other worktrees or abandoned dev sessions.
+    if (command.includes(desktopDir)) {
+      return false;
+    }
+    return true;
   });
-  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
-  if (!output) {
-    return [];
-  }
-
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      const firstSpace = line.indexOf(" ");
-      if (firstSpace <= 0) {
-        return [];
-      }
-
-      const pid = Number(line.slice(0, firstSpace));
-      const command = line.slice(firstSpace + 1);
-      if (!Number.isInteger(pid) || pid <= 0) {
-        return [];
-      }
-
-      // Leave the current worktree's helper alone and only reap stale runtimes
-      // from other worktrees or abandoned dev sessions.
-      if (command.includes(desktopDir)) {
-        return [];
-      }
-
-      return [pid];
-    });
 }
 
 function cleanupStaleComputerUseApps() {
@@ -112,22 +137,21 @@ function cleanupStaleComputerUseApps() {
 }
 
 function warnIfAlphaAppRunning() {
-  if (process.platform === "win32") {
+  if (process.platform !== "darwin") {
     return;
   }
 
-  const result = spawnSync("pgrep", ["-fal", "/Applications/Synara\\.app/Contents/MacOS/Synara"], {
-    encoding: "utf8",
-  });
-  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
-  if (!output) {
+  const pids = listPidsByExactProcessName("Synara").filter((pid) =>
+    readProcessCommand(pid).startsWith("/Applications/Synara.app/Contents/MacOS/Synara"),
+  );
+  if (pids.length === 0) {
     return;
   }
 
   console.error(
     "[desktop-dev] Synara is still running. Close it before testing voice in Synara (Dev), or you may be looking at the wrong app/runtime.",
   );
-  console.error(output);
+  console.error(`[desktop-dev] Running Synara process IDs: ${pids.join(", ")}`);
 }
 
 function startApp() {
@@ -135,18 +159,29 @@ function startApp() {
     return;
   }
 
-  const app = spawn(
-    resolveElectronPath(),
-    [`--t3code-dev-root=${desktopDir}`, "dist-electron/main.js"],
-    {
-      cwd: desktopDir,
-      env: {
-        ...childEnv,
-        VITE_DEV_SERVER_URL: devServerUrl,
-      },
-      stdio: "inherit",
-    },
-  );
+  // Rebuilds can remove dist before replacing it. Never launch Electron into
+  // that gap (it shows a modal "Cannot find module" error instead of waiting).
+  const bundlesReady = requiredFiles.every((file) => {
+    try {
+      const stat = statSync(join(desktopDir, file));
+      return stat.isFile() && stat.size > 0;
+    } catch {
+      return false;
+    }
+  });
+  if (!bundlesReady) {
+    scheduleRestart(1_000);
+    return;
+  }
+
+  const electronPath = resolveElectronPath();
+  const environment = { ...childEnv, VITE_DEV_SERVER_URL: devServerUrl };
+  if (process.platform === "darwin") configureMacLauncher(electronPath, environment);
+  const app = spawn(electronPath, [`--synara-dev-root=${desktopDir}`, "dist-electron/main.js"], {
+    cwd: desktopDir,
+    env: environment,
+    stdio: "inherit",
+  });
 
   currentApp = app;
 
@@ -209,7 +244,7 @@ async function stopApp() {
   });
 }
 
-function scheduleRestart() {
+function scheduleRestart(delayMs = restartDebounceMs) {
   if (shuttingDown) {
     return;
   }
@@ -228,7 +263,7 @@ function scheduleRestart() {
           startApp();
         }
       });
-  }, restartDebounceMs);
+  }, delayMs);
 }
 
 function startWatchers() {

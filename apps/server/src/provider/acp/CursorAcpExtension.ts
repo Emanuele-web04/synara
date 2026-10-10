@@ -2,8 +2,10 @@
  * Public Docs: https://cursor.com/docs/cli/acp#cursor-extension-methods
  * Additional reference provided by the Cursor team: https://anysphere.enterprise.slack.com/files/U068SSJE141/F0APT1HSZRP/cursor-acp-extension-method-schemas.md
  */
-import type { UserInputQuestion } from "@t3tools/contracts";
+import type { UserInputQuestion } from "@synara/contracts";
 import { Schema } from "effect";
+
+import { normalizeRuntimeTaskStatus } from "../runtimeTaskList.ts";
 
 const CursorAskQuestionOption = Schema.Struct({
   id: Schema.String,
@@ -87,30 +89,8 @@ export function extractTodosAsPlan(params: typeof CursorUpdateTodosRequest.Type)
     if (step === "") {
       return [];
     }
-    const status: "pending" | "inProgress" | "completed" =
-      todo.status === "completed"
-        ? "completed"
-        : todo.status === "in_progress" || todo.status === "inProgress"
-          ? "inProgress"
-          : "pending";
+    const status = normalizeRuntimeTaskStatus(todo.status);
     return [{ step, status }];
   });
   return { plan };
-}
-
-export function formatCursorPlanUpdateMarkdown(input: {
-  readonly explanation?: string | null;
-  readonly plan: ReadonlyArray<{
-    readonly step: string;
-    readonly status: "pending" | "inProgress" | "completed";
-  }>;
-}): string | undefined {
-  const steps = input.plan.map((entry) => entry.step.trim()).filter((step) => step.length > 0);
-  if (steps.length === 0) {
-    return undefined;
-  }
-
-  const explanation = input.explanation?.trim();
-  const body = steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
-  return explanation && explanation.length > 0 ? `${explanation}\n\n${body}` : body;
 }

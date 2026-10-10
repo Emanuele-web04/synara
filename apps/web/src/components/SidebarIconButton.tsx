@@ -23,13 +23,29 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 const SLOT_SIZE = {
   sm: "size-[18px]",
   md: "size-5",
+  /**
+   * Sidebar header-bar chrome (Search, Activity bell): a roomier hit target with a
+   * softer radius than row actions. Single source of truth so every header control
+   * keeps the same box — the Activity bell renders its own shell (unread dot +
+   * controlled onboarding tooltip) and reuses this token instead of hardcoding it.
+   */
+  header: "size-6 rounded-md",
+  /** Surface picker row. */
+  lg: "size-7",
 } as const;
 
 export type SidebarIconButtonSize = keyof typeof SLOT_SIZE;
 
+/** Box classes for a given sidebar icon-button slot, for shells that can't use the component. */
+export function sidebarIconButtonSlotClass(size: SidebarIconButtonSize): string {
+  return SLOT_SIZE[size];
+}
+
 type TooltipSide = "top" | "right" | "bottom" | "left";
 
 export type SidebarIconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
+  /** Optional content for controls that share the sidebar hit target, such as update progress. */
+  children?: ReactNode;
   // Accepts both our LucideIcon adapters and raw react-icons glyphs.
   icon: ComponentType<{ className?: string }>;
   // Always rendered as the accessible name (aria-label).
@@ -51,15 +67,19 @@ export type SidebarIconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement
 export function SidebarIconButton({
   icon: Icon,
   label,
-  glyph = "chrome",
+  glyph: glyphProp,
   iconClassName,
-  size = "md",
+  size: sizeProp,
   tooltip,
-  tooltipSide = "top",
+  tooltipSide: tooltipSideProp,
   render,
   className,
+  children,
   ...buttonProps
 }: SidebarIconButtonProps) {
+  const glyph = glyphProp ?? "chrome";
+  const size = sizeProp ?? "md";
+  const tooltipSide = tooltipSideProp ?? "top";
   const triggerElement = (render ?? <button type="button" />) as ReactElement<{
     className?: string;
   }>;
@@ -73,7 +93,7 @@ export function SidebarIconButton({
       className,
     ),
   };
-  const iconNode = <Icon className={iconClassName ?? sidebarGlyphClass(glyph)} />;
+  const iconNode = children ?? <Icon className={iconClassName ?? sidebarGlyphClass(glyph)} />;
   const trigger = triggerElement as ReactElement<Record<string, unknown>>;
 
   if (!tooltip) {

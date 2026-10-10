@@ -7,7 +7,7 @@ import {
   type MessageId,
   type PinnedMessage,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   addPinnedMessage,
   clampThreadNotes,
@@ -16,9 +16,8 @@ import {
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-  togglePinnedMessage,
   togglePinnedMessageDone,
-} from "@t3tools/shared/pinnedMessages";
+} from "@synara/shared/pinnedMessages";
 
 import { newCommandId } from "./lib/utils";
 import { readNativeApi } from "./nativeApi";
@@ -96,14 +95,6 @@ export function restorePinAtIndex(
   const nextPins = [...existingPins];
   nextPins.splice(Math.max(0, Math.min(index, nextPins.length)), 0, pin);
   return nextPins;
-}
-
-export function togglePin(
-  pins: readonly PinnedMessage[] | undefined,
-  messageId: MessageId,
-  pinnedAt: string,
-): PinnedMessage[] {
-  return togglePinnedMessage(pins, { messageId, label: null, done: false, pinnedAt });
 }
 
 export function togglePinDone(

@@ -1,13 +1,35 @@
-import { type ProjectId, ThreadId } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
-import { useNavigate } from "@tanstack/react-router";
-import { useCallback } from "react";
-import { useAppSettings } from "../appSettings";
+import { type ProjectId, type ProviderInstanceId, ThreadId } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
+import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { startTransition, useMemo } from "react";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "../appSettings";
+import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { hasActiveComposerSend } from "../lib/composerSendOwnership";
+import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import {
+  hasReconciledServerProviderStatuses,
+  serverConfigQueryOptions,
+} from "../lib/serverReactQuery";
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import {
+  applyGroupWorkerRoutingDefaults,
+  resolveGroupContainerThreadDefaults,
+} from "../lib/groupWorkerRouting";
+import {
+  findProviderStatus,
+  isProviderUsable,
+  resolveAvailableProviderPreference,
+} from "../lib/providerAvailability";
 import {
   buildDraftThreadContextPatch,
   createActiveDraftThreadSnapshot,
@@ -18,10 +40,16 @@ import {
   type NewThreadOptions,
 } from "../lib/threadBootstrap";
 import { promoteThreadCreate } from "../lib/threadCreatePromotion";
+import {
+  draftNavigationSlotKey,
+  runDraftNavigationOnce,
+  stageDraftNavigation,
+} from "../lib/stagedDraftNavigation";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
@@ -34,196 +62,280 @@ export interface NewThreadNavigationOptions {
   search?: (previous: Record<string, unknown>) => Record<string, unknown>;
 }
 
+// Coordinator hand-off threads never mint through this hook, so every caller
+// here is a user-initiated surface: a fresh chat draft minted inside a group
+// container seeds from the group's workerRouting via the same helper the
+// Groups new-chat path uses. Stored/route reuse paths keep the user's
+// existing selections.
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
-  const { settings } = useAppSettings();
+  const { settings, serverSettings } = useAppSettings();
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const resolveProviderForInstanceId = (instanceId: ProviderInstanceId) =>
+    providerInstances.find((instance) => instance.instanceId === instanceId)?.provider ?? null;
+  const queryClient = useQueryClient();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverCwd = serverConfigQuery.data?.cwd ?? null;
+  const providerStatuses = useProviderStatusesForLocalConfig();
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const navigate = useNavigate();
+  const router = useRouter();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
     useFocusedChatContext();
   const openChatThreadPage = useTerminalStateStore((store) => store.openChatThreadPage);
   const openTerminalThreadPage = useTerminalStateStore((store) => store.openTerminalThreadPage);
+  const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
   const markTemporaryThread = useTemporaryThreadStore((store) => store.markTemporaryThread);
+  const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
 
-  const handleNewThread = useCallback(
-    (
-      projectId: ProjectId,
-      options?: NewThreadOptions,
-      navigation?: NewThreadNavigationOptions,
-    ): Promise<ThreadId> => {
-      const entryPoint = options?.entryPoint ?? "chat";
-      const wantsTemporaryThread = options?.temporary === true;
-      const applyProviderOverride = (threadId: ThreadId) => {
-        if (!options?.provider) {
-          return;
-        }
-        const defaultModel = getDefaultModel(options.provider);
-        if (!defaultModel) {
-          return;
-        }
-        setModelSelection(threadId, {
-          provider: options.provider,
-          model: defaultModel,
-        });
-      };
-      const restoreComposerDraft = (
-        threadId: ThreadId,
-        draftState: ComposerThreadDraftState | null,
-      ) => {
-        if (!draftState) {
-          return;
-        }
-        useComposerDraftStore.setState((state) => {
-          if (state.draftsByThreadId[threadId] === draftState) {
-            return state;
-          }
-          return {
-            draftsByThreadId: {
-              ...state.draftsByThreadId,
-              [threadId]: draftState,
-            },
-          };
-        });
-      };
-      const activateThreadEntryPoint = (threadId: ThreadId) => {
-        if (entryPoint === "terminal") {
-          openTerminalThreadPage(threadId, { terminalOnly: true });
-          return;
-        }
-        openChatThreadPage(threadId);
-      };
-      const {
-        clearProjectDraftThreadId,
-        getDraftThread,
-        getDraftThreadByProjectId,
-        applyStickyState,
-        setDraftThreadContext,
-        setProjectDraftThreadId,
-        setModelSelection,
-      } = useComposerDraftStore.getState();
-      const shouldForceFreshThread = options?.fresh === true;
+  const handleNewThread = (
+    projectId: ProjectId,
+    options?: NewThreadOptions,
+    navigation?: NewThreadNavigationOptions,
+  ): Promise<ThreadId | null> => {
+    // Project/thread targets are not authoritative until hydration completes. Read the
+    // store at call time so a stale UI callback cannot mint a draft during hydration.
+    if (!useStore.getState().threadsHydrated) {
+      return Promise.resolve(null);
+    }
 
-      if (shouldForceFreshThread) {
-        clearProjectDraftThreadId(projectId, entryPoint);
+    const entryPoint = options?.entryPoint ?? "chat";
+    const defaultEnvMode =
+      (entryPoint === "chat"
+        ? useProjectEnvironmentStore.getState().envModeByProjectId[projectId]
+        : undefined) ?? settings.defaultThreadEnvMode;
+    if (entryPoint === "chat") {
+      const draftStore = useComposerDraftStore.getState();
+      const draftThread = draftStore.getDraftThreadByProjectId(projectId, "chat");
+      const draftComposer = draftThread
+        ? (draftStore.draftsByThreadId[draftThread.threadId] ?? null)
+        : null;
+      const project = useStore.getState().projects.find((candidate) => candidate.id === projectId);
+
+      prefetchModelsForNewThread(queryClient, {
+        settings,
+        serverSettings: serverSettings ?? null,
+        hiddenProviders: settings.hiddenProviders,
+        providerOverride: options?.provider ?? null,
+        draftActiveProvider: draftComposer?.activeProvider ?? null,
+        stickyActiveProvider: draftStore.stickyActiveProvider,
+        projectDefaultProvider: project?.defaultModelSelection?.provider ?? null,
+        projectCwd: project?.cwd ?? null,
+        draftWorktreePath: draftThread?.worktreePath ?? null,
+        worktreePath: options?.worktreePath ?? null,
+        hasExplicitWorktreePath: options?.worktreePath !== undefined,
+        fresh: options?.fresh === true,
+        envMode: options?.envMode ?? draftThread?.envMode ?? defaultEnvMode,
+        serverCwd,
+        providerStatuses,
+        statusesReconciled: providerStatusesReconciled,
+        providerOrder: settings.providerOrder,
+        includeDroid: true,
+      });
+    }
+    const wantsTemporaryThread = options?.temporary === true;
+    const applyProviderOverride = (threadId: ThreadId) => {
+      if (!options?.provider) {
+        return;
+      }
+      const defaultModel = getDefaultModel(options.provider);
+      if (!defaultModel) {
+        return;
+      }
+      setModelSelection(threadId, {
+        provider: options.provider,
+        instanceId: resolveSelectableProviderInstanceId(settings, options.provider),
+        model: defaultModel,
+      });
+    };
+    // Puts back a composer draft that a draft-mapping change or the route swap removed. A
+    // draft still present is newer than the snapshot (typed, sent, or re-selected while the
+    // navigation settled) and must win, or the composer is rewritten mid-typing.
+    const restoreComposerDraft = (
+      threadId: ThreadId,
+      draftState: ComposerThreadDraftState | null,
+    ) => {
+      if (!draftState) {
+        return;
+      }
+      useComposerDraftStore.setState((state) => {
+        if (state.draftsByThreadId[threadId] !== undefined) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: draftState,
+          },
+        };
+      });
+    };
+    const activateThreadEntryPoint = (threadId: ThreadId) => {
+      if (entryPoint === "terminal") {
+        openTerminalThreadPage(threadId, { terminalOnly: true });
+        return;
+      }
+      openChatThreadPage(threadId);
+    };
+    const {
+      getDraftThread,
+      getDraftThreadByProjectId,
+      applyStickyState,
+      clearDraftThread,
+      registerDraftThread,
+      setDraftThreadContext,
+      setProjectDraftThreadId,
+      setModelSelection,
+    } = useComposerDraftStore.getState();
+    const shouldForceFreshThread = options?.fresh === true;
+
+    const storedDraftThreadCandidate = getDraftThreadByProjectId(projectId, entryPoint);
+    const latestActiveDraftThreadCandidate: DraftThreadState | null = focusedThreadId
+      ? getDraftThread(focusedThreadId)
+      : null;
+    const storedDraftThread =
+      !shouldForceFreshThread &&
+      !wantsTemporaryThread &&
+      !(storedDraftThreadCandidate && hasActiveComposerSend(storedDraftThreadCandidate.threadId)) &&
+      storedDraftThreadCandidate?.isTemporary !== true
+        ? storedDraftThreadCandidate
+        : null;
+    const latestActiveDraftThread: DraftThreadState | null =
+      !shouldForceFreshThread &&
+      !wantsTemporaryThread &&
+      !(focusedThreadId && hasActiveComposerSend(focusedThreadId)) &&
+      latestActiveDraftThreadCandidate?.isTemporary !== true
+        ? latestActiveDraftThreadCandidate
+        : null;
+    const bootstrapPlan = resolveThreadBootstrapPlan({
+      storedDraftThread,
+      latestActiveDraftThread,
+      entryPoint,
+      projectId,
+      routeThreadId: focusedThreadId,
+    });
+    // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
+    const projectDefaultModelSelection =
+      useStore.getState().projects.find((project) => project.id === projectId)
+        ?.defaultModelSelection ?? null;
+    const applyUsableStickyState = (threadId: ThreadId) => {
+      applyStickyState(threadId);
+      if (options?.provider || !hasReconciledServerProviderStatuses(queryClient)) {
+        return;
       }
 
-      const storedDraftThreadCandidate = getDraftThreadByProjectId(projectId, entryPoint);
-      const latestActiveDraftThreadCandidate: DraftThreadState | null = focusedThreadId
-        ? getDraftThread(focusedThreadId)
+      const draft = useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
+      const stickyProviderInstanceId = draft?.activeProvider ?? null;
+      const stickyProvider = stickyProviderInstanceId
+        ? resolveProviderForInstanceId(stickyProviderInstanceId)
         : null;
-      const storedDraftThread =
-        !shouldForceFreshThread &&
-        !wantsTemporaryThread &&
-        storedDraftThreadCandidate?.isTemporary !== true
-          ? storedDraftThreadCandidate
-          : null;
-      const latestActiveDraftThread: DraftThreadState | null =
-        !shouldForceFreshThread &&
-        !wantsTemporaryThread &&
-        latestActiveDraftThreadCandidate?.isTemporary !== true
-          ? latestActiveDraftThreadCandidate
-          : null;
-      const bootstrapPlan = resolveThreadBootstrapPlan({
-        storedDraftThread,
-        latestActiveDraftThread,
-        entryPoint,
-        projectId,
-        routeThreadId: focusedThreadId,
+      if (
+        !stickyProvider ||
+        isProviderUsable(
+          findProviderStatus(providerStatuses, stickyProvider, stickyProviderInstanceId),
+        )
+      ) {
+        return;
+      }
+
+      const fallbackProvider = resolveAvailableProviderPreference({
+        preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+        statuses: providerStatuses,
+        providerOrder: settings.providerOrder,
+        hiddenProviders: settings.hiddenProviders,
       });
-      // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
-      const projectDefaultModelSelection =
-        useStore.getState().projects.find((project) => project.id === projectId)
-          ?.defaultModelSelection ?? null;
-      const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
-      const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(
-        activeDraftThread,
-        projectId,
+      if (!isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))) {
+        return;
+      }
+
+      setModelSelection(
+        threadId,
+        resolvePreferredComposerModelSelection({
+          draft: draft
+            ? {
+                modelSelectionByProvider: draft.modelSelectionByProvider,
+                activeProvider: fallbackProvider,
+              }
+            : null,
+          threadModelSelection: null,
+          projectModelSelection: projectDefaultModelSelection,
+          defaultProvider: fallbackProvider,
+          resolveProviderForInstanceId,
+        }),
       );
-      const resolveCreationState = (
-        targetThreadId: ThreadId,
-        draftThread: DraftThreadState | null,
-        creationOptions: NewThreadOptions | undefined,
-      ) =>
-        resolveTerminalThreadCreationState({
-          activeDraftThread: activeDraftThreadSnapshot,
-          activeThread: activeThreadSnapshot,
-          defaultProvider: options?.provider ?? settings.defaultProvider,
-          draftComposerState:
-            useComposerDraftStore.getState().draftsByThreadId[targetThreadId] ?? null,
-          draftThread,
-          options: creationOptions,
-          projectDefaultModelSelection,
+    };
+    const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
+    const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(activeDraftThread, projectId);
+    const resolveCreationState = (
+      targetThreadId: ThreadId,
+      draftThread: DraftThreadState | null,
+      creationOptions: NewThreadOptions | undefined,
+    ) =>
+      resolveTerminalThreadCreationState({
+        activeDraftThread: activeDraftThreadSnapshot,
+        activeThread: activeThreadSnapshot,
+        defaultProvider: options?.provider ?? settings.defaultProvider,
+        draftComposerState:
+          useComposerDraftStore.getState().draftsByThreadId[targetThreadId] ?? null,
+        draftThread,
+        options: creationOptions,
+        projectDefaultModelSelection,
+        projectId,
+        resolveProviderForInstanceId,
+      });
+    // Terminal-first threads need a real orchestration thread immediately so
+    // the sidebar can render them as durable rows instead of draft-only routes.
+    const createTerminalThread = async (
+      threadId: ThreadId,
+      creationState: ReturnType<typeof resolveCreationState>,
+    ): Promise<void> => {
+      const api = readNativeApi();
+      if (!api) {
+        return;
+      }
+      await promoteThreadCreate(
+        {
+          type: "thread.create",
+          commandId: newCommandId(),
+          threadId,
           projectId,
-        });
-      // Terminal-first threads need a real orchestration thread immediately so
-      // the sidebar can render them as durable rows instead of draft-only routes.
-      const createTerminalThread = async (
-        threadId: ThreadId,
-        creationState: ReturnType<typeof resolveCreationState>,
-      ): Promise<void> => {
-        const api = readNativeApi();
-        if (!api) {
-          return;
+          title: "New terminal",
+          modelSelection: creationState.modelSelection,
+          runtimeMode: creationState.runtimeMode,
+          interactionMode: creationState.interactionMode,
+          envMode: creationState.envMode,
+          branch: creationState.branch,
+          worktreePath: creationState.worktreePath,
+          workingDirectory: creationState.workingDirectory,
+          lastKnownPr: creationState.lastKnownPr,
+          createdAt: new Date().toISOString(),
+        },
+        api,
+      );
+    };
+    if (bootstrapPlan.kind === "stored") {
+      return (async (): Promise<ThreadId> => {
+        if (wantsTemporaryThread) {
+          markTemporaryThread(bootstrapPlan.threadId);
         }
-        await promoteThreadCreate(
-          {
-            type: "thread.create",
-            commandId: newCommandId(),
-            threadId,
-            projectId,
-            title: "New terminal",
-            modelSelection: creationState.modelSelection,
-            runtimeMode: creationState.runtimeMode,
-            interactionMode: creationState.interactionMode,
-            envMode: creationState.envMode,
-            branch: creationState.branch,
-            worktreePath: creationState.worktreePath,
-            lastKnownPr: creationState.lastKnownPr,
-            createdAt: new Date().toISOString(),
-          },
-          api,
-        );
-      };
-      if (bootstrapPlan.kind === "stored") {
-        return (async (): Promise<ThreadId> => {
-          if (wantsTemporaryThread) {
-            markTemporaryThread(bootstrapPlan.threadId);
-          }
-          const preservedComposerDraft =
-            useComposerDraftStore.getState().draftsByThreadId[bootstrapPlan.threadId] ?? null;
-          let resolvedStoredDraftThread: DraftThreadState | null = bootstrapPlan.draftThread;
-          const shouldPreserveStoredTerminalContext =
-            entryPoint === "terminal" && bootstrapPlan.draftThread.entryPoint === "terminal";
-          const draftContextPatch = shouldPreserveStoredTerminalContext
-            ? null
-            : buildDraftThreadContextPatch(entryPoint, options);
-          const creationOptions = shouldPreserveStoredTerminalContext ? undefined : options;
-          if (draftContextPatch) {
-            setDraftThreadContext(bootstrapPlan.threadId, draftContextPatch);
-            resolvedStoredDraftThread = getDraftThread(bootstrapPlan.threadId);
-          }
-          applyProviderOverride(bootstrapPlan.threadId);
-          setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
-          restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
-          activateThreadEntryPoint(bootstrapPlan.threadId);
-          if (focusedThreadId === bootstrapPlan.threadId) {
-            if (entryPoint === "terminal") {
-              await createTerminalThread(
-                bootstrapPlan.threadId,
-                resolveCreationState(
-                  bootstrapPlan.threadId,
-                  resolvedStoredDraftThread,
-                  creationOptions,
-                ),
-              );
-            }
-            return bootstrapPlan.threadId;
-          }
-          await navigate({
-            to: "/$threadId",
-            params: { threadId: bootstrapPlan.threadId },
-            ...(navigation?.search ? { search: navigation.search } : {}),
-          });
-          restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
+        const preservedComposerDraft =
+          useComposerDraftStore.getState().draftsByThreadId[bootstrapPlan.threadId] ?? null;
+        let resolvedStoredDraftThread: DraftThreadState | null = bootstrapPlan.draftThread;
+        const shouldPreserveStoredTerminalContext =
+          entryPoint === "terminal" && bootstrapPlan.draftThread.entryPoint === "terminal";
+        const draftContextPatch = shouldPreserveStoredTerminalContext
+          ? null
+          : buildDraftThreadContextPatch(entryPoint, options);
+        const creationOptions = shouldPreserveStoredTerminalContext ? undefined : options;
+        if (draftContextPatch) {
+          setDraftThreadContext(bootstrapPlan.threadId, draftContextPatch);
+          resolvedStoredDraftThread = getDraftThread(bootstrapPlan.threadId);
+        }
+        applyProviderOverride(bootstrapPlan.threadId);
+        setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
+        activateThreadEntryPoint(bootstrapPlan.threadId);
+        if (focusedThreadId === bootstrapPlan.threadId) {
           if (entryPoint === "terminal") {
             await createTerminalThread(
               bootstrapPlan.threadId,
@@ -235,80 +347,126 @@ export function useHandleNewThread() {
             );
           }
           return bootstrapPlan.threadId;
-        })();
-      }
-
-      clearProjectDraftThreadId(projectId, entryPoint);
-
-      if (bootstrapPlan.kind === "route") {
-        return (async (): Promise<ThreadId> => {
-          if (wantsTemporaryThread) {
-            markTemporaryThread(bootstrapPlan.threadId);
-          }
-          const preservedComposerDraft =
-            useComposerDraftStore.getState().draftsByThreadId[bootstrapPlan.threadId] ?? null;
-          let resolvedActiveDraftThread: DraftThreadState | null = bootstrapPlan.draftThread;
-          const draftContextPatch = buildDraftThreadContextPatch(entryPoint, options);
-          if (draftContextPatch) {
-            setDraftThreadContext(bootstrapPlan.threadId, draftContextPatch);
-            resolvedActiveDraftThread = getDraftThread(bootstrapPlan.threadId);
-          }
-          applyProviderOverride(bootstrapPlan.threadId);
-          setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
-          restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
-          activateThreadEntryPoint(bootstrapPlan.threadId);
-          if (entryPoint === "terminal") {
-            await createTerminalThread(
+        }
+        await navigate({
+          to: "/$threadId",
+          params: { threadId: bootstrapPlan.threadId },
+          ...(navigation?.search ? { search: navigation.search } : {}),
+        });
+        restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
+        if (entryPoint === "terminal") {
+          await createTerminalThread(
+            bootstrapPlan.threadId,
+            resolveCreationState(
               bootstrapPlan.threadId,
-              resolveCreationState(bootstrapPlan.threadId, resolvedActiveDraftThread, options),
-            );
-          }
-          return bootstrapPlan.threadId;
-        })();
-      }
+              resolvedStoredDraftThread,
+              creationOptions,
+            ),
+          );
+        }
+        return bootstrapPlan.threadId;
+      })();
+    }
 
+    if (bootstrapPlan.kind === "route") {
+      return (async (): Promise<ThreadId> => {
+        if (wantsTemporaryThread) {
+          markTemporaryThread(bootstrapPlan.threadId);
+        }
+        const preservedComposerDraft =
+          useComposerDraftStore.getState().draftsByThreadId[bootstrapPlan.threadId] ?? null;
+        let resolvedActiveDraftThread: DraftThreadState | null = bootstrapPlan.draftThread;
+        const draftContextPatch = buildDraftThreadContextPatch(entryPoint, options);
+        if (draftContextPatch) {
+          setDraftThreadContext(bootstrapPlan.threadId, draftContextPatch);
+          resolvedActiveDraftThread = getDraftThread(bootstrapPlan.threadId);
+        }
+        applyProviderOverride(bootstrapPlan.threadId);
+        setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
+        activateThreadEntryPoint(bootstrapPlan.threadId);
+        if (entryPoint === "terminal") {
+          await createTerminalThread(
+            bootstrapPlan.threadId,
+            resolveCreationState(bootstrapPlan.threadId, resolvedActiveDraftThread, options),
+          );
+        }
+        return bootstrapPlan.threadId;
+      })();
+    }
+
+    return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async (signal) => {
       const threadId = newThreadId();
       if (wantsTemporaryThread) {
         markTemporaryThread(threadId);
       }
       const createdAt = new Date().toISOString();
-      return (async (): Promise<ThreadId> => {
-        setProjectDraftThreadId(projectId, threadId, {
-          ...createFreshDraftThreadSeed({
-            createdAt,
-            entryPoint,
-            options,
+      const draftSeed = createFreshDraftThreadSeed({
+        createdAt,
+        entryPoint,
+        options,
+        defaultEnvMode,
+      });
+      const containerDefaults = await resolveGroupContainerThreadDefaults({
+        projectId,
+        entryPoint,
+      });
+      const committed = await stageDraftNavigation({
+        signal,
+        // Keep the previous routed draft alive while the destination loads. Replacing the
+        // project's primary slot earlier makes the route guard redirect the old URL to Home.
+        stage: () => {
+          registerDraftThread(threadId, { projectId, ...draftSeed });
+          activateThreadEntryPoint(threadId);
+          // Seed the draft from the sticky (last-used) selection so a new chat
+          // reopens with the model and options used most recently.
+          applyUsableStickyState(threadId);
+          if (containerDefaults) {
+            applyGroupWorkerRoutingDefaults({
+              threadId,
+              defaults: containerDefaults,
+              providerStatuses: providerStatusesReconciled ? providerStatuses : [],
+            });
+          }
+          applyProviderOverride(threadId);
+        },
+        // Mark the draft-landing navigation as a transition so the new route
+        // subtree renders interruptibly and the browser can paint the chat
+        // mount loader immediately instead of freezing on the synchronous commit.
+        navigate: () =>
+          new Promise<void>((resolve, reject) => {
+            startTransition(() => {
+              navigate({
+                to: "/$threadId",
+                params: { threadId },
+                ...(navigation?.search ? { search: navigation.search } : {}),
+              }).then(resolve, reject);
+            });
           }),
-        });
-        activateThreadEntryPoint(threadId);
-        applyStickyState(threadId);
-        applyProviderOverride(threadId);
-
-        await navigate({
-          to: "/$threadId",
-          params: { threadId },
-          ...(navigation?.search ? { search: navigation.search } : {}),
-        });
-        if (entryPoint === "terminal") {
-          await createTerminalThread(
-            threadId,
-            resolveCreationState(threadId, getDraftThread(threadId), options),
-          );
-        }
-        return threadId;
-      })();
-    },
-    [
-      activeDraftThread,
-      activeThread,
-      navigate,
-      openChatThreadPage,
-      openTerminalThreadPage,
-      focusedThreadId,
-      markTemporaryThread,
-      settings.defaultProvider,
-    ],
-  );
+        // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
+        // Verify the committed route before deleting the previous project draft.
+        isDestinationActive: () => router.state.location.pathname === `/${threadId}`,
+        finalize: () => setProjectDraftThreadId(projectId, threadId, draftSeed),
+        rollback: () => {
+          clearDraftThread(threadId);
+          clearTerminalState(threadId);
+          if (wantsTemporaryThread) {
+            clearTemporaryThread(threadId);
+          }
+        },
+      });
+      if (!committed) {
+        return null;
+      }
+      if (entryPoint === "terminal") {
+        await createTerminalThread(
+          threadId,
+          resolveCreationState(threadId, getDraftThread(threadId), options),
+        );
+      }
+      return threadId;
+    });
+  };
 
   return {
     activeDraftThread,

@@ -1,0 +1,550 @@
+// FILE: canary.ts
+// Purpose: Maintains and launches an isolated, frozen Synara Canary checkout.
+// Layer: Local developer tooling
+
+import { spawn, spawnSync } from "node:child_process";
+import * as Crypto from "node:crypto";
+import * as FS from "node:fs";
+import * as OS from "node:os";
+import * as Path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export type CanaryCommand = "setup" | "update" | "start" | "stop" | "status" | "rollback";
+
+export interface CanaryPaths {
+  readonly home: string;
+  readonly source: string;
+  readonly state: string;
+  readonly pid: string;
+  readonly log: string;
+}
+
+interface CanaryState {
+  readonly currentCommit: string;
+  readonly previousCommit: string | null;
+  readonly trackedRef: string;
+  readonly updatedAt: string;
+}
+
+interface ParsedCanaryArgs {
+  readonly command: CanaryCommand;
+  readonly ref: string | null;
+}
+
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const REPO_ROOT = Path.resolve(Path.dirname(SCRIPT_PATH), "..");
+const DEFAULT_REF = "main";
+const COMMIT_PATTERN = /^[0-9a-f]{40}$/iu;
+
+export function resolveCanaryPaths(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDirectory = OS.homedir(),
+): CanaryPaths {
+  const home = Path.resolve(
+    env.SYNARA_CANARY_HOME?.trim() || Path.join(homeDirectory, ".synara-canary"),
+  );
+  const cacheBase = env.XDG_CACHE_HOME?.trim() || Path.join(homeDirectory, ".cache");
+  const source = Path.resolve(
+    env.SYNARA_CANARY_SOURCE?.trim() || Path.join(cacheBase, "synara-canary", "source"),
+  );
+  return {
+    home,
+    source,
+    state: Path.join(home, "canary-state.json"),
+    pid: Path.join(home, "canary.pid"),
+    log: Path.join(home, "canary.log"),
+  };
+}
+
+export function parseCanaryArgs(argv: ReadonlyArray<string>): ParsedCanaryArgs {
+  const rawCommand = argv[0] ?? "status";
+  if (
+    !(["setup", "update", "start", "stop", "status", "rollback"] as const).includes(
+      rawCommand as CanaryCommand,
+    )
+  ) {
+    throw new Error(`Unknown Canary command: ${rawCommand}`);
+  }
+  let ref: string | null = null;
+  for (let index = 1; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--ref") {
+      const value = argv[index + 1]?.trim();
+      if (!value) throw new Error("Missing value for --ref.");
+      ref = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown Canary argument: ${String(argument)}`);
+  }
+  return { command: rawCommand as CanaryCommand, ref };
+}
+
+export function resolveCanaryRef(input: ParsedCanaryArgs, trackedRef: string | null): string {
+  return input.ref ?? (input.command === "update" ? trackedRef : null) ?? DEFAULT_REF;
+}
+
+export function canaryCloneArgs(originUrl: string, source: string): ReadonlyArray<string> {
+  // The cleanliness guard runs immediately after cloning. A --no-checkout clone
+  // reports every tracked file as deleted, so it is indistinguishable from a
+  // user-modified managed checkout at that point.
+  return ["clone", "--", originUrl, source];
+}
+
+function canaryStartArgs(): ReadonlyArray<string> {
+  // Invoke the desktop launcher directly. `bun run --cwd apps/desktop start`
+  // adds a short-lived package-script process in front of the launcher, so the
+  // PID persisted by Canary goes stale while Electron is still running. The
+  // direct launcher remains alive for Electron's lifetime and also preserves
+  // Canary's flavor, home, updater policy, and commit identity.
+  return ["apps/desktop/scripts/start-electron.mjs"];
+}
+
+function run(
+  command: string,
+  args: ReadonlyArray<string>,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const result = spawnSync(command, [...args], {
+    cwd,
+    env,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} exited with ${String(result.status)}.`);
+  }
+}
+
+function capture(command: string, args: ReadonlyArray<string>, cwd: string): string {
+  const result = spawnSync(command, [...args], {
+    cwd,
+    env: process.env,
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      `${command} ${args.join(" ")} exited with ${String(result.status)}: ${result.stderr.trim()}`,
+    );
+  }
+  return result.stdout.trim();
+}
+
+function readState(paths: CanaryPaths): CanaryState | null {
+  try {
+    const state = JSON.parse(FS.readFileSync(paths.state, "utf8")) as Partial<CanaryState>;
+    if (
+      typeof state.currentCommit !== "string" ||
+      !COMMIT_PATTERN.test(state.currentCommit) ||
+      (state.previousCommit !== null &&
+        (typeof state.previousCommit !== "string" || !COMMIT_PATTERN.test(state.previousCommit))) ||
+      typeof state.trackedRef !== "string" ||
+      typeof state.updatedAt !== "string"
+    ) {
+      return null;
+    }
+    return state as CanaryState;
+  } catch {
+    return null;
+  }
+}
+
+function writeState(paths: CanaryPaths, state: CanaryState): void {
+  FS.mkdirSync(paths.home, { recursive: true });
+  const temporaryPath = `${paths.state}.tmp`;
+  FS.writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  FS.renameSync(temporaryPath, paths.state);
+}
+
+function readPid(paths: CanaryPaths): number | null {
+  try {
+    const pid = Number(FS.readFileSync(paths.pid, "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function escapeExtendedRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&");
+}
+
+/**
+ * On macOS the launcher opens the app through LaunchServices, which parents it
+ * to launchd in its own process group, so signalling the launcher's group leaves
+ * Canary and its backend running. This matches the app's main process by its
+ * executable and entry point inside the managed checkout.
+ */
+export function canaryAppCommandPattern(source: string): string {
+  const desktop = Path.join(source, "apps/desktop");
+  const runtime = escapeExtendedRegex(Path.join(desktop, ".electron-runtime"));
+  const main = escapeExtendedRegex(Path.join(desktop, "dist-electron/main.js"));
+  return `^${runtime}/[^/]+\\.app/Contents/MacOS/Electron ${main}( |$)`;
+}
+
+function stopCanary(paths: CanaryPaths): void {
+  if (process.platform === "darwin" && FS.existsSync(paths.source)) {
+    // The launcher reports its checkout by real path, with symlinks resolved.
+    const pattern = canaryAppCommandPattern(FS.realpathSync(paths.source));
+    spawnSync("pkill", ["-TERM", "-f", "--", pattern], { stdio: "ignore" });
+  }
+  const pid = readPid(paths);
+  if (pid === null || !isRunning(pid)) {
+    FS.rmSync(paths.pid, { force: true });
+    return;
+  }
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+  } else {
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      process.kill(pid, "SIGTERM");
+    }
+  }
+  FS.rmSync(paths.pid, { force: true });
+}
+
+function resolveOriginUrl(): string {
+  return capture("git", ["remote", "get-url", "origin"], REPO_ROOT);
+}
+
+function ensureManagedSource(paths: CanaryPaths): void {
+  if (FS.existsSync(Path.join(paths.source, ".git"))) return;
+  if (FS.existsSync(paths.source)) {
+    const entries = FS.readdirSync(paths.source);
+    if (entries.length > 0) {
+      throw new Error(`Canary source path exists but is not a Git checkout: ${paths.source}`);
+    }
+  }
+  FS.mkdirSync(Path.dirname(paths.source), { recursive: true });
+  run("git", canaryCloneArgs(resolveOriginUrl(), paths.source), REPO_ROOT);
+}
+
+function assertManagedSourceIsClean(paths: CanaryPaths): void {
+  const status = capture("git", ["status", "--porcelain", "--untracked-files=no"], paths.source);
+  if (status.length > 0) {
+    throw new Error(
+      `Synara Canary's managed source has tracked local changes. Refusing to overwrite ${paths.source}.`,
+    );
+  }
+}
+
+function fetchRef(paths: CanaryPaths, ref: string): string {
+  run("git", ["fetch", "--prune", "origin", ref], paths.source);
+  const commit = capture("git", ["rev-parse", "FETCH_HEAD"], paths.source);
+  if (!COMMIT_PATTERN.test(commit)) throw new Error(`Invalid fetched commit: ${commit}`);
+  return commit;
+}
+
+function checkout(paths: CanaryPaths, commit: string): void {
+  run("git", ["checkout", "--detach", "--force", commit], paths.source);
+}
+
+function readJsonFile(path: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(FS.readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+const RUSTUP_DIST_URL = "https://static.rust-lang.org/rustup/dist";
+const CURL_HTTPS_ARGS = [
+  "--fail",
+  "--silent",
+  "--show-error",
+  "--location",
+  "--proto",
+  "=https",
+  "--tlsv1.2",
+] as const;
+
+/**
+ * A Rust toolchain owned by Canary, beside its managed source. Canary builds
+ * the Computer driver from source, so it brings its own pinned compiler rather
+ * than asking for one: nothing is added to the shell profile or to a Rust the
+ * user already has, and deleting this directory removes it entirely.
+ */
+function canaryRustEnvironment(paths: CanaryPaths): NodeJS.ProcessEnv {
+  const rustDirectory = Path.join(Path.dirname(paths.source), "rust");
+  const cargoHome = Path.join(rustDirectory, "cargo");
+  return {
+    ...process.env,
+    RUSTUP_HOME: Path.join(rustDirectory, "rustup"),
+    CARGO_HOME: cargoHome,
+    // Provisioning otherwise compiles into a directory it deletes; keeping the
+    // target makes the next driver revision an incremental build.
+    CARGO_TARGET_DIR: Path.join(rustDirectory, "target"),
+    PATH: `${Path.join(cargoHome, "bin")}${Path.delimiter}${process.env.PATH ?? ""}`,
+  };
+}
+
+function ensureCanaryRustToolchain(rustVersion: string, env: NodeJS.ProcessEnv): void {
+  const probe = spawnSync("rustc", ["--version"], { env, encoding: "utf8" });
+  if (probe.status === 0 && probe.stdout.startsWith(`rustc ${rustVersion} `)) return;
+  const cargoBin = Path.join(String(env.CARGO_HOME), "bin");
+  if (!FS.existsSync(Path.join(cargoBin, "rustup"))) {
+    const target = process.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+    // rustup-init is a multicall binary that dispatches on its own file name,
+    // so it must keep that exact name; isolate it in a private directory.
+    const installerDirectory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-canary-rustup-"));
+    const installer = Path.join(installerDirectory, "rustup-init");
+    try {
+      console.log(`[canary] Installing Canary's own Rust ${rustVersion} toolchain...`);
+      run(
+        "curl",
+        [...CURL_HTTPS_ARGS, "--output", installer, `${RUSTUP_DIST_URL}/${target}/rustup-init`],
+        OS.tmpdir(),
+      );
+      const expected = capture(
+        "curl",
+        [...CURL_HTTPS_ARGS, `${RUSTUP_DIST_URL}/${target}/rustup-init.sha256`],
+        OS.tmpdir(),
+      ).split(/\s+/u)[0];
+      const actual = Crypto.createHash("sha256").update(FS.readFileSync(installer)).digest("hex");
+      if (actual !== expected) throw new Error("rustup-init checksum mismatch.");
+      FS.chmodSync(installer, 0o755);
+      run(
+        installer,
+        ["-y", "--no-modify-path", "--profile", "minimal", "--default-toolchain", rustVersion],
+        OS.tmpdir(),
+        env,
+      );
+    } finally {
+      FS.rmSync(installerDirectory, { recursive: true, force: true });
+    }
+    return;
+  }
+  run("rustup", ["toolchain", "install", rustVersion, "--profile", "minimal"], OS.tmpdir(), env);
+  run("rustup", ["default", rustVersion], OS.tmpdir(), env);
+}
+
+/**
+ * The Computer driver is a gitignored build artifact, so a fresh checkout has
+ * none and Computer use fails at its first action. Stage the pinned driver when
+ * it is missing or predates the pinned release, compiling it with Canary's own
+ * toolchain. A failure leaves a working Canary, only without Computer use.
+ */
+function provisionComputerDriver(paths: CanaryPaths): void {
+  if (process.platform !== "darwin") return;
+  const driverDirectory = Path.join(paths.source, "apps/desktop/resources/cua-driver");
+  const release = readJsonFile(
+    Path.join(paths.source, "packages/shared/src/cuaDriverRelease.json"),
+  );
+  const provenance = readJsonFile(Path.join(driverDirectory, "provenance.json"));
+  if (
+    release &&
+    provenance &&
+    FS.existsSync(Path.join(driverDirectory, "cua-driver")) &&
+    provenance.source === release.source &&
+    provenance.nativeRevision === release.nativeRevision
+  ) {
+    return;
+  }
+  try {
+    if (typeof release?.rustVersion !== "string") {
+      throw new Error("cuaDriverRelease.json does not pin a Rust version.");
+    }
+    const env = canaryRustEnvironment(paths);
+    ensureCanaryRustToolchain(release.rustVersion, env);
+    console.log("[canary] Compiling the Computer driver; the first build takes a few minutes...");
+    run("node", ["apps/desktop/scripts/provision-cua-driver.mjs"], paths.source, env);
+  } catch (error) {
+    console.warn(
+      `[canary] Computer use is unavailable in this build: the Cua driver could not be provisioned (${
+        error instanceof Error ? error.message : String(error)
+      }). Run canary:update again to retry.`,
+    );
+  }
+}
+
+function build(paths: CanaryPaths): void {
+  run("bun", ["install", "--frozen-lockfile"], paths.source);
+  run("bun", ["run", "build:desktop"], paths.source);
+  provisionComputerDriver(paths);
+  run("bun", ["run", "release:smoke"], paths.source);
+}
+
+function currentSourceCommit(paths: CanaryPaths): string | null {
+  if (!FS.existsSync(Path.join(paths.source, ".git"))) return null;
+  try {
+    const commit = capture("git", ["rev-parse", "HEAD"], paths.source);
+    return COMMIT_PATTERN.test(commit) ? commit : null;
+  } catch {
+    return null;
+  }
+}
+
+function startCanary(paths: CanaryPaths): void {
+  const existingPid = readPid(paths);
+  if (existingPid !== null && isRunning(existingPid)) {
+    console.log(`Synara Canary is already running (pid ${String(existingPid)}).`);
+    return;
+  }
+  const commit = currentSourceCommit(paths);
+  if (
+    commit === null ||
+    !FS.existsSync(Path.join(paths.source, "apps/desktop/dist-electron/main.js"))
+  ) {
+    throw new Error("Synara Canary is not built. Run `bun run canary:setup` first.");
+  }
+  FS.mkdirSync(paths.home, { recursive: true });
+  const env = { ...process.env };
+  delete env.VITE_DEV_SERVER_URL;
+  delete env.ELECTRON_RENDERER_PORT;
+  delete env.SYNARA_AUTH_TOKEN;
+  Object.assign(env, {
+    SYNARA_DESKTOP_FLAVOR: "canary",
+    SYNARA_DISABLE_AUTO_UPDATE: "1",
+    SYNARA_HOME: paths.home,
+    SYNARA_COMMIT_HASH: commit,
+  });
+  const logDescriptor = FS.openSync(paths.log, "a", 0o600);
+  try {
+    FS.writeSync(logDescriptor, `\n[${new Date().toISOString()}] Starting ${commit}\n`);
+    const child = spawn("bun", [...canaryStartArgs()], {
+      cwd: paths.source,
+      env,
+      detached: true,
+      stdio: ["ignore", logDescriptor, logDescriptor],
+      shell: process.platform === "win32",
+    });
+    if (child.pid === undefined) {
+      throw new Error("Synara Canary failed to return a process id.");
+    }
+    child.unref();
+    FS.writeFileSync(paths.pid, `${String(child.pid)}\n`, { mode: 0o600 });
+    console.log(`Started Synara Canary at ${commit.slice(0, 12)} (pid ${String(child.pid)}).`);
+    console.log(`Log: ${paths.log}`);
+  } finally {
+    FS.closeSync(logDescriptor);
+  }
+}
+
+function updateCanary(paths: CanaryPaths, ref: string): void {
+  ensureManagedSource(paths);
+  assertManagedSourceIsClean(paths);
+  const previousCommit = currentSourceCommit(paths);
+  const targetCommit = fetchRef(paths, ref);
+  if (
+    previousCommit === targetCommit &&
+    FS.existsSync(Path.join(paths.source, "apps/desktop/dist-electron/main.js"))
+  ) {
+    const previousState = readState(paths);
+    writeState(paths, {
+      currentCommit: targetCommit,
+      previousCommit: previousState?.previousCommit ?? null,
+      trackedRef: ref,
+      updatedAt: new Date().toISOString(),
+    });
+    startCanary(paths);
+    return;
+  }
+  stopCanary(paths);
+  try {
+    checkout(paths, targetCommit);
+    build(paths);
+  } catch (error) {
+    if (previousCommit !== null && previousCommit !== targetCommit) {
+      console.error(`Canary update failed; restoring ${previousCommit.slice(0, 12)}.`);
+      checkout(paths, previousCommit);
+      build(paths);
+      startCanary(paths);
+    }
+    throw error;
+  }
+  const previousState = readState(paths);
+  writeState(paths, {
+    currentCommit: targetCommit,
+    previousCommit:
+      previousCommit !== null && previousCommit !== targetCommit
+        ? previousCommit
+        : (previousState?.previousCommit ?? null),
+    trackedRef: ref,
+    updatedAt: new Date().toISOString(),
+  });
+  startCanary(paths);
+}
+
+function rollbackCanary(paths: CanaryPaths): void {
+  const state = readState(paths);
+  if (state?.previousCommit === null || state?.previousCommit === undefined) {
+    throw new Error("Synara Canary has no previous successful commit to restore.");
+  }
+  assertManagedSourceIsClean(paths);
+  stopCanary(paths);
+  const rollbackCommit = state.previousCommit;
+  try {
+    checkout(paths, rollbackCommit);
+    build(paths);
+  } catch (error) {
+    console.error(`Canary rollback failed; restoring ${state.currentCommit.slice(0, 12)}.`);
+    checkout(paths, state.currentCommit);
+    build(paths);
+    startCanary(paths);
+    throw error;
+  }
+  writeState(paths, {
+    currentCommit: rollbackCommit,
+    previousCommit: state.currentCommit,
+    trackedRef: state.trackedRef,
+    updatedAt: new Date().toISOString(),
+  });
+  startCanary(paths);
+}
+
+function printStatus(paths: CanaryPaths): void {
+  const state = readState(paths);
+  const pid = readPid(paths);
+  const running = pid !== null && isRunning(pid);
+  console.log(`Synara Canary: ${running ? `running (pid ${String(pid)})` : "stopped"}`);
+  console.log(`Source: ${paths.source}`);
+  console.log(`Data: ${paths.home}`);
+  console.log(`Log: ${paths.log}`);
+  console.log(`Commit: ${state?.currentCommit ?? currentSourceCommit(paths) ?? "not installed"}`);
+  console.log(`Tracked ref: ${state?.trackedRef ?? "not configured"}`);
+}
+
+export function runCanaryCommand(input: ParsedCanaryArgs, paths = resolveCanaryPaths()): void {
+  if (input.command === "setup" || input.command === "update") {
+    updateCanary(paths, resolveCanaryRef(input, readState(paths)?.trackedRef ?? null));
+    return;
+  }
+  if (input.command === "start") {
+    startCanary(paths);
+    return;
+  }
+  if (input.command === "stop") {
+    stopCanary(paths);
+    return;
+  }
+  if (input.command === "rollback") {
+    rollbackCanary(paths);
+    return;
+  }
+  printStatus(paths);
+}
+
+const isMain = process.argv[1] !== undefined && Path.resolve(process.argv[1]) === SCRIPT_PATH;
+if (isMain) {
+  try {
+    runCanaryCommand(parseCanaryArgs(process.argv.slice(2)));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}

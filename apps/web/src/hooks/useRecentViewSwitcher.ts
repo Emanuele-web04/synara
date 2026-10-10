@@ -3,10 +3,10 @@
 // Layer: UI hook
 // Exports: useRecentViewSwitcher
 
-import { ThreadId, type ProjectId } from "@t3tools/contracts";
-import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
-import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ThreadId } from "@synara/contracts";
+import type { ResolvedTerminalVisualIdentity } from "@synara/shared/terminalThreads";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
@@ -32,8 +32,9 @@ import {
   resolveTerminalVisualIdentityMap,
   selectRepresentativeTerminalVisualIdentity,
 } from "../terminalVisualIdentity";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useCommittedPathname } from "./useCommittedPathname";
 import type { useHandleNewThread } from "./useHandleNewThread";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 type NewThreadContext = ReturnType<typeof useHandleNewThread>;
 
@@ -53,14 +54,10 @@ interface UseRecentViewSwitcherInput {
 // Encapsulates recent-view persistence, pruning, prewarm, and activation.
 export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const navigate = useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const pathname = useCommittedPathname();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
-  });
-  const routeWorkspaceId = useParams({
-    strict: false,
-    select: (params) => (typeof params.workspaceId === "string" ? params.workspaceId : null),
   });
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const [recentSwitcherState, setRecentSwitcherState] = useState<RecentViewSwitcherState | null>(
@@ -71,7 +68,6 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const pruneRecentViewsStore = useRecentViewsStore((state) => state.pruneRecentViews);
   const { prewarmThreadDetail, prewarmThreadDetails } = useThreadDetailPrewarm();
   const persistedPinnedThreadIds = usePinnedThreadsStore((state) => state.pinnedThreadIds);
-  const workspacePages = useWorkspaceStore((state) => state.workspacePages);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
@@ -81,35 +77,20 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const routeSplitViewId =
     typeof routeSearch.splitViewId === "string" ? routeSearch.splitViewId : undefined;
   const settingsSection = typeof routeSearch.section === "string" ? routeSearch.section : undefined;
-  const currentRecentView = useMemo(
-    () =>
-      deriveCurrentRecentView({
-        pathname,
-        routeThreadId,
-        activeThreadId: routeThreadId ? (input.activeContextThreadId ?? routeThreadId) : null,
-        routeWorkspaceId,
-        splitViewId: routeSplitViewId,
-        settingsSection,
-      }),
-    [
-      input.activeContextThreadId,
-      pathname,
-      routeSplitViewId,
-      routeThreadId,
-      routeWorkspaceId,
-      settingsSection,
-    ],
-  );
+  const currentRecentView = deriveCurrentRecentView({
+    pathname,
+    routeThreadId,
+    activeThreadId: routeThreadId ? (input.activeContextThreadId ?? routeThreadId) : null,
+    splitViewId: routeSplitViewId,
+    settingsSection,
+  });
   const currentRecentViewKey = currentRecentView ? recentViewKey(currentRecentView) : null;
-  const recentThreadIds = useMemo(
-    () => recentViews.flatMap((view) => (view.kind === "thread" ? [view.threadId] : [])),
-    [recentViews],
+  const recentThreadIds = recentViews.flatMap((view) =>
+    view.kind === "thread" ? [view.threadId] : [],
   );
   const switcherOpen = recentSwitcherState !== null;
-  const recentViewEntries = useMemo<RecentViewDisplayEntry[]>(() => {
-    if (!switcherOpen) {
-      return EMPTY_RECENT_VIEW_ENTRIES;
-    }
+  let recentViewEntries: RecentViewDisplayEntry[] = EMPTY_RECENT_VIEW_ENTRIES;
+  if (switcherOpen) {
     const terminalVisualIdentityByThreadId = new Map<ThreadId, ResolvedTerminalVisualIdentity>();
     for (const view of recentViews) {
       if (view.kind !== "thread") continue;
@@ -146,29 +127,16 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
         projectId: input.activeDraftThread.projectId,
       };
     }
-    return buildRecentViewDisplayEntries({
+    recentViewEntries = buildRecentViewDisplayEntries({
       recentViews,
       currentView: currentRecentView,
       threadsById: sidebarThreadSummaryById,
       draftThreadsById,
       projects: input.projects,
       pinnedThreadIds: persistedPinnedThreadIds,
-      workspacePages,
       terminalVisualIdentityByThreadId,
     });
-  }, [
-    input.activeContextThreadId,
-    input.activeDraftThread,
-    currentRecentView,
-    draftThreadsByThreadId,
-    input.projects,
-    persistedPinnedThreadIds,
-    recentViews,
-    sidebarThreadSummaryById,
-    switcherOpen,
-    terminalStateByThreadId,
-    workspacePages,
-  ]);
+  }
   const currentRecentViewRef = useRef<RecentView | null>(currentRecentView);
   const recentSwitcherStateRef = useRef<RecentViewSwitcherState | null>(recentSwitcherState);
   const recentViewsRef = useRef(recentViews);
@@ -196,17 +164,18 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     activeDraftThreadRef.current = input.activeDraftThread;
   }, [input.activeDraftThread]);
 
-  const buildRecentViewAvailability = useCallback((): RecentViewAvailability => {
+  const buildRecentViewAvailability = (): RecentViewAvailability => {
     const sidebarThreadSummaryById = useStore.getState().sidebarThreadSummaryById;
     const draftThreadsByThreadId = useComposerDraftStore.getState().draftThreadsByThreadId;
     const splitViewsById = useSplitViewStore.getState().splitViewsById;
-    const workspacePages = useWorkspaceStore.getState().workspacePages;
     const activeContextThreadId = activeContextThreadIdRef.current;
     const activeDraftThread = activeDraftThreadRef.current;
 
     const availableThreadIds = new Set<ThreadId>();
-    for (const threadId of Object.keys(sidebarThreadSummaryById)) {
-      availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+    for (const [threadId, thread] of Object.entries(sidebarThreadSummaryById)) {
+      if (!thread || !isSidechatThread(thread)) {
+        availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+      }
     }
     for (const threadId of Object.keys(draftThreadsByThreadId)) {
       availableThreadIds.add(ThreadId.makeUnsafe(threadId));
@@ -215,7 +184,6 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
       availableThreadIds.add(activeContextThreadId);
     }
 
-    const availableWorkspaceIds = new Set(workspacePages.map((workspace) => workspace.id));
     const availableSplitViewIds = new Set(
       Object.keys(splitViewsById).filter((splitViewId) => Boolean(splitViewsById[splitViewId])),
     );
@@ -233,11 +201,10 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
 
     return {
       availableThreadIds,
-      availableWorkspaceIds,
       availableSplitViewIds,
       threadIdsBySplitViewId,
     };
-  }, []);
+  };
 
   useEffect(() => {
     if (!currentRecentView) return;
@@ -254,73 +221,51 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     pruneRecentViewsStore(buildRecentViewAvailability());
   }, [buildRecentViewAvailability, pruneRecentViewsStore, threadsHydrated]);
 
-  const activateRecentView = useCallback(
-    (view: RecentView) => {
-      switch (view.kind) {
-        case "thread": {
-          if (!buildRecentViewAvailability().availableThreadIds.has(view.threadId)) {
-            return;
-          }
-          prewarmThreadDetail(view.threadId);
-          const splitActivation = resolveRecentThreadSplitActivation({
-            view,
-            splitViewsById: useSplitViewStore.getState().splitViewsById,
-          });
-          if (splitActivation) {
-            useSplitViewStore
-              .getState()
-              .setFocusedPane(splitActivation.splitViewId, splitActivation.paneId);
-          }
-          const terminalState = selectThreadTerminalState(
-            useTerminalStateStore.getState().terminalStateByThreadId,
-            view.threadId,
-          );
-          if (terminalState.entryPoint === "terminal") {
-            openTerminalThreadPage(view.threadId);
-          } else {
-            openChatThreadPage(view.threadId);
-          }
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: view.threadId },
-            search: () => (splitActivation ? { splitViewId: splitActivation.splitViewId } : {}),
-          });
+  const activateRecentView = (view: RecentView) => {
+    switch (view.kind) {
+      case "thread": {
+        if (!buildRecentViewAvailability().availableThreadIds.has(view.threadId)) {
           return;
         }
-        case "workspace": {
-          const workspaceExists = useWorkspaceStore
+        prewarmThreadDetail(view.threadId);
+        const splitActivation = resolveRecentThreadSplitActivation({
+          view,
+          splitViewsById: useSplitViewStore.getState().splitViewsById,
+        });
+        if (splitActivation) {
+          useSplitViewStore
             .getState()
-            .workspacePages.some((workspace) => workspace.id === view.workspaceId);
-          if (!workspaceExists) {
-            return;
-          }
-          void navigate({
-            to: "/workspace/$workspaceId",
-            params: { workspaceId: view.workspaceId },
-          });
-          return;
+            .setFocusedPane(splitActivation.splitViewId, splitActivation.paneId);
         }
-        case "settings":
-          void navigate({
-            to: "/settings",
-            search: () => (view.section ? { section: view.section } : {}),
-          });
-          return;
-        case "plugins":
-          void navigate({ to: "/plugins" });
-          return;
+        const terminalState = selectThreadTerminalState(
+          useTerminalStateStore.getState().terminalStateByThreadId,
+          view.threadId,
+        );
+        if (terminalState.entryPoint === "terminal") {
+          openTerminalThreadPage(view.threadId);
+        } else {
+          openChatThreadPage(view.threadId);
+        }
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: view.threadId },
+          search: () => (splitActivation ? { splitViewId: splitActivation.splitViewId } : {}),
+        });
+        return;
       }
-    },
-    [
-      buildRecentViewAvailability,
-      navigate,
-      openChatThreadPage,
-      openTerminalThreadPage,
-      prewarmThreadDetail,
-    ],
-  );
+      case "settings":
+        void navigate({
+          to: "/settings",
+          search: () => (view.section ? { section: view.section } : {}),
+        });
+        return;
+      case "plugins":
+        void navigate({ to: "/plugins" });
+        return;
+    }
+  };
 
-  const commitRecentSwitcherSelection = useCallback(() => {
+  const commitRecentSwitcherSelection = () => {
     const state = recentSwitcherStateRef.current;
     if (!state) return;
     const views = recentViewsRef.current;
@@ -330,49 +275,46 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     setRecentSwitcherState(null);
     if (!view) return;
     activateRecentView(view);
-  }, [activateRecentView]);
+  };
 
-  const cancelRecentSwitcher = useCallback(() => {
+  const cancelRecentSwitcher = () => {
     setRecentSwitcherState(null);
-  }, []);
+  };
 
-  const openOrAdvanceRecentSwitcher = useCallback(
-    (direction: "next" | "previous") => {
-      const currentState = recentSwitcherStateRef.current;
-      let views = recentViewsRef.current;
-      if (currentState === null) {
-        const availability = buildRecentViewAvailability();
-        pruneRecentViewsStore(availability);
-        views = pruneRecentViews(views, availability);
-      }
-      const selectedIndex = resolveRecentViewNavigationIndex({
-        recentViews: views,
-        currentView: currentRecentViewRef.current,
-        selectedKey: currentState?.selectedKey,
-        direction,
-      });
+  const openOrAdvanceRecentSwitcher = (direction: "next" | "previous") => {
+    const currentState = recentSwitcherStateRef.current;
+    let views = recentViewsRef.current;
+    if (currentState === null) {
+      const availability = buildRecentViewAvailability();
+      pruneRecentViewsStore(availability);
+      views = pruneRecentViews(views, availability);
+    }
+    const selectedIndex = resolveRecentViewNavigationIndex({
+      recentViews: views,
+      currentView: currentRecentViewRef.current,
+      selectedKey: currentState?.selectedKey,
+      direction,
+    });
 
-      if (selectedIndex === null) {
-        return false;
-      }
+    if (selectedIndex === null) {
+      return false;
+    }
 
-      const selectedView = views[selectedIndex];
-      if (!selectedView) {
-        return false;
-      }
+    const selectedView = views[selectedIndex];
+    if (!selectedView) {
+      return false;
+    }
 
-      if (selectedView.kind === "thread") {
-        prewarmThreadDetail(selectedView.threadId);
-      }
+    if (selectedView.kind === "thread") {
+      prewarmThreadDetail(selectedView.threadId);
+    }
 
-      setRecentSwitcherState({
-        selectedIndex,
-        selectedKey: recentViewKey(selectedView),
-      });
-      return true;
-    },
-    [buildRecentViewAvailability, prewarmThreadDetail, pruneRecentViewsStore],
-  );
+    setRecentSwitcherState({
+      selectedIndex,
+      selectedKey: recentViewKey(selectedView),
+    });
+    return true;
+  };
 
   useEffect(() => {
     const onWindowKeyUp = (event: KeyboardEvent) => {

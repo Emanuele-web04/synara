@@ -1,4 +1,4 @@
-import { isBuiltInComposerSlashCommand } from "./composerSlashCommands";
+import { isBuiltInComposerSlashCommand, type ComposerSlashCommand } from "./composerSlashCommands";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -6,6 +6,7 @@ import {
 import {
   createComposerMentionTokenRegex,
   extractComposerMentionPath,
+  findThreadProviderMentionReferenceForToken,
   isPluginProviderMentionReference,
   providerMentionMatchesToken,
 } from "./lib/composerMentions";
@@ -14,8 +15,9 @@ import {
   normalizeComposerLinkUrl,
   trimTrailingLinkPunctuation,
 } from "./lib/linkChips";
-import { resolveAgentAlias } from "@t3tools/contracts";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import { resolveAgentAlias } from "@synara/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
+import { threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 
 export type ComposerPromptSegment =
   | {
@@ -25,12 +27,22 @@ export type ComposerPromptSegment =
   | {
       type: "mention";
       path: string;
-      kind?: "path" | "plugin";
+      kind?: "path" | "plugin" | "thread";
+      threadId?: string;
+      /**
+       * Raw token length in the source text (`@name` vs `@"name with spaces"`).
+       * Cursor math must use this — quoted tokens are longer than path.length + 1.
+       */
+      tokenLength?: number;
     }
   | {
       type: "skill";
       name: string;
       prefix?: string;
+    }
+  | {
+      type: "slash-command";
+      command: ComposerSlashCommand;
     }
   | {
       type: "terminal-context";
@@ -50,6 +62,15 @@ export type ComposerPromptSegment =
 
 const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
+const SLASH_COMMAND_CHIP_TOKEN_REGEX = /(^|\s)\/([a-zA-Z][a-zA-Z0-9_-]*)(?=\s)/i;
+
+// Built-in commands that render as an inline chip (icon + label) instead of plain
+// text, both while typing and in the sent message. Everything else stays literal.
+const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>([
+  "automation",
+  "goal",
+  "computer-use",
+]);
 
 // While typing (composer) a URL only becomes a chip once a delimiter follows it,
 // mirroring how skills/mentions wait for a trailing boundary. For read-only
@@ -119,6 +140,12 @@ type InlineTokenMatch =
       end: number;
     }
   | {
+      kind: "slash-command";
+      command: ComposerSlashCommand;
+      start: number;
+      end: number;
+    }
+  | {
       kind: "agent-mention";
       alias: string;
       color: string;
@@ -132,10 +159,31 @@ type InlineTokenMatch =
       end: number;
     };
 
+function isComposerSlashCommandChipName(value: string): value is ComposerSlashCommand {
+  return isBuiltInComposerSlashCommand(value) && COMPOSER_SLASH_COMMAND_CHIP_NAMES.has(value);
+}
+
+export function matchComposerSlashCommandChipToken(
+  text: string,
+): { command: ComposerSlashCommand; start: number; end: number } | null {
+  const match = SLASH_COMMAND_CHIP_TOKEN_REGEX.exec(text);
+  if (!match) {
+    return null;
+  }
+  const whitespace = match[1] ?? "";
+  const command = (match[2] ?? "").toLowerCase();
+  if (!isComposerSlashCommandChipName(command)) {
+    return null;
+  }
+  const start = (match.index ?? 0) + whitespace.length;
+  return { command, start, end: start + command.length + 1 };
+}
+
 function collectInlineTokenMatches(
   text: string,
   options: {
     includeTrailingTokenAtEnd: boolean;
+    includeSlashCommandChips: boolean;
   },
 ): InlineTokenMatch[] {
   const matches: InlineTokenMatch[] = [];
@@ -228,10 +276,20 @@ function collectInlineTokenMatches(
     // Skip if this overlaps with an agent mention or sits inside a URL
     if (isInsideAgentMention(start) || isReserved(start)) continue;
 
-    // Skip built-in slash commands so `/clear`, `/plan` etc. stay as plain text.
-    if (name.length > 0 && !(skillPrefix === "/" && isBuiltInComposerSlashCommand(name))) {
-      matches.push({ kind: "skill", value: name, skillPrefix, start, end });
+    if (name.length === 0) {
+      continue;
     }
+
+    const normalizedName = name.toLowerCase();
+    if (skillPrefix === "/" && isBuiltInComposerSlashCommand(normalizedName)) {
+      if (options.includeSlashCommandChips && isComposerSlashCommandChipName(normalizedName)) {
+        matches.push({ kind: "slash-command", command: normalizedName, start, end });
+      }
+      // Skip the other built-in slash commands so `/clear`, `/plan` etc. stay as plain text.
+      continue;
+    }
+
+    matches.push({ kind: "skill", value: name, skillPrefix, start, end });
   }
 
   matches.sort((a, b) => a.start - b.start);
@@ -242,6 +300,7 @@ function splitTextIntoPromptSegments(
   text: string,
   options: {
     includeTrailingTokenAtEnd: boolean;
+    includeSlashCommandChips: boolean;
     mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   },
 ): ComposerPromptSegment[] {
@@ -269,17 +328,33 @@ function splitTextIntoPromptSegments(
         color: match.color,
       });
     } else if (match.kind === "mention") {
+      const threadMention = findThreadProviderMentionReferenceForToken(
+        match.value,
+        options.mentionReferences,
+      );
       const isPluginMention =
         options.mentionReferences?.some(
           (mention) =>
             isPluginProviderMentionReference(mention) &&
             providerMentionMatchesToken(mention, match.value),
         ) ?? false;
+      const tokenLength = match.end - match.start;
+      const threadId = threadMention ? threadIdFromThreadMentionPath(threadMention.path) : null;
       segments.push(
-        isPluginMention
-          ? { type: "mention", path: match.value, kind: "plugin" }
-          : { type: "mention", path: match.value },
+        threadMention
+          ? {
+              type: "mention",
+              path: match.value,
+              kind: "thread",
+              ...(threadId !== null ? { threadId } : {}),
+              tokenLength,
+            }
+          : isPluginMention
+            ? { type: "mention", path: match.value, kind: "plugin", tokenLength }
+            : { type: "mention", path: match.value, tokenLength },
       );
+    } else if (match.kind === "slash-command") {
+      segments.push({ type: "slash-command", command: match.command });
     } else {
       const skillSegment: ComposerPromptSegment = match.skillPrefix
         ? { type: "skill", name: match.value, prefix: match.skillPrefix }
@@ -302,7 +377,11 @@ export function splitPromptIntoDisplaySegments(
   mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
 ): ComposerPromptSegment[] {
   return splitTextIntoPromptSegments(prompt, {
+    // Sent messages echo the same chips the composer showed while typing, so a
+    // `/goal`/`/automation` token keeps its icon + label instead of falling back
+    // to raw text once the turn is submitted.
     includeTrailingTokenAtEnd: true,
+    includeSlashCommandChips: true,
     mentionReferences,
   });
 }
@@ -329,6 +408,7 @@ export function splitPromptIntoComposerSegments(
       segments.push(
         ...splitTextIntoPromptSegments(prompt.slice(textCursor, index), {
           includeTrailingTokenAtEnd: false,
+          includeSlashCommandChips: true,
           mentionReferences,
         }),
       );
@@ -345,6 +425,7 @@ export function splitPromptIntoComposerSegments(
     segments.push(
       ...splitTextIntoPromptSegments(prompt.slice(textCursor), {
         includeTrailingTokenAtEnd: false,
+        includeSlashCommandChips: true,
         mentionReferences,
       }),
     );

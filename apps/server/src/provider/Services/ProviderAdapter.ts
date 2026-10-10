@@ -9,11 +9,13 @@
  */
 import type {
   ApprovalRequestId,
+  ClaudeCacheObservation,
   ProviderComposerCapabilities,
   ProviderApprovalDecision,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderKind,
+  ProviderListAgentsInput,
   ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
@@ -25,6 +27,7 @@ import type {
   ProviderReadPluginResult,
   ProviderListSkillsResult,
   ProviderListSkillsInput,
+  ProviderInstanceId,
   ProviderStartReviewInput,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
@@ -32,22 +35,58 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
+  ServerVoicePrewarmInput,
+  ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
-} from "@t3tools/contracts";
-import type { Effect } from "effect";
+} from "@synara/contracts";
+import type { Deferred, Effect } from "effect";
 import type { Stream } from "effect";
 
+export function resolveProviderSessionInstanceId(
+  input: Pick<ProviderSessionStartInput, "providerInstanceId" | "modelSelection">,
+): ProviderInstanceId | undefined {
+  return input.providerInstanceId ?? input.modelSelection?.instanceId;
+}
+import type { CodexGeneratedImageHomeCandidate } from "../../codexGeneratedImages.ts";
+
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
+
+/**
+ * Per-adapter ingress budget. A bounded queue makes a slow durable consumer
+ * apply backpressure to the provider instead of growing the process heap
+ * without limit during a persistence outage.
+ */
+export const PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY = 2_048;
+
+/**
+ * Structured payload for steering a running subagent. Mirrors the turn-input
+ * context fields so adapters can project attachments/skills/mentions into the
+ * provider-native steering channel (which is typically text-only).
+ */
+export interface ProviderSteerSubagentPayload {
+  readonly input: string;
+  readonly attachments?: ProviderSendTurnInput["attachments"];
+  readonly skills?: ProviderSendTurnInput["skills"];
+  readonly mentions?: ProviderSendTurnInput["mentions"];
+}
+/** Local preparation controls; never serialized into provider input or persisted history. */
+export interface ProviderTurnDispatchOptions {
+  readonly claudeCompactionCancellation?: Deferred.Deferred<void>;
+}
+export type ProviderConversationRollbackMode = "native" | "restart-session";
 
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /** Restart-session adapters cannot rewind provider history and must rebuild context locally. */
+  readonly conversationRollback?: ProviderConversationRollbackMode;
   readonly supportsSkillMentions?: boolean;
   readonly supportsSkillDiscovery?: boolean;
   readonly supportsNativeSlashCommandDiscovery?: boolean;
@@ -55,18 +94,55 @@ export interface ProviderAdapterCapabilities {
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
   readonly supportsTurnSteering?: boolean;
+  /**
+   * True when `forkThread` honors `throughTurnId`. Other adapters never see a
+   * cutoff: ProviderService skips their native fork so the fork is rebuilt
+   * from its imported transcript instead of carrying later source turns.
+   */
+  readonly supportsForkThroughTurn?: boolean;
+  /** True when `turn.diff.updated.payload.unifiedDiff` contains a parseable live patch. */
+  readonly supportsLiveTurnDiffPatch?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
+  readonly startedAt?: number | string;
+  readonly completedAt?: number | string;
+  readonly status?: string;
 }
 
 export interface ProviderThreadSnapshot {
   readonly threadId: ThreadId;
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
   readonly cwd?: string | null;
+  /**
+   * The model and thinking level the provider session last ran with, when the
+   * persisted session store records them (OMP JSONL `model_change` /
+   * `thinking_level_change` rows). Lets an imported thread keep running the
+   * model the source session actually used.
+   */
+  readonly lastUsedModel?: { readonly model: string; readonly thinkingLevel?: string };
 }
+
+export interface ProviderThreadHistoryPage extends ProviderThreadSnapshot {
+  readonly nextCursor: string | null;
+}
+
+export interface ProviderGeneratedImageHomePathsInput {
+  /** When present, live sessions outside this current settings scope are ignored. */
+  readonly enabledProviderInstanceIds?: ReadonlySet<ProviderInstanceId>;
+}
+
+/** Server-internal launch guard; deliberately not part of the public contracts schema. */
+export interface ProviderContinuationLaunchRequirements {
+  readonly expectedCodexContinuationGeneration?: string;
+}
+
+export type ProviderAdapterSessionStartInput = ProviderSessionStartInput &
+  ProviderContinuationLaunchRequirements;
+export type ProviderAdapterForkThreadInput = ProviderForkThreadInput &
+  ProviderContinuationLaunchRequirements;
 
 export interface ProviderAdapterShape<TError> {
   /**
@@ -79,14 +155,25 @@ export interface ProviderAdapterShape<TError> {
    * Start a provider-backed session.
    */
   readonly startSession: (
-    input: ProviderSessionStartInput,
+    input: ProviderAdapterSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
+
+  /**
+   * Confirm that a successful start reused the provider-native session named
+   * by the supplied cursor. Adapters that can reject malformed cursors without
+   * failing startup should implement this instead of relying on cursor presence.
+   */
+  readonly didResumeSession?: (
+    input: ProviderSessionStartInput,
+    session: ProviderSession,
+  ) => boolean;
 
   /**
    * Send a turn to an active provider session.
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**
@@ -94,6 +181,7 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly steerTurn?: (
     input: ProviderSteerTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**
@@ -110,6 +198,25 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     turnId?: TurnId,
     providerThreadId?: string,
+  ) => Effect.Effect<void, TError>;
+
+  /**
+   * Stop one provider-native background task when the adapter supports it.
+   */
+  readonly stopTask?: (threadId: ThreadId, taskId: string) => Effect.Effect<void, TError>;
+
+  /**
+   * Move one in-flight foreground task to the background when the adapter supports it.
+   */
+  readonly backgroundTask?: (threadId: ThreadId, toolUseId: string) => Effect.Effect<void, TError>;
+
+  /**
+   * Deliver a mid-task user message to a running subagent when the adapter supports it.
+   */
+  readonly steerSubagent?: (
+    threadId: ThreadId,
+    providerThreadId: string,
+    input: ProviderSteerSubagentPayload,
   ) => Effect.Effect<void, TError>;
 
   /**
@@ -133,12 +240,43 @@ export interface ProviderAdapterShape<TError> {
   /**
    * Stop one provider session.
    */
+  /**
+   * Stop and release every resource owned by a thread.
+   *
+   * This operation is idempotent: an already-stopped or unknown thread is a
+   * successful no-op. Callers use it as a cleanup barrier after restarts, when
+   * the persisted binding can outlive the adapter's in-memory session.
+   */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
+   * Renew retired tool authority after all native background work has settled.
+   * True keeps the current session/generation; false requires full replacement.
+   * The adapter must keep admission fenced until renewal is proven complete.
+   */
+  readonly renewAgentGatewayCredential?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
+  /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
+  readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
+    | {
+        readonly previousSession: ProviderSession;
+        readonly startSession: ProviderAdapterShape<TError>["startSession"];
+      }
+    | undefined,
+    TError
+  >;
 
   /**
    * List currently active provider sessions for this adapter.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /**
+   * List provider home roots that can contain generated image artifacts for live sessions.
+   */
+  readonly listGeneratedImageHomePaths?: (
+    input?: ProviderGeneratedImageHomePathsInput,
+  ) => Effect.Effect<ReadonlyArray<CodexGeneratedImageHomeCandidate>, TError>;
 
   /**
    * Check whether this adapter owns an active session id.
@@ -156,7 +294,18 @@ export interface ProviderAdapterShape<TError> {
   readonly readExternalThread?: (input: {
     readonly externalThreadId: string;
     readonly cwd?: string;
+    readonly providerInstanceId?: ProviderInstanceId;
+    readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /** Display history only; never used to reconstruct native model context. */
+  readonly readExternalThreadPage?: (input: {
+    readonly externalThreadId: string;
+    readonly cursor?: string;
+    readonly cwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly providerInstanceId?: ProviderInstanceId;
+  }) => Effect.Effect<ProviderThreadHistoryPage, TError>;
 
   /**
    * Roll back a provider thread by N turns.
@@ -171,6 +320,22 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly compactThread?: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /** Queue native Claude compaction; terminal events report whether it actually compacted. */
+  readonly startClaudeCompaction?: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    /** Request-owned cancellation remains valid before adapter discovery is registered. */
+    readonly cancellation?: Deferred.Deferred<void>;
+  }) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /** Cancel active local compaction preparation before prompt dispatch. */
+  readonly cancelClaudeCompactionDiscovery?: (threadId: ThreadId) => Effect.Effect<void>;
+
+  /** Read bounded native/local cache evidence without delivering a model prompt. */
+  readonly getClaudeCacheObservation?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ClaudeCacheObservation | undefined, TError>;
+
   /**
    * Fork one provider thread into another persisted thread cursor when supported.
    *
@@ -178,7 +343,7 @@ export interface ProviderAdapterShape<TError> {
    * conversation-history-only forking.
    */
   readonly forkThread?: (
-    input: ProviderForkThreadInput,
+    input: ProviderAdapterForkThreadInput,
   ) => Effect.Effect<ProviderForkThreadResult, TError>;
 
   /**
@@ -190,6 +355,15 @@ export interface ProviderAdapterShape<TError> {
    * Canonical runtime event stream emitted by this adapter.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /**
+   * Opt-in delivery guarantee for pre-journal assistant text batching. The
+   * adapter mints fresh local canonical IDs and drains an owned destructive
+   * queue: resubscription/reconnection never redelivers a consumed canonical ID.
+   * The pump owns retries of the exact accepted envelope. Providers with native
+   * replay IDs or replaying streams must omit this and retain original events.
+   */
+  readonly runtimeEventDelivery?: "fresh-ids-once";
 
   /**
    * Read provider-specific composer capabilities.
@@ -234,7 +408,16 @@ export interface ProviderAdapterShape<TError> {
   /**
    * List agents/subagents directly from the provider runtime when supported.
    */
-  readonly listAgents?: () => Effect.Effect<ProviderListAgentsResult, TError>;
+  readonly listAgents?: (
+    input: ProviderListAgentsInput,
+  ) => Effect.Effect<ProviderListAgentsResult, TError>;
+
+  /**
+   * Warm provider state needed by voice transcription when supported.
+   */
+  readonly prewarmVoice?: (
+    input: ServerVoicePrewarmInput,
+  ) => Effect.Effect<ServerVoicePrewarmResult, TError>;
 
   /**
    * Transcribe one captured voice clip into plain text when supported.

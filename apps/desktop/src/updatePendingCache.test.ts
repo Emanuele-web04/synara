@@ -6,7 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   PendingUpdateCacheClearQueue,
+  resolveElectronUpdaterCacheDir,
   resolveElectronUpdaterCacheDirName,
+  resolveElectronUpdaterLegacyZipPath,
   resolveElectronUpdaterPendingCacheDir,
 } from "./updatePendingCache";
 
@@ -82,6 +84,21 @@ describe("resolveElectronUpdaterPendingCacheDir", () => {
         homeDir: "/Users/test",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveElectronUpdaterCacheDir", () => {
+  it("exposes the shared cache root and legacy top-level zip path", () => {
+    const args = {
+      cacheDirName: "Synara-updater",
+      platform: "darwin" as const,
+      homeDir: "/Users/test",
+    };
+
+    expect(resolveElectronUpdaterCacheDir(args)).toBe("/Users/test/Library/Caches/Synara-updater");
+    expect(resolveElectronUpdaterLegacyZipPath(args)).toBe(
+      "/Users/test/Library/Caches/Synara-updater/update.zip",
+    );
   });
 });
 

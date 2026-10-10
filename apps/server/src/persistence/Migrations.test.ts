@@ -3,7 +3,15 @@ import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { migrationEntries, runMigrations } from "./Migrations.ts";
+import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
+import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
+import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
+import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
+import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts";
+import ForkSourceMessageMigration from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
+import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
+import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -17,8 +25,18 @@ const projectionThreadsColumnNames = (sql: SqlClient.SqlClient) =>
     SELECT name FROM pragma_table_info('projection_threads')
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
+const tableColumnNames = (sql: SqlClient.SqlClient, tableName: string) =>
+  sql<{ readonly name: string }>`
+    SELECT name FROM pragma_table_info(${tableName})
+  `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
+
+const tableIndexNames = (sql: SqlClient.SqlClient, tableName: string) =>
+  sql<{ readonly name: string }>`
+    SELECT name FROM pragma_index_list(${tableName})
+  `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
+
 layer("reconcileMigrationLineage", (it) => {
-  // The SYN-99 failure shape: a legacy ~/.t3 import whose tracker high-water
+  // An imported database whose tracker high-water
   // mark is at or beyond Synara's latest migration ID. The migrator's max-ID
   // gate then skips every Synara migration — including the #032 self-heal —
   // and startup crashes on the missing env_mode column.
@@ -26,19 +44,19 @@ layer("reconcileMigrationLineage", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Bring the schema to where T3 Code and Synara last agreed.
+      // Bring the schema to the last shared migration.
       yield* runMigrations({ toMigrationInclusive: 16 });
 
-      // Record foreign T3 Code migrations 17 through past Synara's latest ID.
+      // Record a foreign lineage from 17 through past Synara's latest ID.
       const latestSynaraId = Math.max(...migrationEntries.map(([id]) => id));
       for (let id = 17; id <= latestSynaraId + 3; id++) {
         yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (${id}, ${`T3CodeMigration${id}`})
+          VALUES (${id}, ${`ForeignMigration${id}`})
         `;
       }
 
-      // T3 Code's own later migrations added some of the same columns, so the
+      // The foreign lineage added some of the same columns, so the
       // re-run must tolerate columns that already exist.
       yield* sql`ALTER TABLE projection_threads ADD COLUMN archived_at TEXT`;
 
@@ -64,11 +82,57 @@ layer("reconcileMigrationLineage", (it) => {
     }),
   );
 
+  it.effect(
+    "adds workspace classification without changing existing turns or erasing it on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 132 });
+        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, checkpoint_files_json)
+        VALUES ('old-workspace-thread', 'old-workspace-turn', 'completed', '2026-10-10T10:00:00.000Z', '[]')`;
+        yield* runMigrations();
+        const read = () => sql<{
+          state: string;
+          marker: number;
+        }>`SELECT state, started_without_git_workspace AS marker
+        FROM projection_turns WHERE turn_id = 'old-workspace-turn'`;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 0 }]);
+        yield* sql`UPDATE projection_turns SET started_without_git_workspace = 1 WHERE turn_id = 'old-workspace-turn'`;
+        yield* WorkspaceInitializationMigration;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 1 }]);
+      }),
+  );
+
+  it.effect(
+    "adds a nullable fork cutoff without modifying legacy threads or clearing it on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 133 });
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+        VALUES ('legacy-fork', 'project', 'Keep this', '2026-10-10T10:00:00.000Z', '2026-10-10T10:00:00.000Z')`;
+        yield* runMigrations();
+        const read = () => sql<{
+          title: string;
+          cutoff: string | null;
+        }>`SELECT title, fork_source_message_id AS cutoff
+        FROM projection_threads WHERE thread_id = 'legacy-fork'`;
+        assert.deepStrictEqual(yield* read(), [{ title: "Keep this", cutoff: null }]);
+        yield* sql`UPDATE projection_threads SET fork_source_message_id = 'chosen-message' WHERE thread_id = 'legacy-fork'`;
+        yield* ForkSourceMessageMigration;
+        assert.deepStrictEqual(yield* read(), [{ title: "Keep this", cutoff: "chosen-message" }]);
+      }),
+  );
+
   it.effect("leaves a healthy tracker alone", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
       yield* runMigrations();
+      assert.include(
+        yield* tableColumnNames(sql, "projection_turns"),
+        "started_without_git_workspace",
+      );
       const executed = yield* runMigrations();
       assert.lengthOf(executed, 0);
 
@@ -80,7 +144,28 @@ layer("reconcileMigrationLineage", (it) => {
     }),
   );
 
-  it.effect("preserves tracker rows written by a newer Synara build", () =>
+  it.effect("canonicalizes migration 32 when the preceding lineage is exact", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations();
+      yield* sql`
+        UPDATE effect_sql_migrations
+        SET name = 'PreviousMigration32Name'
+        WHERE migration_id = 32
+      `;
+
+      const executed = yield* runMigrations();
+      assert.lengthOf(executed, 0);
+      const rows = yield* trackerRows(sql);
+      assert.strictEqual(
+        rows.find((row) => row.migration_id === 32)?.name,
+        "ReconcileImportedSchemaLineage",
+      );
+    }),
+  );
+
+  it.effect("refuses writable migration startup for a newer Synara schema", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -91,14 +176,17 @@ layer("reconcileMigrationLineage", (it) => {
         VALUES (${futureId}, 'FutureSynaraMigration')
       `;
 
-      const executed = yield* runMigrations();
-      assert.lengthOf(executed, 0);
+      const rowsBefore = yield* trackerRows(sql);
+      const error = yield* Effect.flip(runMigrations());
+      assert.instanceOf(error, MigrationSchemaTooNewError);
+      assert.strictEqual(error.databaseMigrationId, futureId);
+      assert.strictEqual(error.latestSupportedMigrationId, futureId - 1);
 
       const rows = yield* trackerRows(sql);
-      assert.deepStrictEqual(rows[rows.length - 1], {
-        migration_id: futureId,
-        name: "FutureSynaraMigration",
-      });
+      assert.deepStrictEqual(rows, rowsBefore);
+
+      // The suite shares one in-memory database through the layer.
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${futureId}`;
     }),
   );
 
@@ -121,5 +209,1408 @@ layer("reconcileMigrationLineage", (it) => {
       const rowsAfter = yield* trackerRows(sql);
       assert.deepStrictEqual(rowsAfter, rowsBefore);
     }),
+  );
+
+  it.effect("continues when provider instance columns were partially migrated", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations({ toMigrationInclusive: 117 });
+      const now = new Date().toISOString();
+      yield* sql`
+        ALTER TABLE projection_thread_sessions
+        ADD COLUMN provider_instance_id TEXT
+      `;
+      yield* sql`
+        ALTER TABLE provider_session_runtime
+        ADD COLUMN provider_instance_id TEXT
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          env_mode,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-codex-work',
+          'project-provider-instance',
+          'Work Account Thread',
+          ${JSON.stringify({ instanceId: "codex_work", model: "gpt-5.4" })},
+          'full-access',
+          'default',
+          'local',
+          ${now},
+          ${now},
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id,
+          status,
+          provider_name,
+          provider_instance_id,
+          runtime_mode,
+          active_turn_id,
+          last_error,
+          updated_at
+        )
+        VALUES
+          (
+            'thread-codex-work',
+            'running',
+            'codex',
+            NULL,
+            'full-access',
+            NULL,
+            NULL,
+            ${now}
+          ),
+          (
+            'thread-no-model-selection',
+            'running',
+            'codex',
+            NULL,
+            'full-access',
+            NULL,
+            NULL,
+            ${now}
+          )
+      `;
+      yield* sql`
+        INSERT INTO provider_session_runtime (
+          thread_id,
+          provider_name,
+          provider_instance_id,
+          adapter_key,
+          runtime_mode,
+          status,
+          last_seen_at,
+          resume_cursor_json,
+          runtime_payload_json
+        )
+        VALUES
+          (
+            'thread-codex-work',
+            'codex',
+            NULL,
+            'codex',
+            'full-access',
+            'running',
+            ${now},
+            NULL,
+            ${JSON.stringify({ modelSelection: { instanceId: "codex_bound", model: "gpt-5.4" } })}
+          ),
+          (
+            'runtime-codex-work',
+            'codex',
+            NULL,
+            'codex',
+            'full-access',
+            'running',
+            ${now},
+            NULL,
+            ${JSON.stringify({ modelSelection: { instanceId: "codex_work", model: "gpt-5.4" } })}
+          ),
+          (
+            'runtime-no-instance',
+            'codex',
+            NULL,
+            'codex',
+            'full-access',
+            'running',
+            ${now},
+            NULL,
+            ${JSON.stringify({})}
+          )
+      `;
+
+      const executed = yield* runMigrations({ toMigrationInclusive: 119 });
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        [118, 119],
+      );
+
+      const projectionSessionColumns = yield* tableColumnNames(sql, "projection_thread_sessions");
+      const runtimeColumns = yield* tableColumnNames(sql, "provider_session_runtime");
+      assert.include(projectionSessionColumns, "provider_instance_id");
+      assert.include(runtimeColumns, "provider_instance_id");
+
+      const projectionSessionIndexes = yield* tableIndexNames(sql, "projection_thread_sessions");
+      const runtimeIndexes = yield* tableIndexNames(sql, "provider_session_runtime");
+      assert.include(projectionSessionIndexes, "idx_projection_thread_sessions_provider_instance");
+      assert.include(runtimeIndexes, "idx_provider_session_runtime_provider_instance");
+
+      const projectionRows = yield* sql<{
+        readonly threadId: string;
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT
+          thread_id AS "threadId",
+          provider_instance_id AS "providerInstanceId"
+        FROM projection_thread_sessions
+        WHERE thread_id IN ('thread-codex-work', 'thread-no-model-selection')
+        ORDER BY thread_id ASC
+      `;
+      assert.deepStrictEqual(projectionRows, [
+        { threadId: "thread-codex-work", providerInstanceId: "codex_bound" },
+        { threadId: "thread-no-model-selection", providerInstanceId: "codex" },
+      ]);
+
+      const runtimeRows = yield* sql<{
+        readonly threadId: string;
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT
+          thread_id AS "threadId",
+          provider_instance_id AS "providerInstanceId"
+        FROM provider_session_runtime
+        WHERE thread_id IN ('runtime-codex-work', 'runtime-no-instance', 'thread-codex-work')
+        ORDER BY thread_id ASC
+      `;
+      assert.deepStrictEqual(runtimeRows, [
+        { threadId: "runtime-codex-work", providerInstanceId: "codex_work" },
+        { threadId: "runtime-no-instance", providerInstanceId: "codex" },
+        { threadId: "thread-codex-work", providerInstanceId: "codex_bound" },
+      ]);
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  );
+
+  it.effect("backfills provider instances without parsing malformed legacy JSON", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const now = new Date().toISOString();
+
+      yield* runMigrations({ toMigrationInclusive: 117 });
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          env_mode,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES
+          (
+            'thread-malformed-runtime',
+            'project-provider-instance',
+            'Malformed Legacy Runtime',
+            'not-json',
+            'full-access',
+            'default',
+            'local',
+            ${now},
+            ${now},
+            NULL
+          ),
+          (
+            'thread-invalid-instance',
+            'project-provider-instance',
+            'Invalid Legacy Instance',
+            ${JSON.stringify({ instanceId: "invalid instance!", model: "gpt-5.4" })},
+            'full-access',
+            'default',
+            'local',
+            ${now},
+            ${now},
+            NULL
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id,
+          status,
+          provider_name,
+          runtime_mode,
+          active_turn_id,
+          last_error,
+          updated_at
+        )
+        VALUES
+          (
+            'thread-malformed-runtime',
+            'stopped',
+            'codex',
+            'full-access',
+            NULL,
+            NULL,
+            ${now}
+          ),
+          (
+            'thread-invalid-instance',
+            'stopped',
+            'codex',
+            'full-access',
+            NULL,
+            NULL,
+            ${now}
+          )
+      `;
+      yield* sql`
+        INSERT INTO provider_session_runtime (
+          thread_id,
+          provider_name,
+          adapter_key,
+          runtime_mode,
+          status,
+          last_seen_at,
+          resume_cursor_json,
+          runtime_payload_json
+        )
+        VALUES
+          (
+            'thread-malformed-runtime',
+            'codex',
+            'codex',
+            'full-access',
+            'stopped',
+            ${now},
+            NULL,
+            'not-json'
+          ),
+          (
+            'thread-invalid-instance',
+            'codex',
+            'codex',
+            'full-access',
+            'stopped',
+            ${now},
+            NULL,
+            ${JSON.stringify({
+              providerInstanceId: "also invalid!",
+              modelSelection: { instanceId: "invalid instance!", model: "gpt-5.4" },
+            })}
+          )
+      `;
+
+      yield* runMigrations({ toMigrationInclusive: 119 });
+
+      const [projectionSession] = yield* sql<{
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT provider_instance_id AS "providerInstanceId"
+        FROM projection_thread_sessions
+        WHERE thread_id = 'thread-malformed-runtime'
+      `;
+      const [runtime] = yield* sql<{
+        readonly providerInstanceId: string | null;
+        readonly runtimePayloadJson: string | null;
+      }>`
+        SELECT
+          provider_instance_id AS "providerInstanceId",
+          runtime_payload_json AS "runtimePayloadJson"
+        FROM provider_session_runtime
+        WHERE thread_id = 'thread-malformed-runtime'
+      `;
+
+      assert.deepStrictEqual(projectionSession, { providerInstanceId: "codex" });
+      assert.deepStrictEqual(runtime, {
+        providerInstanceId: "codex",
+        runtimePayloadJson: "not-json",
+      });
+
+      const [invalidProjectionSession] = yield* sql<{
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT provider_instance_id AS "providerInstanceId"
+        FROM projection_thread_sessions
+        WHERE thread_id = 'thread-invalid-instance'
+      `;
+      const [invalidRuntime] = yield* sql<{
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT provider_instance_id AS "providerInstanceId"
+        FROM provider_session_runtime
+        WHERE thread_id = 'thread-invalid-instance'
+      `;
+
+      assert.deepStrictEqual(invalidProjectionSession, { providerInstanceId: "codex" });
+      assert.deepStrictEqual(invalidRuntime, { providerInstanceId: "codex" });
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  );
+});
+
+const providerDeliveryCutoverLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+providerDeliveryCutoverLayer(
+  "registered DurableProviderCommandDelivery cutover migration",
+  (it) => {
+    it.effect("initializes at the event high-water mark when cutover explicitly runs", () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 53 });
+        const now = new Date().toISOString();
+
+        const inserted = yield* sql<{ readonly sequence: number }>`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id,
+          actor_kind, payload_json, metadata_json
+        ) VALUES (
+          'evt-before-durable-delivery', 'thread', 'thread-before-durable-delivery', 0,
+          'thread.turn-start-requested', ${now}, 'cmd-before-durable-delivery',
+          NULL, NULL, 'user', '{"threadId":"thread-before-durable-delivery"}', '{}'
+        )
+        RETURNING sequence
+      `;
+
+        yield* DurableProviderCommandDeliveryMigration;
+        const rows = yield* sql<{ readonly lastAckedSequence: number }>`
+        SELECT last_acked_sequence AS "lastAckedSequence"
+        FROM orchestration_consumer_state
+        WHERE consumer_name = 'provider-command-reactor.v1'
+      `;
+        assert.strictEqual(rows[0]?.lastAckedSequence, inserted[0]?.sequence);
+
+        yield* DurableProviderCommandDeliveryMigration;
+        const idempotentRows = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count
+        FROM orchestration_consumer_state
+        WHERE consumer_name = 'provider-command-reactor.v1'
+      `;
+        assert.strictEqual(idempotentRows[0]?.count, 1);
+      }),
+    );
+  },
+);
+
+const managedAttachmentsLegacyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+managedAttachmentsLegacyLayer("managed attachment migration after private migration 54", (it) => {
+  it.effect("keeps a private database that already recorded old migration 54 compatible", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* DurableProviderCommandDeliveryMigration;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (54, 'DurableProviderCommandDelivery')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [55, "ManagedAttachments"],
+        [56, "CommandReceiptFingerprints"],
+        [57, "ThreadScopedProjectionMessageIdentity"],
+        [58, "ThreadScopedPendingApprovalIdentity"],
+        [59, "ProviderSessionLifecycleGeneration"],
+        [60, "PendingApprovalLifecycleGeneration"],
+        [61, "PendingApprovalSettlementState"],
+        [62, "PendingInteractionSettlementParity"],
+        [63, "ProjectionMessageCausalSequence"],
+        [64, "DurableProviderCommandDeliveryCutover"],
+        [65, "DurableQueuedTurnPromotions"],
+        [66, "DurableProviderRuntimeEvents"],
+        [67, "ProviderDeliveryReconciliation"],
+        [68, "GitHandoffOperations"],
+        [69, "ProjectPullRequestPins"],
+        [70, "AgentGatewayOperations"],
+        [71, "ProjectionThreadsGatewayProvenance"],
+        [72, "AgentGatewayOperationRetention"],
+        [73, "OperationalDiagnostics"],
+        [74, "ExternalMcpIntegrations"],
+        [75, "ExternalMcpActiveCapacity"],
+        [76, "ExternalMcpHardening"],
+        [77, "ExternalMcpCompensatingCapacity"],
+        [78, "ExternalMcpLiveTurnCapacity"],
+        [79, "Spaces"],
+        [80, "ExternalMcpProjectScope"],
+        [81, "AutomationProposals"],
+        [82, "AutomationMemory"],
+        [83, "AutomationHeartbeatEligibility"],
+        [84, "AutomationNotificationPolicy"],
+        [85, "AutomationSettings"],
+        [86, "NormalizeStudioThreadWorkspaces"],
+        [87, "DropUnusedOrchestrationEventIndexes"],
+        [88, "ProjectionThreadsSettledAt"],
+        [89, "RecoverRetentionHiddenThreads"],
+        [90, "ProjectionThreadMessageTextSegments"],
+        [91, "AutomationFailureTolerance"],
+        [92, "BackfillAutomationRunThreadSource"],
+        [93, "BackfillMaxIterationsDisabledReason"],
+        [94, "ProjectionThreadsGoal"],
+        [95, "ProjectionThreadsGoalTiming"],
+        [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ProjectionThreadsSidechatLifecycle"],
+        [98, "MigrateKiloToOpenCode"],
+        [99, "InvalidateProjectionThreadsCursor"],
+        [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
+        [102, "ProjectionThreadMessagesTurnBoundary"],
+        [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
+        [113, "ProjectAgentWakeCursor"],
+        [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
+        [116, "ProjectAgentWorkerRecovery"],
+        [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadSessionProviderInstance"],
+        [119, "ProviderSessionRuntimeInstanceId"],
+        [120, "ProfileStatsDeletedProviderInstances"],
+        [121, "ClearAutomationDefinitionProviderOptions"],
+        [122, "ClearAutomationRunProviderOptions"],
+        [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
+        [125, "Todos"],
+        [126, "ProjectionThreadsSidechatContext"],
+        [127, "ProjectImportHistory"],
+        [128, "HubWork"],
+        [129, "ProjectionThreadsSnooze"],
+        [130, "PullRequestAutoFix"],
+        [131, "ProjectSourceFolders"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
+      ]);
+
+      const tracker = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        tracker.filter((row) => row.migration_id >= 55),
+        [
+          { migration_id: 55, name: "ManagedAttachments" },
+          { migration_id: 56, name: "CommandReceiptFingerprints" },
+          { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
+          { migration_id: 58, name: "ThreadScopedPendingApprovalIdentity" },
+          { migration_id: 59, name: "ProviderSessionLifecycleGeneration" },
+          { migration_id: 60, name: "PendingApprovalLifecycleGeneration" },
+          { migration_id: 61, name: "PendingApprovalSettlementState" },
+          { migration_id: 62, name: "PendingInteractionSettlementParity" },
+          { migration_id: 63, name: "ProjectionMessageCausalSequence" },
+          { migration_id: 64, name: "DurableProviderCommandDeliveryCutover" },
+          { migration_id: 65, name: "DurableQueuedTurnPromotions" },
+          { migration_id: 66, name: "DurableProviderRuntimeEvents" },
+          { migration_id: 67, name: "ProviderDeliveryReconciliation" },
+          { migration_id: 68, name: "GitHandoffOperations" },
+          { migration_id: 69, name: "ProjectPullRequestPins" },
+          { migration_id: 70, name: "AgentGatewayOperations" },
+          { migration_id: 71, name: "ProjectionThreadsGatewayProvenance" },
+          { migration_id: 72, name: "AgentGatewayOperationRetention" },
+          { migration_id: 73, name: "OperationalDiagnostics" },
+          { migration_id: 74, name: "ExternalMcpIntegrations" },
+          { migration_id: 75, name: "ExternalMcpActiveCapacity" },
+          { migration_id: 76, name: "ExternalMcpHardening" },
+          { migration_id: 77, name: "ExternalMcpCompensatingCapacity" },
+          { migration_id: 78, name: "ExternalMcpLiveTurnCapacity" },
+          { migration_id: 79, name: "Spaces" },
+          { migration_id: 80, name: "ExternalMcpProjectScope" },
+          { migration_id: 81, name: "AutomationProposals" },
+          { migration_id: 82, name: "AutomationMemory" },
+          { migration_id: 83, name: "AutomationHeartbeatEligibility" },
+          { migration_id: 84, name: "AutomationNotificationPolicy" },
+          { migration_id: 85, name: "AutomationSettings" },
+          { migration_id: 86, name: "NormalizeStudioThreadWorkspaces" },
+          { migration_id: 87, name: "DropUnusedOrchestrationEventIndexes" },
+          { migration_id: 88, name: "ProjectionThreadsSettledAt" },
+          { migration_id: 89, name: "RecoverRetentionHiddenThreads" },
+          { migration_id: 90, name: "ProjectionThreadMessageTextSegments" },
+          { migration_id: 91, name: "AutomationFailureTolerance" },
+          { migration_id: 92, name: "BackfillAutomationRunThreadSource" },
+          { migration_id: 93, name: "BackfillMaxIterationsDisabledReason" },
+          { migration_id: 94, name: "ProjectionThreadsGoal" },
+          { migration_id: 95, name: "ProjectionThreadsGoalTiming" },
+          { migration_id: 96, name: "ProjectionThreadsGoalAchievements" },
+          { migration_id: 97, name: "ProjectionThreadsSidechatLifecycle" },
+          { migration_id: 98, name: "MigrateKiloToOpenCode" },
+          { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
+          { migration_id: 100, name: "MessageTextChunks" },
+          { migration_id: 101, name: "RemoveTranscriptMarkers" },
+          { migration_id: 102, name: "ProjectionThreadMessagesTurnBoundary" },
+          { migration_id: 103, name: "ClaudeTokenAccounting" },
+          { migration_id: 104, name: "ProjectionThreadsClaudeCacheReview" },
+          { migration_id: 105, name: "AsyncUserInput" },
+          { migration_id: 106, name: "ProjectImportOrigins" },
+          { migration_id: 107, name: "ProjectionThreadsHumanMessage" },
+          { migration_id: 108, name: "GatewayCompletions" },
+          { migration_id: 109, name: "ProjectAgent" },
+          { migration_id: 110, name: "Groups" },
+          { migration_id: 111, name: "GroupLibraryHosting" },
+          { migration_id: 112, name: "CoordinatorAppearance" },
+          { migration_id: 113, name: "ProjectAgentWakeCursor" },
+          { migration_id: 114, name: "ProjectAgentLifecycle" },
+          { migration_id: 115, name: "ProjectAgentManagedWorkers" },
+          { migration_id: 116, name: "ProjectAgentWorkerRecovery" },
+          { migration_id: 117, name: "WorkerMonitoringLiveness" },
+          { migration_id: 118, name: "ProjectionThreadSessionProviderInstance" },
+          { migration_id: 119, name: "ProviderSessionRuntimeInstanceId" },
+          { migration_id: 120, name: "ProfileStatsDeletedProviderInstances" },
+          { migration_id: 121, name: "ClearAutomationDefinitionProviderOptions" },
+          { migration_id: 122, name: "ClearAutomationRunProviderOptions" },
+          { migration_id: 123, name: "ScrubOrchestrationEventProviderOptions" },
+          { migration_id: 124, name: "ProjectionTurnsPendingMessageIndex" },
+          { migration_id: 125, name: "Todos" },
+          { migration_id: 126, name: "ProjectionThreadsSidechatContext" },
+          { migration_id: 127, name: "ProjectImportHistory" },
+          { migration_id: 128, name: "HubWork" },
+          { migration_id: 129, name: "ProjectionThreadsSnooze" },
+          { migration_id: 130, name: "PullRequestAutoFix" },
+          { migration_id: 131, name: "ProjectSourceFolders" },
+          { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
+          { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
+          { migration_id: 134, name: "ProjectionThreadsForkSourceMessage" },
+        ],
+      );
+      const groupConfigColumns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('project_agent_configs')
+      `;
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "goal",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "icon",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "auto_memory_enabled",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "library_path",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "library_remote_url",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "library_push_on_change",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "coordinator_icon",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "coordinator_color",
+      );
+      const linkedTables = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_agent_linked_projects'
+      `;
+      assert.equal(linkedTables.length, 1);
+      const preserved = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM orchestration_consumer_state
+      `;
+      assert.strictEqual(preserved[0]?.count, 1);
+    }),
+  );
+});
+
+const agentGatewayRetentionLegacyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+agentGatewayRetentionLegacyLayer(
+  "agent gateway retention migration after legacy migration 71",
+  (it) => {
+    it.effect("adds caller purge tracking without losing legacy operation rows", () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 69 });
+        yield* sql`
+        CREATE TABLE agent_gateway_operations (
+          operation_id TEXT PRIMARY KEY,
+          caller_thread_id TEXT NOT NULL,
+          caller_turn_id TEXT NOT NULL,
+          operation_kind TEXT NOT NULL CHECK (operation_kind IN ('create_threads')),
+          request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 256),
+          fingerprint TEXT NOT NULL,
+          requested_count INTEGER NOT NULL CHECK (requested_count BETWEEN 1 AND 20),
+          plan_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('reserved', 'dispatching', 'completed', 'failed', 'compensating')
+          ),
+          result_json TEXT,
+          error_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (caller_thread_id, caller_turn_id, operation_kind)
+        )
+      `;
+        yield* sql`
+        CREATE INDEX idx_agent_gateway_operations_status
+        ON agent_gateway_operations (status, updated_at)
+      `;
+        yield* ProjectionThreadsGatewayProvenanceMigration;
+        yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES
+          (70, 'AgentGatewayOperations'),
+          (71, 'ProjectionThreadsGatewayProvenance')
+      `;
+        yield* sql`
+        INSERT INTO agent_gateway_operations (
+          operation_id, caller_thread_id, caller_turn_id, operation_kind,
+          request_id, fingerprint, requested_count, plan_json, status,
+          result_json, error_json, created_at, updated_at
+        ) VALUES (
+          'legacy-operation', 'legacy-thread', 'legacy-turn', 'create_threads',
+          'legacy-request', 'legacy-fingerprint', 1, '[{"legacy":true}]', 'dispatching',
+          NULL, NULL, '2026-07-18T00:00:00.000Z', '2026-07-18T00:00:00.000Z'
+        )
+      `;
+
+        const executed = yield* runMigrations();
+        assert.deepStrictEqual(executed, [
+          [72, "AgentGatewayOperationRetention"],
+          [73, "OperationalDiagnostics"],
+          [74, "ExternalMcpIntegrations"],
+          [75, "ExternalMcpActiveCapacity"],
+          [76, "ExternalMcpHardening"],
+          [77, "ExternalMcpCompensatingCapacity"],
+          [78, "ExternalMcpLiveTurnCapacity"],
+          [79, "Spaces"],
+          [80, "ExternalMcpProjectScope"],
+          [81, "AutomationProposals"],
+          [82, "AutomationMemory"],
+          [83, "AutomationHeartbeatEligibility"],
+          [84, "AutomationNotificationPolicy"],
+          [85, "AutomationSettings"],
+          [86, "NormalizeStudioThreadWorkspaces"],
+          [87, "DropUnusedOrchestrationEventIndexes"],
+          [88, "ProjectionThreadsSettledAt"],
+          [89, "RecoverRetentionHiddenThreads"],
+          [90, "ProjectionThreadMessageTextSegments"],
+          [91, "AutomationFailureTolerance"],
+          [92, "BackfillAutomationRunThreadSource"],
+          [93, "BackfillMaxIterationsDisabledReason"],
+          [94, "ProjectionThreadsGoal"],
+          [95, "ProjectionThreadsGoalTiming"],
+          [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ProjectionThreadsSidechatLifecycle"],
+          [98, "MigrateKiloToOpenCode"],
+          [99, "InvalidateProjectionThreadsCursor"],
+          [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
+          [102, "ProjectionThreadMessagesTurnBoundary"],
+          [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
+          [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
+          [116, "ProjectAgentWorkerRecovery"],
+          [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadSessionProviderInstance"],
+          [119, "ProviderSessionRuntimeInstanceId"],
+          [120, "ProfileStatsDeletedProviderInstances"],
+          [121, "ClearAutomationDefinitionProviderOptions"],
+          [122, "ClearAutomationRunProviderOptions"],
+          [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
+          [125, "Todos"],
+          [126, "ProjectionThreadsSidechatContext"],
+          [127, "ProjectImportHistory"],
+          [128, "HubWork"],
+          [129, "ProjectionThreadsSnooze"],
+          [130, "PullRequestAutoFix"],
+          [131, "ProjectSourceFolders"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
+        ]);
+
+        const columns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('agent_gateway_operations')
+      `;
+        assert.include(
+          columns.map(({ name }) => name),
+          "caller_purged_at",
+        );
+        const rows = yield* sql<{
+          readonly operationId: string;
+          readonly callerThreadId: string;
+          readonly callerTurnId: string;
+          readonly planJson: string;
+          readonly status: string;
+          readonly callerPurgedAt: string | null;
+        }>`
+        SELECT
+          operation_id AS "operationId", caller_thread_id AS "callerThreadId",
+          caller_turn_id AS "callerTurnId", plan_json AS "planJson", status,
+          caller_purged_at AS "callerPurgedAt"
+        FROM agent_gateway_operations
+      `;
+        assert.deepStrictEqual(rows, [
+          {
+            operationId: "legacy-operation",
+            callerThreadId: "legacy-thread",
+            callerTurnId: "legacy-turn",
+            planJson: '[{"legacy":true}]',
+            status: "dispatching",
+            callerPurgedAt: null,
+          },
+        ]);
+      }),
+    );
+  },
+);
+
+const spacesMigrationCollisionLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+spacesMigrationCollisionLayer("Spaces migration after the private migration 70 collision", (it) => {
+  it.effect("reconciles the tracker and preserves pre-existing Spaces data", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 69 });
+
+      // Private builds of the original Spaces branch claimed migration 70 before
+      // current main assigned that ID to AgentGatewayOperations.
+      yield* SpacesMigration;
+      yield* sql`
+        INSERT INTO projection_spaces (
+          space_id, name, icon, sort_order, created_at, updated_at, deleted_at
+        ) VALUES (
+          'space-private-70', 'Private Space', 'bag', 0,
+          '2026-07-17T00:00:00.000Z', '2026-07-17T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (70, 'Spaces')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [70, "AgentGatewayOperations"],
+        [71, "ProjectionThreadsGatewayProvenance"],
+        [72, "AgentGatewayOperationRetention"],
+        [73, "OperationalDiagnostics"],
+        [74, "ExternalMcpIntegrations"],
+        [75, "ExternalMcpActiveCapacity"],
+        [76, "ExternalMcpHardening"],
+        [77, "ExternalMcpCompensatingCapacity"],
+        [78, "ExternalMcpLiveTurnCapacity"],
+        [79, "Spaces"],
+        [80, "ExternalMcpProjectScope"],
+        [81, "AutomationProposals"],
+        [82, "AutomationMemory"],
+        [83, "AutomationHeartbeatEligibility"],
+        [84, "AutomationNotificationPolicy"],
+        [85, "AutomationSettings"],
+        [86, "NormalizeStudioThreadWorkspaces"],
+        [87, "DropUnusedOrchestrationEventIndexes"],
+        [88, "ProjectionThreadsSettledAt"],
+        [89, "RecoverRetentionHiddenThreads"],
+        [90, "ProjectionThreadMessageTextSegments"],
+        [91, "AutomationFailureTolerance"],
+        [92, "BackfillAutomationRunThreadSource"],
+        [93, "BackfillMaxIterationsDisabledReason"],
+        [94, "ProjectionThreadsGoal"],
+        [95, "ProjectionThreadsGoalTiming"],
+        [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ProjectionThreadsSidechatLifecycle"],
+        [98, "MigrateKiloToOpenCode"],
+        [99, "InvalidateProjectionThreadsCursor"],
+        [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
+        [102, "ProjectionThreadMessagesTurnBoundary"],
+        [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
+        [113, "ProjectAgentWakeCursor"],
+        [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
+        [116, "ProjectAgentWorkerRecovery"],
+        [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadSessionProviderInstance"],
+        [119, "ProviderSessionRuntimeInstanceId"],
+        [120, "ProfileStatsDeletedProviderInstances"],
+        [121, "ClearAutomationDefinitionProviderOptions"],
+        [122, "ClearAutomationRunProviderOptions"],
+        [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
+        [125, "Todos"],
+        [126, "ProjectionThreadsSidechatContext"],
+        [127, "ProjectImportHistory"],
+        [128, "HubWork"],
+        [129, "ProjectionThreadsSnooze"],
+        [130, "PullRequestAutoFix"],
+        [131, "ProjectSourceFolders"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
+      ]);
+
+      const tracker = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        tracker.filter((row) => row.migration_id >= 71).map((row) => [row.migration_id, row.name]),
+        [
+          [71, "ProjectionThreadsGatewayProvenance"],
+          [72, "AgentGatewayOperationRetention"],
+          [73, "OperationalDiagnostics"],
+          [74, "ExternalMcpIntegrations"],
+          [75, "ExternalMcpActiveCapacity"],
+          [76, "ExternalMcpHardening"],
+          [77, "ExternalMcpCompensatingCapacity"],
+          [78, "ExternalMcpLiveTurnCapacity"],
+          [79, "Spaces"],
+          [80, "ExternalMcpProjectScope"],
+          [81, "AutomationProposals"],
+          [82, "AutomationMemory"],
+          [83, "AutomationHeartbeatEligibility"],
+          [84, "AutomationNotificationPolicy"],
+          [85, "AutomationSettings"],
+          [86, "NormalizeStudioThreadWorkspaces"],
+          [87, "DropUnusedOrchestrationEventIndexes"],
+          [88, "ProjectionThreadsSettledAt"],
+          [89, "RecoverRetentionHiddenThreads"],
+          [90, "ProjectionThreadMessageTextSegments"],
+          [91, "AutomationFailureTolerance"],
+          [92, "BackfillAutomationRunThreadSource"],
+          [93, "BackfillMaxIterationsDisabledReason"],
+          [94, "ProjectionThreadsGoal"],
+          [95, "ProjectionThreadsGoalTiming"],
+          [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ProjectionThreadsSidechatLifecycle"],
+          [98, "MigrateKiloToOpenCode"],
+          [99, "InvalidateProjectionThreadsCursor"],
+          [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
+          [102, "ProjectionThreadMessagesTurnBoundary"],
+          [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
+          [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
+          [116, "ProjectAgentWorkerRecovery"],
+          [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadSessionProviderInstance"],
+          [119, "ProviderSessionRuntimeInstanceId"],
+          [120, "ProfileStatsDeletedProviderInstances"],
+          [121, "ClearAutomationDefinitionProviderOptions"],
+          [122, "ClearAutomationRunProviderOptions"],
+          [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
+          [125, "Todos"],
+          [126, "ProjectionThreadsSidechatContext"],
+          [127, "ProjectImportHistory"],
+          [128, "HubWork"],
+          [129, "ProjectionThreadsSnooze"],
+          [130, "PullRequestAutoFix"],
+          [131, "ProjectSourceFolders"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
+        ],
+      );
+
+      const preservedSpaces = yield* sql<{ readonly spaceId: string; readonly name: string }>`
+        SELECT space_id AS "spaceId", name
+        FROM projection_spaces
+        WHERE space_id = 'space-private-70'
+      `;
+      assert.deepStrictEqual(preservedSpaces, [
+        { spaceId: "space-private-70", name: "Private Space" },
+      ]);
+
+      const tables = yield* sql<{ readonly name: string }>`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN (
+            'agent_gateway_operations',
+            'operational_diagnostics',
+            'projection_spaces'
+          )
+        ORDER BY name
+      `;
+      assert.deepStrictEqual(
+        tables.map((row) => row.name),
+        ["agent_gateway_operations", "operational_diagnostics", "projection_spaces"],
+      );
+      assert.include(yield* projectionThreadsColumnNames(sql), "gateway_operation_id");
+      const gatewayColumns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('agent_gateway_operations')
+      `;
+      assert.include(
+        gatewayColumns.map((row) => row.name),
+        "caller_purged_at",
+      );
+    }),
+  );
+
+  it.effect("upgrades the previous Spaces-at-74 lineage without losing data", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 74 });
+
+      // PR #365 previously published Spaces as migration 74. Main now owns 74–78 for
+      // External MCP, so lineage reconciliation must replay that canonical range and
+      // apply Spaces at 79 without dropping the already-created table or rows.
+      yield* SpacesMigration;
+      yield* sql`
+        INSERT INTO projection_spaces (
+          space_id, name, icon, sort_order, created_at, updated_at, deleted_at
+        ) VALUES (
+          'space-previous-74', 'Previous Space', 'bag', 0,
+          '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        UPDATE effect_sql_migrations
+        SET name = 'Spaces'
+        WHERE migration_id = 74
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [74, "ExternalMcpIntegrations"],
+        [75, "ExternalMcpActiveCapacity"],
+        [76, "ExternalMcpHardening"],
+        [77, "ExternalMcpCompensatingCapacity"],
+        [78, "ExternalMcpLiveTurnCapacity"],
+        [79, "Spaces"],
+        [80, "ExternalMcpProjectScope"],
+        [81, "AutomationProposals"],
+        [82, "AutomationMemory"],
+        [83, "AutomationHeartbeatEligibility"],
+        [84, "AutomationNotificationPolicy"],
+        [85, "AutomationSettings"],
+        [86, "NormalizeStudioThreadWorkspaces"],
+        [87, "DropUnusedOrchestrationEventIndexes"],
+        [88, "ProjectionThreadsSettledAt"],
+        [89, "RecoverRetentionHiddenThreads"],
+        [90, "ProjectionThreadMessageTextSegments"],
+        [91, "AutomationFailureTolerance"],
+        [92, "BackfillAutomationRunThreadSource"],
+        [93, "BackfillMaxIterationsDisabledReason"],
+        [94, "ProjectionThreadsGoal"],
+        [95, "ProjectionThreadsGoalTiming"],
+        [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ProjectionThreadsSidechatLifecycle"],
+        [98, "MigrateKiloToOpenCode"],
+        [99, "InvalidateProjectionThreadsCursor"],
+        [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
+        [102, "ProjectionThreadMessagesTurnBoundary"],
+        [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
+        [113, "ProjectAgentWakeCursor"],
+        [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
+        [116, "ProjectAgentWorkerRecovery"],
+        [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadSessionProviderInstance"],
+        [119, "ProviderSessionRuntimeInstanceId"],
+        [120, "ProfileStatsDeletedProviderInstances"],
+        [121, "ClearAutomationDefinitionProviderOptions"],
+        [122, "ClearAutomationRunProviderOptions"],
+        [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
+        [125, "Todos"],
+        [126, "ProjectionThreadsSidechatContext"],
+        [127, "ProjectImportHistory"],
+        [128, "HubWork"],
+        [129, "ProjectionThreadsSnooze"],
+        [130, "PullRequestAutoFix"],
+        [131, "ProjectSourceFolders"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
+      ]);
+
+      const tracker = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        tracker.filter((row) => row.migration_id >= 75).map((row) => [row.migration_id, row.name]),
+        [
+          [75, "ExternalMcpActiveCapacity"],
+          [76, "ExternalMcpHardening"],
+          [77, "ExternalMcpCompensatingCapacity"],
+          [78, "ExternalMcpLiveTurnCapacity"],
+          [79, "Spaces"],
+          [80, "ExternalMcpProjectScope"],
+          [81, "AutomationProposals"],
+          [82, "AutomationMemory"],
+          [83, "AutomationHeartbeatEligibility"],
+          [84, "AutomationNotificationPolicy"],
+          [85, "AutomationSettings"],
+          [86, "NormalizeStudioThreadWorkspaces"],
+          [87, "DropUnusedOrchestrationEventIndexes"],
+          [88, "ProjectionThreadsSettledAt"],
+          [89, "RecoverRetentionHiddenThreads"],
+          [90, "ProjectionThreadMessageTextSegments"],
+          [91, "AutomationFailureTolerance"],
+          [92, "BackfillAutomationRunThreadSource"],
+          [93, "BackfillMaxIterationsDisabledReason"],
+          [94, "ProjectionThreadsGoal"],
+          [95, "ProjectionThreadsGoalTiming"],
+          [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ProjectionThreadsSidechatLifecycle"],
+          [98, "MigrateKiloToOpenCode"],
+          [99, "InvalidateProjectionThreadsCursor"],
+          [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
+          [102, "ProjectionThreadMessagesTurnBoundary"],
+          [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
+          [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
+          [116, "ProjectAgentWorkerRecovery"],
+          [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadSessionProviderInstance"],
+          [119, "ProviderSessionRuntimeInstanceId"],
+          [120, "ProfileStatsDeletedProviderInstances"],
+          [121, "ClearAutomationDefinitionProviderOptions"],
+          [122, "ClearAutomationRunProviderOptions"],
+          [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
+          [125, "Todos"],
+          [126, "ProjectionThreadsSidechatContext"],
+          [127, "ProjectImportHistory"],
+          [128, "HubWork"],
+          [129, "ProjectionThreadsSnooze"],
+          [130, "PullRequestAutoFix"],
+          [131, "ProjectSourceFolders"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
+        ],
+      );
+      const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
+        SELECT space_id AS "spaceId"
+        FROM projection_spaces
+        WHERE space_id = 'space-previous-74'
+      `;
+      assert.deepStrictEqual(preservedSpaces, [{ spaceId: "space-previous-74" }]);
+    }),
+  );
+});
+
+const managedAttachmentsConstraintsLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it) => {
+  it.effect(
+    "enforces lifecycle, immutable metadata, cleanup ownership, and indexed quota scans",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        const now = "2026-07-14T00:00:00.000Z";
+        const expiry = "2026-07-15T00:00:00.000Z";
+
+        yield* sql`
+        INSERT INTO managed_attachment_blobs (
+          attachment_id, owner_thread_id, owner_kind, owner_id, kind,
+          original_name, mime_type, reserved_bytes, size_bytes, sha256,
+          relative_path, state, staging_expires_at, claim_command_id,
+          claim_message_id, claimed_at, delete_reason, delete_requested_at,
+          deleted_at, created_at, updated_at
+        ) VALUES (
+          'att-v2-one', 'Thread/Exact', 'session', 'session-one', 'file',
+          'notes.txt', 'text/plain', 1024, NULL, NULL,
+          'objects/at/att-v2-one.bin', 'uploading', ${expiry}, NULL,
+          NULL, NULL, NULL, NULL, NULL, ${now}, ${now}
+        )
+      `;
+
+        yield* sql`
+        UPDATE managed_attachment_blobs
+        SET
+          size_bytes = 5,
+          sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          state = 'staged',
+          updated_at = ${now}
+        WHERE attachment_id = 'att-v2-one'
+      `;
+        yield* sql`
+        UPDATE managed_attachment_blobs
+        SET
+          state = 'claimed',
+          claim_command_id = 'command-one',
+          claim_message_id = 'message-one',
+          claimed_at = ${now},
+          updated_at = ${now}
+        WHERE attachment_id = 'att-v2-one'
+      `;
+        yield* sql`
+        UPDATE managed_attachment_blobs
+        SET
+          state = 'deleting',
+          delete_reason = 'rollback',
+          delete_requested_at = ${now},
+          updated_at = ${now}
+        WHERE attachment_id = 'att-v2-one'
+      `;
+        yield* sql`
+        INSERT INTO managed_attachment_cleanup_jobs (
+          attachment_id, reason, attempt_count, next_attempt_at,
+          lease_owner, lease_expires_at, last_error, created_at, updated_at
+        ) VALUES (
+          'att-v2-one', 'rollback', 0, ${now}, NULL, NULL, NULL, ${now}, ${now}
+        )
+      `;
+
+        const invalidState = yield* Effect.flip(sql`
+        UPDATE managed_attachment_blobs
+        SET state = 'staged', updated_at = ${now}
+        WHERE attachment_id = 'att-v2-one'
+      `);
+        assert.isDefined(invalidState);
+
+        const mutatedOwner = yield* Effect.flip(sql`
+        UPDATE managed_attachment_blobs
+        SET owner_thread_id = 'different-thread'
+        WHERE attachment_id = 'att-v2-one'
+      `);
+        assert.isDefined(mutatedOwner);
+
+        const duplicatePath = yield* Effect.flip(sql`
+        INSERT INTO managed_attachment_blobs (
+          attachment_id, owner_thread_id, owner_kind, owner_id, kind,
+          original_name, mime_type, reserved_bytes, relative_path, state,
+          staging_expires_at, created_at, updated_at
+        ) VALUES (
+          'att-v2-two', 'thread-two', 'session', 'session-two', 'image',
+          'image.png', 'image/png', 2048, 'objects/at/att-v2-one.bin',
+          'uploading', ${expiry}, ${now}, ${now}
+        )
+      `);
+        assert.isDefined(duplicatePath);
+
+        const missingBlobJob = yield* Effect.flip(sql`
+        INSERT INTO managed_attachment_cleanup_jobs (
+          attachment_id, reason, attempt_count, next_attempt_at,
+          created_at, updated_at
+        ) VALUES ('missing', 'gc', 0, ${now}, ${now}, ${now})
+      `);
+        assert.isDefined(missingBlobJob);
+
+        const quota = yield* sql<{
+          readonly reservedBytes: number;
+          readonly reservedCount: number;
+        }>`
+        SELECT
+          COALESCE(SUM(reserved_bytes), 0) AS "reservedBytes",
+          COUNT(*) AS "reservedCount"
+        FROM managed_attachment_blobs
+        WHERE state <> 'deleted'
+      `;
+        assert.deepStrictEqual(quota[0], { reservedBytes: 1024, reservedCount: 1 });
+
+        const blobIndexes = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_index_list('managed_attachment_blobs')
+      `;
+        assert.includeMembers(
+          blobIndexes.map((row) => row.name),
+          [
+            "idx_managed_attachment_blobs_state_expiry",
+            "idx_managed_attachment_blobs_state_reserved",
+            "idx_managed_attachment_blobs_owner_thread",
+            "idx_managed_attachment_blobs_owner_principal",
+            "idx_managed_attachment_blobs_claim",
+          ],
+        );
+        const cleanupIndexes = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_index_list('managed_attachment_cleanup_jobs')
+      `;
+        assert.include(
+          cleanupIndexes.map((row) => row.name),
+          "idx_managed_attachment_cleanup_jobs_due",
+        );
+      }),
+  );
+});
+
+const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+
+// `migrationEntries` is `as const`, so an inferred Map keys on the literal id union and rejects
+// the plain `number` ids these helpers are looked up with. Widen the key type once, here.
+const canonicalNamesById = new Map<number, string>(
+  migrationEntries.map(([id, name]) => [id, name] as const),
+);
+
+const canonicalTrackerThrough = (throughId: number) =>
+  new Map<number, string>(
+    migrationEntries.filter(([id]) => id <= throughId).map(([id, name]) => [id, name] as const),
+  );
+
+const trackerCreatedAtById = (sql: SqlClient.SqlClient) =>
+  sql<{ readonly migration_id: number; readonly created_at: string }>`
+    SELECT migration_id, created_at FROM effect_sql_migrations ORDER BY migration_id ASC
+  `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.migration_id, row.created_at]))));
+
+const releasedV055Layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+releasedV055Layer("released v0.5.5 database", (it) => {
+  it.effect("reconciles the renumbered pins migration without replaying the lineage", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      // Reproduce a database written by v0.5.5: canonical rows 1-53, then the
+      // pins migration recorded under the ID that release shipped it at.
+      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* ProjectPullRequestPinsMigration;
+      yield* sql`
+        INSERT INTO project_pull_request_pins (project_id, repository_key, pull_request_number)
+        VALUES ('project-v055', 'owner/repo', 7)
+      `;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (54, 'ProjectPullRequestPins')
+      `;
+
+      const createdAtBefore = yield* trackerCreatedAtById(sql);
+      const executed = yield* runMigrations();
+
+      // Migration 54 is never replayed: its tracker row was renamed in place.
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        migrationEntries.map(([id]) => id).filter((id) => id >= 55),
+      );
+
+      const rows = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+
+      // Every pre-existing row survived as a row — a metadata fix-up, not a
+      // delete-and-replay. `created_at` would change if rows were re-inserted.
+      const createdAtAfter = yield* trackerCreatedAtById(sql);
+      for (const [id, createdAt] of createdAtBefore) {
+        assert.strictEqual(createdAtAfter.get(id), createdAt, `migration ${id} row was recreated`);
+      }
+
+      // The pins migration re-runs at 69 and must be a no-op over real data.
+      const pins = yield* sql<{ readonly projectId: string; readonly number: number }>`
+        SELECT project_id AS "projectId", pull_request_number AS "number"
+        FROM project_pull_request_pins
+      `;
+      assert.deepStrictEqual(pins, [{ projectId: "project-v055", number: 7 }]);
+    }),
+  );
+});
+
+const divergedBeyondAliasLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+divergedBeyondAliasLayer("tracker that diverges beyond a known alias", (it) => {
+  it.effect("still truncates and replays from the first divergence", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      // A development build between v0.5.5 and v0.6.0: migration 54 matches the
+      // alias but 55 was claimed by an unrelated migration, so this is not a
+      // v0.5.5 database and must keep taking the existing replay path.
+      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* ProjectPullRequestPinsMigration;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (54, 'ProjectPullRequestPins'), (55, 'AgentGatewayOperations')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        migrationEntries.map(([id]) => id).filter((id) => id >= 54),
+      );
+
+      const rows = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+    }),
+  );
+});
+
+layer("Auto-fix migration replay", (it) => {
+  it.effect(
+    "adds the optional alias to an existing Auto-fix table and preserves its watch on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DROP TABLE IF EXISTS pull_request_auto_fix`;
+        yield* sql`CREATE TABLE pull_request_auto_fix (
+      thread_id TEXT NOT NULL, pull_request_url TEXT NOT NULL, status TEXT NOT NULL,
+      pause_reason TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_handled_head_sha TEXT,
+      updated_at TEXT NOT NULL, PRIMARY KEY (thread_id, pull_request_url)
+    )`;
+        yield* sql`INSERT INTO pull_request_auto_fix (thread_id, pull_request_url, status, attempts, last_handled_head_sha, updated_at)
+      VALUES ('chat', 'https://github.com/o/r/pull/1', 'watching', 1, 'original-head', '2026-10-03T10:00:00.000Z')`;
+        yield* PullRequestAutoFixMigration;
+        yield* PullRequestAutoFixMigration;
+        assert.include(
+          yield* tableColumnNames(sql, "pull_request_auto_fix"),
+          "requested_pull_request_url",
+        );
+        assert.include(
+          yield* tableIndexNames(sql, "pull_request_auto_fix"),
+          "pull_request_auto_fix_active_owner",
+        );
+        const rows = yield* sql<{
+          thread_id: string;
+          status: string;
+          attempts: number;
+          last_handled_head_sha: string;
+          requested_pull_request_url: string | null;
+        }>`SELECT thread_id, status, attempts, last_handled_head_sha, requested_pull_request_url FROM pull_request_auto_fix`;
+        assert.deepStrictEqual(rows, [
+          {
+            thread_id: "chat",
+            status: "watching",
+            attempts: 1,
+            last_handled_head_sha: "original-head",
+            requested_pull_request_url: null,
+          },
+        ]);
+      }),
   );
 });

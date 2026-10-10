@@ -3,9 +3,9 @@
 //          full thread (messages/activities) when only catalog or live-refresh signals change.
 // Layer: Diff panel data
 
-import type { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
 
-import type { AppState } from "../store";
+import type { AppState } from "../storeState";
 import { collectByIds } from "../threadDerivation";
 import type { ChatMessage, Thread, ThreadShell, TurnDiffSummary } from "../types";
 import { resolveDiffPanelRepoLiveRefresh } from "./DiffPanel.logic";

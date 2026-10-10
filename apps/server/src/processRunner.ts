@@ -1,13 +1,21 @@
-import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
+import type { ChildProcess as ChildProcessHandle } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+import { isCommandNotFoundExit } from "@synara/shared/platformProcess";
+import { spawnProcess } from "@synara/shared/processRuntime";
+
+import { signalOwnedChildProcess } from "./platform/processTreeController.ts";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
   timeoutMs?: number | undefined;
   env?: NodeJS.ProcessEnv | undefined;
   stdin?: string | undefined;
+  signal?: AbortSignal | undefined;
   allowNonZeroExit?: boolean | undefined;
   maxBufferBytes?: number | undefined;
   outputMode?: "error" | "truncate" | undefined;
+  onStdoutChunk?: ((chunk: string) => void) | undefined;
+  onStderrChunk?: ((chunk: string) => void) | undefined;
 }
 
 export interface ProcessRunResult {
@@ -37,18 +45,12 @@ function normalizeSpawnError(command: string, args: readonly string[], error: un
   return new Error(`Failed to run ${commandLabel(command, args)}: ${error.message}`);
 }
 
-function isWindowsCommandNotFound(code: number | null, stderr: string): boolean {
-  if (process.platform !== "win32") return false;
-  if (code === 9009) return true;
-  return /is not recognized as an internal or external command/i.test(stderr);
-}
-
 function normalizeExitError(
   command: string,
   args: readonly string[],
   result: ProcessRunResult,
 ): Error {
-  if (isWindowsCommandNotFound(result.code, result.stderr)) {
+  if (isCommandNotFoundExit({ code: result.code, stderr: result.stderr })) {
     return new Error(`Command not found: ${command}`);
   }
 
@@ -80,21 +82,17 @@ function normalizeBufferError(
 
 const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
-function killChild(child: ChildProcessHandle, signal: NodeJS.Signals = "SIGTERM"): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
-    try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-      return;
-    } catch {
-      // fallback to direct kill
-    }
-  }
-  child.kill(signal);
+function processAbortError(): Error {
+  const error = new Error("Process execution was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+// The platform boundary decides whether a kill needs tree traversal (Windows
+// batch shims) or Node's direct signal (POSIX); application code never invokes
+// OS tree commands itself.
+function killChild(child: ChildProcessHandle, signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+  signalOwnedChildProcess(child, signal);
 }
 
 function appendChunkWithinLimit(
@@ -102,6 +100,7 @@ function appendChunkWithinLimit(
   currentBytes: number,
   chunk: Buffer,
   maxBytes: number,
+  decoder: StringDecoder,
 ): {
   next: string;
   nextBytes: number;
@@ -111,17 +110,11 @@ function appendChunkWithinLimit(
   if (remaining <= 0) {
     return { next: target, nextBytes: currentBytes, truncated: true };
   }
-  if (chunk.length <= remaining) {
-    return {
-      next: `${target}${chunk.toString()}`,
-      nextBytes: currentBytes + chunk.length,
-      truncated: false,
-    };
-  }
+  const accepted = chunk.length <= remaining ? chunk : chunk.subarray(0, remaining);
   return {
-    next: `${target}${chunk.subarray(0, remaining).toString()}`,
-    nextBytes: currentBytes + remaining,
-    truncated: true,
+    next: `${target}${decoder.write(accepted)}`,
+    nextBytes: currentBytes + accepted.length,
+    truncated: chunk.length > remaining,
   };
 }
 
@@ -130,16 +123,20 @@ export async function runProcess(
   args: readonly string[],
   options: ProcessRunOptions = {},
 ): Promise<ProcessRunResult> {
+  if (options.signal?.aborted) {
+    throw processAbortError();
+  }
+
   const timeoutMs = options.timeoutMs ?? 60_000;
   const maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   const outputMode = options.outputMode ?? "error";
 
   return new Promise<ProcessRunResult>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnProcess(command, args, {
       cwd: options.cwd,
       env: options.env,
       stdio: "pipe",
-      shell: process.platform === "win32",
+      requireExecutable: true,
     });
 
     let stdout = "";
@@ -149,24 +146,51 @@ export async function runProcess(
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    let aborted = false;
     let settled = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    const stdoutObserverDecoder = options.onStdoutChunk ? new StringDecoder("utf8") : null;
+    const stderrObserverDecoder = options.onStderrChunk ? new StringDecoder("utf8") : null;
 
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      killChild(child, "SIGTERM");
+    const scheduleForceKill = (): void => {
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       forceKillTimer = setTimeout(() => {
         killChild(child, "SIGKILL");
       }, 1_000);
+    };
+
+    const onAbort = (): void => {
+      // The first terminal cause wins: a signal that arrives after the timeout fired must not
+      // relabel the already-timed-out process as an explicit cancellation.
+      if (settled || aborted || timedOut) return;
+      aborted = true;
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      killChild(child, "SIGTERM");
+      scheduleForceKill();
+    };
+
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      killChild(child, "SIGTERM");
+      scheduleForceKill();
     }, timeoutMs);
 
     const finalize = (callback: () => void): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutTimer);
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
       if (forceKillTimer) {
         clearTimeout(forceKillTimer);
       }
+      options.signal?.removeEventListener("abort", onAbort);
       callback();
     };
 
@@ -178,31 +202,43 @@ export async function runProcess(
     };
 
     const appendOutput = (stream: "stdout" | "stderr", chunk: Buffer | string): Error | null => {
+      if (aborted) return null;
       const chunkBuffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      const text = chunkBuffer.toString();
       const byteLength = chunkBuffer.length;
       if (stream === "stdout") {
         if (outputMode === "truncate") {
-          const appended = appendChunkWithinLimit(stdout, stdoutBytes, chunkBuffer, maxBufferBytes);
+          const appended = appendChunkWithinLimit(
+            stdout,
+            stdoutBytes,
+            chunkBuffer,
+            maxBufferBytes,
+            stdoutDecoder,
+          );
           stdout = appended.next;
           stdoutBytes = appended.nextBytes;
           stdoutTruncated = stdoutTruncated || appended.truncated;
           return null;
         }
-        stdout += text;
+        stdout += stdoutDecoder.write(chunkBuffer);
         stdoutBytes += byteLength;
         if (stdoutBytes > maxBufferBytes) {
           return normalizeBufferError(command, args, "stdout", maxBufferBytes);
         }
       } else {
         if (outputMode === "truncate") {
-          const appended = appendChunkWithinLimit(stderr, stderrBytes, chunkBuffer, maxBufferBytes);
+          const appended = appendChunkWithinLimit(
+            stderr,
+            stderrBytes,
+            chunkBuffer,
+            maxBufferBytes,
+            stderrDecoder,
+          );
           stderr = appended.next;
           stderrBytes = appended.nextBytes;
           stderrTruncated = stderrTruncated || appended.truncated;
           return null;
         }
-        stderr += text;
+        stderr += stderrDecoder.write(chunkBuffer);
         stderrBytes += byteLength;
         if (stderrBytes > maxBufferBytes) {
           return normalizeBufferError(command, args, "stderr", maxBufferBytes);
@@ -211,7 +247,35 @@ export async function runProcess(
       return null;
     };
 
+    const notifyOutputObserver = (
+      observer: ((chunk: string) => void) | undefined,
+      decoder: StringDecoder | null,
+      chunk: Buffer | string,
+    ): void => {
+      if (!observer || !decoder) return;
+      try {
+        const text = decoder.write(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        if (text.length > 0) observer(text);
+      } catch {
+        // Live-output observers are best effort and must never crash the child-process lifecycle.
+      }
+    };
+
+    const flushOutputObserver = (
+      observer: ((chunk: string) => void) | undefined,
+      decoder: StringDecoder | null,
+    ): void => {
+      if (!observer || !decoder) return;
+      try {
+        const text = decoder.end();
+        if (text.length > 0) observer(text);
+      } catch {
+        // Live-output observers are best effort and must never crash the child-process lifecycle.
+      }
+    };
+
     child.stdout.on("data", (chunk: Buffer | string) => {
+      notifyOutputObserver(options.onStdoutChunk, stdoutObserverDecoder, chunk);
       const error = appendOutput("stdout", chunk);
       if (error) {
         fail(error);
@@ -219,6 +283,7 @@ export async function runProcess(
     });
 
     child.stderr.on("data", (chunk: Buffer | string) => {
+      notifyOutputObserver(options.onStderrChunk, stderrObserverDecoder, chunk);
       const error = appendOutput("stderr", chunk);
       if (error) {
         fail(error);
@@ -227,11 +292,16 @@ export async function runProcess(
 
     child.once("error", (error) => {
       finalize(() => {
-        reject(normalizeSpawnError(command, args, error));
+        reject(aborted ? processAbortError() : normalizeSpawnError(command, args, error));
       });
     });
 
     child.once("close", (code, signal) => {
+      if (!stdoutTruncated) stdout += stdoutDecoder.end();
+      if (!stderrTruncated) stderr += stderrDecoder.end();
+      flushOutputObserver(options.onStdoutChunk, stdoutObserverDecoder);
+      flushOutputObserver(options.onStderrChunk, stderrObserverDecoder);
+
       const result: ProcessRunResult = {
         stdout,
         stderr,
@@ -243,6 +313,10 @@ export async function runProcess(
       };
 
       finalize(() => {
+        if (aborted) {
+          reject(processAbortError());
+          return;
+        }
         if (!options.allowNonZeroExit && (timedOut || (code !== null && code !== 0))) {
           reject(normalizeExitError(command, args, result));
           return;
@@ -252,11 +326,19 @@ export async function runProcess(
     });
 
     child.stdin.once("error", (error) => {
+      if (aborted) return;
       fail(normalizeStdinError(command, args, error));
     });
 
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
     if (options.stdin !== undefined) {
       child.stdin.write(options.stdin, (error) => {
+        if (aborted) return;
         if (error) {
           fail(normalizeStdinError(command, args, error));
           return;

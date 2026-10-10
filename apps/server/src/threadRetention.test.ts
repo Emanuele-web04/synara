@@ -1,21 +1,28 @@
 // FILE: threadRetention.test.ts
-// Purpose: Verifies inactive-thread retention selection without running the server loop.
+// Purpose: Verifies inactive-thread selection without running the server loop.
 // Layer: Server maintenance tests
 // Exports: Vitest coverage for threadRetention helpers.
 
-import { ProjectId, ThreadId, type OrchestrationReadModel } from "@t3tools/contracts";
-import { it as effectIt } from "@effect/vitest";
+import {
+  ProjectId,
+  ThreadId,
+  type OrchestrationCommand,
+  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
+} from "@synara/contracts";
 import { Effect } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vitest";
 
+import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine";
+import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery";
+import type { AutomationRepositoryShape } from "./persistence/Services/AutomationRepository";
+import { ServerLifecycleEvents, ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import {
-  getInactiveThreadIdsForRetention,
-  getSoftDeletedThreadIdsForRetentionPurge,
-  purgeThreadDatabaseRows,
+  getRetentionArchiveRootIds,
+  runThreadRetentionSweep,
+  THREAD_RETENTION_COMMAND_ID_PREFIX,
   THREAD_RETENTION_UNUSED_MS,
 } from "./threadRetention";
-import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 
 function makeReadModelThread(
   overrides: Partial<OrchestrationReadModel["threads"][number]> = {},
@@ -44,6 +51,7 @@ function makeReadModelThread(
 function makeReadModel(threads: OrchestrationReadModel["threads"]): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
+    spaces: [],
     projects: [],
     threads,
     updatedAt: "2026-04-20T00:00:00.000Z",
@@ -51,7 +59,7 @@ function makeReadModel(threads: OrchestrationReadModel["threads"]): Orchestratio
 }
 
 describe("thread retention", () => {
-  it("selects inactive threads older than the seven-day retention window", () => {
+  it("selects inactive threads older than the seven-day hide window", () => {
     const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
     const staleThread = makeReadModelThread({
       id: ThreadId.makeUnsafe("thread-stale"),
@@ -62,9 +70,9 @@ describe("thread retention", () => {
       latestUserMessageAt: new Date(nowMs - THREAD_RETENTION_UNUSED_MS + 1).toISOString(),
     });
 
-    expect(
-      getInactiveThreadIdsForRetention(makeReadModel([staleThread, recentThread]), nowMs),
-    ).toEqual([staleThread.id]);
+    expect(getRetentionArchiveRootIds(makeReadModel([staleThread, recentThread]), nowMs)).toEqual([
+      staleThread.id,
+    ]);
   });
 
   it("does not select busy or pending threads even when they are old", () => {
@@ -72,7 +80,7 @@ describe("thread retention", () => {
     const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
 
     expect(
-      getInactiveThreadIdsForRetention(
+      getRetentionArchiveRootIds(
         makeReadModel([
           makeReadModelThread({
             id: ThreadId.makeUnsafe("thread-running"),
@@ -112,232 +120,204 @@ describe("thread retention", () => {
     });
 
     expect(
-      getInactiveThreadIdsForRetention(makeReadModel([pinnedThread, unpinnedThread]), nowMs),
+      getRetentionArchiveRootIds(makeReadModel([pinnedThread, unpinnedThread]), nowMs),
     ).toEqual([unpinnedThread.id]);
   });
 
-  it("selects already deleted threads for physical purge retry", () => {
-    const deletedThread = makeReadModelThread({
-      id: ThreadId.makeUnsafe("thread-deleted"),
-      deletedAt: "2026-04-19T12:00:00.000Z",
+  it("does not select snoozed threads even when they are old", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const snoozedThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-snoozed"),
+      latestUserMessageAt: oldActivityAt,
+      snoozedUntil: new Date(nowMs + THREAD_RETENTION_UNUSED_MS).toISOString(),
     });
-    const liveThread = makeReadModelThread({
-      id: ThreadId.makeUnsafe("thread-live"),
-      deletedAt: null,
+    const unsnoozedThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-unsnoozed"),
+      latestUserMessageAt: oldActivityAt,
     });
 
     expect(
-      getSoftDeletedThreadIdsForRetentionPurge(makeReadModel([deletedThread, liveThread])),
-    ).toEqual([deletedThread.id]);
+      getRetentionArchiveRootIds(makeReadModel([snoozedThread, unsnoozedThread]), nowMs),
+    ).toEqual([unsnoozedThread.id]);
   });
-});
 
-const sqliteLayer = effectIt.layer(SqlitePersistenceMemory);
+  it("does not select enabled heartbeat automation target threads", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const heartbeatTarget = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-heartbeat-target"),
+      latestUserMessageAt: oldActivityAt,
+    });
+    const ordinaryThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-ordinary"),
+      latestUserMessageAt: oldActivityAt,
+    });
 
-sqliteLayer("thread retention database purge", (it) => {
-  it.effect("physically removes retained thread rows while preserving other threads", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const purgedThreadId = ThreadId.makeUnsafe("thread-purge");
-      const keptThreadId = ThreadId.makeUnsafe("thread-keep");
-      const now = "2026-04-20T00:00:00.000Z";
+    expect(
+      getRetentionArchiveRootIds(
+        makeReadModel([heartbeatTarget, ordinaryThread]),
+        nowMs,
+        new Set([heartbeatTarget.id]),
+      ),
+    ).toEqual([ordinaryThread.id]);
+  });
 
-      yield* sql`
-        INSERT INTO projection_threads (
-          thread_id,
-          project_id,
-          title,
-          model_selection_json,
-          runtime_mode,
-          interaction_mode,
-          env_mode,
-          created_at,
-          updated_at,
-          deleted_at
-        )
-        VALUES
-          (
-            ${purgedThreadId},
-            'project-1',
-            'Thread purge',
-            '{"provider":"codex","model":"gpt-5-codex"}',
-            'full-access',
-            'default',
-            'local',
-            ${now},
-            ${now},
-            ${now}
-          ),
-          (
-            ${keptThreadId},
-            'project-1',
-            'Thread keep',
-            '{"provider":"codex","model":"gpt-5-codex"}',
-            'full-access',
-            'default',
-            'local',
-            ${now},
-            ${now},
-            NULL
-          )
-      `;
+  it("selects one archive root for a fully inactive subagent tree", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const parentId = ThreadId.makeUnsafe("thread-parent");
+    const childId = ThreadId.makeUnsafe("thread-child");
+    const grandchildId = ThreadId.makeUnsafe("thread-grandchild");
 
-      yield* sql`
-        INSERT INTO projection_thread_messages (
-          message_id,
-          thread_id,
-          turn_id,
-          role,
-          text,
-          is_streaming,
-          created_at,
-          updated_at
-        )
-        VALUES
-          ('message-purge', ${purgedThreadId}, 'turn-1', 'user', 'old', 0, ${now}, ${now}),
-          ('message-keep', ${keptThreadId}, 'turn-2', 'user', 'new', 0, ${now}, ${now})
-      `;
-      yield* sql`
-        INSERT INTO projection_thread_activities (
-          activity_id,
-          thread_id,
-          turn_id,
-          tone,
-          kind,
-          summary,
-          payload_json,
-          created_at
-        )
-        VALUES ('activity-purge', ${purgedThreadId}, 'turn-1', 'info', 'event', 'old', '{}', ${now})
-      `;
-      yield* sql`
-        INSERT INTO projection_thread_sessions (
-          thread_id,
-          status,
-          provider_name,
-          provider_session_id,
-          provider_thread_id,
-          active_turn_id,
-          last_error,
-          updated_at
-        )
-        VALUES (${purgedThreadId}, 'stopped', 'codex', 'session-1', 'provider-thread-1', NULL, NULL, ${now})
-      `;
-      yield* sql`
-        INSERT INTO projection_turns (
-          thread_id,
-          turn_id,
-          pending_message_id,
-          assistant_message_id,
-          state,
-          requested_at,
-          checkpoint_files_json
-        )
-        VALUES (${purgedThreadId}, 'turn-1', NULL, NULL, 'completed', ${now}, '[]')
-      `;
-      yield* sql`
-        INSERT INTO projection_thread_proposed_plans (
-          plan_id,
-          thread_id,
-          turn_id,
-          plan_markdown,
-          created_at,
-          updated_at
-        )
-        VALUES ('plan-purge', ${purgedThreadId}, 'turn-1', '# Old plan', ${now}, ${now})
-      `;
-      yield* sql`
-        INSERT INTO projection_pending_approvals (
-          request_id,
-          thread_id,
-          turn_id,
-          status,
-          decision,
-          created_at,
-          resolved_at
-        )
-        VALUES ('approval-purge', ${purgedThreadId}, 'turn-1', 'pending', NULL, ${now}, NULL)
-      `;
-      yield* sql`
-        INSERT INTO provider_session_runtime (
-          thread_id,
-          provider_name,
-          adapter_key,
-          runtime_mode,
-          status,
-          last_seen_at,
-          resume_cursor_json,
-          runtime_payload_json
-        )
-        VALUES (${purgedThreadId}, 'codex', 'codex', 'full-access', 'stopped', ${now}, NULL, '{}')
-      `;
-      yield* sql`
-        INSERT INTO checkpoint_diff_blobs (
-          thread_id,
-          from_turn_count,
-          to_turn_count,
-          diff,
-          created_at
-        )
-        VALUES (${purgedThreadId}, 1, 2, 'diff', ${now})
-      `;
-      yield* sql`
-        INSERT INTO orchestration_command_receipts (
-          command_id,
-          aggregate_kind,
-          aggregate_id,
-          accepted_at,
-          result_sequence,
-          status,
-          error
-        )
-        VALUES
-          ('command-purge', 'thread', ${purgedThreadId}, ${now}, 1, 'accepted', NULL),
-          ('command-keep', 'thread', ${keptThreadId}, ${now}, 2, 'accepted', NULL)
-      `;
-      yield* sql`
-        INSERT INTO orchestration_events (
-          event_id,
-          aggregate_kind,
-          stream_id,
-          stream_version,
-          event_type,
-          occurred_at,
-          actor_kind,
-          payload_json,
-          metadata_json
-        )
-        VALUES
-          ('event-purge', 'thread', ${purgedThreadId}, 1, 'thread.created', ${now}, 'system', '{}', '{}'),
-          ('event-keep', 'thread', ${keptThreadId}, 1, 'thread.created', ${now}, 'system', '{}', '{}')
-      `;
+    expect(
+      getRetentionArchiveRootIds(
+        makeReadModel([
+          makeReadModelThread({ id: parentId, latestUserMessageAt: oldActivityAt }),
+          makeReadModelThread({
+            id: childId,
+            parentThreadId: parentId,
+            latestUserMessageAt: oldActivityAt,
+          }),
+          makeReadModelThread({
+            id: grandchildId,
+            parentThreadId: childId,
+            latestUserMessageAt: oldActivityAt,
+          }),
+        ]),
+        nowMs,
+      ),
+    ).toEqual([parentId]);
+  });
 
-      yield* purgeThreadDatabaseRows(purgedThreadId);
+  it("treats an inactive thread whose parent is absent as an archive root", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const missingParentId = ThreadId.makeUnsafe("thread-missing-parent");
+    const orphanId = ThreadId.makeUnsafe("thread-orphan");
+    const childId = ThreadId.makeUnsafe("thread-orphan-child");
 
-      const purgedRows = yield* sql<{ readonly count: number }>`
-        SELECT
-          (SELECT COUNT(*) FROM projection_threads WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM projection_thread_messages WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM projection_thread_activities WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM projection_thread_sessions WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM projection_turns WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM projection_thread_proposed_plans WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM projection_pending_approvals WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM provider_session_runtime WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM checkpoint_diff_blobs WHERE thread_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM orchestration_command_receipts WHERE aggregate_id = ${purgedThreadId}) +
-          (SELECT COUNT(*) FROM orchestration_events WHERE stream_id = ${purgedThreadId}) AS count
-      `;
-      const keptRows = yield* sql<{ readonly count: number }>`
-        SELECT
-          (SELECT COUNT(*) FROM projection_threads WHERE thread_id = ${keptThreadId}) +
-          (SELECT COUNT(*) FROM projection_thread_messages WHERE thread_id = ${keptThreadId}) +
-          (SELECT COUNT(*) FROM orchestration_command_receipts WHERE aggregate_id = ${keptThreadId}) +
-          (SELECT COUNT(*) FROM orchestration_events WHERE stream_id = ${keptThreadId}) AS count
-      `;
+    expect(
+      getRetentionArchiveRootIds(
+        makeReadModel([
+          makeReadModelThread({
+            id: orphanId,
+            parentThreadId: missingParentId,
+            latestUserMessageAt: oldActivityAt,
+          }),
+          makeReadModelThread({
+            id: childId,
+            parentThreadId: orphanId,
+            latestUserMessageAt: oldActivityAt,
+          }),
+        ]),
+        nowMs,
+      ),
+    ).toEqual([orphanId]);
+  });
 
-      expect(purgedRows[0]?.count).toBe(0);
-      expect(keptRows[0]?.count).toBe(4);
-    }),
-  );
+  it("does not archive a stale parent over a recent child", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const parentId = ThreadId.makeUnsafe("thread-parent");
+    const childId = ThreadId.makeUnsafe("thread-child");
+
+    expect(
+      getRetentionArchiveRootIds(
+        makeReadModel([
+          makeReadModelThread({
+            id: parentId,
+            latestUserMessageAt: new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString(),
+          }),
+          makeReadModelThread({
+            id: childId,
+            parentThreadId: parentId,
+            latestUserMessageAt: new Date(nowMs - 1).toISOString(),
+          }),
+        ]),
+        nowMs,
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps a stale child with its recent parent because children are not standalone chats", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const parentId = ThreadId.makeUnsafe("thread-parent");
+    const childId = ThreadId.makeUnsafe("thread-child");
+
+    expect(
+      getRetentionArchiveRootIds(
+        makeReadModel([
+          makeReadModelThread({
+            id: parentId,
+            latestUserMessageAt: new Date(nowMs - 1).toISOString(),
+          }),
+          makeReadModelThread({
+            id: childId,
+            parentThreadId: parentId,
+            latestUserMessageAt: new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString(),
+          }),
+        ]),
+        nowMs,
+      ),
+    ).toEqual([]);
+  });
+
+  it("dispatches reversible archive commands and publishes completed progress", async () => {
+    const archivedThreadId = ThreadId.makeUnsafe("thread-to-archive");
+    const dispatchedCommands: OrchestrationCommand[] = [];
+    let pruneCount = 0;
+    const shellSnapshot = makeReadModel([
+      makeReadModelThread({
+        id: archivedThreadId,
+        latestUserMessageAt: new Date(Date.now() - THREAD_RETENTION_UNUSED_MS - 1).toISOString(),
+      }),
+    ]) as unknown as OrchestrationShellSnapshot;
+    const engine = {
+      dispatch: (command: OrchestrationCommand) =>
+        Effect.sync(() => {
+          dispatchedCommands.push(command);
+          return { sequence: 1 };
+        }),
+    } as unknown as OrchestrationEngineShape;
+    const snapshotQuery = {
+      getShellSnapshot: () => Effect.succeed(shellSnapshot),
+    } as unknown as ProjectionSnapshotQueryShape;
+    const automationRepository = {
+      list: () => Effect.succeed({ definitions: [], runs: [], memories: [] }),
+    } as unknown as AutomationRepositoryShape;
+
+    const maintenanceEvent = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runThreadRetentionSweep(
+          engine,
+          snapshotQuery,
+          automationRepository,
+          Effect.sync(() => {
+            pruneCount += 1;
+          }),
+        );
+        const lifecycle = yield* ServerLifecycleEvents;
+        return (yield* lifecycle.snapshot).events.find((event) => event.type === "maintenance");
+      }).pipe(Effect.provide(ServerLifecycleEventsLive)),
+    );
+
+    expect(dispatchedCommands).toHaveLength(1);
+    expect(dispatchedCommands[0]).toMatchObject({
+      type: "thread.archive",
+      threadId: archivedThreadId,
+    });
+    expect(dispatchedCommands[0]?.commandId).toMatch(
+      new RegExp(`^${THREAD_RETENTION_COMMAND_ID_PREFIX}`),
+    );
+    expect(pruneCount).toBe(1);
+    expect(maintenanceEvent).toMatchObject({
+      type: "maintenance",
+      payload: {
+        task: "thread-retention",
+        state: "completed",
+        deletedCount: 1,
+        totalCount: 1,
+      },
+    });
+  });
 });

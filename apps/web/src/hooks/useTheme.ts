@@ -3,9 +3,9 @@
 // Layer: Web appearance state hook
 // Exports: useTheme for mode, resolved variant, theme-pack import/export, and active theme metadata.
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { isElectron } from "../env";
-import { isMacPlatform } from "../lib/utils";
+import { isMacNavigatorPlatform } from "../lib/utils";
 import {
   DEFAULT_THEME_STATE,
   type ChromeTheme,
@@ -14,7 +14,10 @@ import {
   type ThemePack,
   type ThemeState,
   type ThemeVariant,
+  type WindowMaterial,
+  type WindowTranslucency,
   areThemePacksEqual,
+  areWindowTranslucenciesEqual,
   buildThemeCssVariables,
   canParseThemeShareString,
   createThemeShareString,
@@ -25,6 +28,7 @@ import {
   serializeThemeState,
   setThemeCodeThemeId,
   setThemeFonts,
+  setWindowTranslucency as setWindowTranslucencyState,
   updateChromeTheme,
   updateThemePackFromShareString,
 } from "../theme/theme.logic";
@@ -32,19 +36,29 @@ import {
 type ThemeSnapshot = {
   state: ThemeState;
   systemDark: boolean;
+  /** The desktop refused the last custom blur and fell back to vibrancy. */
+  desktopBlurUnavailable: boolean;
 };
 
 const STORAGE_KEY = "synara:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 let listeners: Array<() => void> = [];
-let lastSnapshot: ThemeSnapshot | null = null;
-let lastSnapshotKey = "";
+// Refreshed only when the store actually changes (a write, a cross-tab storage
+// event, or a media-query flip) so `getSnapshot` is a plain field read.
+// React re-reads the snapshot after a listener fires, which is exactly when
+// this cache is rebuilt, so the tearing guarantee holds. Reading and parsing
+// localStorage on every render of every theme consumer was measurable during
+// transcript streaming.
+let currentSnapshot: ThemeSnapshot | null = null;
 let lastDesktopTheme: ThemeMode | null = null;
+let lastDesktopWindowMaterial: string | null = null;
+let desktopBlurUnavailable = false;
 
 // ─── Store wiring ─────────────────────────────────────────────────────────
 
 function emitChange() {
+  refreshSnapshot();
   for (const listener of listeners) {
     listener();
   }
@@ -78,18 +92,30 @@ function writeStoredThemeState(state: ThemeState) {
   localStorage.setItem(STORAGE_KEY, serializeThemeState(state));
 }
 
-function getSnapshot(): ThemeSnapshot {
+function computeSnapshot(): ThemeSnapshot {
   const state = readStoredThemeState();
   const systemDark = state.mode === "system" ? getSystemDark() : false;
-  const snapshotKey = `${serializeThemeState(state)}|${systemDark ? "dark" : "light"}`;
+  return { state, systemDark, desktopBlurUnavailable };
+}
 
-  if (lastSnapshot && lastSnapshotKey === snapshotKey) {
-    return lastSnapshot;
+function refreshSnapshot(): ThemeSnapshot {
+  const next = computeSnapshot();
+  // Keep the previous object when nothing changed so consumers' memoization
+  // and `useSyncExternalStore` see a stable reference.
+  if (
+    currentSnapshot &&
+    currentSnapshot.systemDark === next.systemDark &&
+    currentSnapshot.desktopBlurUnavailable === next.desktopBlurUnavailable &&
+    serializeThemeState(currentSnapshot.state) === serializeThemeState(next.state)
+  ) {
+    return currentSnapshot;
   }
+  currentSnapshot = next;
+  return next;
+}
 
-  lastSnapshotKey = snapshotKey;
-  lastSnapshot = { state, systemDark };
-  return lastSnapshot;
+function getSnapshot(): ThemeSnapshot {
+  return currentSnapshot ?? refreshSnapshot();
 }
 
 function updateStoredThemeState(update: (state: ThemeState) => ThemeState) {
@@ -155,9 +181,12 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
 
   const variant = resolveThemeVariant(state.mode, getSystemDark());
   const activeTheme = resolveThemePack(state, variant);
+  const translucency = state.translucency[variant];
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
     electron: isElectron,
-    isMac: isMacPlatform(typeof navigator === "undefined" ? "" : navigator.platform),
+    isMac: isMacNavigatorPlatform(),
+    systemUiFont: state.systemUiFont,
+    translucency,
   });
 
   root.classList.toggle("dark", variant === "dark");
@@ -165,6 +194,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   root.setAttribute("data-theme-mode", state.mode);
   root.setAttribute("data-theme-variant", variant);
   root.setAttribute("data-window-material", cssVariableBuild.material);
+  root.setAttribute("data-window-translucency", cssVariableBuild.translucencyScope);
 
   for (const [name, value] of Object.entries(cssVariableBuild.variables)) {
     if (value.trim().length === 0) {
@@ -175,6 +205,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   }
 
   syncDesktopTheme(state.mode);
+  syncDesktopWindowMaterial(cssVariableBuild.material, translucency.blur);
 
   if (suppressTransitions) {
     // Force a reflow so the no-transitions class takes effect before removal.
@@ -204,6 +235,36 @@ function syncDesktopTheme(theme: ThemeMode) {
   });
 }
 
+// Only the macOS desktop implements this; the material there is "translucent" only on macOS.
+// Without a chosen blur the window keeps vibrancy, which is the desktop's "opaque" backing.
+function syncDesktopWindowMaterial(cssMaterial: WindowMaterial, blur: number | null) {
+  const setWindowMaterial =
+    typeof window === "undefined" ? undefined : window.desktopBridge?.setWindowMaterial;
+  const material: WindowMaterial =
+    cssMaterial === "translucent" && blur !== null ? "translucent" : "opaque";
+  const blurRadius = material === "translucent" && blur !== null ? blur : 0;
+  const key = `${material}:${blurRadius}`;
+  if (!setWindowMaterial || lastDesktopWindowMaterial === key) {
+    return;
+  }
+
+  lastDesktopWindowMaterial = key;
+  void setWindowMaterial({ material, blurRadius }).then(
+    (applied) => {
+      // Vibrancy always applies; only a custom blur can be refused by the window server.
+      const unavailable = material === "translucent" && !applied;
+      if (lastDesktopWindowMaterial !== key || desktopBlurUnavailable === unavailable) return;
+      desktopBlurUnavailable = unavailable;
+      emitChange();
+    },
+    () => {
+      if (lastDesktopWindowMaterial === key) {
+        lastDesktopWindowMaterial = null;
+      }
+    },
+  );
+}
+
 // Apply immediately on module load to minimize flash before React mounts.
 if (typeof document !== "undefined") {
   applyThemeState(readStoredThemeState());
@@ -211,10 +272,49 @@ if (typeof document !== "undefined") {
 
 // ─── Public hook ──────────────────────────────────────────────────────────
 
+function setTheme(nextTheme: ThemeMode) {
+  updateStoredThemeState((state) => ({
+    ...state,
+    mode: nextTheme,
+  }));
+}
+
+function setSystemUiFont(enabled: boolean) {
+  updateStoredThemeState((state) => ({
+    ...state,
+    systemUiFont: enabled,
+  }));
+}
+
+function resetThemeVariant(variant: ThemeVariant) {
+  updateStoredThemeState((state) => resetThemeVariantState(state, variant));
+}
+
+function resetAllThemes() {
+  updateStoredThemeState(() => DEFAULT_THEME_STATE);
+}
+
+function updateThemePack(variant: ThemeVariant, patch: Partial<ChromeTheme>) {
+  updateStoredThemeState((state) => updateChromeTheme(state, variant, patch));
+}
+
+function updateThemeFonts(variant: ThemeVariant, patch: Partial<ThemeFonts>) {
+  updateStoredThemeState((state) => setThemeFonts(state, variant, patch));
+}
+
+function setWindowTranslucency(variant: ThemeVariant, patch: Partial<WindowTranslucency>) {
+  updateStoredThemeState((state) => setWindowTranslucencyState(state, variant, patch));
+}
+
+function setCodeThemeId(variant: ThemeVariant, codeThemeId: string) {
+  updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
+}
+
 export function useTheme() {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => ({
     state: DEFAULT_THEME_STATE,
     systemDark: false,
+    desktopBlurUnavailable: false,
   }));
   const theme = snapshot.state.mode;
   const resolvedTheme = resolveThemeVariant(theme, snapshot.systemDark);
@@ -222,66 +322,36 @@ export function useTheme() {
   const darkTheme = resolveThemePack(snapshot.state, "dark");
   const lightTheme = resolveThemePack(snapshot.state, "light");
   const defaultActiveTheme = resolveThemePack(DEFAULT_THEME_STATE, resolvedTheme);
-  const isDefaultActiveTheme = areThemePacksEqual(activeTheme, defaultActiveTheme);
+  const isDefaultActiveTheme =
+    areThemePacksEqual(activeTheme, defaultActiveTheme) &&
+    areWindowTranslucenciesEqual(
+      snapshot.state.translucency[resolvedTheme],
+      DEFAULT_THEME_STATE.translucency[resolvedTheme],
+    );
 
-  const setTheme = useCallback((nextTheme: ThemeMode) => {
-    updateStoredThemeState((state) => ({
-      ...state,
-      mode: nextTheme,
-    }));
-  }, []);
+  const canImportThemeString = (value: string, variant: ThemeVariant = resolvedTheme) =>
+    canParseThemeShareString(value, variant);
 
-  const canImportThemeString = useCallback(
-    (value: string, variant: ThemeVariant = resolvedTheme) =>
-      canParseThemeShareString(value, variant),
-    [resolvedTheme],
-  );
+  const importThemeString = (value: string, variant: ThemeVariant = resolvedTheme) => {
+    updateStoredThemeState((state) => updateThemePackFromShareString(state, value, variant));
+  };
 
-  const importThemeString = useCallback(
-    (value: string, variant: ThemeVariant = resolvedTheme) => {
-      updateStoredThemeState((state) => updateThemePackFromShareString(state, value, variant));
-    },
-    [resolvedTheme],
-  );
+  const exportThemeString = (variant: ThemeVariant = resolvedTheme) =>
+    createThemeShareString(variant, resolveThemePack(snapshot.state, variant));
 
-  const exportThemeString = useCallback(
-    (variant: ThemeVariant = resolvedTheme) =>
-      createThemeShareString(variant, resolveThemePack(snapshot.state, variant)),
-    [resolvedTheme, snapshot.state],
-  );
-
-  const resetActiveTheme = useCallback(() => {
+  const resetActiveTheme = () => {
     updateStoredThemeState((state) => resetThemeVariantState(state, resolvedTheme));
-  }, [resolvedTheme]);
+  };
 
-  const resetThemeVariant = useCallback((variant: ThemeVariant) => {
-    updateStoredThemeState((state) => resetThemeVariantState(state, variant));
-  }, []);
-
-  const resetAllThemes = useCallback(() => {
-    updateStoredThemeState(() => DEFAULT_THEME_STATE);
-  }, []);
-
-  const updateThemePack = useCallback((variant: ThemeVariant, patch: Partial<ChromeTheme>) => {
-    updateStoredThemeState((state) => updateChromeTheme(state, variant, patch));
-  }, []);
-
-  const updateThemeFonts = useCallback((variant: ThemeVariant, patch: Partial<ThemeFonts>) => {
-    updateStoredThemeState((state) => setThemeFonts(state, variant, patch));
-  }, []);
-
-  const setCodeThemeId = useCallback((variant: ThemeVariant, codeThemeId: string) => {
-    updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
-  }, []);
-
-  const isDefaultThemePack = useCallback(
-    (variant: ThemeVariant) =>
-      areThemePacksEqual(
-        resolveThemePack(snapshot.state, variant),
-        resolveThemePack(DEFAULT_THEME_STATE, variant),
-      ),
-    [snapshot.state],
-  );
+  const isDefaultThemePack = (variant: ThemeVariant) =>
+    areThemePacksEqual(
+      resolveThemePack(snapshot.state, variant),
+      resolveThemePack(DEFAULT_THEME_STATE, variant),
+    ) &&
+    areWindowTranslucenciesEqual(
+      snapshot.state.translucency[variant],
+      DEFAULT_THEME_STATE.translucency[variant],
+    );
 
   // Keep the DOM synced if something bypassed the immediate module-load apply.
   useEffect(() => {
@@ -291,8 +361,11 @@ export function useTheme() {
   return {
     activeTheme,
     canImportThemeString,
+    systemUiFont: snapshot.state.systemUiFont,
+    setSystemUiFont,
     darkTheme,
     defaultActiveTheme,
+    desktopBlurUnavailable: snapshot.desktopBlurUnavailable,
     exportThemeString,
     importThemeString,
     isDefaultActiveTheme,
@@ -304,11 +377,21 @@ export function useTheme() {
     resolvedTheme,
     setCodeThemeId,
     setTheme,
+    setWindowTranslucency,
     theme,
     themeState: snapshot.state,
+    translucency: snapshot.state.translucency,
     updateThemeFonts,
     updateThemePack,
   } as const;
 }
 
-export type { ChromeTheme, ThemeFonts, ThemeMode, ThemePack, ThemeState, ThemeVariant };
+export type {
+  ChromeTheme,
+  ThemeFonts,
+  ThemeMode,
+  ThemePack,
+  ThemeState,
+  ThemeVariant,
+  WindowTranslucency,
+};

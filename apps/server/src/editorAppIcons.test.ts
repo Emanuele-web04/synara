@@ -5,11 +5,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { clearEditorIconInFlightCache, resolveCachedEditorIcon } from "./editorAppIcons";
+import { clearWindowsStorePackageDiscoveryCache } from "./editorAppDiscovery";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   clearEditorIconInFlightCache();
+  clearWindowsStorePackageDiscoveryCache();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -71,6 +73,32 @@ function writeFakeLinuxDesktopIcon(input: {
   fs.writeFileSync(path.join(iconsDir, `${input.iconName}.png`), input.bytes);
 }
 
+function writeFakeWindowsStorePackageIcon(input: {
+  readonly programFilesDir: string;
+  readonly packageDirName: string;
+  readonly iconFileName: string;
+  readonly bytes: Uint8Array;
+}): void {
+  const assetsDir = path.join(input.programFilesDir, "WindowsApps", input.packageDirName, "Assets");
+  fs.mkdirSync(assetsDir, { recursive: true });
+  fs.writeFileSync(path.join(assetsDir, input.iconFileName), input.bytes);
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function writeFakePowerShellAppxRegistration(input: {
+  readonly binDir: string;
+  readonly installLocation: string;
+}): void {
+  fs.mkdirSync(input.binDir, { recursive: true });
+  const script = `#!/bin/sh\nprintf '%s\\n' ${shellSingleQuote(input.installLocation)}\n`;
+  const scriptPath = path.join(input.binDir, "powershell.exe");
+  fs.writeFileSync(scriptPath, script);
+  fs.chmodSync(scriptPath, 0o755);
+}
+
 describe("resolveCachedEditorIcon", () => {
   it("copies a macOS app PNG icon into the cache", async () => {
     const homeDir = makeTempDir("synara-editor-icon-home-");
@@ -117,6 +145,50 @@ describe("resolveCachedEditorIcon", () => {
       cacheDir,
       platform: "linux",
       env: { HOME: homeDir, PATH: "", XDG_DATA_DIRS: "" },
+    });
+
+    expect(icon?.contentType).toBe("image/png");
+    expect(icon?.path.startsWith(cacheDir)).toBe(true);
+    expect(icon ? fs.readFileSync(icon.path) : null).toEqual(Buffer.from(bytes));
+  });
+
+  it("copies a Windows Store package PNG icon for VS Code", async () => {
+    const programFilesDir = makeTempDir("synara-editor-icon-win-program-files-");
+    const cacheDir = makeTempDir("synara-editor-icon-win-cache-");
+    const powershellBinDir = makeTempDir("synara-editor-icon-win-powershell-");
+    const localAppData = makeTempDir("synara-editor-icon-win-local-appdata-");
+    const packageDirName = "Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe";
+    const installLocation = path.join(programFilesDir, "WindowsApps", packageDirName);
+    const bytes = new Uint8Array([137, 80, 78, 71, 20, 21, 22]);
+    writeFakeWindowsStorePackageIcon({
+      programFilesDir,
+      packageDirName,
+      iconFileName: "Square44x44Logo.targetsize-256_altform-unplated.png",
+      bytes,
+    });
+    writeFakePowerShellAppxRegistration({ binDir: powershellBinDir, installLocation });
+    fs.mkdirSync(
+      path.join(
+        localAppData,
+        "Microsoft",
+        "WindowsApps",
+        "Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+      ),
+      { recursive: true },
+    );
+
+    const icon = await resolveCachedEditorIcon({
+      editorId: "vscode",
+      cacheDir,
+      platform: "win32",
+      env: {
+        LOCALAPPDATA: localAppData,
+        PATH: powershellBinDir,
+        PATHEXT: ".EXE",
+        ProgramFiles: programFilesDir,
+        ProgramW6432: "",
+        SystemDrive: "",
+      },
     });
 
     expect(icon?.contentType).toBe("image/png");

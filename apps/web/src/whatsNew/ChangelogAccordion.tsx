@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 
-import { pluralize } from "@t3tools/shared/text";
+import { pluralize } from "@synara/shared/text";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { cn } from "~/lib/utils";
@@ -30,12 +30,13 @@ export interface ChangelogAccordionProps {
 
 export function ChangelogAccordion({
   entries,
-  defaultExpandedVersion = null,
+  defaultExpandedVersion: defaultExpandedVersionProp,
   className,
 }: ChangelogAccordionProps) {
+  const defaultExpandedVersion = defaultExpandedVersionProp ?? null;
   if (entries.length === 0) {
     return (
-      <p className={cn("text-xs text-muted-foreground", className)}>
+      <p className={cn("text-ui leading-snug text-muted-foreground", className)}>
         No release notes yet — check back after the next update.
       </p>
     );
@@ -75,9 +76,11 @@ function ChangelogAccordionRow({
         <CollapsibleTrigger className="group flex w-full items-center gap-3 py-3 text-left">
           <DisclosureChevron open={open} />
           <span className="flex flex-1 items-baseline gap-2">
-            <span className="text-xs text-muted-foreground">{entry.date}</span>
-            <span className="text-sm font-semibold text-foreground">Version {entry.version}</span>
-            <span className="text-xs text-muted-foreground/70">({featureLabel})</span>
+            <span className="text-ui leading-snug text-muted-foreground">{entry.date}</span>
+            <span className="text-ui-lg font-semibold text-foreground">
+              Version {entry.version}
+            </span>
+            <span className="text-ui leading-snug text-muted-foreground/70">({featureLabel})</span>
           </span>
         </CollapsibleTrigger>
         <CollapsiblePanel>

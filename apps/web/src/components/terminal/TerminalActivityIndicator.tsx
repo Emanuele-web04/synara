@@ -2,7 +2,7 @@
 // Purpose: Compact terminal lifecycle indicator for running, attention, and review states.
 // Layer: Terminal presentation primitive
 
-import type { TerminalVisualState } from "@t3tools/shared/terminalThreads";
+import type { TerminalVisualState } from "@synara/shared/terminalThreads";
 
 import { cn } from "~/lib/utils";
 
@@ -15,8 +15,9 @@ const RUNNING_INDICATOR_OFFSETS_MS = [0, 160, 320, 480] as const;
 
 export default function TerminalActivityIndicator({
   className,
-  state = "running",
+  state: stateProp,
 }: TerminalActivityIndicatorProps) {
+  const state = stateProp ?? "running";
   if (state === "attention" || state === "review") {
     return (
       <span

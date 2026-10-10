@@ -31,12 +31,24 @@ export class PersistenceDecodeError extends Schema.TaggedErrorClass<PersistenceD
 }
 
 export function toPersistenceSqlError(operation: string) {
-  return (cause: unknown): PersistenceSqlError =>
-    new PersistenceSqlError({
+  return (cause: unknown): PersistenceSqlError => {
+    const messages: string[] = [];
+    const seen = new Set<unknown>();
+    let current: unknown = cause;
+    while (current && typeof current === "object" && !seen.has(current)) {
+      seen.add(current);
+      if (current instanceof Error && current.message && !messages.includes(current.message)) {
+        messages.push(current.message);
+      }
+      current = "cause" in current ? (current as { readonly cause?: unknown }).cause : undefined;
+    }
+    const causeDetail = messages.length > 0 ? ` (${messages.join(": ")})` : "";
+    return new PersistenceSqlError({
       operation,
-      detail: `Failed to execute ${operation}`,
+      detail: `Failed to execute ${operation}${causeDetail}`,
       cause,
     });
+  };
 }
 
 export function toPersistenceDecodeError(operation: string) {
@@ -48,6 +60,16 @@ export function toPersistenceDecodeError(operation: string) {
     });
 }
 
+export function toPersistenceSqlOrDecodeError(
+  sqlOperation: string,
+  decodeOperation: string,
+): (cause: unknown) => PersistenceSqlError | PersistenceDecodeError {
+  return (cause) =>
+    Schema.isSchemaError(cause)
+      ? toPersistenceDecodeError(decodeOperation)(cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
+}
+
 export function toPersistenceDecodeCauseError(operation: string) {
   return (cause: unknown): PersistenceDecodeError =>
     new PersistenceDecodeError({
@@ -57,8 +79,35 @@ export function toPersistenceDecodeCauseError(operation: string) {
     });
 }
 
+/**
+ * The projection cursor table is non-empty but a projector the snapshot
+ * sequence depends on has no cursor row. The snapshot fence is unknowable in
+ * this state: reporting any number would either serve stale data as fresh or
+ * demand an unsatisfiable resnapshot forever. Reachable only through an
+ * interrupted projection rebuild (repair/restore), so it names the missing
+ * cursors and points at the recovery path instead of guessing.
+ */
+export class ProjectionStateIncompleteError extends Schema.TaggedErrorClass<ProjectionStateIncompleteError>()(
+  "ProjectionStateIncompleteError",
+  {
+    missingProjectors: Schema.Array(Schema.String),
+    knownProjectors: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return (
+      `Projection state is incomplete: missing cursor rows for ${this.missingProjectors.join(", ")} ` +
+      `(present: ${this.knownProjectors.join(", ") || "none"}). ` +
+      "The snapshot sequence cannot be derived; restart the server so the projection " +
+      "bootstrap can rebuild the missing cursors, or run repair local state."
+    );
+  }
+}
+
 export const isPersistenceError = (u: unknown) =>
-  Schema.is(PersistenceSqlError)(u) || Schema.is(PersistenceDecodeError)(u);
+  Schema.is(PersistenceSqlError)(u) ||
+  Schema.is(PersistenceDecodeError)(u) ||
+  Schema.is(ProjectionStateIncompleteError)(u);
 
 export class MigrationLineageError extends Schema.TaggedErrorClass<MigrationLineageError>()(
   "MigrationLineageError",
@@ -73,6 +122,22 @@ export class MigrationLineageError extends Schema.TaggedErrorClass<MigrationLine
       `Migration tracker does not match any known lineage: migration ${this.firstDivergedId} ` +
       `is recorded as "${this.recordedName}" but Synara expects "${this.expectedName}". ` +
       `Refusing to run migrations against an unrecognized database.`
+    );
+  }
+}
+
+export class MigrationSchemaTooNewError extends Schema.TaggedErrorClass<MigrationSchemaTooNewError>()(
+  "MigrationSchemaTooNewError",
+  {
+    databaseMigrationId: Schema.Number,
+    latestSupportedMigrationId: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return (
+      `Database schema migration ${this.databaseMigrationId} is newer than this Synara build ` +
+      `(latest supported migration: ${this.latestSupportedMigrationId}). ` +
+      "Refusing writable startup; upgrade Synara or restore a compatible database backup."
     );
   }
 }
@@ -119,8 +184,15 @@ export type OrchestrationCommandReceiptRepositoryError =
 
 export type ProviderSessionRuntimeRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
-export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+export type ProjectionRepositoryError =
+  | PersistenceSqlError
+  | PersistenceDecodeError
+  | ProjectionStateIncompleteError;
 
 export type AuthPairingLinkRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
 export type AuthSessionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+
+export type AutomationRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+
+export type TodoRepositoryError = PersistenceSqlError | PersistenceDecodeError;

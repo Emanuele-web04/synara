@@ -1,0 +1,138 @@
+// FILE: activeThreadDelete.ts
+// Purpose: Owns the shared server-delete and worktree-cleanup sequence for active threads.
+// Layer: Web orchestration helper
+// Exports: deleteActiveThreadFromClient
+
+import type { ThreadId } from "@synara/contracts";
+import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
+import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
+
+import { toastManager } from "../components/ui/toast";
+import { readNativeApi } from "../nativeApi";
+import { useStore } from "../store";
+import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
+import type { Thread } from "../types";
+import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
+import { reconcileDeletedThreadFromClient } from "./deletedThreadClientReconciliation";
+import { newCommandId } from "./utils";
+
+// The terminal runtime pulls in xterm and its addons (~223 KB gzip). Importing it
+// statically here anchored the whole terminal stack into the eager sidebar/router
+// graph, so every page load paid for it. Deleting a thread is a rare, already
+// async user action, so the chunk is fetched on demand instead. The import is
+// awaited (never fire-and-forget) so disposal cannot race the rest of the delete
+// sequence, and the resolved module is cached by the module system afterwards.
+async function disposeThreadTerminalRuntimes(threadId: ThreadId): Promise<void> {
+  try {
+    const { terminalRuntimeRegistry } =
+      await import("../components/terminal/terminalRuntimeRegistry");
+    for (const scopeId of terminalScopeIdsForThread(threadId)) {
+      terminalRuntimeRegistry.disposeThread(scopeId);
+    }
+  } catch (error) {
+    // A failed chunk fetch must not abort the delete sequence: the durable delete
+    // already landed server-side and the server owns provider/terminal teardown.
+    console.error("Failed to dispose terminal runtimes for deleted thread", { threadId, error });
+  }
+}
+
+export async function deleteActiveThreadFromClient<TPrepared = undefined>(input: {
+  readonly threadId: ThreadId;
+  /** Delete native descendants before their parent, invoking callbacks for each accepted delete. */
+  readonly includeSubagentDescendants?: boolean;
+  readonly deletedThreadIds?: ReadonlySet<ThreadId>;
+  readonly reconcileDeletedThread?: boolean;
+  readonly worktreeCleanupMode?: "prompt" | "skip";
+  readonly prepareForDelete?: (thread: Thread) => TPrepared;
+  readonly onDeleted: (input: {
+    thread: Thread;
+    prepared: TPrepared | undefined;
+  }) => void | Promise<void>;
+  readonly removeWorktree: (input: {
+    cwd: string;
+    path: string;
+    force: boolean;
+  }) => Promise<unknown>;
+  readonly unknownWorktreeErrorMessage?: string;
+}): Promise<void> {
+  const api = readNativeApi();
+  if (!api) return;
+  const state = useStore.getState();
+  const thread = getThreadFromState(state, input.threadId);
+  if (!thread) return;
+  const project = state.projects.find((candidate) => candidate.id === thread.projectId) ?? null;
+  const allThreads = getThreadsFromState(state);
+  const threadsToDelete = input.includeSubagentDescendants
+    ? [...collectSubagentDescendants(allThreads, thread.id).toReversed(), thread]
+    : [thread];
+  const deletedThreadIds = new Set([
+    ...(input.deletedThreadIds ?? []),
+    ...threadsToDelete.map((candidate) => candidate.id),
+  ]);
+  const survivingThreads = allThreads.filter(
+    (candidate) => candidate.id === input.threadId || !deletedThreadIds.has(candidate.id),
+  );
+  const orphanedWorktreePath = getOrphanedWorktreePathForThread(survivingThreads, input.threadId);
+  const displayWorktreePath = orphanedWorktreePath
+    ? formatWorktreePathForDisplay(orphanedWorktreePath)
+    : null;
+  const shouldDeleteWorktree =
+    (input.worktreeCleanupMode ?? "prompt") === "prompt" &&
+    orphanedWorktreePath !== null &&
+    project !== null &&
+    (await api.dialogs.confirm(
+      [
+        "This thread is the only one linked to this worktree:",
+        displayWorktreePath ?? orphanedWorktreePath,
+        "",
+        "Delete the worktree too?",
+      ].join("\n"),
+    ));
+
+  // Children go first: if a delete fails, their surviving parent remains reachable.
+  // Worktree removal happens only after the entire requested subtree was accepted.
+  for (const deletedThread of threadsToDelete) {
+    const prepared = input.prepareForDelete?.(deletedThread);
+    await api.orchestration.dispatchCommand({
+      type: "thread.delete",
+      commandId: newCommandId(),
+      threadId: deletedThread.id,
+    });
+    // Provider and terminal cleanup are owned by the server-side lifecycle
+    // reactor. Dispose only the local renderer after the durable delete intent
+    // was accepted, so a rejected delete never tears down a live client session.
+    await disposeThreadTerminalRuntimes(deletedThread.id);
+    if (input.reconcileDeletedThread ?? true) {
+      void reconcileDeletedThreadFromClient({
+        threadId: deletedThread.id,
+        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
+      });
+    }
+    await input.onDeleted({ thread: deletedThread, prepared });
+  }
+
+  if (!shouldDeleteWorktree || !orphanedWorktreePath || !project) return;
+  try {
+    await input.removeWorktree({
+      cwd: project.cwd,
+      path: orphanedWorktreePath,
+      force: true,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : (input.unknownWorktreeErrorMessage ?? "Unknown error removing worktree.");
+    console.error("Failed to remove orphaned worktree after thread deletion", {
+      threadId: input.threadId,
+      projectCwd: project.cwd,
+      worktreePath: orphanedWorktreePath,
+      error,
+    });
+    toastManager.add({
+      type: "error",
+      title: "Thread deleted, but worktree removal failed",
+      description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`,
+    });
+  }
+}

@@ -32,19 +32,28 @@ const headerButtonDarkBorderClassName =
 // Adding a new variant? Mirror an existing one's border/focus treatment so the
 // family stays visually coherent. Prefer adding a variant over passing a
 // className override at the call site.
+//
+// The `shape` axis is orthogonal to variant × size: `capsule` turns any
+// variant into a fully rounded pill (dialog footers detect the `rounded-full`
+// class and skip their radius/sizing override for capsules).
 const buttonVariants = cva(
   extendButtonIconChildSelectors(
-    "[&_svg]:-mx-0.5 relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border font-medium text-[length:var(--app-font-size-ui,12px)] outline-none pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 sm:text-[length:var(--app-font-size-ui,12px)] [&_svg:not([class*='opacity-'])]:opacity-80 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+    "[&_svg]:-mx-0.5 relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border font-medium text-ui outline-none pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 sm:text-ui [&_svg:not([class*='opacity-'])]:opacity-80 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   ),
   {
     defaultVariants: {
+      shape: "default",
       size: "default",
       variant: "default",
     },
     variants: {
+      shape: {
+        capsule: "rounded-full font-normal",
+        default: "",
+      },
       size: {
         chip: extendButtonIconChildSelectors(
-          "h-auto gap-1 px-2 py-0.5 text-[length:var(--app-font-size-ui-sm,11px)] sm:h-auto sm:text-[length:var(--app-font-size-ui-sm,11px)] [&_svg:not([class*='size-'])]:size-3 sm:[&_svg:not([class*='size-'])]:size-3",
+          "h-auto gap-1 px-2 py-0.5 text-ui-sm sm:h-auto sm:text-ui-sm [&_svg:not([class*='size-'])]:size-3 sm:[&_svg:not([class*='size-'])]:size-3",
         ),
         default: "h-9 px-[calc(--spacing(3)-1px)] sm:h-8",
         icon: "size-9 sm:size-8",
@@ -62,10 +71,10 @@ const buttonVariants = cva(
         lg: "h-10 px-[calc(--spacing(3.5)-1px)] sm:h-9",
         sm: "h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:h-7",
         xl: extendButtonIconChildSelectors(
-          "h-11 px-[calc(--spacing(4)-1px)] text-[length:var(--app-font-size-ui-lg,13px)] sm:h-10 sm:text-[length:var(--app-font-size-ui-lg,13px)] [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4.5",
+          "h-11 px-[calc(--spacing(4)-1px)] text-ui-lg sm:h-10 sm:text-ui-lg [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4.5",
         ),
         xs: extendButtonIconChildSelectors(
-          "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-[length:var(--app-font-size-ui-sm,11px)] sm:h-6 sm:text-[length:var(--app-font-size-ui-xs,10px)] [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
+          "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-ui-sm sm:h-6 sm:text-ui-xs [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
         ),
       },
       variant: {
@@ -79,7 +88,7 @@ const buttonVariants = cva(
         destructive:
           "border-destructive bg-destructive text-white [:hover,[data-pressed]]:bg-destructive/90",
         "destructive-outline":
-          "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-destructive-foreground [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4",
+          "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-destructive [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4 [:hover,[data-pressed]]:text-destructive",
         ghost:
           "border-transparent bg-transparent text-[var(--color-text-foreground-secondary)] focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-0 [:hover,[data-pressed]]:bg-[var(--color-background-button-secondary-hover)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)] data-pressed:bg-[var(--color-background-button-secondary)] data-pressed:text-[var(--color-text-foreground)]",
         link: "border-transparent underline-offset-4 [:hover,[data-pressed]]:underline",
@@ -100,7 +109,7 @@ const buttonVariants = cva(
     compoundVariants: [
       {
         class:
-          "!box-border !h-auto !min-h-7 gap-1.5 rounded-lg px-[calc(--spacing(2.5)-1px)] !py-0.5 text-[length:var(--app-font-size-ui,12px)] sm:!h-auto sm:px-[calc(--spacing(2.5)-1px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
+          "!box-border !h-auto !min-h-7 gap-1.5 rounded-lg px-[calc(--spacing(2.5)-1px)] !py-0.5 text-ui sm:!h-auto sm:px-[calc(--spacing(2.5)-1px)] sm:text-ui-sm",
         size: "xs",
         variant: "chrome-outline",
       },
@@ -109,6 +118,8 @@ const buttonVariants = cva(
         size: "icon-xs",
         variant: "chrome-outline",
       },
+      // Last, so a size's own radius (xs, icon-xs) never squares a capsule off.
+      { class: "rounded-full", shape: "capsule" },
     ],
   },
 );
@@ -116,20 +127,21 @@ const buttonVariants = cva(
 interface ButtonProps extends useRender.ComponentProps<"button"> {
   variant?: VariantProps<typeof buttonVariants>["variant"];
   size?: VariantProps<typeof buttonVariants>["size"];
+  shape?: VariantProps<typeof buttonVariants>["shape"];
 }
 
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant, size, render, ...props },
-  ref,
-) {
+// `ref` rides along in `...props` instead of going through `forwardRef`: React 19 passes it as a
+// plain prop, and `mergeProps` forwards it to the rendered element either way. Pulling it out into
+// a local made React Compiler read the whole component as a ref access during render and skip it —
+// which costs every button on screen its auto-memoization.
+function Button({ className, variant, size, shape, render, ...props }: ButtonProps) {
   const typeValue: React.ButtonHTMLAttributes<HTMLButtonElement>["type"] = render
     ? undefined
     : "button";
 
   const defaultProps = {
-    className: cn(buttonVariants({ className, size, variant })),
+    className: cn(buttonVariants({ className, shape, size, variant })),
     "data-slot": "button",
-    ref,
     type: typeValue,
   };
 
@@ -138,7 +150,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     props: mergeProps<"button">(defaultProps, props),
     render,
   });
-});
+}
 
 /** Dialog footers and inline error actions share this sizing override. */
 const dialogActionButtonClassName =

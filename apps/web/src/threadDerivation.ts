@@ -2,8 +2,8 @@
 // Purpose: Rebuild stable Thread objects from normalized shell/detail slices.
 // Exports: cached collection helpers and thread derivation for the web store hot path.
 
-import type { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
-import type { AppState } from "./store";
+import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
+import type { AppState } from "./storeState";
 import type {
   ChatMessage,
   ProposedPlan,
@@ -80,7 +80,7 @@ function selectThreadMessages(state: AppState, threadId: ThreadId): Thread["mess
   );
 }
 
-function selectThreadActivities(state: AppState, threadId: ThreadId): Thread["activities"] {
+export function selectThreadActivities(state: AppState, threadId: ThreadId): Thread["activities"] {
   return collectByIds(
     state.activityIdsByThreadId?.[threadId] ?? EMPTY_ACTIVITY_IDS_BY_THREAD[threadId],
     state.activityByThreadId?.[threadId] ?? EMPTY_ACTIVITY_MAP,
@@ -138,6 +138,9 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     session,
     latestTurn: turnState?.latestTurn ?? null,
     pendingSourceProposedPlan: turnState?.pendingSourceProposedPlan,
+    ...(turnState?.pendingTurnStartMessageId !== undefined
+      ? { pendingTurnStartMessageId: turnState.pendingTurnStartMessageId }
+      : {}),
     messages,
     activities,
     proposedPlans,

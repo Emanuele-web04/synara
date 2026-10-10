@@ -12,10 +12,14 @@
  * @module ProviderService
  */
 import type {
+  ClaudeCacheObservation,
+  ProviderBackgroundTaskInput,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
   ProviderKind,
+  ModelSelection,
+  RuntimeMode,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
@@ -24,20 +28,77 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
+  ProviderSteerSubagentInput,
   ProviderStopSessionInput,
+  ProviderStopTaskInput,
   ThreadId,
+  TurnId,
   ProviderTurnStartResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
-import type { Effect, Stream } from "effect";
+import type { Deferred, Effect, Stream } from "effect";
 
 import type { ProviderServiceError } from "../Errors.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type { PersistedProviderRuntimeEvent } from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import type {
+  ProviderAdapterCapabilities,
+  ProviderTurnDispatchOptions,
+} from "./ProviderAdapter.ts";
+
+export type ProviderRuntimeEventPumpStatus = "starting" | "healthy" | "recovering" | "degraded";
+
+export interface ProviderRuntimeEventPumpHealth {
+  readonly provider: ProviderKind;
+  readonly status: ProviderRuntimeEventPumpStatus;
+  readonly consecutiveFailures: number;
+  readonly updatedAt: string;
+  readonly lastEventAt?: string;
+  readonly lastError?: string;
+  readonly quarantinedEvents?: number;
+  readonly lastQuarantinedEventId?: string;
+  readonly lastQuarantinedAt?: string;
+}
+
+export interface ProviderSessionStartOutcome {
+  readonly session: ProviderSession;
+  readonly nativeResumeAttempted: boolean;
+  readonly nativeResumeSucceeded: boolean;
+  readonly priorTranscriptBootstrapPending: boolean;
+}
+
+export interface ProviderSessionStartOutcomeOptions {
+  /**
+   * Persist a pending transcript bootstrap when this start cannot restore
+   * provider-native context. The caller clears it only after the provider has
+   * accepted the bootstrap turn.
+   */
+  readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
+}
+
+export interface PersistedProviderSessionProfile {
+  readonly provider: ProviderKind;
+  readonly modelSelection?: ModelSelection;
+  readonly runtimeMode?: RuntimeMode;
+  readonly enableComputerControl: boolean;
+}
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly startClaudeCompaction?: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly cancellation?: Deferred.Deferred<void>;
+  }) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+  /** Signal local compaction preparation cancellation without delivering a provider command. */
+  readonly cancelClaudeCompactionDiscovery?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+  readonly getClaudeCacheObservation?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ClaudeCacheObservation | undefined, ProviderServiceError>;
   /**
    * Start a provider session.
    */
@@ -47,10 +108,26 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**
+   * Start a provider session and report whether the adapter confirmed that it
+   * restored the provider-native session named by the supplied cursor.
+   */
+  readonly startSessionWithOutcome?: (
+    threadId: ThreadId,
+    input: ProviderSessionStartInput,
+    options?: ProviderSessionStartOutcomeOptions,
+  ) => Effect.Effect<ProviderSessionStartOutcome, ProviderServiceError>;
+
+  /** Mark a persisted prior-transcript bootstrap as accepted by the provider. */
+  readonly completePriorTranscriptBootstrap?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Send a provider turn.
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
@@ -58,6 +135,7 @@ export interface ProviderServiceShape {
    */
   readonly steerTurn: (
     input: ProviderSteerTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
@@ -77,11 +155,44 @@ export interface ProviderServiceShape {
     input: ProviderForkThreadInput,
   ) => Effect.Effect<ProviderForkThreadResult | null, ProviderServiceError>;
 
+  /** Copy an external native conversation without ever resuming the original. */
+  readonly importExternalThread?: (input: {
+    readonly threadId: ThreadId;
+    readonly provider: "codex" | "claudeAgent";
+    readonly externalThreadId: string;
+    readonly sourceCwd: string;
+    readonly cwd?: string;
+    readonly modelSelection: ModelSelection;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly runtimeMode: RuntimeMode;
+  }) => Effect.Effect<ProviderForkThreadResult, ProviderServiceError>;
+
   /**
    * Interrupt a running provider turn.
    */
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Stop a provider-native background task. No-op when the routed adapter does
+   * not support task control.
+   */
+  readonly stopTask: (input: ProviderStopTaskInput) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Move an in-flight foreground task to the background. No-op when the routed
+   * adapter does not support task control.
+   */
+  readonly backgroundTask: (
+    input: ProviderBackgroundTaskInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Deliver a mid-task user message to a running subagent of an active session.
+   */
+  readonly steerSubagent: (
+    input: ProviderSteerSubagentInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -114,11 +225,21 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Whether provider-native background tasks are currently keeping the
+   * thread's runtime alive. Restart-oriented recovery paths must check this
+   * before stopRuntimeSession: killing the shared subprocess silently
+   * terminates those tasks.
+   */
+  readonly hasLiveRuntimeTasks?: (input: { readonly threadId: ThreadId }) => Effect.Effect<boolean>;
+
+  /**
    * Forget a stale provider-native resume cursor while preserving local routing
    * metadata such as provider options and runtime mode.
    */
   readonly clearSessionResumeCursor?: (input: {
     readonly threadId: ThreadId;
+    /** Clear only persisted resume state without stopping a runtime that owns live tasks. */
+    readonly preserveActiveRuntime?: boolean;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -127,6 +248,11 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /** Read the settings that produced a persisted native resume cursor. */
+  readonly getPersistedSessionProfile: (
+    threadId: ThreadId,
+  ) => Effect.Effect<PersistedProviderSessionProfile | undefined, ProviderServiceError>;
 
   /**
    * Read static capabilities for a provider adapter.
@@ -151,16 +277,39 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Stop provider event producers, drain the lossless fan-out while subscribers
+   * are still live, and then close the publication bus. Safe to call repeatedly.
+   */
+  readonly closeRuntimeEvents: Effect.Effect<void>;
+
+  /**
+   * Snapshot the supervised runtime-event pumps. The state is operational
+   * evidence for reconciliation and diagnostics, not provider availability.
+   */
+  readonly getRuntimeEventPumpHealth?: () => Effect.Effect<
+    ReadonlyArray<ProviderRuntimeEventPumpHealth>
+  >;
+
+  /**
    * Canonical provider runtime event stream.
    *
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /**
+   * Canonical runtime events paired with their already-durable journal sequence.
+   *
+   * Durable production services expose this stream so the ingestion worker can
+   * drain through the accepted row without appending the same event again.
+   * Lightweight/test services may omit it and retain the append-on-ingest path.
+   */
+  readonly streamPersistedEvents?: Stream.Stream<PersistedProviderRuntimeEvent>;
 }
 
 /**
  * ProviderService - Service tag for provider orchestration.
  */
 export class ProviderService extends ServiceMap.Service<ProviderService, ProviderServiceShape>()(
-  "t3/provider/Services/ProviderService",
+  "synara/provider/Services/ProviderService",
 ) {}

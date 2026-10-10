@@ -23,16 +23,19 @@ const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconB
   {
     label,
     tooltip,
-    tooltipSide = "top",
+    tooltipSide: tooltipSideProp,
     title,
     className,
-    size = "icon-xs",
-    variant = "ghost",
+    size: sizeProp,
+    variant: variantProp,
     children,
     ...buttonProps
   },
   ref,
 ) {
+  const tooltipSide = tooltipSideProp ?? "top";
+  const size = sizeProp === undefined ? "icon-xs" : sizeProp;
+  const variant = variantProp === undefined ? "ghost" : variantProp;
   if (tooltip === undefined || tooltip === null) {
     return (
       <Button

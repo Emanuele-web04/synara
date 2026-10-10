@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateState } from "@synara/contracts";
 
 import {
   getCanRetryAfterDownloadFailure,
@@ -7,6 +7,7 @@ import {
   getDownloadStallTimeoutMessage,
   hasDownloadProgressAdvanced,
   isExpectedStalledDownloadCancellationError,
+  isUpdateVersionAllowedForFlavor,
   isUpdateVersionNewer,
   nextStatusAfterDownloadFailure,
   shouldCheckForUpdatesOnForeground,
@@ -27,6 +28,8 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  installFailureCount: 0,
+  flavor: "production",
   releaseUrl: null,
 };
 
@@ -169,6 +172,48 @@ describe("isUpdateVersionNewer", () => {
     expect(isUpdateVersionNewer("0.1.1", "0.1.0")).toBe(false);
     expect(isUpdateVersionNewer("1.0.0", "0.9.9")).toBe(false);
   });
+
+  it("orders prereleases within the same base version", () => {
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-beta.2")).toBe(true);
+    expect(isUpdateVersionNewer("0.1.0-beta.2", "0.1.0-beta.1")).toBe(false);
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-beta.1")).toBe(false);
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-beta.1.1")).toBe(true);
+    // Numeric identifiers compare numerically, not lexically.
+    expect(isUpdateVersionNewer("0.1.0-beta.2", "0.1.0-beta.10")).toBe(true);
+    // A different prerelease channel does not count as newer.
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-alpha.9")).toBe(false);
+  });
+});
+
+describe("isUpdateVersionAllowedForFlavor", () => {
+  it("lets beta installs accept only beta releases", () => {
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta.2", "beta")).toBe(true);
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta", "beta")).toBe(true);
+    // The GitHub feed falls back to latest-mac.yml when beta-mac.yml is
+    // absent; a stable build must never be offered to a beta install.
+    expect(isUpdateVersionAllowedForFlavor("0.8.4", "beta")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("0.9.0", "beta")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-alpha.1", "beta")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-betamax.1", "beta")).toBe(false);
+  });
+
+  it("lets production installs accept only stable releases", () => {
+    expect(isUpdateVersionAllowedForFlavor("0.8.4", "production")).toBe(true);
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta.1", "production")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("v0.8.4-alpha.9", "production")).toBe(false);
+  });
+
+  it("does not gate development or canary flavors", () => {
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta.2", "canary")).toBe(true);
+    expect(isUpdateVersionAllowedForFlavor("0.8.4", "development")).toBe(true);
+  });
+
+  it("fails closed on unparseable versions for beta and production", () => {
+    expect(isUpdateVersionAllowedForFlavor("nightly-build", "beta")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("nightly-build", "production")).toBe(false);
+    // Canary keeps the pre-existing "differs means newer" passthrough.
+    expect(isUpdateVersionAllowedForFlavor("nightly-build", "canary")).toBe(true);
+  });
 });
 
 describe("getAutoUpdateDisabledReason", () => {
@@ -221,7 +266,7 @@ describe("getAutoUpdateDisabledReason", () => {
         disabledByEnv: true,
         hasUpdateFeedConfig: true,
       }),
-    ).toContain("T3CODE_DISABLE_AUTO_UPDATE");
+    ).toContain("SYNARA_DISABLE_AUTO_UPDATE");
   });
 
   it("reports linux non-AppImage builds as disabled", () => {
