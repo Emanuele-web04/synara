@@ -36,6 +36,14 @@ import { createThreadFindHighlightStore, type ThreadFindHighlightStore } from ".
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
 import { ThreadErrorBanner } from "./ThreadErrorBanner";
+import { SubagentRunningChip } from "./SubagentRunningChip";
+import { SubagentThreadIntro } from "./SubagentThreadIntro";
+import {
+  createSubagentRunVisibilityStore,
+  SubagentRunContext,
+  type SubagentRunContextValue,
+} from "./subagentRunContext";
+import { CHAT_COLUMN_FRAME_CLASS_NAME, CHAT_COLUMN_GUTTER_CLASS_NAME } from "./composerPickerStyles";
 import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
 
 interface ChatTranscriptPaneProps {
@@ -43,6 +51,11 @@ interface ChatTranscriptPaneProps {
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
   subagentsRunning?: boolean;
+  /** What the transcript's subagent cards read from the chat (child threads, controls). */
+  subagentRun?: Omit<SubagentRunContextValue, "visibility"> | null;
+  /** The newest card with subagents at work; drives the floating "N running" chip. */
+  runningSubagentRun?: { entryId: string; runningCount: number } | null;
+  subagentThread?: ComponentProps<typeof MessagesTimeline>["subagentThread"];
   collapseFinishedTurns?: boolean;
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
@@ -147,6 +160,9 @@ export function ChatTranscriptPane({
   activeTurnId,
   activeTurnInProgress,
   subagentsRunning,
+  subagentRun,
+  runningSubagentRun,
+  subagentThread,
   collapseFinishedTurns,
   activeTurnStartedAt,
   agentActivityDetail,
@@ -307,6 +323,33 @@ export function ChatTranscriptPane({
 
   const agentDetailOpen = Boolean(agentActivityDetail && onCloseAgentActivityDetail);
 
+  // Subagent cards report whether they are on screen; the "N running" chip
+  // shows only while the card of the subagents still at work is not.
+  const [subagentRunVisibility] = useState(() => createSubagentRunVisibilityStore());
+  const subagentRunContextValue = useMemo<SubagentRunContextValue | null>(
+    () => (subagentRun ? { ...subagentRun, visibility: subagentRunVisibility } : null),
+    [subagentRun, subagentRunVisibility],
+  );
+  const subagentCardPlacements = useSyncExternalStore(
+    subagentRunVisibility.subscribe,
+    subagentRunVisibility.get,
+    subagentRunVisibility.get,
+  );
+  const runningCardPlacement = runningSubagentRun
+    ? (subagentCardPlacements.get(runningSubagentRun.entryId) ?? null)
+    : null;
+  const subagentChipVisible =
+    runningSubagentRun !== null &&
+    runningSubagentRun !== undefined &&
+    runningCardPlacement !== "visible" &&
+    !agentActivityDetail;
+  const subagentChipEntryId = runningSubagentRun?.entryId ?? null;
+  const handleSubagentChipClick = useCallback(() => {
+    if (subagentChipEntryId) {
+      timelineControllerRef?.current?.scrollToWorkEntry(subagentChipEntryId);
+    }
+  }, [subagentChipEntryId, timelineControllerRef]);
+
   return (
     <div
       data-chat-transcript-pane="true"
@@ -342,11 +385,15 @@ export function ChatTranscriptPane({
           aria-hidden={agentDetailOpen || undefined}
           inert={agentDetailOpen}
         >
+          <SubagentRunContext.Provider value={subagentRunContextValue}>
           <MessagesTimeline
             key={activeThreadId}
+            subagentThread={subagentThread ?? null}
             historyHeader={
               importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
                 <ImportedHistoryButton history={importedHistory} />
+              ) : subagentThread ? (
+                <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
               ) : undefined
             }
             hasMessages={hasMessages}
@@ -433,6 +480,7 @@ export function ChatTranscriptPane({
             {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
             {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
           />
+          </SubagentRunContext.Provider>
         </div>
         {agentActivityDetail && onCloseAgentActivityDetail ? (
           <div className="absolute inset-0">
@@ -481,6 +529,26 @@ export function ChatTranscriptPane({
             >
               <ArrowDownIcon className="size-3.5" />
             </button>
+          </div>
+        ) : null}
+
+        {runningSubagentRun ? (
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-6 z-30 py-1",
+              DISCLOSURE_CONTENT_MOTION_CLASS,
+              subagentChipVisible ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0",
+            )}
+            style={scrollButtonFrameStyle}
+          >
+            <div className={cn(CHAT_COLUMN_FRAME_CLASS_NAME, CHAT_COLUMN_GUTTER_CLASS_NAME, "flex")}>
+              <SubagentRunningChip
+                runningCount={runningSubagentRun.runningCount}
+                direction={runningCardPlacement === "below" ? "below" : "above"}
+                visible={subagentChipVisible}
+                onClick={handleSubagentChipClick}
+              />
+            </div>
           </div>
         ) : null}
 

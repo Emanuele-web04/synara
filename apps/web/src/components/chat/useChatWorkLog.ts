@@ -1,9 +1,9 @@
 import { OrchestrationThreadActivity, ThreadId, type TurnId } from "@synara/contracts";
 import { useEffect, useMemo } from "react";
 import {
+  deriveSubagentTaskEnds,
   deriveWorkLogEntries,
   isLatestTurnSettled,
-  omitRoutedSubagentWorkEntries,
 } from "../../session-logic";
 import { useStore } from "../../store";
 import { createThreadSelector } from "../../storeSelectors";
@@ -13,6 +13,7 @@ import { useWorkflowRunUiThreadState } from "../../workflowRunUiStore";
 import { enrichSubagentWorkEntries, resolveComposerStripWorkLogEntries } from "../ChatView.logic";
 import { createRelevantWorkLogThreadsSelector } from "../ChatView.selectors";
 import { deriveComposerSubagentStripItems } from "./ComposerSubagentStrip.logic";
+import { foldSubagentRunWorkEntries } from "./SubagentRunCard.logic";
 import { deriveWorkflowRunState, type WorkflowSubagentThreadRef } from "./WorkflowRunCard.logic";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 interface ChatWorkLogInput {
@@ -95,11 +96,10 @@ export function useChatWorkLog({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
-  // Subagents are presented by the composer strip (and their own threads); the
-  // transcript drops the routed fan-out rows entirely. The enriched list above is
-  // still what feeds the strip-adjacent derivations that need receiver metadata.
+  // A turn's subagents fold into one card entry where they were launched (the
+  // routed fan-out rows and their progress reports never render as tool rows).
   const workLogEntries = useMemo(
-    () => omitRoutedSubagentWorkEntries(enrichedWorkLogEntries),
+    () => foldSubagentRunWorkEntries(enrichedWorkLogEntries),
     [enrichedWorkLogEntries],
   );
   // The strip's liveness (running/settled) reads the child thread's own session and
@@ -269,6 +269,12 @@ export function useChatWorkLog({
     }
     return toolUseIds;
   }, [stripSourceActivities]);
+  // When each subagent task ended (parent-side task completions): the card's
+  // authority for background subagents, whose own threads end at launch.
+  const subagentTaskEnds = useMemo(
+    () => deriveSubagentTaskEnds(stripSourceActivities),
+    [stripSourceActivities],
+  );
   const composerSubagentStripItems = useMemo(
     () =>
       deriveComposerSubagentStripItems({
@@ -336,6 +342,11 @@ export function useChatWorkLog({
   );
   return {
     workLogEntries,
+    // The parent's child threads (and theirs), which the transcript card reads
+    // for live state, durations, and result previews.
+    subagentRunThreads: relevantWorkLogThreads,
+    backgroundedSubagentToolUseIds,
+    subagentTaskEnds,
     composerSubagentStripItems,
     stripSourceThreadId,
     workflowRunState,

@@ -10,7 +10,12 @@ import { pluralize } from "@synara/shared/text";
 import { useThreadHasPendingDraft } from "../composerDraftStore";
 import { createSubagentSiblingSummariesSelector, createThreadSelector } from "../storeSelectors";
 import { useStore } from "../store";
-import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
+import {
+  humanizeSubagentStatus,
+  resolveSubagentPresentationForThread,
+  resolveSubagentThreadStatusKind,
+  subagentStatusDotClassName,
+} from "../lib/subagentPresentation";
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
 import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
@@ -133,9 +138,7 @@ function renderSubagentLabel(input: {
 
   return (
     <span className="min-w-0 truncate">
-      <span className="font-medium" style={{ color: presentation.accentColor }}>
-        {presentation.nickname ?? presentation.primaryLabel}
-      </span>
+      <span className="font-medium">{presentation.nickname ?? presentation.primaryLabel}</span>
       {supportingLabel ? (
         <span className={cn("ml-1 text-muted-foreground/48", input.roleClassName)}>
           {presentation.role ? `(${presentation.role})` : supportingLabel}
@@ -201,19 +204,10 @@ export function SidebarThreadRowContent({
 }) {
   const subagentIndentPx = subagentIndentPxProp ?? 0;
   const isSubagentThread = Boolean(thread.parentThreadId);
-  const subagentPresentation =
-    variant === "standard" && isSubagentThread
-      ? resolveSubagentPresentationForThread({
-          thread: {
-            id: thread.id,
-            parentThreadId: thread.parentThreadId,
-            subagentAgentId: thread.subagentAgentId,
-            subagentNickname: thread.subagentNickname,
-            subagentRole: thread.subagentRole,
-            title: thread.title,
-          },
-        })
-      : null;
+  // A child row's dot carries its state (running/done/failed/stopped), the
+  // same hues as the transcript card; the name stays in the neutral row color.
+  const subagentStatusKind =
+    variant === "standard" && isSubagentThread ? resolveSubagentThreadStatusKind(thread) : null;
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
   const hasPendingDraft = useThreadHasPendingDraft(thread.id);
 
@@ -221,15 +215,25 @@ export function SidebarThreadRowContent({
     <>
       {variant === "standard" && isSubagentThread ? (
         <span
-          aria-hidden="true"
           className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
           style={{ marginLeft: `${subagentIndentPx}px` }}
+          title={humanizeSubagentStatus(subagentStatusKind) ?? undefined}
         >
-          <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
-          <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
           <span
-            className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{ backgroundColor: subagentPresentation?.accentColor }}
+            aria-hidden="true"
+            className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35"
+          />
+          <span
+            aria-hidden="true"
+            className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35"
+          />
+          <span
+            data-testid="sidebar-subagent-status-dot"
+            data-status={subagentStatusKind ?? "none"}
+            className={cn(
+              "absolute left-1.5 top-1/2 size-[6px] -translate-x-1/2 -translate-y-1/2 rounded-full",
+              subagentStatusDotClassName(subagentStatusKind),
+            )}
           />
         </span>
       ) : terminalEntryPoint ? (
