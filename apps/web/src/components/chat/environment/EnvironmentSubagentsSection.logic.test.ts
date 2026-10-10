@@ -115,6 +115,10 @@ describe("deriveEnvironmentSubagentRoster", () => {
     });
 
     // Live rows in spawn order; settled rows most recently settled first.
+    for (const item of [...roster.active, ...roster.previous]) {
+      expect(item.accentColor).toBeTypeOf("string");
+      expect(item.accentColor).not.toBe("");
+    }
     expect(roster.active.map((item) => item.primaryLabel)).toEqual(["Dove", "Cyan"]);
     expect(roster.previous.map((item) => item.primaryLabel)).toEqual(["Blue", "Ada"]);
     expect(roster.active[1]).toMatchObject({
