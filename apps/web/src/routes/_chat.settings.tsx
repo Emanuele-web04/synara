@@ -888,6 +888,15 @@ function SettingsRouteView() {
 
         <SettingsSection title="Code and status">
           {renderBooleanSettingRow({
+            settingKey: "showEnvironmentSubagents",
+            title: "Subagents",
+            description:
+              "Show a compact summary of the chat's subagents in the Environment panel. Click it to open the full list, running and done, in the right dock.",
+            resetLabel: "subagents section",
+            ariaLabel: "Show the Subagents section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
             settingKey: "showEnvironmentUsage",
             title: "Usage",
             description: "Show the provider usage row in the chat Environment panel.",
