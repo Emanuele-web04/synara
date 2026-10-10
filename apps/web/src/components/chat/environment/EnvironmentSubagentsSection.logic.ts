@@ -163,8 +163,9 @@ export function formatEnvironmentSubagentMeta(
     | "toolUses"
     | "totalTokens"
   >,
+  includeFailureSummary = true,
 ): string | null {
-  if (item.statusKind === "failed" && item.summary) {
+  if (includeFailureSummary && item.statusKind === "failed" && item.summary) {
     return item.summary;
   }
   const parts = [

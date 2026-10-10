@@ -10,6 +10,8 @@ import { useCallback } from "react";
 import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 
+import { toastManager } from "../ui/toast";
+
 import { localSubagentThreadId } from "../ChatView.selectors";
 import type { ComposerSubagentStripItem } from "./ComposerSubagentStrip.logic";
 
@@ -22,13 +24,22 @@ export function useSubagentRunControls(stripSourceThreadId: ThreadId | null) {
       // The Task tool_use lives on the strip source thread (the parent while a
       // subagent thread is open), so route the command there.
       if (!api || !stripSourceThreadId) return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.task.background",
-        commandId: newCommandId(),
-        threadId: stripSourceThreadId,
-        toolUseId: item.providerThreadId,
-        createdAt: new Date().toISOString(),
-      });
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.task.background",
+          commandId: newCommandId(),
+          threadId: stripSourceThreadId,
+          toolUseId: item.providerThreadId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not update the subagent",
+          description:
+            error instanceof Error ? error.message : "The subagent request failed. Try again.",
+        });
+      }
     },
     [stripSourceThreadId],
   );
@@ -42,12 +53,21 @@ export function useSubagentRunControls(stripSourceThreadId: ThreadId | null) {
     async (item: SubagentRunTarget) => {
       const api = readNativeApi();
       if (!api || !stripSourceThreadId) return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.interrupt",
-        commandId: newCommandId(),
-        threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
-        createdAt: new Date().toISOString(),
-      });
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.interrupt",
+          commandId: newCommandId(),
+          threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
+          createdAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not update the subagent",
+          description:
+            error instanceof Error ? error.message : "The subagent request failed. Try again.",
+        });
+      }
     },
     [stripSourceThreadId],
   );

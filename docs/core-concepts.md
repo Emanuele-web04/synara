@@ -67,8 +67,10 @@ composer; it is not sent twice.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
   The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
-  summarizes all of them (running and done); clicking it opens the full list in the right dock,
-  where finished subagents stay one click away after the strip hides.
+  summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
+  where finished subagents stay one click away after the strip hides. In split view, the list
+  stays beside the chat in its pane when opening a child or returning to its parent. Failed
+  Stop or background requests report an error so the run is not mistaken for stopped.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
