@@ -4,7 +4,7 @@
 
 import { type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   hasReconciledServerProviderStatuses,
@@ -16,6 +16,11 @@ import {
   serverQueryKeys,
   sidebarLocalServersQueryOptions,
 } from "./serverReactQuery";
+
+const nativeApiMocks = vi.hoisted(() => ({ getConfig: vi.fn<() => Promise<ServerConfig>>() }));
+vi.mock("~/nativeApi", () => ({
+  ensureNativeApi: () => ({ server: { getConfig: nativeApiMocks.getConfig } }),
+}));
 
 const READY_CODEX_STATUS = {
   provider: "codex",
@@ -44,6 +49,36 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
 }
 
 describe("server provider status reconciliation", () => {
+  it("does not restore a removed account when reconnects overlap an older config request", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([READY_CODEX_STATUS]));
+    let resolveOlderConfig!: (config: ServerConfig) => void;
+    nativeApiMocks.getConfig.mockReset();
+    nativeApiMocks.getConfig.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOlderConfig = resolve;
+        }),
+    );
+    nativeApiMocks.getConfig.mockResolvedValueOnce({
+      ...makeServerConfig([]),
+      cwd: "new-workspace",
+    });
+
+    const olderRefresh = refreshServerConfigAfterTransportOpen(queryClient);
+    await reconcileServerProviderStatuses(queryClient, []);
+    const newerRefresh = refreshServerConfigAfterTransportOpen(queryClient);
+    // Let a fresh request commit first, while releasing the older one even if
+    // the cache coalesced it with the new reconnect.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolveOlderConfig(makeServerConfig([READY_CODEX_STATUS]));
+    await Promise.all([olderRefresh, newerRefresh]);
+
+    const config = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+    expect(config?.providers).toEqual([]);
+    expect(config?.cwd).toBe("new-workspace");
+  });
+
   it("remembers a config-only recovery across repeated reconnects", async () => {
     const queryClient = new QueryClient();
     const warningStatus = {

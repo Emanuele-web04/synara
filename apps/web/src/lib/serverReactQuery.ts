@@ -98,6 +98,8 @@ const latestProviderStatusSnapshotByQueryClient = new WeakMap<
   ProviderStatusSnapshot
 >();
 
+const configRefreshRevisionByQueryClient = new WeakMap<QueryClient, number>();
+
 export function hasReconciledServerProviderStatuses(queryClient: QueryClient): boolean {
   return latestProviderStatusSnapshotByQueryClient.get(queryClient)?.reconciled === true;
 }
@@ -224,6 +226,8 @@ export async function refreshServerConfigAfterTransportOpen(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
+  const configRefreshRevision = (configRefreshRevisionByQueryClient.get(queryClient) ?? 0) + 1;
+  configRefreshRevisionByQueryClient.set(queryClient, configRefreshRevision);
   const providerSnapshotAtStart = latestProviderStatusSnapshotByQueryClient.get(queryClient);
   const configSnapshotAtStart = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
   const providerRevisionAtStart = providerSnapshotAtStart?.revision ?? 0;
@@ -232,14 +236,11 @@ export async function refreshServerConfigAfterTransportOpen(
     providers: providerSnapshotAtStart?.providers ?? [],
     reconciled: false,
   });
-  const loadConfig =
-    options?.loadConfig ??
-    (() =>
-      queryClient.fetchQuery({
-        ...serverConfigQueryOptions(),
-        staleTime: 0,
-      }));
+  // A reconnect must issue a fresh projection read. fetchQuery can share an
+  // older in-flight request and write its stale membership before we reconcile.
+  const loadConfig = options?.loadConfig ?? (() => ensureNativeApi().server.getConfig());
   const config = await loadConfig();
+  if (configRefreshRevisionByQueryClient.get(queryClient) !== configRefreshRevision) return;
   const latestProviderSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient);
   const streamArrivedDuringRefresh =
     latestProviderSnapshot?.reconciled === true &&
