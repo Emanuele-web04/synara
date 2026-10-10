@@ -23,7 +23,7 @@ export interface ExternalMcpIntegrationRecord {
   readonly pairedAt: string | null;
   readonly revokedAt: string | null;
   readonly rateLimitPerMinute: number;
-  readonly concurrencyLimit: number;
+  readonly concurrencyLimit: number | null;
 }
 
 export interface ExternalMcpProjectRecord {
@@ -70,8 +70,13 @@ export interface ExternalMcpRepositoryShape {
     readonly expiresAt: string;
     readonly pairingExpiresAt: string;
     readonly rateLimitPerMinute: number;
-    readonly concurrencyLimit: number;
+    readonly concurrencyLimit: number | null;
   }) => Effect.Effect<void, Error>;
+  readonly updateConcurrencyLimit: (input: {
+    readonly integrationId: string;
+    readonly concurrencyLimit: number | null;
+    readonly now: string;
+  }) => Effect.Effect<boolean, Error>;
   readonly listIntegrations: () => Effect.Effect<
     ReadonlyArray<ExternalMcpIntegrationRecord>,
     Error
