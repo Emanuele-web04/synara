@@ -1248,6 +1248,16 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageIdsForTurn = (threadId: ThreadId, turnId: TurnId) =>
     Cache.invalidate(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId));
 
+  const getTrackedAssistantTurnIdsForThread = (threadId: ThreadId) =>
+    Cache.keys(turnMessageIdsByTurnKey).pipe(
+      Effect.map((keys) => {
+        const prefix = `${threadId}:`;
+        return Array.from(keys)
+          .filter((key) => key.startsWith(prefix))
+          .map((key) => TurnId.makeUnsafe(key.slice(prefix.length)));
+      }),
+    );
+
   const appendBufferedAssistantText = (messageId: MessageId, delta: string) =>
     Cache.getOption(bufferedAssistantTextByMessageId, messageId).pipe(
       Effect.flatMap((existingText) =>
@@ -3120,6 +3130,24 @@ const make = Effect.gen(function* () {
           });
           yield* clearProviderDiffPlaceholder(thread.id, exitedTurnId);
         }
+        // A session stop settles the session (activeTurnId: null) before the
+        // runtime exits, and several adapters' exit events name no turn, so the
+        // turn resolved above can be missing. Every turn still tracked for this
+        // thread died with the session: finalize its messages before the buffers
+        // below are dropped, or their text is lost and they stay streaming.
+        yield* Effect.forEach(
+          yield* getTrackedAssistantTurnIdsForThread(thread.id),
+          (orphanedTurnId) =>
+            finalizeBufferedAssistantMessagesForTurn({
+              event,
+              threadId: thread.id,
+              turnId: orphanedTurnId,
+              createdAt: now,
+              commandTag: "assistant-complete-session-exit",
+              finalDeltaCommandTag: "assistant-delta-session-exit",
+            }),
+          { discard: true },
+        );
         yield* clearTurnStateForSession(thread.id);
       }
 
