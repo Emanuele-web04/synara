@@ -86,11 +86,15 @@ describe("WsStreamAdmission", () => {
       yield* Deferred.await(started);
       expect(yield* admission.snapshot).toMatchObject({ active: 1, releasedTotal: 0 });
       // An identical resubscribe — same client, same key — attaches to the
-      // existing lease instead of tearing it down and replaying the stream.
-      // Capacity accounting keeps seeing the single live lease.
+      // existing lease without ending the first producer. The short-lived
+      // second producer releases its own capacity when it completes.
       yield* Stream.runDrain(admission.guard(1, { key: "server.settings" }, Stream.empty));
       expect(yield* Ref.get(subscriptions)).toBe(1);
-      expect(yield* admission.snapshot).toMatchObject({ active: 1, admittedTotal: 1 });
+      expect(yield* admission.snapshot).toMatchObject({
+        active: 1,
+        admittedTotal: 2,
+        releasedTotal: 1,
+      });
       // releaseKey (the unsubscribe path) completes the shared latch, so the
       // still-running first stream ends without manual interruption.
       yield* admission.releaseKey(1, "server.settings");
@@ -98,8 +102,8 @@ describe("WsStreamAdmission", () => {
       expect(yield* admission.snapshot).toMatchObject({
         clients: 0,
         active: 0,
-        admittedTotal: 1,
-        releasedTotal: 1,
+        admittedTotal: 2,
+        releasedTotal: 2,
       });
     }).pipe(Effect.runPromise);
   });
@@ -107,13 +111,18 @@ describe("WsStreamAdmission", () => {
   it("bounds live taps under repeated same-key resubscribes", async () => {
     await Effect.gen(function* () {
       const admission = yield* makeWsStreamAdmission();
+      const subscriptions = yield* Ref.make(0);
       // Forks a guarded never-ending stream and waits until it is admitted, so
       // successive resubscribes attach in a deterministic order.
       const forkGuardedNever = () =>
         Effect.gen(function* () {
           const admitted = yield* Deferred.make<void>();
           const source = Stream.concat(
-            Stream.fromEffect(Deferred.succeed(admitted, undefined)),
+            Stream.fromEffect(
+              Ref.update(subscriptions, (count) => count + 1).pipe(
+                Effect.andThen(Deferred.succeed(admitted, undefined)),
+              ),
+            ),
             Stream.never,
           );
           const fiber = yield* Effect.forkChild(
@@ -124,25 +133,34 @@ describe("WsStreamAdmission", () => {
           yield* Deferred.await(admitted);
           return fiber;
         });
-      const first = yield* forkGuardedNever();
-      const second = yield* forkGuardedNever();
-      const third = yield* forkGuardedNever();
-      // Every identical resubscribe shares the one live lease — none ends its
-      // predecessor, and the ledger never counts more than one active slot.
+      const fibers = yield* Effect.forEach(
+        Array.from({ length: MAX_STREAMS_PER_RPC_CLIENT }),
+        forkGuardedNever,
+      );
+      const overflow = yield* Stream.runDrain(
+        admission.guard(
+          1,
+          { key: "orchestration.thread:t", threadId: "t" },
+          Stream.fromEffect(Ref.update(subscriptions, (count) => count + 1)),
+        ),
+      ).pipe(Effect.exit);
+      expect(overflow._tag).toBe("Failure");
+      expect(yield* Ref.get(subscriptions)).toBe(MAX_STREAMS_PER_RPC_CLIENT);
+      // Sharing a lease preserves existing producers but cannot exempt a new
+      // producer from the per-client total stream budget.
       expect(yield* admission.snapshot).toMatchObject({
-        active: 1,
-        admittedTotal: 1,
+        active: MAX_STREAMS_PER_RPC_CLIENT,
+        admittedTotal: MAX_STREAMS_PER_RPC_CLIENT,
+        rejectedCapacityTotal: 1,
       });
       // One unsubscribe ends every attached stream through the shared latch.
       yield* admission.releaseKey(1, "orchestration.thread:t");
-      yield* Fiber.join(first);
-      yield* Fiber.join(second);
-      yield* Fiber.join(third);
+      yield* Effect.forEach(fibers, Fiber.join, { discard: true });
       expect(yield* admission.snapshot).toMatchObject({
         clients: 0,
         active: 0,
-        admittedTotal: 1,
-        releasedTotal: 1,
+        admittedTotal: MAX_STREAMS_PER_RPC_CLIENT,
+        releasedTotal: MAX_STREAMS_PER_RPC_CLIENT,
       });
     }).pipe(Effect.runPromise);
   });
@@ -186,22 +204,32 @@ describe("WsStreamAdmission", () => {
       expect(otherClient.leaseId).not.toBe(first.leaseId);
       expect(yield* admission.snapshot).toMatchObject({
         clients: 2,
-        active: 2,
-        admittedTotal: 2,
+        active: 3,
+        admittedTotal: 3,
       });
 
       // Each holder's release detaches; the shared lease survives until its
       // last holder lets go.
       yield* admission.release(first);
-      expect(yield* admission.snapshot).toMatchObject({ active: 2, releasedTotal: 0 });
+      expect(yield* admission.snapshot).toMatchObject({ active: 2, releasedTotal: 1 });
 
+      // An explicit unsubscribe releases all remaining holders. A late
+      // finalizer for that retired lease must not free its successor's slot.
+      yield* admission.releaseKey(1, "server.settings");
+      const replacement = yield* admission.acquire(1, { key: "server.settings" });
       yield* admission.release(shared);
+      expect(yield* admission.snapshot).toMatchObject({
+        active: 2,
+        admittedTotal: 4,
+        releasedTotal: 2,
+      });
+      yield* admission.release(replacement);
       yield* admission.release(otherClient);
       expect(yield* admission.snapshot).toMatchObject({
         clients: 0,
         active: 0,
-        admittedTotal: 2,
-        releasedTotal: 2,
+        admittedTotal: 4,
+        releasedTotal: 4,
       });
     }).pipe(Effect.runPromise);
   });

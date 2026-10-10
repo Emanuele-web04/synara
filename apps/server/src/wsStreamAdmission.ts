@@ -77,6 +77,10 @@ function activeThreadCount(leases: ReadonlyMap<string, LeaseEntry>): number {
   ).size;
 }
 
+function activeStreamCount(leases: ReadonlyMap<string, LeaseEntry>): number {
+  return Array.from(leases.values()).reduce((total, entry) => total + entry.holds, 0);
+}
+
 export const makeWsStreamAdmission = (
   options: {
     readonly recordRejection?: (input: {
@@ -100,9 +104,27 @@ export const makeWsStreamAdmission = (
             const client = ledger.clients.get(clientId) ?? {
               leases: new Map<string, LeaseEntry>(),
             };
-            // Each client owns an independent ledger. Reusing a key within
-            // that ledger attaches to the existing lease instead of tearing
-            // down and replaying its live stream.
+            // Every guarded call owns a producer, including calls sharing one
+            // key's end latch. Check the total budget before either admission.
+            const active = activeStreamCount(client.leases);
+            const activeThreads = activeThreadCount(client.leases);
+            if (active >= MAX_STREAMS_PER_RPC_CLIENT) {
+              return [
+                {
+                  _tag: "Rejected",
+                  reason: "stream-capacity",
+                  active,
+                  activeThreads,
+                  error: new WsRpcError({
+                    message: "Streaming RPC capacity exceeded.",
+                    code: "STREAM_CAPACITY_EXCEEDED",
+                    retryable: true,
+                    retryAfterMs: STREAM_CAPACITY_RETRY_AFTER_MS,
+                  }),
+                },
+                { ...ledger, rejectedCapacityTotal: ledger.rejectedCapacityTotal + 1 },
+              ];
+            }
             const heldEntry = Array.from(client.leases.values()).find(
               (entry) => entry.lease.key === subscription.key,
             );
@@ -122,26 +144,8 @@ export const makeWsStreamAdmission = (
                 {
                   ...ledger,
                   clients: nextClients,
+                  admittedTotal: ledger.admittedTotal + 1,
                 },
-              ];
-            }
-            const active = client.leases.size;
-            const activeThreads = activeThreadCount(client.leases);
-            if (active >= MAX_STREAMS_PER_RPC_CLIENT) {
-              return [
-                {
-                  _tag: "Rejected",
-                  reason: "stream-capacity",
-                  active,
-                  activeThreads,
-                  error: new WsRpcError({
-                    message: "Streaming RPC capacity exceeded.",
-                    code: "STREAM_CAPACITY_EXCEEDED",
-                    retryable: true,
-                    retryAfterMs: STREAM_CAPACITY_RETRY_AFTER_MS,
-                  }),
-                },
-                { ...ledger, rejectedCapacityTotal: ledger.rejectedCapacityTotal + 1 },
               ];
             }
             if (
@@ -228,7 +232,11 @@ export const makeWsStreamAdmission = (
           nextLeases.set(lease.leaseId, { lease: entry.lease, holds: entry.holds - 1 });
           const nextClients = new Map(ledger.clients);
           nextClients.set(lease.clientId, { leases: nextLeases });
-          return { ...ledger, clients: nextClients };
+          return {
+            ...ledger,
+            clients: nextClients,
+            releasedTotal: ledger.releasedTotal + 1,
+          };
         }
         const nextLeases = new Map(client.leases);
         nextLeases.delete(lease.leaseId);
@@ -266,7 +274,7 @@ export const makeWsStreamAdmission = (
                 {
                   ...ledger,
                   clients: nextClients,
-                  releasedTotal: ledger.releasedTotal + 1,
+                  releasedTotal: ledger.releasedTotal + entry.holds,
                 },
               ];
             }
@@ -296,7 +304,7 @@ export const makeWsStreamAdmission = (
         (ledger): WsStreamAdmissionSnapshot => ({
           clients: ledger.clients.size,
           active: Array.from(ledger.clients.values()).reduce(
-            (total, client) => total + client.leases.size,
+            (total, client) => total + activeStreamCount(client.leases),
             0,
           ),
           admittedTotal: ledger.admittedTotal,
