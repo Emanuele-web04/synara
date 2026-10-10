@@ -2446,6 +2446,12 @@ const make = Effect.gen(function* () {
           extractSubagentIdentityHints(collabItem),
         );
         for (const receiverThreadId of receiverThreadIds) {
+          // A subagent that messages or waits on the conversation that launched
+          // it (Codex's "root") names that conversation as a receiver; it is
+          // the launcher, never a new subagent of the subagent.
+          if (receiverThreadId === eventProviderParentThreadId) {
+            continue;
+          }
           yield* ensureSubagentThread(
             receiverThreadId,
             resolveSubagentIdentityFromDirectory(identityDirectory, {

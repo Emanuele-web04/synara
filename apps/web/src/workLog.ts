@@ -144,6 +144,9 @@ export interface WorkLogEntry {
   requestKind?: WorkLogRequestKind;
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
+  // Set on the one entry a turn's subagents fold into: the transcript renders
+  // it as the subagent card (see SubagentRunCard.logic.ts).
+  subagentRun?: WorkLogSubagentRun;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
   // Deterministic coordinator-monitor rows (worker settled / stuck /
@@ -285,6 +288,26 @@ export interface WorkLogSubagent {
   isActive?: boolean | undefined;
 }
 
+/** What the parent's own log says about one subagent of a folded run. */
+export interface WorkLogSubagentRunMember {
+  /** The subagent's key in `subagents` (its provider thread id). */
+  key: string;
+  /** When the launching call first named this subagent. */
+  launchedAt: string;
+  /** The latest step the subagent reported to its launcher. */
+  latestStep: string | null;
+  /** Final state from the subagent's task completion, once it ended. */
+  outcome: "completed" | "failed" | "stopped" | null;
+  /** The launching call's own error, when the launch itself failed. */
+  failure: string | null;
+  /** When a later collab call first reported it finished (Codex "settled"). */
+  settledAt: string | null;
+}
+
+export interface WorkLogSubagentRun {
+  members: ReadonlyArray<WorkLogSubagentRunMember>;
+}
+
 export interface WorkLogSubagentAction {
   tool: string;
   status: string;
@@ -383,9 +406,9 @@ export function orderedActivities(
   return ordered;
 }
 
-// Routed subagent work (Claude's agent fan-out) belongs to the composer subagent
-// strip and to the child threads themselves — the transcript never renders a
-// subagent roster. The check runs on derived entries rather than raw activities
+// Routed subagent work (Claude's agent fan-out) belongs to the transcript's
+// subagent card and to the child threads themselves, never to plain tool rows.
+// The check runs on derived entries rather than raw activities
 // because providers stream the tool call first and attach receiver metadata on a
 // later lifecycle update that merges into the same entry. Generic OpenCode task
 // calls carry no receiver metadata and keep their ordinary chat row.
@@ -399,8 +422,14 @@ export function isRoutedSubagentWorkEntry(
     return true;
   }
   // Waiting on, closing, or hearing back from subagents only changes their
-  // state, which the strip and the child threads already show. Codex sends
+  // state, which the card and the child threads already show. Codex sends
   // these without receiver ids, so without this they read as bare "Wait" rows.
+  return isSubagentStateOnlyWorkEntry(entry);
+}
+
+// A collab call that only reports on subagents already launched (wait, close,
+// settled). It may update their state but never launches one.
+export function isSubagentStateOnlyWorkEntry(entry: Pick<WorkLogEntry, "subagentAction">): boolean {
   const tool = normalizeCollabIdentifier(entry.subagentAction?.tool ?? null);
   return tool !== null && SUBAGENT_STATE_ONLY_COLLAB_TOOLS.has(tool);
 }
@@ -507,6 +536,30 @@ function subagentOutcomeFromStatus(
     default:
       return undefined;
   }
+}
+
+export interface SubagentTaskEnd {
+  outcome: "completed" | "failed" | "stopped";
+  endedAt: string;
+}
+
+/**
+ * When and how each subagent task ended, keyed by its launching tool call id,
+ * from the parent's task completions. A background subagent's own thread ends
+ * its first turn at launch, so this is the only reliable end it has.
+ */
+export function deriveSubagentTaskEnds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, SubagentTaskEnd> {
+  const ends = new Map<string, SubagentTaskEnd>();
+  for (const activity of activities) {
+    if (activity.kind !== "task.completed") continue;
+    const payload = asRecord(activity.payload);
+    const toolUseId = asTrimmedString(payload?.toolUseId);
+    const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
+    if (toolUseId && outcome) ends.set(toolUseId, { outcome, endedAt: activity.createdAt });
+  }
+  return ends;
 }
 
 // A subagent's progress rows take its final state from the task completion or

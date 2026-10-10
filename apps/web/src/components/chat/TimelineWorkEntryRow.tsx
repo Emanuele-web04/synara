@@ -58,6 +58,7 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { SubagentRunCard } from "./SubagentRunCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
@@ -653,6 +654,11 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         />
       </div>
     );
+  }
+
+  // A turn's subagents fold into one entry that renders as the subagent card.
+  if (workEntry.subagentRun) {
+    return <SubagentRunCard workEntry={workEntry} />;
   }
 
   // A created-automation row renders as its own card instead of a tool-call line.
