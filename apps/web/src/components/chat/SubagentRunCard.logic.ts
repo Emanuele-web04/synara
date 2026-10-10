@@ -51,7 +51,7 @@ interface RunDraft {
 }
 
 function runKeyForEntry(entry: WorkLogEntry): string {
-  return entry.turnId ? `turn:${entry.turnId}` : `entry:${entry.id}`;
+  return `entry:${entry.id}`;
 }
 
 function isTerminalStatus(status: string | null | undefined): boolean {
@@ -74,7 +74,7 @@ function progressStep(entry: WorkLogEntry): string | null {
 }
 
 /**
- * Distinct children launched in a turn share a card at the first launch. A
+ * Each launching call retains its position; adjacent calls group after timeline ordering. A
  * repeat launch/resume of a child opens another invocation, even in that turn.
  * Later state-only calls (wait, close, settled) update its latest invocation,
  * and progress reports feed the matching invocation's current step. State-only

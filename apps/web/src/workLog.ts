@@ -323,6 +323,8 @@ export interface WorkLogSubagentRunMember {
 }
 
 export interface WorkLogSubagentRun {
+  // Adjacent transcript calls retain their identities for jump and visibility tracking.
+  entryIds?: ReadonlyArray<string>;
   members: ReadonlyArray<WorkLogSubagentRunMember>;
 }
 

@@ -282,15 +282,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
   );
   // Elapsed clocks tick locally so the transcript does not re-render each second.
   const nowMs = useNowMs(card.isLive);
-  // Open while any subagent works, and it stays open once seen live, so a run
-  // that ends mid-turn does not collapse under the reader; a finished run met
-  // in history starts folded into one row.
-  const [seenLive, setSeenLive] = useState(card.isLive);
-  useEffect(() => {
-    if (card.isLive) setSeenLive(true);
-  }, [card.isLive]);
-  const [expandedChoice, setExpandedChoice] = useState<boolean | null>(null);
-  const expanded = expandedChoice ?? (card.isLive || seenLive);
+  const [expanded, setExpandedChoice] = useState(false);
   const header = describeSubagentRunHeader(card, nowMs);
   const liveItems = collectLiveSubagentRunItems(card.rows);
   const onStop = context?.onStop;
@@ -313,6 +305,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const visibility = context?.visibility ?? null;
   const entryId = workEntry.id;
+  const visibilityIdsKey = (workEntry.subagentRun?.entryIds ?? [entryId]).join("\n");
   useEffect(() => {
     const element = rootRef.current;
     if (!element || !visibility || typeof IntersectionObserver === "undefined") return;
@@ -321,23 +314,24 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
         const last = observed.at(-1);
         if (!last) return;
         const viewportTop = last.rootBounds?.top ?? 0;
-        visibility.set(
-          entryId,
-          last.isIntersecting
-            ? "visible"
-            : last.boundingClientRect.bottom <= viewportTop
-              ? "above"
-              : "below",
-        );
+        for (const id of visibilityIdsKey.split("\n"))
+          visibility.set(
+            id,
+            last.isIntersecting
+              ? "visible"
+              : last.boundingClientRect.bottom <= viewportTop
+                ? "above"
+                : "below",
+          );
       },
       { root: element.closest('[data-chat-scroll-container="true"]') },
     );
     observer.observe(element);
     return () => {
       observer.disconnect();
-      visibility.set(entryId, null);
+      for (const id of visibilityIdsKey.split("\n")) visibility.set(id, null);
     };
-  }, [entryId, visibility]);
+  }, [visibilityIdsKey, visibility]);
 
   const HeaderIcon = card.isLive
     ? null
