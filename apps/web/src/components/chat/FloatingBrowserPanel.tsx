@@ -191,7 +191,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
 
   const closeIntentRef = useRef<"close" | "handoff">("handoff");
   const startDragFromClientRef = useRef<
-    (x: number, y: number, options: { reopenMenuOnRelease: boolean }) => void
+    (x: number, y: number, options: { reopenMenuOnRelease: boolean; expandOnClick?: boolean }) => void
   >(() => {});
 
   const handleClose = useCallback(() => {
@@ -379,6 +379,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     activeInteractionCleanupRef.current?.();
     didDragRef.current = false;
     const reopenMenuOnRelease = options.reopenMenuOnRelease && !controlsOpen;
+    const expandOnClick = options.expandOnClick === true;
     setControlsOpen(false);
     setFloatingChromeExpanded(props.threadId, panelRef.current, false);
 
@@ -404,7 +405,9 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         commitPanelRect(panelRectRef.current, host);
         return;
       }
-      if (openMenu && reopenMenuOnRelease) {
+      if (openMenu && expandOnClick) {
+        handlePopToSidebarRef.current();
+      } else if (openMenu && reopenMenuOnRelease) {
         setControlsOpen(true);
         setFloatingChromeExpanded(props.threadId, panelRef.current, true);
       }
@@ -443,7 +446,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    startDragFromClient(event.clientX, event.clientY, { reopenMenuOnRelease: !expandOnClick });
+    startDragFromClient(event.clientX, event.clientY, { reopenMenuOnRelease: !expandOnClick, expandOnClick });
   };
 
   useLayoutEffect(() => {
@@ -511,7 +514,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
           type="button"
           aria-label="Expand browser"
           data-floating-browser-preview-shield="true"
-          className="absolute inset-0 z-50 cursor-grab rounded-[inherit] active:cursor-grabbing"
+          className="pointer-events-auto absolute inset-0 z-50 cursor-grab rounded-[inherit] active:cursor-grabbing"
           onPointerDown={(event) => startHandleGesture(event, true)}
           onClick={(event) => {
             if (event.detail === 0) props.onPopToSidebar();

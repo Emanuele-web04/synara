@@ -30,7 +30,7 @@ export function resolveBrowserRuntimePresentation(input: {
 }) {
   const { native, floating, rect, desktopZoom } = input;
   const layout = floating ? resolveFloatingBrowserGuestLayout(rect) : null;
-  const scale = native && layout ? layout.scale : 1;
+  const scale = layout ? layout.scale : 1;
   const bounds = resolveDesktopDipRectFromCssRect(
     layout
       ? {
