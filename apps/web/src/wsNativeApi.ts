@@ -522,7 +522,7 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
     automationEventListeners.emit(message.data);
   });
-  // Tasks is Beta-only: Stable's server refuses the stream, so don't open it there.
+  // Do not open the Tasks stream when the connected server has refused it.
   if (TASKS_OFFERED_BY_BUILD) {
     transport.subscribe(WS_CHANNELS.todoEvent, (message) => {
       todoEventListeners.emit(message.data);

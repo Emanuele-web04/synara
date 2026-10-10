@@ -5,12 +5,16 @@
 // Layer: Chat right-dock UI
 // Exports: DockExplorerPane
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import type { ThreadId } from "@synara/contracts";
 import { isNormalizedWindowsAbsolutePath } from "@synara/shared/path";
 import { useQueryClient } from "@tanstack/react-query";
 
+import {
+  selectDockExplorerBrowseState,
+  useDockExplorerBrowseStore,
+} from "~/dockExplorerBrowseStore";
 import { directoryChain, useExplorerRevealRequestStore } from "~/explorerRevealRequestStore";
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
@@ -36,11 +40,12 @@ export const DockExplorerPane = function DockExplorerPane(props: {
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
 }) {
   const queryClient = useQueryClient();
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const [expandedDirectories, setExpandedDirectories] = useState<ReadonlySet<string>>(
-    () => new Set<string>(),
+  // Browse state lives in the per-thread store, not component state: the pane
+  // unmounts on a thread switch and remounts on return, so useState here would
+  // reset the selected file, expanded directories, and search query every time.
+  const { selectedFilePath, expandedDirectories, searchQuery } = useDockExplorerBrowseStore(
+    selectDockExplorerBrowseState(props.threadId),
   );
-  const [searchQuery, setSearchQuery] = useState("");
 
   // Reveal requests (e.g. picking a folder in the Cmd+P palette) expand the
   // full ancestor chain and clear any name filter so the tree is what shows.
@@ -49,12 +54,12 @@ export const DockExplorerPane = function DockExplorerPane(props: {
   );
   useEffect(() => {
     if (!revealRequest) return;
-    setSearchQuery("");
+    useDockExplorerBrowseStore.getState().setSearchQuery(props.threadId, "");
     const workspaceRoot = props.workspaceRoot;
     let cancelled = false;
     const expand = (paths: string[]) => {
       if (cancelled) return;
-      setExpandedDirectories((current) => new Set([...current, ...paths]));
+      useDockExplorerBrowseStore.getState().expandDirectories(props.threadId, paths);
     };
     if (!workspaceRoot || !isNormalizedWindowsAbsolutePath(workspaceRoot.replaceAll("\\", "/"))) {
       expand(directoryChain(revealRequest.path));
@@ -95,20 +100,18 @@ export const DockExplorerPane = function DockExplorerPane(props: {
   const handleSelectFile = (path: string) => {
     const request = ++selectionRequestRef.current;
     void flushWorkspaceEditors(queryClient, props.workspaceRoot).then((saved) => {
-      if (saved && request === selectionRequestRef.current) setSelectedFilePath(path);
+      if (saved && request === selectionRequestRef.current) {
+        useDockExplorerBrowseStore.getState().selectFile(props.threadId, path);
+      }
     });
   };
 
   const handleToggleDirectory = (path: string) => {
-    setExpandedDirectories((current) => {
-      const next = new Set(current);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
+    useDockExplorerBrowseStore.getState().toggleDirectory(props.threadId, path);
+  };
+
+  const handleQueryChange = (query: string) => {
+    useDockExplorerBrowseStore.getState().setSearchQuery(props.threadId, query);
   };
 
   return (
@@ -118,7 +121,7 @@ export const DockExplorerPane = function DockExplorerPane(props: {
         selectedFilePath={selectedFilePath}
         expandedDirectories={expandedDirectories}
         query={searchQuery}
-        onQueryChange={setSearchQuery}
+        onQueryChange={handleQueryChange}
         containerClassName={DOCK_EXPLORER_SIDEBAR_CLASS}
         onSelectFile={handleSelectFile}
         onToggleDirectory={handleToggleDirectory}

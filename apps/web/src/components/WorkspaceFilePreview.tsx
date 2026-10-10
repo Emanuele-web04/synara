@@ -303,11 +303,16 @@ function applyWorkspaceFileFindHighlights(
   const registry = workspaceFileFindHighlightRegistry();
   registry?.delete(highlightNames.all);
   registry?.delete(highlightNames.active);
-  if (!root || query.trim().length === 0) return 0;
+  // The viewer also hosts status text and selection controls, which are not
+  // part of the file. Count and highlight the same rendered content only.
+  const contentRoot = root?.querySelector(
+    ".editor-markdown-preview__body, .editor-file-viewer__highlight, .editor-file-viewer__plain",
+  );
+  if (!contentRoot || query.trim().length === 0) return 0;
 
   const ranges: Range[] = [];
   const textNodes: Text[] = [];
-  const walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  const walker = document.createTreeWalker(contentRoot, 4 /* NodeFilter.SHOW_TEXT */);
   let node = walker.nextNode();
   while (node) {
     if (node.nodeType === 3 && node.textContent) textNodes.push(node as Text);
@@ -324,9 +329,9 @@ function applyWorkspaceFileFindHighlights(
   const renderedMatches = collectWorkspaceFileFindMatches(
     renderedText,
     query,
-    FILE_FIND_MAX_MATCHES,
+    FILE_FIND_MAX_MATCHES + 1,
   );
-  for (const match of renderedMatches) {
+  for (const match of renderedMatches.slice(0, FILE_FIND_MAX_MATCHES)) {
     const startSpan = nodeSpans.find(
       (span) => match.startOffset >= span.start && match.startOffset < span.end,
     );
@@ -353,7 +358,7 @@ function applyWorkspaceFileFindHighlights(
   }
   const activeElement = ranges[safeIndex]?.commonAncestorContainer.parentElement;
   activeElement?.scrollIntoView({ block: "nearest" });
-  return ranges.length;
+  return renderedMatches.length;
 }
 
 function createPierreEditor(options: PierreEditorOptions<undefined>) {
@@ -914,15 +919,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     editableDocument != null &&
     editor.state.format?.expectedVersion !== editableDocument.version;
   const displayedFileContents = activeEditBuffer?.contents ?? fileContents;
-  const fileFindMatches = useMemo(
-    () =>
-      collectWorkspaceFileFindMatches(
-        displayedFileContents,
-        fileFindQuery,
-        FILE_FIND_MAX_MATCHES + 1,
-      ),
-    [displayedFileContents, fileFindQuery],
-  );
   useEffect(
     () => () => {
       const registry = workspaceFileFindHighlightRegistry();
@@ -962,10 +958,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     setFileFindRenderedMatchCount((current) =>
       current === renderedMatchCount ? current : renderedMatchCount,
     );
-    if (renderedMatchCount === 0) {
+    const navigableMatchCount = Math.min(FILE_FIND_MAX_MATCHES, renderedMatchCount);
+    if (navigableMatchCount === 0) {
       setFileFindActiveIndex(0);
-    } else if (fileFindActiveIndex >= renderedMatchCount) {
-      setFileFindActiveIndex(renderedMatchCount - 1);
+    } else if (fileFindActiveIndex >= navigableMatchCount) {
+      setFileFindActiveIndex(navigableMatchCount - 1);
     }
   }, [
     displayedFileContents,
@@ -991,14 +988,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   }, []);
   const handleFileFindStep = useCallback(
     (direction: "next" | "previous") => {
-      const count = Math.min(
-        FILE_FIND_MAX_MATCHES,
-        fileFindRenderedMatchCount || fileFindMatches.length,
-      );
+      const count = Math.min(FILE_FIND_MAX_MATCHES, fileFindRenderedMatchCount);
       if (count === 0) return;
       setFileFindActiveIndex((current) => stepWorkspaceFileFindIndex(count, current, direction));
     },
-    [fileFindMatches.length, fileFindRenderedMatchCount],
+    [fileFindRenderedMatchCount],
   );
   const lineCount =
     displayedFileContents.length === 0 ? 0 : displayedFileContents.split("\n").length;
@@ -1321,11 +1315,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             open={fileFindEnabled && fileFindOpen}
             focusNonce={fileFindFocusNonce}
             query={fileFindQuery}
-            matchCount={Math.min(
-              FILE_FIND_MAX_MATCHES,
-              fileFindRenderedMatchCount || fileFindMatches.length,
-            )}
-            matchCountCapped={fileFindMatches.length > FILE_FIND_MAX_MATCHES}
+            matchCount={Math.min(FILE_FIND_MAX_MATCHES, fileFindRenderedMatchCount)}
+            matchCountCapped={fileFindRenderedMatchCount > FILE_FIND_MAX_MATCHES}
             activeIndex={fileFindActiveIndex}
             onQueryChange={handleFileFindQueryChange}
             onStep={handleFileFindStep}
@@ -1455,6 +1446,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
                     cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
                     wikiLinkRoot={props.workspaceRoot ?? undefined}
                     isStreaming={false}
+                    parseHtml
                     className="editor-markdown-preview__body text-sm leading-relaxed"
                     {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}
                   />

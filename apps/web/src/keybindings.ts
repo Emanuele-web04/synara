@@ -233,6 +233,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenFilePreviewFocus,
   },
   {
+    command: "search.files",
+    shortcut: commandShortcut("p"),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "search.content",
+    shortcut: commandShortcut("f", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "settings.usage",
     shortcut: commandShortcut("u", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
