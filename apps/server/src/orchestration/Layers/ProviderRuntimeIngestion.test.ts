@@ -20,6 +20,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderItemId,
   RuntimeItemId,
   RuntimeTaskId,
   ThreadId,
@@ -8152,6 +8153,214 @@ describe("ProviderRuntimeIngestion", () => {
     ).toHaveLength(1);
   });
 
+  it("records a subagent's brief on its child thread as a message from the parent agent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const childThreadId = asThreadId("subagent:thread-1:toolu_brief");
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-brief-collab"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("toolu_brief"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Subagent task",
+        data: {
+          toolCallId: "toolu_brief",
+          toolName: "Agent",
+          input: { description: "Audit SQL", prompt: "Audit the SQL changes." },
+          receiverThreadId: "toolu_brief",
+          nickname: "Audit SQL",
+          prompt: "Audit the SQL changes.",
+        },
+      },
+    });
+    const briefEvent = {
+      type: "item.completed",
+      eventId: asEventId("evt-brief-message"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-brief"),
+      itemId: asItemId("brief-uuid-1"),
+      providerRefs: { providerThreadId: "toolu_brief", providerParentThreadId: "thread-1" },
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        title: "Subagent brief",
+        detail: "Audit the SQL changes.",
+      },
+    } as const;
+    harness.emit(briefEvent);
+    await harness.drain();
+    // A journal replay of the same event must not duplicate the brief.
+    harness.emit(briefEvent);
+    await harness.drain();
+
+    const child = await waitForThread(
+      harness.engine,
+      (thread) => thread.messages.length > 0,
+      2000,
+      childThreadId,
+    );
+    expect(
+      child.messages.map((message) => ({
+        role: message.role,
+        text: message.text,
+        dispatchOrigin: message.dispatchOrigin,
+      })),
+    ).toEqual([{ role: "user", text: "Audit the SQL changes.", dispatchOrigin: "agent" }]);
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const parent = readModel.threads.find((thread) => thread.id === "thread-1");
+    expect(parent?.messages.some((message) => message.text === "Audit the SQL changes.")).toBe(
+      false,
+    );
+  });
+
+  it("titles provider-native children from their prompt and never from a raw id", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-unnamed-child-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-unnamed-child"),
+      itemId: asItemId("item-unnamed-child"),
+      providerRefs: {
+        providerThreadId: "01a1223d-49c0-73c3-b6e3-1f11c74f2c18",
+        providerParentThreadId: "parent-provider-1",
+      },
+      payload: { streamKind: "assistant_text", delta: "Working." },
+    });
+    const unnamed = await waitForThread(
+      harness.engine,
+      () => true,
+      2000,
+      asThreadId("subagent:thread-1:01a1223d-49c0-73c3-b6e3-1f11c74f2c18"),
+    );
+    expect(unnamed.title).toBe("Subagent");
+
+    // The spawn arrives later with only a prompt: the placeholder takes its first line.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-prompt-spawn"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-prompt-spawn"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Subagent",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            receiverThreadIds: ["01a1223d-49c0-73c3-b6e3-1f11c74f2c18"],
+            prompt:
+              "Count the lines of calc.py with wc and report the exact number back to me in one line.\nThen stop.",
+          },
+        },
+      },
+    });
+    const titled = await waitForThread(
+      harness.engine,
+      (thread) => thread.title !== "Subagent",
+      2000,
+      asThreadId("subagent:thread-1:01a1223d-49c0-73c3-b6e3-1f11c74f2c18"),
+    );
+    expect(titled.title).toBe("Count the lines of calc.py with wc and report the exact num…");
+  });
+
+  it("records the spawning subagent thread as the source of a nested subagent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-nested-spawn"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-outer-child"),
+      itemId: asItemId("toolu_inner"),
+      providerRefs: {
+        providerThreadId: "toolu_outer",
+        providerParentThreadId: "thread-1",
+        providerItemId: ProviderItemId.makeUnsafe("toolu_inner"),
+      },
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+        title: "Subagent task",
+        data: {
+          toolCallId: "toolu_inner",
+          toolName: "Agent",
+          input: { description: "Inner worker", prompt: "Run echo nested." },
+          receiverThreadId: "toolu_inner",
+          nickname: "Inner worker",
+          prompt: "Run echo nested.",
+        },
+      },
+    });
+
+    const inner = await waitForThread(
+      harness.engine,
+      () => true,
+      2000,
+      asThreadId("subagent:thread-1:toolu_inner"),
+    );
+    expect(inner.parentThreadId).toBe("thread-1");
+    expect(inner.sourceThreadId).toBe("subagent:thread-1:toolu_outer");
+    expect(inner.title).toBe("Inner worker");
+  });
+
+  it("publishes the native subagent cap notice once across distinct overflowing events", async () => {
+    const harness = await createHarness();
+    const collabEvent = (eventId: string, receiverThreadIds: ReadonlyArray<string>) =>
+      ({
+        type: "item.updated",
+        eventId: asEventId(eventId),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-native-cap"),
+        itemId: asItemId(`item-${eventId}`),
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Task",
+          data: { item: { type: "collabAgentToolCall", receiverThreadIds } },
+        },
+      }) as const;
+
+    harness.emit(
+      collabEvent(
+        "evt-cap-first",
+        Array.from({ length: 21 }, (_, index) => `cap-child-${index}`),
+      ),
+    );
+    await harness.drain();
+    harness.emit(collabEvent("evt-cap-second", ["cap-child-extra-1", "cap-child-extra-2"]));
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const notices =
+      readModel.threads
+        .find((thread) => thread.id === "thread-1")
+        ?.activities.filter((activity) => activity.kind === "subagent.materialization.capped") ??
+      [];
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.summary).toContain("Subagent limit reached");
+    expect(notices[0]?.turnId).toBe("turn-native-cap");
+  });
+
   it("routes fallback-annotated child events without polluting the parent projection", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -8599,6 +8808,109 @@ describe("ProviderRuntimeIngestion", () => {
     expect(acks.length).toBeLessThan(rows.length);
     expect(acks.length).toBeLessThanOrEqual(4);
   });
+
+  it.each(["turn.completed", "turn.aborted", "session.exited"] as const)(
+    "keeps a newer turn's live tools after a stale %s",
+    async (type) => {
+      const harness = await createHarness();
+      const parentThreadId = asThreadId("thread-1");
+      const threadId = asThreadId("subagent:thread-1:reused-child");
+      const providerRefs = { providerThreadId: "reused-child", providerParentThreadId: "thread-1" };
+      const turnId = asTurnId("new-child-turn");
+      const createdAt = new Date().toISOString();
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("new-native-child-turn"),
+        payload: {},
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+      });
+      await harness.drain();
+      // The replacement generation owns a newer turn on the persisted child.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("replacement-child-session"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      harness.emit({
+        type: "item.started",
+        eventId: asEventId("new-child-tool"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+        itemId: asItemId("reused-tool"),
+        payload: { itemType: "command_execution", status: "inProgress" },
+      });
+      await harness.drain();
+      const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+      const tools = () =>
+        runtime!.runPromise(sql<{ readonly itemId: string }>`
+        SELECT item_id AS "itemId" FROM projection_thread_active_tools WHERE thread_id = ${threadId}`);
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type,
+        eventId: asEventId("old-child-terminal"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId: asTurnId("old-child-turn"),
+        createdAt,
+        payload:
+          type === "turn.completed"
+            ? { state: "completed" }
+            : type === "session.exited"
+              ? { exitKind: "graceful" }
+              : {},
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId("old-child-tool-close"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId: asTurnId("old-child-turn"),
+        createdAt,
+        itemId: asItemId("reused-tool"),
+        payload: { itemType: "command_execution", status: "completed" },
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("new-child-terminal"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+        payload: { state: "completed" },
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([]);
+    },
+  );
 
   it("maintains durable last-activity + in-flight tool rows for the worker monitor", async () => {
     const harness = await createHarness();

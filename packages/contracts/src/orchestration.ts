@@ -1478,6 +1478,9 @@ export const ThreadHandoffImportedMessage = Schema.Struct({
   role: Schema.Literals(["user", "assistant"]),
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  // Who wrote an imported user message. "agent" marks a subagent's brief from
+  // the agent that launched it, so it never counts as a human message.
+  dispatchOrigin: Schema.optional(MessageDispatchOrigin),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

@@ -14232,3 +14232,1030 @@ describe("Claude cache preflight", () => {
     );
   });
 });
+
+function trackingToolResult(toolUseId: string, text: string) {
+  return {
+    type: "tool_result",
+    tool_use_id: toolUseId,
+    content: [{ type: "text", text }],
+  };
+}
+
+function isRootEvent(event: ProviderRuntimeEvent): boolean {
+  return event.providerRefs?.providerThreadId === undefined;
+}
+
+function onChild(event: ProviderRuntimeEvent, toolUseId: string): boolean {
+  return event.providerRefs?.providerThreadId === toolUseId;
+}
+
+function payloadRecord(event: ProviderRuntimeEvent): Record<string, unknown> {
+  return event.payload as unknown as Record<string, unknown>;
+}
+
+function detailTaskIds(event: ProviderRuntimeEvent): string[] {
+  const detail = payloadRecord(event).detail as { tasks?: Array<{ task_id: string }> };
+  return (detail?.tasks ?? []).map((task) => task.task_id);
+}
+
+function taskIdOf(event: ProviderRuntimeEvent): string {
+  return String(payloadRecord(event).taskId ?? "");
+}
+
+function startTrackingSession(adapter: ClaudeAdapterShape) {
+  return Effect.gen(function* () {
+    const session = yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+    });
+    yield* adapter.sendTurn({ threadId: session.threadId, input: "delegate", attachments: [] });
+    return session;
+  });
+}
+
+describe("Claude subagent tracking", () => {
+  const SESSION = "sdk-session-subagent-tracking";
+  let uuidCounter = 0;
+  const nextUuid = () => `tracking-${(uuidCounter += 1)}`;
+
+  const rootToolUse = (index: number, id: string, name: string, input: Record<string, unknown>) =>
+    ({
+      type: "stream_event",
+      session_id: SESSION,
+      uuid: nextUuid(),
+      parent_tool_use_id: null,
+      event: {
+        type: "content_block_start",
+        index,
+        content_block: { type: "tool_use", id, name, input },
+      },
+    }) as unknown as SDKMessage;
+
+  const system = (subtype: string, fields: Record<string, unknown>) =>
+    ({
+      type: "system",
+      subtype,
+      session_id: SESSION,
+      uuid: nextUuid(),
+      ...fields,
+    }) as unknown as SDKMessage;
+
+  const subagentAssistant = (parent: string, content: ReadonlyArray<Record<string, unknown>>) =>
+    ({
+      type: "assistant",
+      session_id: SESSION,
+      uuid: nextUuid(),
+      parent_tool_use_id: parent,
+      message: {
+        id: `msg-${nextUuid()}`,
+        content,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    }) as unknown as SDKMessage;
+
+  const userMessage = (
+    parent: string | null,
+    content: ReadonlyArray<Record<string, unknown>>,
+    toolUseResult?: Record<string, unknown>,
+  ) =>
+    ({
+      type: "user",
+      session_id: SESSION,
+      uuid: nextUuid(),
+      parent_tool_use_id: parent,
+      message: { role: "user", content },
+      ...(toolUseResult ? { tool_use_result: toolUseResult } : {}),
+    }) as unknown as SDKMessage;
+
+  const success = () =>
+    ({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      errors: [],
+      session_id: SESSION,
+      uuid: nextUuid(),
+    }) as unknown as SDKMessage;
+
+  it.effect("keeps a subagent's background work and nested subagents off the parent thread", () => {
+    const harness = makeHarness();
+    const OUTER = "toolu_outer";
+    const INNER = "toolu_inner";
+    const BG_BASH = "toolu_outer_bg_bash";
+    const INNER_BASH = "toolu_inner_bash";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, OUTER, "Agent", {
+          description: "Outer worker",
+          prompt: "Run the background command, then spawn Inner.",
+          subagent_type: "worker-low",
+        }),
+        system("task_started", {
+          task_id: "task-outer",
+          tool_use_id: OUTER,
+          task_type: "local_agent",
+          subagent_type: "worker-low",
+          spawn_depth: 1,
+          is_backgrounded: false,
+          description: "Outer worker",
+        }),
+        userMessage(OUTER, [
+          { type: "text", text: "Run the background command, then spawn Inner." },
+        ]),
+        subagentAssistant(OUTER, [
+          {
+            type: "tool_use",
+            id: BG_BASH,
+            name: "Bash",
+            input: {
+              command: "sleep 3 && echo bg",
+              description: "Sleep briefly then echo bg",
+              run_in_background: true,
+            },
+          },
+        ]),
+        system("task_progress", {
+          task_id: "task-outer",
+          tool_use_id: OUTER,
+          description: "Running Sleep briefly then echo bg",
+          last_tool_name: "Bash",
+          usage: { total_tokens: 10, tool_uses: 1, duration_ms: 100 },
+        }),
+        subagentAssistant(OUTER, [
+          {
+            type: "tool_use",
+            id: INNER,
+            name: "Agent",
+            input: { description: "Inner worker", prompt: "Run echo nested." },
+          },
+        ]),
+        system("background_tasks_changed", {
+          tasks: [{ task_id: "task-inner", task_type: "local_agent", description: "Inner worker" }],
+        }),
+        system("task_started", {
+          task_id: "task-inner",
+          tool_use_id: INNER,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          spawn_depth: 2,
+          is_backgrounded: true,
+          description: "Inner worker",
+        }),
+        userMessage(OUTER, [trackingToolResult(INNER, "Async agent launched successfully.")], {
+          status: "async_launched",
+          agentId: "task-inner",
+        }),
+        userMessage(INNER, [{ type: "text", text: "Run echo nested." }]),
+        subagentAssistant(INNER, [
+          {
+            type: "tool_use",
+            id: INNER_BASH,
+            name: "Bash",
+            input: { command: "echo nested", description: "Echo the word nested" },
+          },
+        ]),
+        system("task_progress", {
+          task_id: "task-inner",
+          tool_use_id: INNER,
+          description: "Running Echo the word nested",
+          last_tool_name: "Bash",
+          usage: { total_tokens: 10, tool_uses: 1, duration_ms: 100 },
+        }),
+        system("background_tasks_changed", {
+          tasks: [
+            { task_id: "task-inner", task_type: "local_agent", description: "Inner worker" },
+            {
+              task_id: "bash-bg",
+              task_type: "local_bash",
+              description: "Sleep briefly then echo bg",
+            },
+          ],
+        }),
+        system("task_started", {
+          task_id: "bash-bg",
+          tool_use_id: BG_BASH,
+          task_type: "local_bash",
+          is_backgrounded: true,
+          description: "Sleep briefly then echo bg",
+        }),
+        userMessage(OUTER, [
+          trackingToolResult(BG_BASH, "Command running in background with ID: bash-bg."),
+        ]),
+        userMessage(INNER, [trackingToolResult(INNER_BASH, "nested")]),
+        subagentAssistant(INNER, [{ type: "text", text: "The output is nested." }]),
+        system("task_updated", { task_id: "task-inner", patch: { status: "completed" } }),
+        system("task_notification", {
+          task_id: "task-inner",
+          tool_use_id: INNER,
+          status: "completed",
+          output_file: "/tmp/inner.out",
+          summary: "The output is nested.",
+        }),
+        system("background_tasks_changed", {
+          tasks: [
+            {
+              task_id: "bash-bg",
+              task_type: "local_bash",
+              description: "Sleep briefly then echo bg",
+            },
+          ],
+        }),
+        system("task_updated", { task_id: "bash-bg", patch: { status: "completed" } }),
+        system("task_notification", {
+          task_id: "bash-bg",
+          tool_use_id: BG_BASH,
+          status: "completed",
+          output_file: "/tmp/bash.out",
+          summary: "Background command completed.",
+        }),
+        system("background_tasks_changed", { tasks: [] }),
+        subagentAssistant(OUTER, [{ type: "text", text: "Both outputs are in." }]),
+        system("task_updated", { task_id: "task-outer", patch: { status: "completed" } }),
+        system("task_notification", {
+          task_id: "task-outer",
+          tool_use_id: OUTER,
+          status: "completed",
+          output_file: "/tmp/outer.out",
+          summary: "Both outputs are in.",
+        }),
+        userMessage(null, [trackingToolResult(OUTER, "Both outputs are in.")], {
+          status: "completed",
+          agentId: "task-outer",
+        }),
+        success(),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const rootEvents = events.filter(isRootEvent);
+      const outerEvents = events.filter((event) => onChild(event, OUTER));
+      const innerEvents = events.filter((event) => onChild(event, INNER));
+
+      // The parent only hears about its own subagent's lifecycle.
+      assert.deepEqual(
+        rootEvents.filter((event) => event.type === "runtime.warning").map(detailTaskIds),
+        [],
+      );
+      assert.deepEqual(
+        rootEvents
+          .filter((event) => event.type.startsWith("task."))
+          .map((event) => taskIdOf(event))
+          .filter((taskId) => taskId !== "task-outer"),
+        [],
+      );
+      const outerProgress = rootEvents.find((event) => event.type === "task.progress");
+      assert.isDefined(outerProgress);
+      assert.equal(payloadRecord(outerProgress!).toolUseId, OUTER);
+      assert.equal(payloadRecord(outerProgress!).subagentTitle, "Outer worker");
+      assert.equal(
+        rootEvents.some(
+          (event) =>
+            event.type === "content.delta" && String(payloadRecord(event).delta).includes("nested"),
+        ),
+        false,
+      );
+      assert.equal(
+        rootEvents.some((event) => event.providerRefs?.providerItemId === INNER_BASH),
+        false,
+      );
+
+      // The outer subagent's own background work and nested spawn land on its thread.
+      assert.deepEqual(
+        outerEvents
+          .filter((event) => event.type === "runtime.warning")
+          .map((event) => payloadRecord(event).message),
+        ["Inner worker", "Sleep briefly then echo bg"],
+      );
+      assert.deepEqual(
+        outerEvents
+          .filter((event) => event.type === "task.started" || event.type === "task.completed")
+          .map((event) => `${event.type}:${taskIdOf(event)}`),
+        [
+          "task.started:task-inner",
+          "task.started:bash-bg",
+          "task.completed:task-inner",
+          "task.completed:bash-bg",
+        ],
+      );
+      assert.equal(
+        outerEvents.some(
+          (event) => event.type === "task.progress" && payloadRecord(event).toolUseId === INNER,
+        ),
+        true,
+      );
+      // Briefs are surfaced on each child thread as user messages from the launcher.
+      const briefOf = (childEvents: ProviderRuntimeEvent[]) =>
+        childEvents
+          .filter(
+            (event) =>
+              event.type === "item.completed" && payloadRecord(event).itemType === "user_message",
+          )
+          .map((event) => payloadRecord(event).detail);
+      assert.deepEqual(briefOf(outerEvents), ["Run the background command, then spawn Inner."]);
+      assert.deepEqual(briefOf(innerEvents), ["Run echo nested."]);
+
+      // The nested subagent's own conversation runs on its own child thread.
+      assert.equal(
+        innerEvents.some(
+          (event) =>
+            event.type === "content.delta" &&
+            String(payloadRecord(event).delta).includes("The output is nested."),
+        ),
+        true,
+      );
+      assert.equal(
+        innerEvents.some(
+          (event) =>
+            event.type === "item.started" && event.providerRefs?.providerItemId === INNER_BASH,
+        ),
+        true,
+      );
+      assert.equal(
+        innerEvents.every((event) => event.providerRefs?.providerParentThreadId === THREAD_ID),
+        true,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("records a background subagent's failure on its launching tool call", () => {
+    const harness = makeHarness();
+    const BG = "toolu_background_agent";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && onChild(event, BG)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, BG, "Agent", {
+          description: "Background job",
+          prompt: "Do the slow thing.",
+          run_in_background: true,
+        }),
+        system("task_started", {
+          task_id: "task-bg",
+          tool_use_id: BG,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: true,
+          description: "Background job",
+        }),
+        userMessage(null, [trackingToolResult(BG, "Async agent launched successfully.")], {
+          status: "async_launched",
+          agentId: "task-bg",
+        }),
+        success(),
+        subagentAssistant(BG, [{ type: "text", text: "Working on it." }]),
+        system("task_notification", {
+          task_id: "task-bg",
+          tool_use_id: BG,
+          status: "failed",
+          output_file: "/tmp/bg.out",
+          summary: "It broke.",
+        }),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const rootTurnId = events.find(
+        (event) => event.type === "turn.started" && isRootEvent(event),
+      )?.turnId;
+      const finalState = events
+        .filter(
+          (event) =>
+            isRootEvent(event) &&
+            event.type === "item.updated" &&
+            event.providerRefs?.providerItemId === BG,
+        )
+        .map((event) => {
+          const data = payloadRecord(event).data as {
+            agentStates?: Record<string, { status: string }>;
+          };
+          return { status: data.agentStates?.[BG]?.status, turnId: event.turnId };
+        })
+        .find((entry) => entry.status !== undefined);
+      assert.deepEqual(finalState, { status: "failed", turnId: rootTurnId });
+      const childCompleted = events.find(
+        (event) => event.type === "turn.completed" && onChild(event, BG),
+      );
+      assert.equal(payloadRecord(childCompleted!).state, "failed");
+      // A background spawn never forwards its prompt; the launching call supplies the brief.
+      assert.deepEqual(
+        events
+          .filter(
+            (event) =>
+              onChild(event, BG) &&
+              event.type === "item.completed" &&
+              payloadRecord(event).itemType === "user_message",
+          )
+          .map((event) => payloadRecord(event).detail),
+        ["Do the slow thing."],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("closes a foreground subagent's child turn on its hand-back tool result", () => {
+    const harness = makeHarness();
+    const FG = "toolu_foreground_agent";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, FG, "Agent", { description: "Foreground job", prompt: "Look around." }),
+        system("task_started", {
+          task_id: "task-fg",
+          tool_use_id: FG,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: false,
+          description: "Foreground job",
+        }),
+        subagentAssistant(FG, [{ type: "text", text: "Looked around." }]),
+        userMessage(null, [trackingToolResult(FG, "Looked around.")], {
+          status: "completed",
+          agentId: "task-fg",
+        }),
+        success(),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const childCompleted = events.find(
+        (event) => event.type === "turn.completed" && onChild(event, FG),
+      );
+      assert.isDefined(childCompleted);
+      assert.equal(payloadRecord(childCompleted!).state, "completed");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("closes a foreground subagent's child turn when the parent turn is aborted", () => {
+    const harness = makeHarness();
+    const FG = "toolu_aborted_agent";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, FG, "Agent", { description: "Aborted job", prompt: "Wait forever." }),
+        system("task_started", {
+          task_id: "task-aborted",
+          tool_use_id: FG,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: false,
+          description: "Aborted job",
+        }),
+        subagentAssistant(FG, [{ type: "text", text: "Waiting." }]),
+        {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: false,
+          errors: ["Error: Request was aborted."],
+          session_id: SESSION,
+          uuid: nextUuid(),
+        } as unknown as SDKMessage,
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const childCompleted = events.find(
+        (event) => event.type === "turn.completed" && onChild(event, FG),
+      );
+      assert.isDefined(childCompleted);
+      assert.equal(payloadRecord(childCompleted!).state, "interrupted");
+      // The parent's launching call ends with the subagent stopped, not done.
+      const launchClosed = events.find(
+        (event) =>
+          isRootEvent(event) &&
+          event.type === "item.completed" &&
+          event.providerRefs?.providerItemId === FG,
+      );
+      const agentStates = (
+        payloadRecord(launchClosed!).data as {
+          agentStates?: Record<string, { status: string }>;
+        }
+      ).agentStates;
+      assert.deepEqual(agentStates, { [FG]: { status: "stopped" } });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("tells the user when a queued steer never reached the subagent", () => {
+    const harness = makeHarness();
+    const STEERED = "toolu_steered_agent";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* startTrackingSession(adapter);
+
+      const before = harness.query.iteratorNextCalls;
+      harness.query.emit(
+        rootToolUse(0, STEERED, "Agent", { description: "Short job", prompt: "Be quick." }),
+      );
+      harness.query.emit(
+        system("task_started", {
+          task_id: "task-steered",
+          tool_use_id: STEERED,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          description: "Short job",
+        }),
+      );
+      harness.query.emit(subagentAssistant(STEERED, [{ type: "text", text: "Almost done." }]));
+      for (let i = 0; i < 10_000 && harness.query.iteratorNextCalls <= before + 2; i += 1) {
+        yield* Effect.yieldNow;
+      }
+      yield* adapter.steerSubagent(session.threadId, STEERED, { input: "Also check the docs" });
+
+      harness.query.emit(
+        system("task_notification", {
+          task_id: "task-steered",
+          tool_use_id: STEERED,
+          status: "completed",
+          output_file: "/tmp/steered.out",
+          summary: "Done.",
+        }),
+      );
+      harness.query.emit(
+        userMessage(null, [trackingToolResult(STEERED, "Done.")], {
+          status: "completed",
+          agentId: "task-steered",
+        }),
+      );
+      harness.query.emit(success());
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const notice = events.find(
+        (event) => event.type === "runtime.warning" && onChild(event, STEERED),
+      );
+      assert.isDefined(notice);
+      assert.include(String(payloadRecord(notice!).message), "not delivered");
+      assert.equal(
+        (payloadRecord(notice!).detail as { undeliveredMessage?: string }).undeliveredMessage,
+        "Also check the docs",
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "bounds settled ownership history without losing live children or routing retired tails to the parent",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* startTrackingSession(adapter);
+        const LIVE = "toolu_live_history";
+        harness.query.emit(
+          rootToolUse(0, LIVE, "Agent", { description: "Live owner", run_in_background: true }),
+        );
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-live-history",
+            tool_use_id: LIVE,
+            task_type: "local_agent",
+            subagent_type: "general-purpose",
+            is_backgrounded: true,
+          }),
+        );
+        harness.query.emit(
+          userMessage(null, [trackingToolResult(LIVE, "Started")], {
+            agentId: "task-live-history",
+            status: "running",
+          }),
+        );
+        const OWNER = "toolu_settled_owner";
+        const NESTED = "toolu_live_nested";
+        const BASH = "toolu_owner_bash";
+        harness.query.emit(rootToolUse(900, OWNER, "Agent", { description: "Settled launcher" }));
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-settled-owner",
+            tool_use_id: OWNER,
+            task_type: "local_agent",
+            subagent_type: "general-purpose",
+          }),
+        );
+        harness.query.emit(
+          subagentAssistant(OWNER, [
+            {
+              type: "tool_use",
+              id: NESTED,
+              name: "Agent",
+              input: { description: "Nested worker", run_in_background: true },
+            },
+            {
+              type: "tool_use",
+              id: BASH,
+              name: "Bash",
+              input: { command: "sleep 1", run_in_background: true },
+            },
+          ]),
+        );
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-nested-history",
+            tool_use_id: NESTED,
+            task_type: "local_agent",
+            subagent_type: "general-purpose",
+            is_backgrounded: true,
+          }),
+        );
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-bash-history",
+            tool_use_id: BASH,
+            task_type: "local_bash",
+            description: "Pinned background task",
+          }),
+        );
+        harness.query.emit(
+          userMessage(
+            OWNER,
+            [trackingToolResult(NESTED, "Started"), trackingToolResult(BASH, "Started")],
+            { status: "async_launched" },
+          ),
+        );
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-settled-owner",
+            tool_use_id: OWNER,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(
+          userMessage(null, [trackingToolResult(OWNER, "Done")], {
+            agentId: "task-settled-owner",
+            status: "completed",
+          }),
+        );
+        for (let i = 0; i < 205; i += 1) {
+          const id = `toolu_retained_${i}`;
+          const taskId = `task-retained-${i}`;
+          harness.query.emit(rootToolUse(i + 1, id, "Agent", { description: `Worker ${i}` }));
+          harness.query.emit(
+            system("task_started", {
+              task_id: taskId,
+              tool_use_id: id,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+            }),
+          );
+          harness.query.emit(subagentAssistant(id, [{ type: "text", text: `worker ${i}` }]));
+          harness.query.emit(
+            userMessage(null, [trackingToolResult(id, "Done")], {
+              agentId: taskId,
+              status: "completed",
+            }),
+          );
+        }
+        // Contexts can expire before their compact task identity mapping: SDK
+        // launches without task_started still create contexts from their traffic.
+        for (let i = 0; i < 205; i += 1) {
+          const id = `toolu_no_task_start_${i}`;
+          harness.query.emit(
+            rootToolUse(1000 + i, id, "Agent", { description: "Unmapped worker" }),
+          );
+          harness.query.emit(subagentAssistant(id, [{ type: "text", text: "Unmapped work" }]));
+          harness.query.emit(
+            userMessage(null, [trackingToolResult(id, "Done")], { status: "completed" }),
+          );
+        }
+        // A retired identity is no longer safe to attribute from a late tail alone.
+        harness.query.emit(
+          subagentAssistant("toolu_retained_0", [{ type: "text", text: "RETIRED TAIL" }]),
+        );
+        harness.query.emit(
+          system("task_progress", {
+            task_id: "task-retained-0",
+            tool_use_id: "toolu_retained_0",
+            description: "RETIRED PROGRESS",
+            usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 },
+          }),
+        );
+        // Recent resumes keep their original identity; explicit native identity on
+        // an older SendMessage recovers safely without reusing its unrelated tool id.
+        for (const i of [204, 0]) {
+          const alias = `toolu_resume_history_${i}`;
+          harness.query.emit(
+            rootToolUse(300 + i, alias, "SendMessage", {
+              to: `task-retained-${i}`,
+              message: "Resume",
+            }),
+          );
+          harness.query.emit(
+            system("task_started", {
+              task_id: `task-retained-${i}`,
+              tool_use_id: alias,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+              is_backgrounded: true,
+            }),
+          );
+          harness.query.emit(subagentAssistant(alias, [{ type: "text", text: `RESUMED ${i}` }]));
+          harness.query.emit(
+            system("task_notification", {
+              task_id: `task-retained-${i}`,
+              tool_use_id: alias,
+              status: "completed",
+              output_file: "/tmp/history.out",
+              summary: "Done",
+            }),
+          );
+          harness.query.emit(userMessage(null, [trackingToolResult(alias, "Done")]));
+          if (i === 204) {
+            const latestAlias = "toolu_latest_resume";
+            harness.query.emit(
+              rootToolUse(600, latestAlias, "SendMessage", {
+                to: "task-retained-204",
+                message: "Again",
+              }),
+            );
+            harness.query.emit(
+              system("task_started", {
+                task_id: "task-retained-204",
+                tool_use_id: latestAlias,
+                task_type: "local_agent",
+                subagent_type: "general-purpose",
+                is_backgrounded: true,
+              }),
+            );
+            harness.query.emit(subagentAssistant(alias, [{ type: "text", text: "RETIRED ALIAS" }]));
+            harness.query.emit(
+              system("task_progress", {
+                task_id: "task-retained-204",
+                tool_use_id: alias,
+                description: "RETIRED TASK ALIAS",
+                usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 },
+              }),
+            );
+            harness.query.emit(
+              subagentAssistant(latestAlias, [{ type: "text", text: "LATEST ALIAS" }]),
+            );
+            harness.query.emit(
+              system("task_notification", {
+                task_id: "task-retained-204",
+                tool_use_id: latestAlias,
+                status: "completed",
+                output_file: "/tmp/history.out",
+                summary: "Done",
+              }),
+            );
+            harness.query.emit(userMessage(null, [trackingToolResult(latestAlias, "Done")]));
+          }
+        }
+        harness.query.emit(subagentAssistant(NESTED, [{ type: "text", text: "NESTED OWNER" }]));
+        harness.query.emit(
+          system("task_progress", {
+            task_id: "task-bash-history",
+            tool_use_id: BASH,
+            description: "PINNED BACKGROUND",
+            usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 },
+          }),
+        );
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-bash-history",
+            tool_use_id: BASH,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-nested-history",
+            tool_use_id: NESTED,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(subagentAssistant(LIVE, [{ type: "text", text: "LIVE OWNER" }]));
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-live-history",
+            tool_use_id: LIVE,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(success());
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        assert.equal(
+          events.some((event) => JSON.stringify(event.payload).includes("RETIRED")),
+          false,
+        );
+        assert.equal(
+          events.filter(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.providerRefs?.providerThreadId?.startsWith("toolu_no_task_start_"),
+          ).length,
+          205,
+        );
+        const resumed = (i: number) =>
+          events.find(
+            (event) =>
+              event.type === "content.delta" &&
+              String(payloadRecord(event).delta).includes(`RESUMED ${i}`),
+          );
+        assert.equal(resumed(204)?.providerRefs?.providerThreadId, "toolu_retained_204");
+        assert.equal(resumed(0)?.providerRefs?.providerThreadId, "task:task-retained-0");
+        assert.equal(
+          events.some(
+            (event) =>
+              event.type === "content.delta" &&
+              onChild(event, NESTED) &&
+              String(payloadRecord(event).delta).includes("NESTED OWNER"),
+          ),
+          true,
+        );
+        const background = events.find(
+          (event) =>
+            event.type === "task.progress" &&
+            String(payloadRecord(event).description).includes("PINNED BACKGROUND"),
+        );
+        assert.equal(background?.providerRefs?.providerThreadId, OWNER);
+        const nestedDone = events.find(
+          (event) => event.type === "task.completed" && taskIdOf(event) === "task-nested-history",
+        );
+        assert.equal(nestedDone?.providerRefs?.providerThreadId, OWNER);
+        assert.equal(
+          events.some(
+            (event) =>
+              event.type === "content.delta" &&
+              onChild(event, LIVE) &&
+              String(payloadRecord(event).delta).includes("LIVE OWNER"),
+          ),
+          true,
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("resumes a subagent on its existing child thread", () => {
+    const harness = makeHarness();
+    const ORIGINAL = "toolu_original_agent";
+    const RESUME = "toolu_send_message";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, ORIGINAL, "Agent", {
+          description: "Sleeper",
+          prompt: "Sleep, then report.",
+        }),
+        system("task_started", {
+          task_id: "task-resumable",
+          tool_use_id: ORIGINAL,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          description: "Sleeper",
+        }),
+        subagentAssistant(ORIGINAL, [{ type: "text", text: "First pass." }]),
+        system("task_notification", {
+          task_id: "task-resumable",
+          tool_use_id: ORIGINAL,
+          status: "completed",
+          output_file: "/tmp/resumable.out",
+          summary: "First pass.",
+        }),
+        userMessage(null, [trackingToolResult(ORIGINAL, "First pass.")], {
+          status: "completed",
+          agentId: "task-resumable",
+        }),
+        rootToolUse(1, RESUME, "SendMessage", { to: "task-resumable", message: "Keep going." }),
+        system("task_started", {
+          task_id: "task-resumable",
+          tool_use_id: RESUME,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: true,
+          description: "Sleeper",
+        }),
+        userMessage(null, [trackingToolResult(RESUME, "Message delivered.")]),
+        system("task_progress", {
+          task_id: "task-resumable",
+          tool_use_id: RESUME,
+          description: "Reading output",
+          usage: { total_tokens: 30, tool_uses: 2, duration_ms: 200 },
+        }),
+        userMessage(RESUME, [{ type: "text", text: "Keep going." }]),
+        subagentAssistant(RESUME, [{ type: "text", text: "Second pass." }]),
+        system("task_notification", {
+          task_id: "task-resumable",
+          tool_use_id: RESUME,
+          status: "completed",
+          output_file: "/tmp/resumable.out",
+          summary: "Second pass.",
+        }),
+        success(),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(
+        events.some((event) => onChild(event, RESUME)),
+        false,
+      );
+      const originalEvents = events.filter((event) => onChild(event, ORIGINAL));
+      assert.equal(
+        originalEvents.some(
+          (event) =>
+            event.type === "content.delta" &&
+            String(payloadRecord(event).delta).includes("Second pass."),
+        ),
+        true,
+      );
+      assert.equal(
+        originalEvents.some(
+          (event) =>
+            event.type === "item.completed" &&
+            payloadRecord(event).itemType === "user_message" &&
+            payloadRecord(event).detail === "Keep going.",
+        ),
+        true,
+      );
+      assert.equal(
+        events.filter(
+          (event) =>
+            event.type === "turn.completed" &&
+            onChild(event, ORIGINAL) &&
+            payloadRecord(event).state === "completed",
+        ).length,
+        2,
+      );
+      const resumedProgress = events.find(
+        (event) => event.type === "task.progress" && isRootEvent(event),
+      );
+      assert.isDefined(resumedProgress);
+      assert.equal(payloadRecord(resumedProgress!).toolUseId, ORIGINAL);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+});
