@@ -529,6 +529,8 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   pi: ["pi", "agents"],
   devin: ["devin", "claude", "agents"],
   omp: ["omp", "agents"],
+  // External bundles run arbitrary upstreams with no fixed home, so use the generic dir.
+  external: ["agents"],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;
 
 function homeRootsForOrigin(

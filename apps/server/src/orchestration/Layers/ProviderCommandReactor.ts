@@ -325,7 +325,7 @@ function normalizeProviderOptionsForComparison(
   provider: ProviderKind,
   providerOptions: ProviderStartOptions | undefined,
 ): Record<string, unknown> | undefined {
-  const rawOptions = providerOptions?.[provider];
+  const rawOptions = provider === "external" ? undefined : providerOptions?.[provider];
   if (!rawOptions || typeof rawOptions !== "object") {
     return undefined;
   }
