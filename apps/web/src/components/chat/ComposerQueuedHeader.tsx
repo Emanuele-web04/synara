@@ -3,7 +3,7 @@
 // composer input (each with Steer / Delete / Edit actions), led by a "Queue paused"
 // notice with Resume / Edit when a stop, failure, or usage limit holds the queue. Rounded only on top with
 // a flat, borderless bottom that fuses flush onto the composer; spans the full composer
-// width while the composer below keeps its own full rounding.
+// width while the composer below keeps only its bottom rounding.
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 

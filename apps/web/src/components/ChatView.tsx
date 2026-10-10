@@ -6231,12 +6231,13 @@ export default function ChatView({
             <div
               className={cn(
                 COMPOSER_INPUT_SURFACE_CLASS_NAME,
+                queuedComposerTurns.length > 0 && "rounded-t-none!",
                 composerProviderState.composerSurfaceClassName,
                 composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
               )}
             >
               <ComposerInputBanners
-                roundedTopReset={false}
+                roundedTopReset={queuedComposerTurns.length > 0}
                 planFollowUp={
                   !activePendingApproval &&
                   pendingUserInputs.length === 0 &&

@@ -9146,6 +9146,27 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
+      // The queued rail and input form one continuous outline, including on narrow panes.
+      for (const viewport of [DEFAULT_VIEWPORT, { name: "narrow", width: 480, height: 640 }]) {
+        await mounted.setViewport(viewport);
+        const surface = document.querySelector<HTMLElement>(".chat-composer-surface")!;
+        const rail = document
+          .querySelector<HTMLElement>('[data-testid="queued-follow-up-row"]')!
+          .closest<HTMLElement>(".chat-composer-stacked-top")!;
+        const inputBounds = surface.getBoundingClientRect();
+        const railBounds = rail.getBoundingClientRect();
+        expect(railBounds.left).toBeCloseTo(inputBounds.left, 1);
+        expect(railBounds.right).toBeCloseTo(inputBounds.right, 1);
+        expect(railBounds.bottom).toBeCloseTo(inputBounds.top + 1, 1);
+        await page.screenshot({
+          path: `../../../../output/playwright/queue-after-${viewport.width === 480 ? "narrow" : "wide"}.png`,
+        });
+        expect(getComputedStyle(surface).borderTopLeftRadius).toBe("0px");
+        expect(getComputedStyle(surface).borderTopRightRadius).toBe("0px");
+        expect(getComputedStyle(surface).borderBottomLeftRadius).not.toBe("0px");
+      }
+      await mounted.setViewport(DEFAULT_VIEWPORT);
+
       const actionButtons = document.querySelectorAll<HTMLButtonElement>(
         'button[aria-label="Queued follow-up actions"]',
       );
