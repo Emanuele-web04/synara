@@ -263,7 +263,6 @@ export interface WorkLogSynaraWorkerNoticeThread {
 
 export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
-  outcome?: "completed" | "failed" | "stopped";
   taskType: string | null;
   description: string | null;
   // How the task ended; absent on completions derived before outcomes existed.
