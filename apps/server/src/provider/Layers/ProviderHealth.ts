@@ -2569,11 +2569,13 @@ export function providerStatusesEqual(
 }
 
 function isTransientProviderCommandTimeout(status: ServerProviderStatus): boolean {
-  return (
-    status.status !== "ready" &&
-    status.authStatus === "unknown" &&
-    (status.message ?? "").includes(PROVIDER_COMMAND_TIMEOUT_DETAIL)
-  );
+  const message = status.message ?? "";
+  // Most providers use the shared detail string, but Pi's advisory probe has
+  // a provider-specific explanation. Keep a slow CLI probe from replacing an
+  // already usable status just because its wording differs.
+  const describesTimeout =
+    message.includes(PROVIDER_COMMAND_TIMEOUT_DETAIL) || /\btimed out\b/i.test(message);
+  return status.status !== "ready" && status.authStatus === "unknown" && describesTimeout;
 }
 
 function wasPreviouslyUsableProviderStatus(status: ServerProviderStatus): boolean {

@@ -14,6 +14,7 @@ import {
   type OrchestrationThreadShell,
   type ProviderInteractionMode,
   type ProviderKind,
+  type RuntimeMode,
   type SynaraCreateThreadsInput,
   type SynaraCreateThreadsResult,
 } from "@synara/contracts";
@@ -129,6 +130,7 @@ export type GatewayCreationContext =
     }
   | {
       readonly kind: "hub-work";
+      readonly inheritedRuntimeMode?: RuntimeMode | undefined;
       readonly callerThreadId: string;
       readonly workItemId: string;
       readonly batchId: string;
@@ -580,6 +582,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const runtimeMode =
             externalPolicy?.runtimeMode ??
             spec.runtimeMode ??
+            (context.kind === "hub-work" ? context.inheritedRuntimeMode : undefined) ??
             (context.kind === "external-client" || caller!.runtimeMode === "auto"
               ? "approval-required"
               : caller!.runtimeMode);
