@@ -99,6 +99,17 @@ export function resolvePullRequestReviewBadge(
     : null;
 }
 
+/** Sidebar badge = number of configured automations, matching the Automations "All" tab. */
+export function resolveAutomationCountBadge(count: number | undefined): SidebarActionBadge | null {
+  if (count === undefined) return null;
+  return count > 0
+    ? {
+        text: String(count),
+        accessibleLabel: `${count} ${pluralize(count, "automation")}`,
+      }
+    : null;
+}
+
 /** Stable repository-resolution input for PR caches. Sidebar-only presentation changes such as
  * expand/collapse and ordering do not invalidate; project roots/names do. */
 export function pullRequestRepositoryConfigFingerprint(
