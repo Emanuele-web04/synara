@@ -7,7 +7,7 @@
 // Layer: Chat hooks
 // Exports: useSubagentStripSource, useSubagentRoster, useThreadSubagentRoster
 
-import type { OrchestrationThreadActivity, ThreadId, TurnId } from "@synara/contracts";
+import { ThreadId, type OrchestrationThreadActivity, type TurnId } from "@synara/contracts";
 import { useEffect, useMemo } from "react";
 
 import { deriveWorkLogEntries, isLatestTurnSettled, type WorkLogEntry } from "../../session-logic";
@@ -36,6 +36,7 @@ export interface SubagentStripSource {
   stripSourceActivities: ReadonlyArray<OrchestrationThreadActivity>;
   stripLiveTurnId: TurnId | null;
   stripWorkLogEntries: WorkLogEntry[];
+  stripRelevantWorkLogThreads: ReadonlyArray<Thread>;
   hasStripWorkLogSubagents: boolean;
   backgroundedSubagentToolUseIds: ReadonlySet<string>;
   subagentParentRow: SubagentParentRow | null;
@@ -182,6 +183,36 @@ export function useSubagentStripSource(input: {
       stripRelevantWorkLogThreads,
     ],
   );
+  // The strip's liveness (running/settled) reads the child thread's own session and
+  // tail activities, so retain a detail subscription while a subagent runs; settled
+  // subagents stay on whatever the store already holds.
+  const liveSubagentThreadIdsKey = useMemo(() => {
+    if (!hasStripWorkLogSubagents) {
+      return "";
+    }
+    const threadIds = new Set<string>();
+    for (const entry of stripWorkLogEntries) {
+      for (const subagent of entry.subagents ?? []) {
+        if (subagent.isActive && subagent.resolvedThreadId) {
+          threadIds.add(subagent.resolvedThreadId);
+        }
+      }
+    }
+    return [...threadIds].toSorted().join("\n");
+  }, [stripWorkLogEntries, hasStripWorkLogSubagents]);
+  useEffect(() => {
+    if (!liveSubagentThreadIdsKey) {
+      return;
+    }
+    const releases = liveSubagentThreadIdsKey
+      .split("\n")
+      .map((threadId) => retainThreadDetailSubscription(ThreadId.makeUnsafe(threadId)));
+    return () => {
+      for (const release of releases) {
+        release();
+      }
+    };
+  }, [liveSubagentThreadIdsKey]);
   const backgroundedSubagentToolUseIds = useMemo(
     () => collectBackgroundedSubagentToolUseIds(stripSourceActivities),
     [stripSourceActivities],
@@ -204,6 +235,7 @@ export function useSubagentStripSource(input: {
     stripSourceActivities,
     stripLiveTurnId,
     stripWorkLogEntries,
+    stripRelevantWorkLogThreads,
     hasStripWorkLogSubagents,
     backgroundedSubagentToolUseIds,
     subagentParentRow,

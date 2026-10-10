@@ -1,8 +1,7 @@
-import { OrchestrationThreadActivity, ThreadId, type TurnId } from "@synara/contracts";
-import { useEffect, useMemo } from "react";
+import { OrchestrationThreadActivity, type TurnId } from "@synara/contracts";
+import { useMemo } from "react";
 import { deriveWorkLogEntries, deriveSubagentTaskEnds } from "../../session-logic";
 import { useStore } from "../../store";
-import { retainThreadDetailSubscription } from "../../threadDetailSubscriptionRetention";
 import type { Thread } from "../../types";
 import { useWorkflowRunUiThreadState } from "../../workflowRunUiStore";
 import { enrichSubagentWorkEntries } from "../ChatView.logic";
@@ -99,36 +98,6 @@ export function useChatWorkLog({
     () => foldSubagentRunWorkEntries(enrichedWorkLogEntries),
     [enrichedWorkLogEntries],
   );
-  // The strip's liveness (running/settled) reads the child thread's own session and
-  // tail activities, so retain a detail subscription while a subagent runs; settled
-  // subagents stay on whatever the store already holds.
-  const liveSubagentThreadIdsKey = useMemo(() => {
-    if (!hasWorkLogSubagents) {
-      return "";
-    }
-    const threadIds = new Set<string>();
-    for (const entry of enrichedWorkLogEntries) {
-      for (const subagent of entry.subagents ?? []) {
-        if (subagent.isActive && subagent.resolvedThreadId) {
-          threadIds.add(subagent.resolvedThreadId);
-        }
-      }
-    }
-    return [...threadIds].toSorted().join("\n");
-  }, [enrichedWorkLogEntries, hasWorkLogSubagents]);
-  useEffect(() => {
-    if (!liveSubagentThreadIdsKey) {
-      return;
-    }
-    const releases = liveSubagentThreadIdsKey
-      .split("\n")
-      .map((threadId) => retainThreadDetailSubscription(ThreadId.makeUnsafe(threadId)));
-    return () => {
-      for (const release of releases) {
-        release();
-      }
-    };
-  }, [liveSubagentThreadIdsKey]);
   const subagentSource = useSubagentStripSource({
     activeThread,
     latestTurnSettled,
