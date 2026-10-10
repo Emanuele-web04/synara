@@ -568,6 +568,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["moved", "agent-done"]);
     expect(completion?.label).toBe("Subagent finished: Server startup");
     expect(completion?.backgroundTaskCompletion).toEqual({
+      outcome: "completed",
       taskId: "agent-1",
       taskType: "local_agent",
       description: "Server startup",
@@ -4456,6 +4457,86 @@ describe("deriveWorkLogEntries", () => {
 });
 
 describe("deriveTimelineEntries", () => {
+  it.each(["adjacent", "reply-between", "different-outcome"] as const)(
+    "preserves Monitor wake boundaries while avoiding a duplicate terminal notice: %s",
+    (caseKind) => {
+      const work = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "move",
+            createdAt: "2026-03-17T19:12:00.000Z",
+            kind: "runtime.warning",
+            tone: "info",
+            payload: {
+              nativeEventType: "background_tasks_changed",
+              data: { tasks: [{ task_id: "ci", task_type: "monitor", description: "CI checks" }] },
+            },
+          }),
+          makeActivity({
+            id: "sdk-end",
+            createdAt: "2026-03-17T19:12:01.000Z",
+            kind: "task.completed",
+            tone: "info",
+            payload: { taskId: "ci", status: "completed" },
+          }),
+          makeActivity({
+            id: "monitor-end",
+            createdAt: "2026-03-17T19:12:02.000Z",
+            kind: "runtime.warning",
+            tone: "info",
+            payload: {
+              nativeEventType: "monitor_event",
+              message: "CI checks — final output",
+              data: {
+                task_id: "ci",
+                name: "CI checks",
+                output: "final output",
+                outcome: caseKind === "different-outcome" ? "failed" : "completed",
+              },
+            },
+          }),
+        ],
+        undefined,
+      );
+      const messages: ChatMessage[] =
+        caseKind === "reply-between"
+          ? [
+              {
+                id: MessageId.makeUnsafe("wake-answer"),
+                role: "assistant",
+                text: "First wake reply",
+                createdAt: "2026-03-17T19:12:01.500Z",
+                streaming: false,
+              },
+            ]
+          : [];
+      const timeline = deriveTimelineEntries(messages, [], work);
+      const terminal = timeline.filter(
+        (row) =>
+          row.kind === "work" &&
+          (row.entry.monitorNotification || row.entry.backgroundTaskCompletion),
+      );
+      expect(terminal).toHaveLength(caseKind === "adjacent" ? 1 : 2);
+      expect(terminal.at(-1)).toMatchObject({
+        kind: "work",
+        entry: {
+          monitorNotification: {
+            output: "final output",
+            outcome: caseKind === "different-outcome" ? "failed" : "completed",
+          },
+        },
+      });
+      if (caseKind === "adjacent") expect(terminal[0]?.createdAt).toBe("2026-03-17T19:12:01.000Z");
+      if (caseKind === "reply-between")
+        expect(timeline.map((row) => row.id)).toEqual([
+          "move",
+          "sdk-end",
+          "wake-answer",
+          "monitor-end",
+        ]);
+    },
+  );
+
   it.each([false, true])(
     "keeps tools and plans after repeated steering messages (later narration: %s)",
     (hasLaterNarration) => {
