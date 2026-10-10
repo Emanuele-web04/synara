@@ -92,6 +92,7 @@ import {
   claudeCacheForModel,
 } from "../claudeCacheObservation.ts";
 import { compareSemverVersions } from "../providerMaintenance.ts";
+import { isImageGenerationToolName } from "../imageGenerationTool.ts";
 import { redactSensitiveJsonFields } from "../../sensitiveKeys.ts";
 import {
   Cause,
@@ -462,6 +463,9 @@ interface ClaudeSessionContext {
   processedTokenBaselineKnown: boolean;
   readonly requestUsage: ClaudeRequestUsage;
   lastResultUuid: string | undefined;
+  // Last effective fast-mode state Claude Code reported, as `state:reason`.
+  // `currentFastMode` is only what was requested; the account can still refuse it.
+  lastFastModeSignature: string | undefined;
   lastAssistantUuid: string | undefined;
   // Completed-turn native boundaries, oldest first (see ClaudeTurnBoundary).
   turnBoundaries: Array<ClaudeTurnBoundary>;
@@ -1219,6 +1223,14 @@ function hasActiveClaudeCompactionWork(context: ClaudeSessionContext): boolean {
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.toLowerCase();
+  // Claude SDK qualifies MCP tools as mcp__<server>__<tool>. Match the exact
+  // terminal tool name before server names and broad edit/image checks interfere.
+  const mcpSeparator = toolName.startsWith("mcp__") ? toolName.indexOf("__", "mcp__".length) : -1;
+  const nativeToolName =
+    mcpSeparator > "mcp__".length ? toolName.slice(mcpSeparator + 2) : toolName;
+  if (isImageGenerationToolName(nativeToolName)) {
+    return "image_generation";
+  }
   if (
     normalized === "todowrite" ||
     normalized.includes("todo") ||
@@ -1390,6 +1402,8 @@ function titleForTool(itemType: CanonicalItemType): string {
       return "Web search";
     case "image_view":
       return "Image view";
+    case "image_generation":
+      return "Image generation";
     case "dynamic_tool_call":
       return "Tool call";
     default:
@@ -1637,6 +1651,15 @@ function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStat
     return "cancelled";
   }
   return "failed";
+}
+
+function claudeFastModeSignature(message: {
+  readonly fast_mode_state?: string | undefined;
+  readonly fast_mode_disabled_reason?: string | undefined;
+}): string | undefined {
+  return message.fast_mode_state === undefined
+    ? undefined
+    : `${message.fast_mode_state}:${message.fast_mode_disabled_reason ?? ""}`;
 }
 
 function nativeProviderRefs(
@@ -3619,6 +3642,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           processedTokenBaselineKnown: true,
           requestUsage: new ClaudeRequestUsage(),
           lastResultUuid: undefined,
+          lastFastModeSignature: undefined,
           lastAssistantUuid: undefined,
           turnBoundaries: [],
           lastThreadStartedId: undefined,
@@ -4500,6 +4524,34 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         yield* completeTurn(context, status, errorMessage, message);
 
+        // Results carry the fast-mode state that actually served the turn. Publish
+        // it when it moves (cooldown after a rate limit, a toggle between turns) so
+        // the composer stops showing a requested speed the account did not get.
+        const fastModeSignature = claudeFastModeSignature(message);
+        if (
+          fastModeSignature !== undefined &&
+          fastModeSignature !== context.lastFastModeSignature
+        ) {
+          context.lastFastModeSignature = fastModeSignature;
+          const fastModeStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "session.configured",
+            eventId: fastModeStamp.eventId,
+            provider: PROVIDER,
+            createdAt: fastModeStamp.createdAt,
+            threadId: context.session.threadId,
+            payload: {
+              config: {
+                fast_mode_state: message.fast_mode_state,
+                ...(message.fast_mode_disabled_reason !== undefined
+                  ? { fast_mode_disabled_reason: message.fast_mode_disabled_reason }
+                  : {}),
+              },
+            },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+
         // Claude Code caches account credentials in the live SDK process. An
         // auth/account failure cannot be recovered by reusing that query after
         // the user logs in, so retire it after publishing the failed turn. The
@@ -4847,6 +4899,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (Array.isArray(message.tools)) {
               context.initToolNames = new Set(message.tools);
             }
+            context.lastFastModeSignature = claudeFastModeSignature(message);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "session.configured",
@@ -6469,6 +6522,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             processedTokenBaselineKnown,
             requestUsage: new ClaudeRequestUsage(),
             lastResultUuid: undefined,
+            lastFastModeSignature: undefined,
             lastAssistantUuid: resumeState?.resumeSessionAt,
             turnBoundaries: [...(resumeState?.turnBoundaries ?? [])],
             lastThreadStartedId: undefined,

@@ -20,6 +20,7 @@ import {
   type ProviderInstanceId,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
+  type RuntimeMode,
   type ServerProviderStatus,
   type ThreadGoalAchievement,
   type TurnId,
@@ -158,6 +159,7 @@ import {
 import {
   deriveContextWindowSelectionStatus,
   deriveComposerContextWindowLabel,
+  deriveObservedClaudeContextBudget,
   deriveAppliedContextWindowSelection,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowState,
@@ -402,6 +404,7 @@ import {
   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
+import { deriveFastModeNotice } from "~/lib/fastModeState";
 import { AmbientRailSlot } from "./chat/AmbientRailSlot";
 import { ComputerPreviewPopover } from "./chat/ComputerPreviewPopover";
 import {
@@ -988,8 +991,39 @@ export default function ChatView({
     }, 0);
     return () => window.clearTimeout(settle);
   }, [setIsRevertingCheckpoint, setPendingFileUndo, activeThread, pendingFileUndo]);
+  const [runtimeModeAcknowledgement, setRuntimeModeAcknowledgement] = useState<{
+    threadId: ThreadId;
+    baseMode: RuntimeMode;
+    baseUpdatedAt: string;
+    mode: RuntimeMode;
+  } | null>(null);
+  const serverRuntimeMode = serverThread?.runtimeMode;
+  const serverThreadUpdatedAt = serverThread?.updatedAt;
+  const acknowledgeRuntimeModeChange = useCallback(
+    (mode: RuntimeMode) => {
+      if (serverRuntimeMode === undefined || serverThreadUpdatedAt === undefined) return;
+      setRuntimeModeAcknowledgement({
+        threadId,
+        baseMode: serverRuntimeMode,
+        baseUpdatedAt: serverThreadUpdatedAt,
+        mode,
+      });
+    },
+    [serverRuntimeMode, serverThreadUpdatedAt, threadId],
+  );
+  // Only a server-confirmed choice made in this view may temporarily precede
+  // the projection. Persisted composer drafts do not own an existing thread's permissions.
+  const acknowledgedRuntimeMode =
+    runtimeModeAcknowledgement?.threadId === threadId &&
+    runtimeModeAcknowledgement.baseMode === serverRuntimeMode &&
+    runtimeModeAcknowledgement.baseUpdatedAt === serverThreadUpdatedAt
+      ? runtimeModeAcknowledgement.mode
+      : serverRuntimeMode;
   const runtimeMode =
-    composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+    acknowledgedRuntimeMode ??
+    composerDraft.runtimeMode ??
+    activeThread?.runtimeMode ??
+    DEFAULT_RUNTIME_MODE;
 
   const interactionMode =
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -3165,6 +3199,7 @@ export default function ChatView({
     resetInteractionMode,
     persistThreadSettingsForNextTurn,
   } = useChatRuntimeModes({
+    onRuntimeModePersisted: acknowledgeRuntimeModeChange,
     threadId,
     activeThread,
     serverThread,
@@ -4561,12 +4596,22 @@ export default function ChatView({
       appliedContextWindowSelection,
     ],
   );
+  const observedClaudeContextBudget = useMemo(
+    () => deriveObservedClaudeContextBudget(threadActivities),
+    [threadActivities],
+  );
   const composerContextWindowLabel = deriveComposerContextWindowLabel({
     provider: selectedProvider,
     model: selectedModel,
     snapshot: runtimeUsageContextWindow,
     status: contextWindowSelectionStatus,
+    observedBudget: observedClaudeContextBudget,
   });
+  // Claude reports the speed it actually serves; the selection is only a request.
+  const composerFastModeNotice = useMemo(
+    () => (selectedProvider === "claudeAgent" ? deriveFastModeNotice(threadActivities) : null),
+    [selectedProvider, threadActivities],
+  );
   const composerFooterControlsPlan = useMemo(
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
     [composerFooterTier, runtimeUsageContextWindow],
@@ -4647,6 +4692,7 @@ export default function ChatView({
       hideModelLabel={!composerFooterControlsPlan.showModelLabel}
       hideStatusLabel={!composerFooterControlsPlan.showTraitsLabel}
       contextWindowLabel={composerContextWindowLabel}
+      fastModeNotice={composerFastModeNotice}
       effortControl={settings.composerEffortSlider ? "slider" : "menu"}
       provider={selectedProvider}
       model={selectedModelForPickerWithCustomFallback}
@@ -5338,6 +5384,9 @@ export default function ChatView({
     runtimeModel: selectedRuntimeModel,
     providerStatus: activeProviderStatus,
     runtimeMode,
+    activeRuntimeMode: activeThread?.session?.activeTurnId
+      ? activeThread.session.runtimeMode
+      : undefined,
     onRuntimeModeChange: handleRuntimeModeChange,
     contextWindow: runtimeUsageContextWindow,
     cumulativeCostUsd: activeCumulativeCostUsd,
@@ -6446,7 +6495,9 @@ export default function ChatView({
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
-            aria-hidden={terminalWorkspaceTerminalTabActive}
+            // `inert`, not aria-hidden: hiding a subtree that still holds focus (the composer
+            // or the terminal) is blocked by the browser; inert also releases that focus.
+            inert={terminalWorkspaceTerminalTabActive}
             className={cn(
               "flex min-h-0 min-w-0 flex-1 flex-col",
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
@@ -6478,6 +6529,13 @@ export default function ChatView({
                     <SynaraLogo aria-label="Synara logo" className="size-10" />
                     <h2
                       data-testid="empty-landing-heading"
+                      // A combobox contributes its (empty) value, not its text, to the
+                      // heading's name, which read as "What should we do in ?".
+                      aria-label={
+                        isEmptyChatLanding
+                          ? undefined
+                          : `What should we do in ${activeProjectDisplayName ?? "this folder"}?`
+                      }
                       className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
                     >
                       {isEmptyChatLanding ? (
@@ -6746,7 +6804,7 @@ export default function ChatView({
 
           {terminalWorkspaceOpen ? (
             <div
-              aria-hidden={!terminalWorkspaceTerminalTabActive}
+              inert={!terminalWorkspaceTerminalTabActive}
               className={cn(
                 "absolute inset-0 min-h-0 min-w-0 transition-all duration-200 ease-out",
                 terminalWorkspaceTerminalTabActive

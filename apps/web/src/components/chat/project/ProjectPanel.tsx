@@ -19,7 +19,9 @@ import { Textarea } from "~/components/ui/textarea";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { resolveGroupCoordinatorDisplayName } from "~/lib/groupCoordinatorName";
-import { BotIcon, FastModeIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
+import { useThreadFastModeNotice } from "~/hooks/useThreadFastModeNotice";
+import { BotIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
+import { FastModeBadgeIcon } from "../FastModeBadgeIcon";
 import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import { cn } from "~/lib/utils";
 import { useAutomations } from "~/routes/-automations.shared";
@@ -210,6 +212,9 @@ export function ProjectPanel({
   const coordinatorModel =
     agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
   const coordinatorModelSummary = resolveThreadModelSummary(coordinatorModel);
+  const coordinatorFastModeNotice = useThreadFastModeNotice(
+    coordinatorModel?.provider === "claudeAgent" ? coordinatorThreadId : null,
+  );
   const coordinatorDisplayName = resolveGroupCoordinatorDisplayName({
     coordinatorName: agent.overview?.config?.coordinatorName ?? null,
     threadTitle: coordinatorThread?.title ?? null,
@@ -393,9 +398,9 @@ export function ProjectPanel({
                     </span>
                   ) : null}
                   {coordinatorModelSummary?.fastMode ? (
-                    <FastModeIcon
+                    <FastModeBadgeIcon
+                      notice={coordinatorFastModeNotice}
                       className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]"
-                      aria-hidden
                     />
                   ) : null}
                   {coordinatorStatusDot ? (

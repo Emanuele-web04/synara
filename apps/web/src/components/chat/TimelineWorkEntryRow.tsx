@@ -47,6 +47,7 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { computerToolName, describeComputerToolCall } from "~/lib/computerToolPresentation";
 import { cn } from "~/lib/utils";
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
@@ -1044,13 +1045,16 @@ function ProviderContextLifecycleDetails(props: {
   );
 }
 
-function providerModelLabel(selection: ModelSelection): string {
+function providerModelLabel(
+  selection: ModelSelection,
+  fastModeNotice?: FastModeNotice | null,
+): string {
   const displayName =
     PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === selection.provider)
       ?.displayName ?? selection.provider;
   const summary = resolveThreadModelSummary(selection);
   const modelLabel = summary
-    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? " · Fast" : ""}`
+    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? ` · ${fastModeNotice?.label ?? "Fast"}` : ""}`
     : selection.model;
   return `${displayName} · ${modelLabel}`;
 }
@@ -1063,9 +1067,13 @@ export function ProviderHandoffDetails(props: {
     <div className="space-y-3" data-provider-handoff-details="true">
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
         <dt className="text-muted-foreground/56">From</dt>
-        <dd className="text-foreground/84">{providerModelLabel(info.sourceModelSelection)}</dd>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.sourceModelSelection, info.sourceFastModeNotice)}
+        </dd>
         <dt className="text-muted-foreground/56">To</dt>
-        <dd className="text-foreground/84">{providerModelLabel(info.targetModelSelection)}</dd>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.targetModelSelection, info.targetFastModeNotice)}
+        </dd>
         {info.status === "failed" ? (
           <>
             <dt className="text-muted-foreground/56">Error</dt>
