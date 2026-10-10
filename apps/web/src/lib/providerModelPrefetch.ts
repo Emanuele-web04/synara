@@ -136,7 +136,8 @@ export function resolveNewThreadModelPrefetchProvider(input: {
     resolveInstance(input.draftActiveProvider) ??
     resolveInstance(input.stickyActiveProvider) ??
     input.projectDefaultProvider ??
-    input.defaultProvider
+    input.defaultProvider ??
+    "codex"
   );
 }
 
@@ -188,7 +189,10 @@ export function providerModelsPrefetchQueryOptions(input: {
   const { priority, provider, settings } = input;
   const cwd = input.cwd ?? null;
   const instanceId = input.instanceId ?? provider;
-  const providerOptions = providerStartOptionsForInstance(settings, instanceId)?.[provider];
+  const providerOptions =
+    provider === "external"
+      ? undefined
+      : providerStartOptionsForInstance(settings, instanceId)?.[provider];
   const optionString = (key: string) => readProviderOptionString(providerOptions, key);
 
   switch (provider) {
@@ -276,6 +280,8 @@ export function providerModelsPrefetchQueryOptions(input: {
         agentDir: optionString("agentDir"),
         priority,
       });
+    case "external":
+      throw new Error("External agents have no built-in model catalog to prefetch.");
   }
 }
 
@@ -288,7 +294,10 @@ function providerAgentsPrefetchQueryOptions(input: {
   const { provider, settings } = input;
   const cwd = input.cwd ?? null;
   const instanceId = input.instanceId ?? provider;
-  const providerOptions = providerStartOptionsForInstance(settings, instanceId)?.[provider];
+  const providerOptions =
+    provider === "external"
+      ? undefined
+      : providerStartOptionsForInstance(settings, instanceId)?.[provider];
 
   switch (provider) {
     case "claudeAgent":
@@ -377,6 +386,25 @@ export function prefetchProviderModelsForNewThread(
 
 /**
  * Warm Droid's model catalog on explicit new-thread intent only. Droid
+ * discovery spins a disposable ACP session per model (expensive), so it must
+ * never run from idle project focus.
+ */
+/**
+ * Discovery cache key for an external agent profile. Keyed by profile
+ * identity (profileId plus the pinned revisionId), never a shared provider
+ * bucket, so model discovery and health caches stay per-profile. The generic
+ * connector foundation owns the actual discovery; this helper keeps the cache
+ * namespace stable for it.
+ */
+export function externalAgentModelDiscoveryCacheKey(input: {
+  profileId: string;
+  revisionId: string;
+}) {
+  return ["external-agent-discovery", "models", input.profileId, input.revisionId] as const;
+}
+
+/**
+ * Warm Droid model discovery on explicit new-thread intent only. Droid
  * discovery spins a disposable ACP session per model (expensive), so it must
  * never run from idle project focus.
  */
@@ -492,6 +520,9 @@ export function prefetchModelsForNewThread(
   const statusesReconciled = input.statusesReconciled === true;
   const providerStatuses = input.providerStatuses ?? EMPTY_PROVIDER_STATUSES;
   const isProviderWarmable = (provider: ProviderKind): boolean => {
+    if (provider === "external") {
+      return false;
+    }
     // Mirrors useProviderModelCatalog.shouldDiscoverProvider exactly:
     // the enabled flag short-circuits even the selected provider, then the
     // selected provider always wins, then hidden providers are skipped.

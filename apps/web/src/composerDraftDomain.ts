@@ -360,7 +360,7 @@ export interface ComposerDraftStoreState {
   setProviderModelOptions: (
     threadId: ThreadId,
     provider: ProviderKind,
-    nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
+    nextProviderOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | null | undefined,
     options?: {
       instanceId?: ProviderInstanceId | null;
       model?: string | null;

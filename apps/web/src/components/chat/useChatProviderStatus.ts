@@ -51,6 +51,8 @@ function getProviderStartOptionsCustomBinaryPath(
   provider: ProviderKind,
 ): string | null {
   switch (provider) {
+    case "external":
+      return null;
     case "codex":
       return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
     case "claudeAgent":

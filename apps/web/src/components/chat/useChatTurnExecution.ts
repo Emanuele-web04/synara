@@ -351,19 +351,22 @@ export function useChatTurnExecution({
 
         // Register the task before slow git work so the sidebar can show it
         // and navigation can leave preparation running on its original thread.
-        const threadCreateModelSelection: ModelSelection = buildModelSelection(
-          selectedModelSelectionForSend.provider,
-          selectedModelSelectionForSend.model ||
-            selectedModelForSend ||
-            targetProjectDefaultModelSelectionForSend?.model ||
-            getDefaultModel(selectedModelSelectionForSend.provider) ||
-            DEFAULT_MODEL_BY_PROVIDER.codex,
-          selectedModelSelectionForSend.options,
-          selectedModelSelectionForSend.provider === "claudeAgent"
-            ? selectedModelSelectionForSend.supportsAutoMode
-            : undefined,
-          { instanceId: selectedModelSelectionForSend.instanceId },
-        );
+        const threadCreateModelSelection: ModelSelection =
+          selectedModelSelectionForSend.provider === "external"
+            ? selectedModelSelectionForSend
+            : buildModelSelection(
+                selectedModelSelectionForSend.provider,
+                selectedModelSelectionForSend.model ||
+                  selectedModelForSend ||
+                  targetProjectDefaultModelSelectionForSend?.model ||
+                  getDefaultModel(selectedModelSelectionForSend.provider) ||
+                  DEFAULT_MODEL_BY_PROVIDER.codex,
+                selectedModelSelectionForSend.options,
+                selectedModelSelectionForSend.provider === "claudeAgent"
+                  ? selectedModelSelectionForSend.supportsAutoMode
+                  : undefined,
+                { instanceId: selectedModelSelectionForSend.instanceId },
+              );
 
         if (isLocalDraftThread) {
           const inheritedProjectInstructions =

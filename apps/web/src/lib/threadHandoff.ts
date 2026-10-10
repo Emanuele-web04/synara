@@ -322,10 +322,13 @@ export function resolveThreadHandoffModelSelection(input: {
   };
 
   const stickySelection = input.stickyModelSelectionByProvider[targetInstanceId];
-  const withTargetInstance = (selection: ModelSelection): ModelSelection => ({
-    ...selection,
-    ...(input.targetProviderInstanceId ? { instanceId: input.targetProviderInstanceId } : {}),
-  });
+  const withTargetInstance = (selection: ModelSelection): ModelSelection =>
+    selection.provider === "external"
+      ? selection
+      : {
+          ...selection,
+          ...(input.targetProviderInstanceId ? { instanceId: input.targetProviderInstanceId } : {}),
+        };
 
   if (isCompatibleSelection(stickySelection)) {
     return withTargetInstance(stickySelection);
@@ -333,6 +336,8 @@ export function resolveThreadHandoffModelSelection(input: {
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return withTargetInstance(input.projectDefaultModelSelection);
   }
+  if (input.targetProvider === "external")
+    throw new Error("Select an external agent profile and revision before handing off.");
   const defaultModel = getDefaultModel(input.targetProvider);
   if (!defaultModel) {
     throw new Error("Select a Pi model before handing off to Pi.");

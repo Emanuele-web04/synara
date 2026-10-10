@@ -125,6 +125,8 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
       return trimmed === "pi" ? "" : trimmed;
     case "omp":
       return trimmed === "omp" ? "" : trimmed;
+    case "external":
+      return "";
   }
 }
 
@@ -275,7 +277,7 @@ export function codexAccountInstanceId(accountId: string): ProviderInstanceId {
 
 function legacyProviderConfig(
   settings: ServerSettings,
-  provider: ProviderKind,
+  provider: Exclude<ProviderKind, "external">,
 ): ProviderInstanceConfig {
   const legacy = settings.providers[provider] as Record<string, unknown>;
   return {
@@ -500,6 +502,24 @@ export function resolveProviderInstance(
 ): ResolvedProviderInstance | null {
   if (isUnresolvedAutomationInstanceId(input.instanceId)) {
     return null;
+  }
+  // Profiles own their immutable executable and credential configuration.
+  // This route is intentionally absent from editable built-in instances.
+  if (
+    (input.instanceId === "external" ||
+      (input.instanceId === undefined && input.provider === "external")) &&
+    (input.provider === undefined || input.provider === "external")
+  ) {
+    return {
+      instanceId: "external",
+      driver: "external",
+      displayName: "External Agent",
+      enabled: true,
+      isDefault: true,
+      config: {},
+      environment: {},
+      raw: { driver: "external" },
+    };
   }
   const instances = deriveProviderInstances(settings);
   if (input.instanceId !== undefined) {

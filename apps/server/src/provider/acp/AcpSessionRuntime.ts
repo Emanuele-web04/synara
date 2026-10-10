@@ -297,6 +297,8 @@ export interface AcpSpawnInput {
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
+  /** Profile-backed agents receive a complete, explicitly selected environment. */
+  readonly inheritEnvironment?: boolean;
   readonly providerEnvironment?: {
     readonly driver: ProviderProcessEnvDriver;
     readonly instanceId?: string | undefined;
@@ -326,7 +328,7 @@ export function buildAcpSpawnProcessEnv(
         ...(overlay !== undefined ? { overlay } : {}),
       })
     : spawn.env
-      ? { ...env, ...overlay }
+      ? { ...(spawn.inheritEnvironment === false ? {} : env), ...overlay }
       : env;
   return buildProviderChildEnvironment({ provider: "acp", baseEnv: accountIsolatedEnv });
 }
@@ -2533,8 +2535,11 @@ function shouldEmitToolCallUpdate(
   return previous.detail !== next.detail;
 }
 
-const assistantItemId = (sessionId: string, runtimeInstanceId: string, segmentIndex: number) =>
-  `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
+export const assistantItemId = (
+  sessionId: string,
+  runtimeInstanceId: string,
+  segmentIndex: number,
+) => `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
   getSessionEpoch,

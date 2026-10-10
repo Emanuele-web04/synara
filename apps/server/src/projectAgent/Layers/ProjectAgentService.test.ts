@@ -21,7 +21,7 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { MEMORY_AUTO_DOCUMENT_PATH, memoryThreadDocumentPath } from "@synara/shared/projectAgent";
-import { Cause, Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Cause, Deferred, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
@@ -346,10 +346,12 @@ function makeTestLayer(options?: {
     providers: {
       ...DEFAULT_SERVER_SETTINGS.providers,
       ...Object.fromEntries(
-        (options?.disabledProviders ?? []).map((provider) => [
-          provider,
-          { ...DEFAULT_SERVER_SETTINGS.providers[provider], enabled: false },
-        ]),
+        (options?.disabledProviders ?? [])
+          .filter((provider) => provider !== "external")
+          .map((provider) => [
+            provider,
+            { ...DEFAULT_SERVER_SETTINGS.providers[provider], enabled: false },
+          ]),
       ),
     },
   };

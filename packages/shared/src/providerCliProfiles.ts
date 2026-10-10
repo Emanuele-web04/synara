@@ -15,7 +15,7 @@ export const PROVIDER_CLI_COMMAND_BY_KIND = {
   opencode: "opencode",
   pi: "pi",
   omp: "omp",
-} as const satisfies Record<ProviderKind, string>;
+} as const satisfies Record<Exclude<ProviderKind, "external">, string>;
 
 const CLI_COMMAND_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const RESERVED_CLI_COMMANDS = new Set<string>(Object.values(PROVIDER_CLI_COMMAND_BY_KIND));
@@ -26,7 +26,10 @@ export function normalizeProviderCliAlias(value: unknown): string | undefined {
   return CLI_COMMAND_PATTERN.test(alias) && !RESERVED_CLI_COMMANDS.has(alias) ? alias : undefined;
 }
 
-function profileSuffix(provider: ProviderKind, instanceId: ProviderInstanceId): string {
+function profileSuffix(
+  provider: Exclude<ProviderKind, "external">,
+  instanceId: ProviderInstanceId,
+): string {
   if (instanceId === provider) return "default";
   const command = PROVIDER_CLI_COMMAND_BY_KIND[provider];
   const prefixes = [provider.toLowerCase(), command.toLowerCase()]
@@ -53,6 +56,10 @@ export function providerCliCommandName(input: {
   readonly instanceId: ProviderInstanceId;
   readonly config?: Readonly<Record<string, unknown>> | undefined;
 }): string {
+  if (input.provider === "external")
+    throw new Error(
+      "External profiles own their launch command; no built-in CLI alias is available.",
+    );
   const configured = normalizeProviderCliAlias(input.config?.cliAlias);
   if (configured) return configured;
   return `${PROVIDER_CLI_COMMAND_BY_KIND[input.provider]}-${profileSuffix(
@@ -106,7 +113,7 @@ export const PROVIDER_AUTHENTICATION = {
     interactiveCommand: "/login",
   },
 } as const satisfies Record<
-  ProviderKind,
+  Exclude<ProviderKind, "external">,
   {
     readonly args: readonly string[];
     readonly instructions: string;

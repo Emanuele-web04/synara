@@ -35,6 +35,10 @@ export class AgentGatewayTargetError extends Error {
   }
 }
 
+// The agent gateway resolves and validates built-in provider targets only;
+// external agent profile selections are rejected up front.
+export type ResolvedAgentGatewayTarget = Exclude<ModelSelection, { readonly provider: "external" }>;
+
 export interface AgentGatewayProviderCatalog {
   readonly provider: ProviderKind;
   readonly defaultModel: string | null;
@@ -256,6 +260,12 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  // External profiles carry connector-defined options, so the gateway has no static rules.
+  // The gateway rejects external targets outright; this entry only satisfies the registry.
+  external: {
+    primaryOptionKey: "modelVariant",
+    options: {},
+  },
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
 function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptionConfig {
@@ -265,7 +275,9 @@ function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptio
 }
 
 function providerDefaultModel(provider: ProviderKind): string | null {
-  return provider === "pi" || provider === "omp" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
+  return provider === "pi" || provider === "omp" || provider === "external"
+    ? null
+    : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
 export function loadAgentGatewayProviderCatalog(input: {
@@ -293,6 +305,17 @@ export function loadAgentGatewayProviderCatalog(input: {
       available: false,
       ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
       error: unavailableReason,
+    });
+  }
+  // External profiles have no discovery-backed catalog; the gateway rejects them outright.
+  if (input.provider === "external") {
+    return Effect.succeed({
+      provider: input.provider,
+      defaultModel,
+      models: [],
+      enabled: true,
+      available: false,
+      error: `Provider "external" is not supported by the agent gateway.`,
     });
   }
   return input.discovery
@@ -515,7 +538,7 @@ function normalizedEffortValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function validateOptionsWithoutCatalog(target: ModelSelection): void {
+function validateOptionsWithoutCatalog(target: ResolvedAgentGatewayTarget): void {
   const rawOptions = target.options as Record<string, unknown> | undefined;
   for (const [optionId, value] of Object.entries(rawOptions ?? {})) {
     if (value === undefined) continue;
@@ -634,7 +657,7 @@ function validateKnownProviderOption(
 }
 
 function validateAdvertisedOption(
-  target: ModelSelection,
+  target: ResolvedAgentGatewayTarget,
   descriptor: ProviderModelDescriptor,
 ): void {
   const rawOptions = target.options as Record<string, unknown> | undefined;
@@ -655,8 +678,16 @@ export function resolveAgentGatewayTarget(input: {
   readonly discovery: ProviderDiscoveryServiceShape;
   readonly availability?: AgentGatewayProviderAvailability;
   readonly cwd?: string;
-}): Effect.Effect<ModelSelection, AgentGatewayTargetError> {
+}): Effect.Effect<ResolvedAgentGatewayTarget, AgentGatewayTargetError> {
   return Effect.gen(function* () {
+    if (input.target.provider === "external") {
+      return yield* Effect.fail(
+        new AgentGatewayTargetError(
+          "provider_unavailable",
+          "External agent profile targets are not supported by the agent gateway.",
+        ),
+      );
+    }
     const catalog = yield* loadAgentGatewayProviderCatalog({
       provider: input.target.provider,
       discovery: input.discovery,

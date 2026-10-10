@@ -10325,7 +10325,7 @@ describe("ProviderCommandReactor", () => {
   });
 
   describe("interrupt escalation recovery", () => {
-    async function createEscalatedHarness(provider: ProviderKind = "codex") {
+    async function createEscalatedHarness(provider: Exclude<ProviderKind, "external"> = "codex") {
       const harness = await createHarness({
         threadModelSelection: {
           provider,

@@ -336,6 +336,10 @@
       "types": "./src/providerCliProfiles.ts",
       "import": "./src/providerCliProfiles.ts"
     },
+    "./capabilityEvidence": {
+      "types": "./src/capabilityEvidence.ts",
+      "import": "./src/capabilityEvidence.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"
