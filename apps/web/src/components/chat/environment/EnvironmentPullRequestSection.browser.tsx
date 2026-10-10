@@ -325,7 +325,10 @@ describe("EnvironmentPullRequestSection", () => {
     await expect
       .element(page.getByText("#321 Keep PR context visible", { exact: true }))
       .toBeVisible();
-    expect(getGitStatus).toHaveBeenCalledExactlyOnceWith({ cwd });
+    expect(getGitStatus).toHaveBeenCalledExactlyOnceWith(
+      { cwd },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it.each(["merged"] as const)(

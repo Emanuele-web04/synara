@@ -2,10 +2,12 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 const { readWorkingTreeDiff } = vi.hoisted(() => ({
-  readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
-    patch: input.filePath ?? "all",
-    truncated: false,
-  })),
+  readWorkingTreeDiff: vi.fn(
+    async (input: { filePath?: string }, _options?: { readonly signal?: AbortSignal }) => ({
+      patch: input.filePath ?? "all",
+      truncated: false,
+    }),
+  ),
 }));
 vi.mock("../nativeApi", () => ({ ensureNativeApi: () => ({ git: { readWorkingTreeDiff } }) }));
 import {
@@ -44,11 +46,10 @@ describe("file-scoped working tree diffs", () => {
       patch: "src/b.ts",
       truncated: false,
     });
-    expect(readWorkingTreeDiff).toHaveBeenCalledWith({
-      cwd: "/repo",
-      scope: "workingTree",
-      filePath: "src/a.ts",
-    });
+    expect(readWorkingTreeDiff).toHaveBeenCalledWith(
+      { cwd: "/repo", scope: "workingTree", filePath: "src/a.ts" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 });
 
@@ -292,6 +293,31 @@ describe("git query invalidation", () => {
     firstDiffGate.resolve();
     await Promise.resolve();
     expect(queryClient.getQueryData(diffKey)).toBe("fresh");
+    unsubscribe();
+  });
+
+  it("aborts the superseded read so the server stops working on it", async () => {
+    const queryClient = new QueryClient();
+    const diffQuery = gitWorkingTreeDiffQueryOptions({ cwd: "/repo/superseded-read" });
+    const firstReadGate = deferredVoid();
+    let firstReadSignal: AbortSignal | undefined;
+    readWorkingTreeDiff.mockImplementationOnce(async (_input, options) => {
+      firstReadSignal = options?.signal;
+      await firstReadGate.promise;
+      return { patch: "stale", truncated: false };
+    });
+    const observer = new QueryObserver(queryClient, diffQuery);
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(firstReadSignal).toBeDefined());
+
+    await refreshGitWorkingTreeDiffsForCwd(queryClient, "/repo/superseded-read");
+
+    expect(firstReadSignal?.aborted).toBe(true);
+    expect(queryClient.getQueryData(diffQuery.queryKey)).toEqual({
+      patch: "all",
+      truncated: false,
+    });
+    firstReadGate.resolve();
     unsubscribe();
   });
 

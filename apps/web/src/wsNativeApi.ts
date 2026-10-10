@@ -648,12 +648,15 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     git: {
-      githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),
+      githubRepository: (input, options) =>
+        transport.request(WS_METHODS.gitGithubRepository, input, options),
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
-      status: (input) => transport.request(WS_METHODS.gitStatus, input),
-      readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
+      status: (input, options) => transport.request(WS_METHODS.gitStatus, input, options),
+      readWorkingTreeDiff: (input, options) =>
+        transport.request(WS_METHODS.gitReadWorkingTreeDiff, input, options),
       readFileAtRev: (input) => transport.request(WS_METHODS.gitReadFileAtRev, input),
-      workingTreeDiffStats: (input) => transport.request(WS_METHODS.gitWorkingTreeDiffStats, input),
+      workingTreeDiffStats: (input, options) =>
+        transport.request(WS_METHODS.gitWorkingTreeDiffStats, input, options),
       blameLine: (input) => transport.request(WS_METHODS.gitBlameLine, input),
       summarizeDiff: (input) =>
         transport.request(WS_METHODS.gitSummarizeDiff, input, {
@@ -663,8 +666,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.gitRunStackedAction, input, {
           timeoutMs: null,
         }),
-      listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
-      listRecentCommits: (input) => transport.request(WS_METHODS.gitListRecentCommits, input),
+      listBranches: (input, options) =>
+        transport.request(WS_METHODS.gitListBranches, input, options),
+      listRecentCommits: (input, options) =>
+        transport.request(WS_METHODS.gitListRecentCommits, input, options),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
       // Worktree materialization scales with checkout size; progress events
       // keep the UI honest while the stream runs, so no fixed timeout.
@@ -683,8 +688,10 @@ export function createWsNativeApi(): NativeApi {
       stageFiles: (input) => transport.request(WS_METHODS.gitStageFiles, input),
       unstageFiles: (input) => transport.request(WS_METHODS.gitUnstageFiles, input),
       handoffThread: (input) => transport.request(WS_METHODS.gitHandoffThread, input),
-      resolvePullRequest: (input) => transport.request(WS_METHODS.gitResolvePullRequest, input),
-      pullRequestSnapshot: (input) => transport.request(WS_METHODS.gitPullRequestSnapshot, input),
+      resolvePullRequest: (input, options) =>
+        transport.request(WS_METHODS.gitResolvePullRequest, input, options),
+      pullRequestSnapshot: (input, options) =>
+        transport.request(WS_METHODS.gitPullRequestSnapshot, input, options),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
       onActionProgress: gitActionProgressListeners.subscribe,

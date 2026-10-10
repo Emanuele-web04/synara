@@ -1135,6 +1135,11 @@ export interface DesktopBridge {
   };
 }
 
+/** Lets a caller cancel a read it no longer needs, so the server stops the work too. */
+interface AbortableRequestOptions {
+  readonly signal?: AbortSignal;
+}
+
 export interface NativeApi {
   dialogs: {
     pickFolder: () => Promise<string | null>;
@@ -1168,7 +1173,7 @@ export interface NativeApi {
     ) => Promise<ProjectPrewarmSearchIndexResult>;
     readFile: (
       input: ProjectReadFileInput,
-      options?: { readonly signal?: AbortSignal },
+      options?: AbortableRequestOptions,
     ) => Promise<ProjectReadFileResult>;
     onFileChange?: (
       input: ProjectWatchFileInput,
@@ -1190,7 +1195,7 @@ export interface NativeApi {
     onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
     provisionFromGitHub: (
       input: GitHubProjectProvisionInput,
-      options?: { readonly signal?: AbortSignal },
+      options?: AbortableRequestOptions,
     ) => Promise<GitHubProjectProvisionResult>;
     onProvisionProgress: (
       callback: (event: GitHubProjectProvisionProgressEvent) => void,
@@ -1211,9 +1216,18 @@ export interface NativeApi {
   };
   git: {
     // Existing branch/worktree API
-    githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
-    listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
-    listRecentCommits: (input: GitListRecentCommitsInput) => Promise<GitListRecentCommitsResult>;
+    githubRepository: (
+      input: GitHubRepositoryInput,
+      options?: AbortableRequestOptions,
+    ) => Promise<GitHubRepositoryResult>;
+    listBranches: (
+      input: GitListBranchesInput,
+      options?: AbortableRequestOptions,
+    ) => Promise<GitListBranchesResult>;
+    listRecentCommits: (
+      input: GitListRecentCommitsInput,
+      options?: AbortableRequestOptions,
+    ) => Promise<GitListRecentCommitsResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     createDetachedWorktree: (
       input: GitCreateDetachedWorktreeInput,
@@ -1229,22 +1243,28 @@ export interface NativeApi {
     stageFiles: (input: GitStageFilesInput) => Promise<GitStageFilesResult>;
     unstageFiles: (input: GitUnstageFilesInput) => Promise<GitUnstageFilesResult>;
     handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;
-    resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
+    resolvePullRequest: (
+      input: GitPullRequestRefInput,
+      options?: AbortableRequestOptions,
+    ) => Promise<GitResolvePullRequestResult>;
     pullRequestSnapshot: (
       input: GitPullRequestSnapshotInput,
+      options?: AbortableRequestOptions,
     ) => Promise<GitPullRequestSnapshotResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;
     // Stacked action API
     pull: (input: GitPullInput) => Promise<GitPullResult>;
-    status: (input: GitStatusInput) => Promise<GitStatusResult>;
+    status: (input: GitStatusInput, options?: AbortableRequestOptions) => Promise<GitStatusResult>;
     readWorkingTreeDiff: (
       input: GitReadWorkingTreeDiffInput,
+      options?: AbortableRequestOptions,
     ) => Promise<GitReadWorkingTreeDiffResult>;
     readFileAtRev: (input: GitReadFileAtRevInput) => Promise<GitReadFileAtRevResult>;
     workingTreeDiffStats: (
       input: GitReadWorkingTreeDiffInput,
+      options?: AbortableRequestOptions,
     ) => Promise<GitWorkingTreeDiffStatsResult>;
     blameLine: (input: GitBlameLineInput) => Promise<GitBlameLineResult>;
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
