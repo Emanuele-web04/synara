@@ -2252,6 +2252,11 @@ const makeWsRpcHandlersLayer = () =>
             requireOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
             "Failed to create external MCP integration",
           ),
+        [WS_METHODS.serverUpdateExternalMcpIntegration]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(externalMcp.updateIntegration(input))),
+            "Failed to update external MCP integration",
+          ),
         [WS_METHODS.serverRevokeExternalMcpIntegration]: (input) =>
           rpcEffect(
             requireOwner.pipe(
