@@ -129,9 +129,9 @@ export interface WorkLogEntry {
   id: string;
   createdAt: string;
   /**
-   * Activity order key from two unrelated counters: provider rows carry the
-   * provider runtime journal sequence, rows the server writes itself carry the
-   * orchestration event sequence. The timeline compares it only to break ties.
+   * Provider runtime sequence, used to break equal-time ties in the timeline.
+   * Absent for server-created rows: their orchestration event sequence is a
+   * different counter, so they order by `createdAt` instead.
    */
   sequence?: number;
   turnId?: TurnId | null;
@@ -562,9 +562,7 @@ function deriveTurnFailureEntries(
       createdAt: previous?.createdAt ?? activity.createdAt,
       ...(previous?.sequence !== undefined
         ? { sequence: previous.sequence }
-        : activity.sequence !== undefined
-          ? { sequence: activity.sequence }
-          : {}),
+        : withProviderSequence(activity)),
       ...(activity.turnId ? { turnId: activity.turnId } : {}),
       tone: "error",
       label: "Task interrupted",
@@ -576,8 +574,9 @@ function deriveTurnFailureEntries(
 }
 
 // Completions of tasks a visible "Moved to background" notice announced. They
-// carry no turn id (they land between turns), so they bypass the turn filter
-// once the notice that launched them is visible.
+// bypass the turn filter once the notice that launched them is visible, and
+// belong to the turn that launched the task: a completion can arrive after the
+// user already started another turn (a stopped turn's subagents report late).
 function deriveBackgroundTaskCompletionEntries(
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
@@ -585,7 +584,7 @@ function deriveBackgroundTaskCompletionEntries(
 ): WorkLogEntry[] {
   const backgroundTasks = new Map<
     string,
-    { taskType: string | null; description: string | null }
+    { taskType: string | null; description: string | null; turnId: TurnId | null }
   >();
   const completions: WorkLogEntry[] = [];
   for (const activity of ordered) {
@@ -603,14 +602,17 @@ function deriveBackgroundTaskCompletionEntries(
         backgroundTasks.set(record.task_id, {
           taskType: typeof record.task_type === "string" ? record.task_type : null,
           description: typeof record.description === "string" ? record.description : null,
+          turnId: activity.turnId,
         });
       }
       continue;
     }
     if (activity.kind !== "task.completed" || typeof payload?.taskId !== "string") continue;
-    const task = backgroundTasks.get(payload.taskId);
-    if (!task) continue;
+    const launched = backgroundTasks.get(payload.taskId);
+    if (!launched) continue;
     backgroundTasks.delete(payload.taskId);
+    const { turnId: launchTurnId, ...task } = launched;
+    const turnId = launchTurnId ?? activity.turnId;
     const noun = task.taskType === "local_agent" ? "Subagent" : "Background task";
     const outcome =
       payload.status === "failed"
@@ -621,7 +623,8 @@ function deriveBackgroundTaskCompletionEntries(
     completions.push({
       id: activity.id,
       createdAt: activity.createdAt,
-      ...(activity.sequence !== undefined ? { sequence: activity.sequence } : {}),
+      ...withProviderSequence(activity),
+      ...(turnId ? { turnId } : {}),
       // Status first: a trailing "finished" is trimmed as a tool status word.
       label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
       tone: payload.status === "failed" ? "error" : "info",
@@ -1177,6 +1180,14 @@ function withUserInputExchanges(
 
 const derivedWorkLogEntryCache = new WeakMap<OrchestrationThreadActivity, DerivedWorkLogEntry>();
 
+// Only provider runtime sequences order transcript rows causally; a fallback
+// orchestration event sequence belongs to an unrelated counter.
+function withProviderSequence(activity: OrchestrationThreadActivity): { sequence?: number } {
+  return activity.sequence !== undefined && activity.sequenceSource !== "orchestration"
+    ? { sequence: activity.sequence }
+    : {};
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const cached = derivedWorkLogEntryCache.get(activity);
   if (cached) {
@@ -1196,7 +1207,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
-    ...(activity.sequence !== undefined ? { sequence: activity.sequence } : {}),
+    ...withProviderSequence(activity),
     ...(activity.turnId !== null ? { turnId: activity.turnId } : {}),
     label: activity.summary,
     tone: activity.tone === "approval" ? "info" : activity.tone,
@@ -2038,10 +2049,13 @@ function reconcileSettledLiveActivities(
         : options.latestTurnState === "interrupted"
           ? "cancelled"
           : null;
+  // A latest turn the session is still running is not settled, whatever a
+  // mid-turn message did to its client-side state.
   if (
     latestTurnId &&
     latestTerminalState &&
     options.latestTurnCompletedAt &&
+    options.activeTurnId !== latestTurnId &&
     !terminalByTurnId.has(latestTurnId)
   ) {
     terminalByTurnId.set(latestTurnId, {
@@ -3278,6 +3292,22 @@ function coalesceAdjacentMessageSegments(entries: TimelineEntry[]): TimelineEntr
   return runs.map((run) => (Array.isArray(run) ? (replacements.get(run) ?? run[0]!) : run));
 }
 
+function startsNewUserTurn(message: ChatMessage): boolean {
+  return (
+    message.role === "user" &&
+    // Effective dispatch semantics are recorded before an emulated steer waits
+    // for interruption/promotion. Fall back to turn binding for events written
+    // before startsNewTurn existed; native steers remain continuations.
+    (message.startsNewTurn ??
+      (message.dispatchMode !== "steer" ||
+        (message.turnId !== null && message.turnId !== undefined)))
+  );
+}
+
+function isSequenced(row: TimelineEntry): boolean {
+  return row.kind === "work" && row.sequence !== undefined;
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
@@ -3373,18 +3403,25 @@ export function deriveTimelineEntries(
   const orderedMessages = messagesOrdered
     ? visibleMessages
     : visibleMessages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // A user message bound to its turn owns that turn's block even when it was
+  // sent (and queued) while an earlier turn was still running: the earlier
+  // turn's answer stays under its own request instead of moving below it.
+  let userTurnCount = 0;
   for (const message of orderedMessages) {
-    // Effective dispatch semantics are recorded before an emulated steer waits
-    // for interruption/promotion. Fall back to turn binding for events written
-    // before startsNewTurn existed; native steers remain continuations.
-    const startsNewTurn =
-      message.startsNewTurn ??
-      (message.dispatchMode !== "steer" ||
-        (message.turnId !== null && message.turnId !== undefined));
-    if (message.role === "user" && startsNewTurn) {
+    if (!startsNewUserTurn(message)) continue;
+    userTurnCount += 1;
+    if (message.turnId && !turnOrder.has(message.turnId)) {
+      turnOrder.set(message.turnId, userTurnCount);
+    }
+  }
+  for (const message of orderedMessages) {
+    if (startsNewUserTurn(message)) {
       userStarts.push(message.createdAt);
     }
-    const order = userStarts.length;
+    const order =
+      message.role !== "user" && message.turnId
+        ? (turnOrder.get(message.turnId) ?? userStarts.length)
+        : userStarts.length;
     messageOrder.set(message.id, order);
     if (message.turnId && !turnOrder.has(message.turnId)) turnOrder.set(message.turnId, order);
   }
@@ -3423,14 +3460,27 @@ export function deriveTimelineEntries(
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
 
+  // Keep provider-sequenced work separate from server-created rows so unrelated
+  // counters never break ties against each other. All lists use the same
+  // chronological comparator; provider sequences only order equal-time ties.
+  const sequencedWorkRows = workRows.filter(isSequenced);
+  const timedWorkRows =
+    sequencedWorkRows.length === workRows.length ? [] : workRows.filter((row) => !isSequenced(row));
   return coalesceAdjacentMessageSegments(
     mergeTimelineEntries(
       mergeTimelineEntries(
-        sortedTimelineEntries(messageRows, compare),
-        sortedTimelineEntries(proposedPlanRows, compare),
+        mergeTimelineEntries(
+          sortedTimelineEntries(messageRows, compare),
+          sortedTimelineEntries(proposedPlanRows, compare),
+          compare,
+        ),
+        sortedTimelineEntries(timedWorkRows, compare),
         compare,
       ),
-      sortedTimelineEntries(workRows, compare),
+      sortedTimelineEntries(
+        sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
+        compare,
+      ),
       compare,
     ),
   );
