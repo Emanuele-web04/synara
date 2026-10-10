@@ -1592,7 +1592,7 @@ describe("deriveMessagesTimelineRows", () => {
       }),
       userEntry("u3", "2026-01-01T00:02:00Z"),
       assistantEntry("a3", "2026-01-01T00:02:05Z", {
-        turnId: "t3",
+        turnId: "turn-third",
         text: "Three",
         completedAt: "2026-01-01T00:02:20Z",
       }),
@@ -1612,7 +1612,7 @@ describe("deriveMessagesTimelineRows", () => {
           }),
         ],
         latestTurn: {
-          turnId: TurnId.makeUnsafe("t3"),
+          turnId: TurnId.makeUnsafe("turn-third"),
           state: "completed",
           startedAt: "2026-01-01T00:02:00.500Z",
           completedAt: "2026-01-01T00:02:20Z",
@@ -1661,7 +1661,7 @@ describe("deriveMessagesTimelineRows", () => {
           ),
           turnActivity(
             "m3",
-            "t3",
+            "turn-third",
             "turn.started",
             { model: "gpt-6-luna", provider: "codex" },
             "2026-01-01T00:02:00.500Z",
@@ -1730,7 +1730,7 @@ describe("deriveMessagesTimelineRows", () => {
           ),
           turnActivity(
             "fail",
-            "t3",
+            "turn-third",
             "turn.completed",
             {
               state: "failed",
@@ -1790,14 +1790,14 @@ describe("deriveMessagesTimelineRows", () => {
         ),
         turnActivity(
           "done3",
-          "t3",
+          "turn-third",
           "turn.completed",
           { state: "interrupted" },
           "2026-01-01T00:02:20Z",
         ),
       ]);
       expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).toBe(true);
-      expect(timing.get(TurnId.makeUnsafe("t3"))?.stoppedByUser).not.toBe(true);
+      expect(timing.get(TurnId.makeUnsafe("turn-third"))?.stoppedByUser).not.toBe(true);
       const rows = deriveMessagesTimelineRows({
         ...baseInput,
         timelineEntries: threeTurns,
