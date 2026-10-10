@@ -2,6 +2,7 @@ import http from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { ExternalMcpUpdateIntegrationInput } from "@synara/contracts";
 import { Effect, Exit, Layer, Scope, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
@@ -25,6 +26,8 @@ async function withExternalMcpServer(
   input: {
     readonly host?: string;
     readonly publicUrl?: URL;
+    readonly role?: "owner" | "client";
+    readonly updateIntegration?: (input: ExternalMcpUpdateIntegrationInput) => void;
     readonly verifyCredentialFailure?: {
       readonly code: string;
       readonly message: string;
@@ -78,6 +81,11 @@ async function withExternalMcpServer(
             : Effect.fail({ code: "external_credential_invalid", message: "invalid", status: 401 }),
       listIntegrations: () => Effect.succeed([]),
       createIntegration: () => Effect.die("not used"),
+      updateIntegration: (update: ExternalMcpUpdateIntegrationInput) =>
+        Effect.sync(() => {
+          input.updateIntegration?.(update);
+          return update;
+        }),
       revokeIntegration: () => Effect.succeed(false),
       pair: () => Effect.die("not used"),
       assertActive: () => Effect.succeed(verified),
@@ -106,7 +114,7 @@ async function withExternalMcpServer(
           sessionId: "owner-session",
           subject: "owner",
           method: "bootstrap",
-          role: "owner",
+          role: input.role ?? "owner",
           credentialSource: "cookie",
         }),
     } as never;
@@ -150,6 +158,45 @@ async function withExternalMcpServer(
 }
 
 describe("externalMcpRouteLayer", () => {
+  it("validates owner concurrency edits and retains cookie-origin protection", async () => {
+    const updates: ExternalMcpUpdateIntegrationInput[] = [];
+    await withExternalMcpServer(
+      { updateIntegration: (input) => updates.push(input) },
+      async ({ origin }) => {
+        const update = (concurrencyLimit: unknown, requestOrigin = origin) =>
+          fetch(`${origin}/api/mcp/external/integrations/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Origin: requestOrigin },
+            body: JSON.stringify({ integrationId: "integration-route-test", concurrencyLimit }),
+          });
+        for (const limit of [8, null]) {
+          const response = await update(limit);
+          expect(response.status).toBe(200);
+          expect(await response.json()).toMatchObject({ concurrencyLimit: limit });
+        }
+        for (const invalid of [0, 101, 1.5, "8"]) {
+          expect((await update(invalid)).status).toBe(400);
+        }
+        expect((await update(null, "https://untrusted.example")).status).toBe(403);
+      },
+    );
+    await withExternalMcpServer(
+      { role: "client", updateIntegration: (input) => updates.push(input) },
+      async ({ origin }) => {
+        const response = await fetch(`${origin}/api/mcp/external/integrations/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Origin: origin },
+          body: JSON.stringify({ integrationId: "integration-route-test", concurrencyLimit: null }),
+        });
+        expect(response.status).toBe(403);
+      },
+    );
+    expect(updates).toEqual([
+      { integrationId: "integration-route-test", concurrencyLimit: 8 },
+      { integrationId: "integration-route-test", concurrencyLimit: null },
+    ]);
+  });
+
   it("keeps the runtime identity challenge available when external MCP is remotely disabled", async () => {
     await withExternalMcpServer({ host: "0.0.0.0" }, async ({ origin }) => {
       const response = await fetch(`${origin}/api/mcp/external/runtime-challenge`, {

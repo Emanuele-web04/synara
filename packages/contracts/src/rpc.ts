@@ -91,6 +91,7 @@ import {
   ExternalMcpIntegration,
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
+  ExternalMcpUpdateIntegrationInput,
 } from "./externalMcp";
 import {
   DEVICE_WS_METHODS,
@@ -1378,6 +1379,15 @@ export const WsServerCreateExternalMcpIntegrationRpc = Rpc.make(
   },
 );
 
+export const WsServerUpdateExternalMcpIntegrationRpc = Rpc.make(
+  WS_METHODS.serverUpdateExternalMcpIntegration,
+  {
+    payload: ExternalMcpUpdateIntegrationInput,
+    success: ExternalMcpIntegration,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerRevokeExternalMcpIntegrationRpc = Rpc.make(
   WS_METHODS.serverRevokeExternalMcpIntegration,
   {
@@ -1998,6 +2008,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerUpdateProviderRpc,
   WsServerListExternalMcpIntegrationsRpc,
   WsServerCreateExternalMcpIntegrationRpc,
+  WsServerUpdateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
   WsServerListWorktreesRpc,
