@@ -2113,6 +2113,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
+          const collapsedSubagentCount = (collapsedTurnItems ?? []).reduce(
+            (count, item) =>
+              count + (item.kind === "work" ? (item.entry.subagentRun?.members.length ?? 0) : 0),
+            0,
+          );
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
@@ -2388,6 +2393,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           : row.collapsedWorkElapsed
                             ? `Worked for ${row.collapsedWorkElapsed}`
                             : "Details"}
+                        {collapsedSubagentCount > 0
+                          ? ` · ${collapsedSubagentCount} subagent${collapsedSubagentCount === 1 ? "" : "s"}`
+                          : null}
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}

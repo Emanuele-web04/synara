@@ -179,21 +179,51 @@ describe("computeStableMessagesTimelineRows", () => {
     result: [],
   });
 
-  it.each(["failure", "settledAt"] as const)("refreshes a subagent card when %s arrives", (field) => {
-    const member = {
-      key: "a", launchedAt: "2026-10-10T00:00:00Z", latestStep: null,
-      outcome: null, failure: null, settledAt: null,
-    };
-    const row: WorkTimelineRow = {
-      kind: "work", id: "run", createdAt: member.launchedAt,
-      groupedEntries: [{ id: "run", createdAt: member.launchedAt, label: "Subagents", tone: "info",
-        subagentRun: { members: [member] } }],
-    };
-    const first = computeStableMessagesTimelineRows([row], emptyStableRows());
-    const next: WorkTimelineRow = { ...row, groupedEntries: [{ ...row.groupedEntries[0]!,
-      subagentRun: { members: [{ ...member, [field]: field === "failure" ? "Launch failed" : "2026-10-10T00:00:08Z" }] } }] };
-    expect(computeStableMessagesTimelineRows([next], first).result[0]).toBe(next);
-  });
+  it.each(["failure", "settledAt"] as const)(
+    "refreshes a subagent card when %s arrives",
+    (field) => {
+      const member = {
+        key: "a",
+        launchedAt: "2026-10-10T00:00:00Z",
+        latestStep: null,
+        outcome: null,
+        failure: null,
+        settledAt: null,
+      };
+      const row: WorkTimelineRow = {
+        kind: "work",
+        id: "run",
+        createdAt: member.launchedAt,
+        groupedEntries: [
+          {
+            id: "run",
+            createdAt: member.launchedAt,
+            label: "Subagents",
+            tone: "info",
+            subagentRun: { members: [member] },
+          },
+        ],
+      };
+      const first = computeStableMessagesTimelineRows([row], emptyStableRows());
+      const next: WorkTimelineRow = {
+        ...row,
+        groupedEntries: [
+          {
+            ...row.groupedEntries[0]!,
+            subagentRun: {
+              members: [
+                {
+                  ...member,
+                  [field]: field === "failure" ? "Launch failed" : "2026-10-10T00:00:08Z",
+                },
+              ],
+            },
+          },
+        ],
+      };
+      expect(computeStableMessagesTimelineRows([next], first).result[0]).toBe(next);
+    },
+  );
 
   it("replaces work rows when later tool metadata adds visible details", () => {
     const firstRows: MessagesTimelineRow[] = [

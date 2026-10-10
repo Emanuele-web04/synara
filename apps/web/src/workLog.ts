@@ -541,6 +541,8 @@ function subagentOutcomeFromStatus(
 export interface SubagentTaskEnd {
   outcome: "completed" | "failed" | "stopped";
   endedAt: string;
+  /** The same provider task's previous, already settled invocation. */
+  previous?: SubagentTaskEnd;
 }
 
 /**
@@ -552,12 +554,24 @@ export function deriveSubagentTaskEnds(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyMap<string, SubagentTaskEnd> {
   const ends = new Map<string, SubagentTaskEnd>();
+  const resumed = new Set<string>();
   for (const activity of activities) {
-    if (activity.kind !== "task.completed") continue;
     const payload = asRecord(activity.payload);
     const toolUseId = asTrimmedString(payload?.toolUseId);
+    if (activity.kind === "task.started" && toolUseId && ends.has(toolUseId)) {
+      resumed.add(toolUseId);
+    }
+    if (activity.kind !== "task.completed") continue;
     const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
-    if (toolUseId && outcome) ends.set(toolUseId, { outcome, endedAt: activity.createdAt });
+    if (toolUseId && outcome) {
+      const previous = resumed.has(toolUseId) ? ends.get(toolUseId) : ends.get(toolUseId)?.previous;
+      ends.set(toolUseId, {
+        outcome,
+        endedAt: activity.createdAt,
+        ...(previous ? { previous } : {}),
+      });
+      resumed.delete(toolUseId);
+    }
   }
   return ends;
 }
