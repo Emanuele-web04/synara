@@ -917,7 +917,9 @@ test("keeps one real renderer guest across floating and sidebar handoffs", async
       const png = await electronApp.evaluate(async ({ BrowserWindow }) =>
         (await BrowserWindow.getAllWindows()[0]!.capturePage()).toPNG().toString("base64"),
       );
-      await testInfo.attach(name, { body: Buffer.from(png, "base64"), contentType: "image/png" });
+      const artifactPath = testInfo.outputPath(`${name}.png`);
+      writeFileSync(artifactPath, Buffer.from(png, "base64"));
+      await testInfo.attach(name, { path: artifactPath, contentType: "image/png" });
     };
     const clickChrome = async (buttonId: "drag" | "pop" | "close") => {
       // Wait for the disclosure to expose its target before sending real native
