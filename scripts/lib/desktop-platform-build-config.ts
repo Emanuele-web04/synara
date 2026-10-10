@@ -114,7 +114,10 @@ export function createDesktopPlatformBuildConfig(
 
   if (input.platform === "mac") {
     const mac = {
-      target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
+      // The finalizer creates the updater ZIP with ditto after notarization.
+      // Asking electron-builder for a ZIP too compresses the app twice and
+      // generates a blockmap that finalization immediately discards.
+      target: [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
       hardenedRuntime: input.signed === true,

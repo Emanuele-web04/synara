@@ -1,6 +1,8 @@
 # Release Checklist
 
-This document covers build-only native validation and publishing desktop releases from one tag.
+This document covers publishing desktop releases from one tag and targeted
+build-only diagnosis. An ordinary release uses one publication run after its
+version, release notes and lockfile are final.
 
 ## What the workflow does
 
@@ -8,16 +10,34 @@ This document covers build-only native validation and publishing desktop release
   - Manual dispatch defaults to build-only validation and uploads workflow artifacts without publishing anything.
   - A pushed tag matching `v*.*.*` publishes after successful builds.
   - Manual publication requires the explicit `publish_release=true` input.
-- Runs lint, typecheck and tests alongside unsigned native, JavaScript and icon
-  preparation. Packaging/signing waits for all quality gates. Narrow `native`, `icon`, and
-  `js` validation stages cannot publish and omit these full-suite gates.
+- Runs lint, typecheck and every test in parallel with native preparation and
+  packaging. Packaging starts after exact-source preflight and its portable
+  JavaScript, Cua and icon inputs are ready; it does not wait for `quality` or
+  `server_tests`. Both GitHub and npm publication depend directly on successful
+  `quality`, all `server_tests` shards and native artifact jobs. No tests are
+  removed. Narrow `native`, `icon`, and `js` validation stages cannot publish and
+  omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
-  - macOS `x64` DMG
+  - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
+    `arm64` (the Intel runner took 15-20 minutes for the same work). Every
+    Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
+    job then downloads it and runs the startup smoke on `macos-15-intel`:
+    under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
+- Each platform calls `release-platform.yml` with one native job that builds,
+  signs/notarizes where required, records verified provenance, runs Defender on
+  Windows and packaged startup smoke, then uploads the qualified `desktop-*`
+  artifact on the same runner. A first successful attempt creates no candidate
+  checkpoint and needs no second runner or candidate upload/download.
+- If a later step fails after provenance has been validated, the failure handler
+  rechecks the candidate's integrity before retaining
+  `candidate-desktop-PLATFORM-ARCH` for 30 days. A retry of the same run and SHA
+  can restore that verified candidate and skip packaging; see
+  [release recovery](#resume-a-failed-release) for the limits.
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](../BETA.md).
@@ -48,7 +68,7 @@ This document covers build-only native validation and publishing desktop release
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
   - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
-  - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
+  - `*.blockmap` files, except the macOS update ZIP, which uses a full-archive payload
 - Enforced upgrade path:
   - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
   - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
@@ -58,9 +78,15 @@ This document covers build-only native validation and publishing desktop release
 - macOS metadata note:
   - Installed macOS apps persist alternate icon choices using `NSWorkspace` custom-icon metadata, and reapply the saved choice on launch after an update. Default removes the override so the bundled icon follows system appearance. This requires a writable app bundle; development Electron bundles are not customized.
   - Custom icons leave signed `Contents` unchanged, but add Finder metadata that `codesign --verify --strict` rejects on a customized installation. Validate pristine distribution artifacts with the strict checks below. A local notarized app copy retained normal signature verification and Gatekeeper acceptance after customization; signed release/update testing must still cover this path.
-  - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
+  - The DMG release path asks electron-builder for the DMG only. After notarization,
+    the finalizer creates the updater ZIP once with `ditto` and writes its
+    `latest-mac.yml` hash/size for each architecture; there is no preliminary ZIP
+    or ZIP blockmap to generate and discard.
   - The workflow merges the per-arch macOS metadata, then keeps the merged manifest as `latest-mac.yml` and copies it to `synara-mac.yml` for stable releases.
-  - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
+  - Finalization verifies Electron framework symlinks, extracts the ZIP and
+    validates the extracted app signature before accepting the updater artifact.
+    Retained older stages with existing metadata are updated to the final ZIP
+    bytes, and any stale `.zip.blockmap` is removed.
   - macOS updater downloads intentionally use the full zip payload so Squirrel.Mac installs the exact signed archive validated by release build.
 - Local smoke test:
   - Run `bun run release:smoke:mac-update -- --skip-build --build-version 0.1.5` on macOS after local desktop/server/web dist files exist.
@@ -98,7 +124,16 @@ Checklist:
 
 ## 1) Build-only native CI validation
 
-Use this before publication to validate the real native macOS, Linux, and Windows build matrix. Build-only mode produces workflow artifacts and local updater metadata without creating a tag, GitHub Release, npm publication, or version-bump commit, or changing public updater feeds.
+Use build-only mode when investigating a native failure or qualifying changes to
+packaging, signing or the release workflow. It is not a prerequisite for every
+release: a full build-only run followed by a tag run builds the installers twice.
+The tag run already performs the publication gates. Build-only artifacts are not
+automatically promoted into a later tag run.
+
+Build-only mode produces workflow artifacts and local updater metadata without
+creating a tag, GitHub Release, npm publication, or version-bump commit, or changing
+public updater feeds. Finalize the candidate version and lockfile first, then use
+the smallest platform and stage that can answer the diagnostic question.
 
 1. Push the release-candidate branch so GitHub Actions can check it out.
 2. Start the workflow in build-only mode:
@@ -107,7 +142,10 @@ Use this before publication to validate the real native macOS, Linux, and Window
 4. Confirm preflight and all four native matrix builds pass.
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
-To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
+To publish from a manual dispatch instead of a tag push, select the existing
+release tag and pass `publish_release=true`. Publishing from a branch is refused.
+Use only one publication trigger; do not dispatch again after pushing a tag that
+already started the workflow.
 The public updater repository lookup runs only when publication is enabled;
 build-only validation does not need that GitHub API check.
 
@@ -195,9 +233,12 @@ checks, portable JavaScript and icon compilation. The packaging jobs download
 only their platform's prepared artifact from the same run, recompute the build
 environment key, and repeat executable/provenance verification. Missing artifacts
 or runner drift fail instead of falling back to unrelated binaries. These temporary
-handoff artifacts expire after one day; signing credentials are passed only to the
-packaging step after quality gates. A failed candidate can spend extra parallel
-compute on unsigned preparation. No tests or release acceptance gates are skipped.
+handoff artifacts expire after 30 days; signing credentials are passed only to the
+packaging step. Once preflight and the required prepared inputs pass, packaging
+can run while quality and server tests are still in progress. This can spend
+native compute on a candidate whose tests later fail. Both GitHub and npm
+publication wait directly for the full quality/server-test gates and successful
+native qualification; no tests or release acceptance gates are skipped.
 
 When deploying changes to the cache/provenance logic, run the producer on `main`
 after merge and before the next release: the exact fingerprint changes with that
@@ -210,7 +251,7 @@ directory, verifies the complete file inventory, source, lockfile and build
 settings, then copies only the two allowed output roots. Frozen production
 installs, dependency patches and native ABI checks still run on each platform.
 
-The Intel Mac job no longer retries the whole artifact command. Diagnose the
+The macOS jobs no longer retry the whole artifact command. Diagnose the
 failed stage and rerun only its platform. With `--keep-stage` (used by CI), the
 logged stage directory retains Apple submission IDs and exact payload hashes
 for same-run recovery; it is not uploaded or persisted across runners. A failed
@@ -258,7 +299,8 @@ On an Apple Silicon Mac, build the DMG and macOS update ZIP in `release/` with:
 SYNARA_DESKTOP_UPDATE_REPOSITORY=Emanuele-web04/synara bun run dist:desktop:dmg:arm64
 ```
 
-Use `dist:desktop:dmg:x64` on Intel. The updater repository setting is needed for
+`dist:desktop:dmg:x64` builds the Intel app; on Apple Silicon, add the
+`x86_64-apple-darwin` Rust target for Cua, and launching it needs Rosetta 2. The updater repository setting is needed for
 ZIP manifest finalization outside GitHub Actions. The build passes
 `--publish never` to electron-builder and defaults to unsigned; release signing,
 notarization, and updater settings remain controlled by the existing release flow.
@@ -378,18 +420,90 @@ full subject distinguished name.
 
 ## 4) Ongoing release checklist
 
-1. Ensure `main` is green in CI.
-2. Run the build-only native CI validation for the release-candidate branch and version.
-3. Bump app version as needed.
-4. Run `node scripts/resolve-release-update-policy.ts X.Y.Z` and confirm it reports the expected lane, `make_latest`, and `mirror_to_stable_channel` values before creating the tag.
-5. Create release tag: `vX.Y.Z`.
-6. Push tag.
-7. Verify workflow steps:
-   - preflight, quality gates and all three server test shards pass
-   - all matrix builds pass
-   - release job uploads expected files
-8. For a stable clean-lane release, confirm the new versioned release is GitHub Latest, contains all three default `latest` manifests plus all three `synara` aliases, and left the historical compatibility release unchanged.
-9. Smoke test downloaded artifacts.
+1. Inspect the checkout and current `main` CI results; preserve unrelated work.
+   Select the release source before checks. Follow [BETA.md](../BETA.md) for the
+   separate Beta version commit; Beta package versions must not land on `main`.
+2. Finalize the version with `node scripts/update-release-package-versions.ts X.Y.Z`,
+   then finish the changelog, in-app notes and documentation. Confirm the four
+   release package versions and `bun.lock` match. Prepare website copy in parallel.
+3. Use the Node and Bun versions in `.mise.toml`, with frozen dependencies. On
+   the finished candidate, run the required local `bun run fmt:check`,
+   `bun run lint`, `bun run typecheck`, `bun run release:smoke`, and affected
+   Vitest tests. Include `bun run windows-runtime:check`, `bun run migrations:check`
+   and relevant browser/native checks when their boundaries change.
+   The single tag workflow supplies the final full workspace test suite through
+   `quality` plus all three `server_tests` shards, and the desktop build through
+   `build_portable` and the native platform jobs. Do not require an additional
+   local full `bun run test` or `bun run build` solely as a release prerequisite.
+   Keep these CI results pending until the exact candidate SHA passes; a previous
+   `main` commit, another release SHA or focused rerun is not equivalent proof.
+   Full local tests/builds remain useful for diagnosis, unavailable CI or an
+   explicitly requested local check. When marketing or its build inputs change,
+   verify `bun run build:marketing` separately unless equivalent successful CI
+   proof exists for that exact candidate; it is not part of the desktop payload.
+   Retain commands, candidate SHA and results; do not restart completed checks
+   merely to resume the release conversation. Packaging can overlap these CI
+   checks; a failed quality gate or server shard blocks both GitHub and npm
+   publication through their direct dependencies.
+4. Run `node scripts/resolve-release-update-policy.ts X.Y.Z` and confirm the lane,
+   `make_latest`, and `mirror_to_stable_channel` values. Before any publication
+   trigger, configure the exact Windows unsigned exception or verify the requested
+   signing setup. Diagnose a known signing, Defender or runner failure before
+   starting another complete release run.
+5. Commit the candidate, record its full SHA, and create `vX.Y.Z` on that commit.
+   Push the branch when appropriate, then push the tag **once**. Do not add a
+   disposable full build-only run or a second publication dispatch. The tag
+   workflow validates the exact candidate and builds the installers.
+6. Record the workflow run ID, attempt, completed gates, artifact identities and
+   next action in the release's local checkpoint. Keep progress bookkeeping
+   outside tracked release inputs. Monitor the existing run through preflight,
+   quality gates, server shards, packaging, verification and publication; use the
+   recovery procedure below when a stage fails.
+7. Confirm the versioned release is public with all expected installers, manifests
+   and provenance. Stable must be GitHub Latest and carry all three `latest`
+   manifests plus byte-identical `synara` aliases; Beta must remain a prerelease
+   with its own feed. Verify the historical compatibility release is unchanged.
+8. Verify public downloads and the authorized website deployment. Report packaged
+   startup proof separately from manual installation, installed-app updates and
+   live-provider behavior; do not claim checks that were not performed.
+
+### Resume a failed release
+
+- Read the failed job's error before changing source or starting another run.
+  Preserve the version, tag, source SHA and existing successful results when the
+  failure is transient or limited to runner state.
+- For an unchanged candidate, resume the original workflow with
+  `gh run rerun RUN_ID --failed`. This retains successful jobs. If GitHub refuses
+  a rerun while the workflow is active, let the other jobs finish; do not cancel
+  their work and dispatch a second full run.
+- Build and qualification share one native job and runner. A successful first
+  attempt uploads only the qualified `desktop-*` artifact, without retaining a
+  separate candidate. If Defender, startup or a later step fails after provenance
+  was validated, the failure handler rechecks file integrity and signing policy
+  before uploading `candidate-desktop-PLATFORM-ARCH` for 30 days. A failed
+  integrity check must not preserve the candidate as reusable.
+- On a retry of the same run and source SHA, the native job looks for that
+  retained candidate and verifies its source, version, lockfile, flavor, file
+  inventory/digests and signing policy before skipping packaging. Qualification
+  runs again; successful platforms remain complete. This is same-run recovery,
+  not cross-run promotion or a cache of signing credentials.
+- A corrupt candidate or an artifact API error fails closed; neither is treated
+  as a cache miss. An absent or expired candidate requires packaging again.
+  Crashes or cancellations that prevent the failure handler from uploading a
+  validated checkpoint cannot resume from that runner's local files. Signing or
+  Apple notarization failures before validated provenance also require packaging
+  again. The local `--keep-stage` recovery described above does not persist Apple
+  wait state onto a replacement runner.
+- A source correction changes the candidate. Run the checks affected by that
+  correction, commit it and follow the unpublished-tag correction policy before
+  triggering its publication. Artifacts and test results from a different SHA
+  are not automatically reusable; never rewrite provenance to claim otherwise.
+- Do not move a tag that already produced a public release without explicit
+  authorization. For a correction to an unpublished tag, first verify its remote
+  target and release status, then use a guarded push and record the old/new SHAs.
+- A failed full suite remains a failed full suite even when focused reruns pass.
+  Record both outcomes; do not repeat unrelated passed stages to conceal or
+  replace the original result.
 
 ## 5) Troubleshooting
 

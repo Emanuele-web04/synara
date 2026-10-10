@@ -28,7 +28,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-15-intel, ubuntu-24.04]
+        # Same runner and target pairs as the release Cua matrix.
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15, arch: x64 }
+          - { runner: ubuntu-24.04, arch: x64 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -39,6 +43,7 @@ jobs:
       - uses: ./.github/actions/provision-cua
         id: cua
         with:
+          arch: ${{ matrix.arch }}
           save-cache: "true"
       - name: Retain verified unsigned Cua outside the cache quota
         uses: actions/upload-artifact@v7

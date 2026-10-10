@@ -291,6 +291,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: portable-build
+          retention-days: 30
           path: ${{ runner.temp }}/portable-build/*
           compression-level: 1
           if-no-files-found: error
@@ -331,6 +332,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mac-icon-catalog
+          retention-days: 30
           path: ${{ runner.temp }}/mac-icon/Assets.car
           if-no-files-found: error
 
@@ -359,6 +361,7 @@ jobs:
       - name: Provision verified Cua
         uses: ./.github/actions/provision-cua
         with:
+          arch: ${{ matrix.arch }}
           benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
       - name: Upload prepared Cua for this candidate
         if: needs.preflight.outputs.package_artifacts == 'true'
@@ -366,7 +369,7 @@ jobs:
         with:
           name: prepared-cua-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/cua-artifact
-          retention-days: 1
+          retention-days: 30
           if-no-files-found: error
       - name: Upload Cua benchmark evidence
         if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
@@ -378,269 +381,35 @@ jobs:
 
   build:
     name: Build ${{ matrix.label }}
-    needs: [preflight, quality, server_tests, build_mac_icon, build_portable, prepare_cua]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.server_tests.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && (needs.build_mac_icon.result == 'success' || (needs.preflight.outputs.build_icon == 'false' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # Tests consume the same source independently; both publishers gate on them.
+    needs: [preflight, build_mac_icon, build_portable, prepare_cua]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && (needs.build_mac_icon.result == 'success' || (needs.preflight.outputs.build_icon == 'false' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
     permissions:
       contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-          fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Install dependencies
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        # Preflight validates the entire workspace. Native artifacts retain all
-        # runtime/build dependencies but do not install the unrelated marketing site.
-        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
-
-      - name: Download macOS icon catalog
-        if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
-        uses: actions/download-artifact@v8
-        with:
-          name: mac-icon-catalog
-          path: ${{ runner.temp }}/mac-icon
-
-      - name: Select macOS native toolchain
-        if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The pinned apple-metal bridge requires the macOS 15 SDK.
-          # Icon Composer runs separately on macOS 26 to avoid AssetRuntime
-          # framework crashes on the older native-build host.
-          native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer
-          test -d "$native_developer_dir"
-          test -s "$RUNNER_TEMP/mac-icon/Assets.car"
-          echo "DEVELOPER_DIR=$native_developer_dir" >> "$GITHUB_ENV"
-          echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"
-          DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
-
-      - name: Report runner capacity
-        run: node scripts/report-build-runner.ts
-
-      - name: Import this candidate's verified Cua
-        if: matrix.platform == 'mac' || matrix.platform == 'linux'
-        uses: ./.github/actions/provision-cua
-        with:
-          prepared-artifact: prepared-cua-${{ matrix.platform }}-${{ matrix.arch }}
-
-      - name: Restore portable outputs
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        uses: ./.github/actions/restore-portable-build
-        with:
-          source-commit: ${{ needs.preflight.outputs.source_commit }}
-
-      - id: build_artifact
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        name: Build desktop artifact
-        shell: bash
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-          AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
-          SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
-          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
-          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
-          SOURCE_TAG: ${{ needs.preflight.outputs.source_tag }}
-          LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
-        run: |
-          signed=false
-          args=(
-            --platform "${{ matrix.platform }}"
-            --target "${{ matrix.target }}"
-            --arch "${{ matrix.arch }}"
-            --flavor "${{ needs.preflight.outputs.desktop_flavor }}"
-            --build-version "${{ needs.preflight.outputs.version }}"
-            --source-commit "$SOURCE_COMMIT"
-            --lockfile-sha256 "$LOCKFILE_SHA256"
-            # Non-production flavors default to release-<flavor>/, but the
-            # collect step below only globs release/. Each matrix leg has its
-            # own runner, so a fixed dir is safe.
-            --output-dir release
-            --skip-build
-            --keep-stage
-            --verbose
-          )
-
-          if [[ -n "$SOURCE_TAG" ]]; then
-            args+=(--source-tag "$SOURCE_TAG")
-          fi
-
-          has_all() {
-            for value in "$@"; do
-              if [[ -z "$value" ]]; then
-                return 1
-              fi
-            done
-            return 0
-          }
-
-          if [[ "${{ matrix.platform }}" == "mac" ]]; then
-            if has_all "$CSC_LINK" "$CSC_KEY_PASSWORD" "$APPLE_API_KEY" "$APPLE_API_KEY_ID" "$APPLE_API_ISSUER" "$APPLE_TEAM_ID"; then
-              key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-              printf '%s' "$APPLE_API_KEY" > "$key_path"
-              export APPLE_API_KEY="$key_path"
-              echo "macOS signing enabled."
-              signed=true
-              args+=(--signed)
-            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" ]]; then
-              echo "Publishing macOS artifacts requires every signing and notarization secret."
-              exit 1
-            else
-              echo "Build-only macOS artifact will be unsigned because publication is disabled."
-            fi
-          elif [[ "${{ matrix.platform }}" == "win" ]]; then
-            if has_all \
-              "$AZURE_TENANT_ID" \
-              "$AZURE_CLIENT_ID" \
-              "$AZURE_CLIENT_SECRET" \
-              "$AZURE_TRUSTED_SIGNING_ENDPOINT" \
-              "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
-              "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" \
-              "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME" \
-              "$AZURE_TRUSTED_SIGNING_SUBJECT_DN"; then
-              echo "Windows signing enabled (Azure Trusted Signing)."
-              signed=true
-              args+=(--signed)
-            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" && "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" != "true" ]]; then
-              echo "Publishing Windows artifacts requires every Azure Trusted Signing secret."
-              exit 1
-            else
-              echo "Windows artifact will be unsigned under the explicit version-scoped release exception."
-            fi
-          else
-            echo "Signing disabled for ${{ matrix.platform }}."
-          fi
-
-          # Never retry source, signing or notarization failures as downloads.
-          bun run dist:desktop:artifact -- "${args[@]}"
-
-          echo "signed=$signed" >> "$GITHUB_OUTPUT"
-
-      - name: Collect release assets
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-publish
-
-          shopt -s nullglob
-          for pattern in \
-            "release/*.dmg" \
-            "release/*.zip" \
-            "release/*.AppImage" \
-            "release/*.exe" \
-            "release/*.blockmap" \
-            "release/latest*.yml"; do
-            for file in $pattern; do
-              cp "$file" release-publish/
-            done
-          done
-
-          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
-            if [[ -f release-publish/latest-mac.yml ]]; then
-              mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ matrix.arch }}.yml"
-            fi
-          fi
-
-      - name: Verify and record artifact provenance
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        shell: bash
-        env:
-          EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          EXPECTED_WINDOWS_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-          EXPECTED_WINDOWS_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
-          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
-          SOURCE_TAG: ${{ needs.preflight.outputs.source_tag }}
-          LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
-          PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
-          SIGNED_ARTIFACT: ${{ steps.build_artifact.outputs.signed }}
-          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
-        run: |
-          node scripts/write-release-artifact-provenance.ts \
-            --assets-dir release-publish \
-            --platform "${{ matrix.platform }}" \
-            --arch "${{ matrix.arch }}" \
-            --target "${{ matrix.target }}" \
-            --version "${{ needs.preflight.outputs.version }}" \
-            --source-commit "$SOURCE_COMMIT" \
-            --source-tag "$SOURCE_TAG" \
-            --lockfile-sha256 "$LOCKFILE_SHA256" \
-            --publication "$PUBLISH_RELEASE" \
-            --signed "$SIGNED_ARTIFACT" \
-            --allow-unsigned-windows-publication "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" \
-            --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
-            --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
-            --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
-
-      - name: Verify Windows installer with Microsoft Defender
-        id: windows_defender
-        if: matrix.platform == 'win' && needs.preflight.outputs.package_artifacts == 'true'
-        timeout-minutes: 10
-        shell: pwsh
-        run: ./scripts/verify-windows-defender.ps1 -AssetsDirectory release-publish -EvidenceDirectory "${{ runner.temp }}/windows-defender-evidence"
-
-      - name: Preserve Windows Defender evidence
-        if: ${{ always() && matrix.platform == 'win' && needs.preflight.outputs.package_artifacts == 'true' && steps.windows_defender.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-defender-${{ matrix.arch }}
-          path: ${{ runner.temp }}/windows-defender-evidence/
-          if-no-files-found: error
-
-      - name: Smoke packaged desktop startup
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        shell: bash
-        run: |
-          node scripts/verify-packaged-desktop-startup.ts \
-            --assets-dir release-publish \
-            --platform "${{ matrix.platform }}" \
-            --arch "${{ matrix.arch }}" \
-            --version "${{ needs.preflight.outputs.version }}" \
-            --executable-name "${{ needs.preflight.outputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
-
-      - name: Upload build artifacts
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
-          path: release-publish/*
-          if-no-files-found: error
+    uses: ./.github/workflows/release-platform.yml
+    with:
+      runner: ${{ matrix.runner }}
+      platform: ${{ matrix.platform }}
+      arch: ${{ matrix.arch }}
+      target: ${{ matrix.target }}
+      version: ${{ needs.preflight.outputs.version }}
+      desktop_flavor: ${{ needs.preflight.outputs.desktop_flavor }}
+      publish_release: ${{ needs.preflight.outputs.publish_release == 'true' }}
+      source_commit: ${{ needs.preflight.outputs.source_commit }}
+      source_tag: ${{ needs.preflight.outputs.source_tag }}
+      lockfile_sha256: ${{ needs.preflight.outputs.lockfile_sha256 }}
+      allow_unsigned_windows_publication: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
+    secrets: inherit
 
   publish_cli:
     name: Publish CLI to npm
     # Prereleases (beta lane) never touch the npm `latest` dist-tag.
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
-    needs: [preflight, build, build_portable]
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}
+    needs: [preflight, quality, server_tests, build, build_portable]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -717,13 +486,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: server-tarball
+          retention-days: 30
           path: release-server/*.tar.gz
           if-no-files-found: error
 
   release:
     name: Publish GitHub Release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' }}
-    needs: [preflight, build, build_server_tarball]
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}
+    needs: [preflight, quality, server_tests, build, build_server_tarball]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
