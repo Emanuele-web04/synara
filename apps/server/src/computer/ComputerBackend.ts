@@ -712,6 +712,17 @@ export interface ComputerBackend {
   readonly focusNeutralSemanticText?: boolean;
   /** Exact targets are revalidated and background input never falls back to global input. */
   readonly exactTargetBackgroundInput?: boolean;
+  /**
+   * The backend accepts the human's pane input while one of its observation
+   * calls (a capture, a state or tree read, a settle wait) is still in flight
+   * for an agent. When true, the manager lets pane input run during the
+   * observation half of an agent's tool call instead of behind the whole
+   * call; the agent's own input still never interleaves with it. The price is
+   * attribution: the agent's post-action observation can show what the human
+   * changed meanwhile. Absent or false keeps pane input queued behind the
+   * agent's call, as for a host that serves one request at a time.
+   */
+  readonly concurrentObservationInput?: boolean;
   typeText(
     text: string,
     windowId?: string,
