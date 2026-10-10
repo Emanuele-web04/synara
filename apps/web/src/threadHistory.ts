@@ -8,6 +8,8 @@ import { useSyncExternalStore } from "react";
 import { useStore } from "./store";
 import { ensureNativeApi } from "./nativeApi";
 import { getVerifiedThreadCacheIdentity } from "./threadDetailCacheIdentity";
+import { deepEqualJson } from "./storeNormalization";
+import { getThreadHistoryOwner } from "./threadHistoryOwnership";
 
 interface LoadState {
   loading: boolean;
@@ -39,6 +41,7 @@ export function loadThreadHistoryPage(id: ThreadId): Promise<boolean> {
   const cursor = state.threadHistoryById?.[id]?.olderCursor;
   const activityCursor = state.threadHistoryById?.[id]?.olderActivityCursor;
   const originalHistory = state.threadHistoryById?.[id];
+  const owner = getThreadHistoryOwner(originalHistory);
   const identity = getVerifiedThreadCacheIdentity();
   if ((!cursor && !activityCursor) || state.threadDetailSyncById?.[id] !== "synced")
     return Promise.resolve(false);
@@ -60,12 +63,11 @@ export function loadThreadHistoryPage(id: ThreadId): Promise<boolean> {
         !page ||
         page.thread.id !== id ||
         !page.history ||
-        (cursor &&
-          page.history.olderCursor?.messageId === cursor.messageId &&
-          (!activityCursor ||
-            page.history.olderActivityCursor?.activityId === activityCursor.activityId)) ||
+        (deepEqualJson(page.history.olderCursor ?? null, cursor ?? null) &&
+          deepEqualJson(page.history.olderActivityCursor ?? null, activityCursor ?? null)) ||
         getVerifiedThreadCacheIdentity() !== identity ||
-        useStore.getState().threadHistoryById?.[id] !== originalHistory
+        getThreadHistoryOwner(useStore.getState().threadHistoryById?.[id]) !== owner ||
+        useStore.getState().threadDetailSyncById?.[id] !== "synced"
       )
         return false;
       useStore.getState().mergeThreadHistoryPage(page, cursor ?? null, activityCursor);
@@ -116,6 +118,7 @@ export function useThreadHistory(threadId: string) {
   );
   return {
     ...loading,
+    owner: getThreadHistoryOwner(history),
     nextCursor: history?.olderCursor ?? history?.olderActivityCursor ?? null,
     totalMessageCount: history?.totalMessageCount ?? 0,
     available: history !== undefined,

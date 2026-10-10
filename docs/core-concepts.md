@@ -66,6 +66,10 @@ composer; it is not sent twice.
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  Long conversations open at recent work. Load earlier messages, Find, pinned-message navigation,
+  and Go to first message can reach their earlier history. Reloads can reuse private local detail
+  after verifying the connected server; actions wait for reconciliation.
+  See [Thread history and reload recovery](thread-history.md) for compatibility and storage limits.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session

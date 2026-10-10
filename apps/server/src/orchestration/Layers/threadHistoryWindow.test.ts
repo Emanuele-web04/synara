@@ -1,4 +1,4 @@
-import { EventId, MessageId, ThreadId } from "@synara/contracts";
+import { EventId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -9,6 +9,11 @@ import {
   OrchestrationProjectionSnapshotQueryLive,
   REQUIRED_SNAPSHOT_PROJECTORS,
 } from "./ProjectionSnapshotQuery.ts";
+
+// Compare real SQL output with the existing renderer fold without adding web
+// files to the server's composite TypeScript project.
+const rendererSessionLogicPath = new URL("../../../../web/src/session-logic.ts", import.meta.url)
+  .pathname;
 
 const layer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(
@@ -185,6 +190,164 @@ layer("thread message history windows", (it) => {
       assert.equal(
         Option.getOrThrow(yield* query.getThreadDetailForExportById(threadId)).messages.length,
         2105,
+      );
+    }),
+  );
+  it.effect("recovers messages when SQL and JS ID collation disagree", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const id = ThreadId.makeUnsafe("case-message-thread");
+      const now = "2026-10-10T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES ('case-message-project','History','/tmp/probe-case','[]',${now},${now})`;
+      yield* sql`INSERT INTO projection_threads (thread_id,project_id,title,model_selection_json,created_at,updated_at) VALUES (${id},'case-message-project','History','{"provider":"codex","model":"gpt-5"}',${now},${now})`;
+      for (const messageId of ["B", "a"]) {
+        yield* sql`INSERT INTO projection_thread_messages (message_id,thread_id,role,text,is_streaming,source,created_at,updated_at) VALUES (${messageId},${id},'assistant','text',0,'native',${now},${now})`;
+      }
+      const tail = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(id, { limit: 1 }));
+      assert.equal(tail.thread.messages[0]?.id, MessageId.makeUnsafe("a"));
+      const page = Option.getOrThrow(
+        yield* query.getThreadDetailSnapshotById(id, {
+          limit: 1,
+          before: tail.history!.olderCursor!,
+        }),
+      );
+      assert.deepEqual(
+        page.thread.messages.map((m) => m.id),
+        [MessageId.makeUnsafe("B")],
+      );
+    }),
+  );
+  it.effect("recovers activities when SQL and JS ID collation disagree", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const id = ThreadId.makeUnsafe("case-activity-thread");
+      const now = "2026-10-10T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES ('case-activity-project','History','/tmp/probe-activity','[]',${now},${now})`;
+      yield* sql`INSERT INTO projection_threads (thread_id,project_id,title,model_selection_json,created_at,updated_at) VALUES (${id},'case-activity-project','History','{"provider":"codex","model":"gpt-5"}',${now},${now})`;
+      for (const activityId of ["B", "a"]) {
+        yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,tone,kind,summary,payload_json,created_at) VALUES (${activityId},${id},'tool','tool.completed','Work','{}',${now})`;
+      }
+      const tail = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(id, { limit: 1 }));
+      assert.equal(tail.thread.activities[0]?.id, EventId.makeUnsafe("a"));
+      const page = Option.getOrThrow(
+        yield* query.getThreadDetailSnapshotById(id, {
+          limit: 1,
+          beforeActivity: tail.history!.olderActivityCursor!,
+        }),
+      );
+      assert.deepEqual(
+        page.thread.activities.map((a) => a.id),
+        [EventId.makeUnsafe("B")],
+      );
+    }),
+  );
+  it.effect("recovers messages when Unicode IDs cross UTF-16 ordering", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const id = ThreadId.makeUnsafe("unicode-message-thread");
+      const now = "2026-10-10T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES ('unicode-message-project','History','/tmp/probe-case','[]',${now},${now})`;
+      yield* sql`INSERT INTO projection_threads (thread_id,project_id,title,model_selection_json,created_at,updated_at) VALUES (${id},'unicode-message-project','History','{"provider":"codex","model":"gpt-5"}',${now},${now})`;
+      for (const messageId of ["\uE000", "\u{10000}"]) {
+        yield* sql`INSERT INTO projection_thread_messages (message_id,thread_id,role,text,is_streaming,source,created_at,updated_at) VALUES (${messageId},${id},'assistant','text',0,'native',${now},${now})`;
+      }
+      const tail = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(id, { limit: 1 }));
+      assert.equal(tail.thread.messages[0]?.id, MessageId.makeUnsafe("\u{10000}"));
+      const page = Option.getOrThrow(
+        yield* query.getThreadDetailSnapshotById(id, {
+          limit: 1,
+          before: tail.history!.olderCursor!,
+        }),
+      );
+      assert.deepEqual(
+        page.thread.messages.map((m) => m.id),
+        [MessageId.makeUnsafe("\uE000")],
+      );
+    }),
+  );
+  it.effect("recovers activities when Unicode IDs cross UTF-16 ordering", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const id = ThreadId.makeUnsafe("unicode-activity-thread");
+      const now = "2026-10-10T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES ('unicode-activity-project','History','/tmp/probe-activity','[]',${now},${now})`;
+      yield* sql`INSERT INTO projection_threads (thread_id,project_id,title,model_selection_json,created_at,updated_at) VALUES (${id},'unicode-activity-project','History','{"provider":"codex","model":"gpt-5"}',${now},${now})`;
+      for (const activityId of ["\uE000", "\u{10000}"]) {
+        yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,tone,kind,summary,payload_json,created_at) VALUES (${activityId},${id},'tool','tool.completed','Work','{}',${now})`;
+      }
+      const tail = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(id, { limit: 1 }));
+      assert.equal(tail.thread.activities[0]?.id, EventId.makeUnsafe("\u{10000}"));
+      const page = Option.getOrThrow(
+        yield* query.getThreadDetailSnapshotById(id, {
+          limit: 1,
+          beforeActivity: tail.history!.olderActivityCursor!,
+        }),
+      );
+      assert.deepEqual(
+        page.thread.activities.map((a) => a.id),
+        [EventId.makeUnsafe("\uE000")],
+      );
+    }),
+  );
+  it.effect("retains the background ownership patch before a partial task update", () =>
+    Effect.gen(function* () {
+      const { deriveOutstandingBackgroundTaskIds } = yield* Effect.promise(
+        () => import(rendererSessionLogicPath),
+      );
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const id = ThreadId.makeUnsafe("partial-task-thread");
+      const now = "2026-10-10T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES ('partial-task-project','History','/tmp/probe-partial','[]',${now},${now})`;
+      yield* sql`INSERT INTO projection_threads (thread_id,project_id,title,model_selection_json,created_at,updated_at) VALUES (${id},'partial-task-project','History','{"provider":"codex","model":"gpt-5"}',${now},${now})`;
+      yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,tone,kind,summary,payload_json,sequence,created_at) VALUES
+      ('old-start',${id},'info','task.started','Task start','{"taskId":"task-1","taskType":"subagent"}',1,${now}),
+      ('old-background',${id},'info','task.updated','Background','{"taskId":"task-1","isBackgrounded":true}',2,${new Date(Date.parse(now) + 1000).toISOString()}),
+      ('old-patch',${id},'info','task.updated','Running','{"taskId":"task-1","status":"running"}',3,${new Date(Date.parse(now) + 2000).toISOString()})`;
+      for (let index = 0; index < 205; index++) {
+        const time = new Date(Date.parse(now) + (index + 3) * 1000).toISOString();
+        yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,tone,kind,summary,payload_json,sequence,created_at) VALUES (${`fill-${index}`},${id},'tool','tool.completed','Work','{}',${index + 4},${time})`;
+      }
+      const legacy = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(id));
+      assert.deepEqual(deriveOutstandingBackgroundTaskIds(legacy.thread.activities), ["task-1"]);
+      const windowed = Option.getOrThrow(
+        yield* query.getThreadDetailSnapshotById(id, { limit: 100 }),
+      );
+      assert.deepEqual(deriveOutstandingBackgroundTaskIds(windowed.thread.activities), ["task-1"]);
+    }),
+  );
+  it.effect("retains the last unfinished prior-turn task list", () =>
+    Effect.gen(function* () {
+      const { deriveActiveTaskListState } = yield* Effect.promise(
+        () => import(rendererSessionLogicPath),
+      );
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const id = ThreadId.makeUnsafe("task-list-thread");
+      const now = "2026-10-10T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES ('task-list-project','History','/tmp/probe-tasks','[]',${now},${now})`;
+      yield* sql`INSERT INTO projection_threads (thread_id,project_id,title,model_selection_json,latest_turn_id,created_at,updated_at) VALUES (${id},'task-list-project','History','{"provider":"codex","model":"gpt-5"}','latest',${now},${now})`;
+      yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,turn_id,tone,kind,summary,payload_json,sequence,created_at) VALUES ('pending-list',${id},'prior','info','turn.tasks.updated','Pending work','{"tasks":[{"task":"Still pending","status":"inProgress"}]}',1,${now})`;
+      for (let index = 0; index < 205; index++) {
+        const time = new Date(Date.parse(now) + (index + 1) * 1000).toISOString();
+        yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,tone,kind,summary,payload_json,sequence,created_at) VALUES (${`list-fill-${index}`},${id},'tool','tool.completed','Work','{}',${index + 2},${time})`;
+      }
+      const legacy = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(id));
+      const legacyState = deriveActiveTaskListState(
+        legacy.thread.activities,
+        TurnId.makeUnsafe("latest"),
+      );
+      assert(legacyState !== null);
+      const windowed = Option.getOrThrow(
+        yield* query.getThreadDetailSnapshotById(id, { limit: 100 }),
+      );
+      assert.deepEqual(
+        deriveActiveTaskListState(windowed.thread.activities, TurnId.makeUnsafe("latest")),
+        legacyState,
       );
     }),
   );

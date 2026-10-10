@@ -15,6 +15,18 @@ export interface ThreadHistoryMessageIdentity {
   role: string;
 }
 
+/** Match SQLite BINARY collation, including supplementary Unicode IDs. */
+function compareSqlText(a: string, b: string): number {
+  if (a === b) return 0;
+  const first = new TextEncoder().encode(a);
+  const second = new TextEncoder().encode(b);
+  for (let index = 0; index < Math.min(first.length, second.length); index++) {
+    const order = first[index]! - second[index]!;
+    if (order) return order;
+  }
+  return first.length - second.length;
+}
+
 export function compareHistoryMessageOrder(
   a: OrchestrationThreadHistoryCursor,
   b: OrchestrationThreadHistoryCursor,
@@ -22,8 +34,8 @@ export function compareHistoryMessageOrder(
   return (
     Number(a.sequence !== null) - Number(b.sequence !== null) ||
     (a.sequence ?? 0) - (b.sequence ?? 0) ||
-    a.createdAt.localeCompare(b.createdAt) ||
-    a.messageId.localeCompare(b.messageId)
+    compareSqlText(a.createdAt, b.createdAt) ||
+    compareSqlText(a.messageId, b.messageId)
   );
 }
 
@@ -96,9 +108,9 @@ export function selectThreadActivityHistoryWindow(
   const boundary = before
     ? rows.findIndex(
         (row) =>
-          row.createdAt.localeCompare(before.createdAt) > 0 ||
+          compareSqlText(row.createdAt, before.createdAt) > 0 ||
           (row.createdAt === before.createdAt &&
-            row.activityId.localeCompare(before.activityId) >= 0),
+            compareSqlText(row.activityId, before.activityId) >= 0),
       )
     : rows.length;
   const through = boundary < 0 ? rows.length : boundary;

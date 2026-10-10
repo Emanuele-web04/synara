@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EventId, MessageId } from "@synara/contracts";
-import { makeReadModelThread, makeState, makeThread } from "./storeTestFixtures";
+import { EventId, MessageId, TurnId } from "@synara/contracts";
+import { makeDomainEvent, makeReadModelThread, makeState, makeThread } from "./storeTestFixtures";
 import { getThreadFromState } from "./threadDerivation";
 import {
   mergeThreadHistoryPage,
@@ -8,6 +8,8 @@ import {
   syncServerThreadDetailHotPath,
   markThreadDetailSyncFailedInClientState,
 } from "./storeProjection";
+
+import { applyOrchestrationEventsHotPath } from "./storeEventReducer";
 
 const cursor = {
   messageId: MessageId.makeUnsafe("current"),
@@ -184,4 +186,205 @@ it("keeps a failed cache verification unverified and preserves historical activi
     state.threadHistoryById[thread.id]!.olderActivityCursor,
   );
   expect(getThreadFromState(next, thread.id)?.activities).toHaveLength(2105);
+});
+
+it("does not rearm an exhausted message cursor while activities still page", () => {
+  const thread = makeThread();
+  const activityCursor = {
+    activityId: EventId.makeUnsafe("a-5"),
+    createdAt: "2026-10-10T10:00:00.000Z",
+  };
+  const state = {
+    ...makeState(thread),
+    threadHistoryById: {
+      [thread.id]: {
+        totalMessageCount: 205,
+        totalActivityCount: 305,
+        olderCursor: null,
+        olderActivityCursor: activityCursor,
+        revisionSequence: 0,
+      },
+    },
+  };
+  const page = {
+    snapshotSequence: 20,
+    thread: makeReadModelThread({}),
+    history: {
+      totalMessageCount: 205,
+      totalActivityCount: 305,
+      olderCursor: {
+        messageId: MessageId.makeUnsafe("m-105"),
+        sequence: 106,
+        createdAt: activityCursor.createdAt,
+      },
+      olderActivityCursor: null,
+      revisionSequence: 0,
+    },
+  };
+  const next = mergeThreadHistoryPage(state, page, null, activityCursor);
+  expect(next.threadHistoryById?.[thread.id]?.olderCursor).toBeNull();
+});
+
+it("does not rearm an exhausted activity cursor while messages still page", () => {
+  const thread = makeThread();
+  const messageCursor = {
+    messageId: MessageId.makeUnsafe("m-5"),
+    sequence: 6,
+    createdAt: "2026-10-10T10:00:00.000Z",
+  };
+  const state = {
+    ...makeState(thread),
+    threadHistoryById: {
+      [thread.id]: {
+        totalMessageCount: 305,
+        totalActivityCount: 205,
+        olderCursor: messageCursor,
+        olderActivityCursor: null,
+        revisionSequence: 0,
+      },
+    },
+  };
+  const page = {
+    snapshotSequence: 20,
+    thread: makeReadModelThread({}),
+    history: {
+      totalMessageCount: 305,
+      totalActivityCount: 205,
+      olderCursor: null,
+      olderActivityCursor: {
+        activityId: EventId.makeUnsafe("a-105"),
+        createdAt: messageCursor.createdAt,
+      },
+      revisionSequence: 0,
+    },
+  };
+  const next = mergeThreadHistoryPage(state, page, messageCursor, null);
+  expect(next.threadHistoryById?.[thread.id]?.olderActivityCursor).toBeNull();
+});
+
+it("removes loaded rows of rolled-back turns when the target message was outside the window", () => {
+  const stale = {
+    id: MessageId.makeUnsafe("removed-current"),
+    turnId: TurnId.makeUnsafe("removed-turn"),
+    role: "assistant" as const,
+    text: "removed",
+    streaming: false,
+    createdAt: "2026-10-10T10:00:00.000Z",
+  };
+  const thread = makeThread({ messages: [stale] });
+  const cursor = { messageId: stale.id, createdAt: stale.createdAt, sequence: 10 };
+  const state = {
+    ...makeState(thread),
+    threadHistoryById: {
+      [thread.id]: {
+        totalMessageCount: 205,
+        olderCursor: cursor,
+        olderActivityCursor: null,
+        revisionSequence: 0,
+      },
+    },
+    threadDetailSyncById: { [thread.id]: "synced" as const },
+    threadDetailAppliedSequenceById: { [thread.id]: 20 },
+  };
+  const event = {
+    ...makeDomainEvent("thread.conversation-rolled-back", {
+      threadId: thread.id,
+      messageId: MessageId.makeUnsafe("unloaded-target"),
+      numTurns: 100,
+      removedTurnIds: [stale.turnId],
+    }),
+    sequence: 24,
+  };
+  const rolledBack = applyOrchestrationEventsHotPath(state, [event]);
+  expect(getThreadFromState(rolledBack, thread.id)?.messages).toEqual([]);
+});
+
+it("clears an unknown rollback suffix even when an older server omits removed turn IDs", () => {
+  const stale = {
+    id: MessageId.makeUnsafe("removed-turnless"),
+    role: "assistant" as const,
+    text: "removed",
+    streaming: false,
+    createdAt: cursor.createdAt,
+  };
+  const thread = makeThread({ messages: [stale] });
+  const state = {
+    ...makeState(thread),
+    threadHistoryById: {
+      [thread.id]: {
+        totalMessageCount: 205,
+        olderCursor: cursor,
+        revisionSequence: 0,
+      },
+    },
+  };
+  const event = makeDomainEvent(
+    "thread.conversation-rolled-back",
+    {
+      threadId: thread.id,
+      messageId: MessageId.makeUnsafe("older-unloaded-target"),
+      numTurns: 100,
+    },
+    { sequence: 24 },
+  );
+  const next = applyOrchestrationEventsHotPath(state, [event]);
+  expect(getThreadFromState(next, thread.id)?.messages).toEqual([]);
+});
+
+it("does not preserve removed rows after missing-target rollback and a same-count authoritative snapshot", () => {
+  const stale = {
+    id: MessageId.makeUnsafe("removed-current"),
+    turnId: TurnId.makeUnsafe("removed-turn"),
+    role: "assistant" as const,
+    text: "removed",
+    streaming: false,
+    createdAt: "2026-10-10T10:00:00.000Z",
+  };
+  const thread = makeThread({ messages: [stale] });
+  const cursor = { messageId: stale.id, createdAt: stale.createdAt, sequence: 10 };
+  const state = {
+    ...makeState(thread),
+    threadHistoryById: {
+      [thread.id]: {
+        totalMessageCount: 205,
+        olderCursor: cursor,
+        olderActivityCursor: null,
+        revisionSequence: 0,
+      },
+    },
+    threadDetailSyncById: { [thread.id]: "synced" as const },
+    threadDetailAppliedSequenceById: { [thread.id]: 20 },
+  };
+  const event = {
+    ...makeDomainEvent("thread.conversation-rolled-back", {
+      threadId: thread.id,
+      messageId: MessageId.makeUnsafe("unloaded-target"),
+      numTurns: 100,
+      removedTurnIds: [stale.turnId],
+    }),
+    sequence: 24,
+  };
+  const rolledBack = applyOrchestrationEventsHotPath(state, [event]);
+  const newMessage = {
+    ...stale,
+    id: MessageId.makeUnsafe("new-current"),
+    turnId: TurnId.makeUnsafe("new-turn"),
+    text: "new",
+    source: "native" as const,
+    updatedAt: stale.createdAt,
+  };
+  const snapshot = syncServerThreadDetailHotPath(
+    rolledBack,
+    makeReadModelThread({ messages: [newMessage] }),
+    25,
+    {
+      totalMessageCount: 205,
+      olderCursor: { ...cursor, messageId: newMessage.id },
+      olderActivityCursor: null,
+      revisionSequence: 24,
+    },
+  );
+  expect(getThreadFromState(snapshot, thread.id)?.messages.map((m) => m.id)).toEqual([
+    newMessage.id,
+  ]);
 });

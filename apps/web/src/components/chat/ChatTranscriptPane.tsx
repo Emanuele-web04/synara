@@ -431,27 +431,36 @@ export function ChatTranscriptPane({
               key={activeThreadId}
               subagentThread={subagentThread ?? null}
               historyHeader={
-                nativeHistory.available ? (
-                  <ImportedHistoryButton
-                    history={{
-                      ...nativeHistory,
-                      load: () => {
-                        onNavigate?.();
-                        return nativeHistory.load();
-                      },
-                    }}
-                    completeLabel="Start of conversation"
-                    onFirstMessage={() => {
-                      void loadFirstMessage();
-                    }}
-                  />
-                ) : importedHistory.nextCursor ||
+                <>
+                  {subagentThread ? (
+                    <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
+                  ) : null}
+                  {nativeHistory.available ? (
+                    <ImportedHistoryButton
+                      history={{
+                        ...nativeHistory,
+                        load: () => {
+                          onNavigate?.();
+                          return nativeHistory.load();
+                        },
+                      }}
+                      completeLabel="Start of conversation"
+                      onFirstMessage={() => {
+                        void loadFirstMessage();
+                      }}
+                    />
+                  ) : null}
+                  {importedHistory.nextCursor ||
                   importedHistory.error ||
                   importedHistory.loading ? (
-                  <ImportedHistoryButton history={importedHistory} />
-                ) : subagentThread ? (
-                  <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
-                ) : undefined
+                    <ImportedHistoryButton
+                      history={importedHistory}
+                      {...(nativeHistory.available
+                        ? { loadLabel: "Load original chat history" }
+                        : {})}
+                    />
+                  ) : null}
+                </>
               }
               hasMessages={hasMessages}
               isWorking={isWorking}

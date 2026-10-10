@@ -11,15 +11,19 @@ import { type LegendListRef } from "@legendapp/list/react";
 import { act, createRef, useMemo, type ComponentProps } from "react";
 import { page } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
-import { render } from "vitest-browser-react";
+import { render, renderHook } from "vitest-browser-react";
+import { useAsyncUserInputResponse } from "./useAsyncUserInputResponse";
 
 const api = vi.hoisted(() => ({
   loadProjectImportHistory: vi.fn(),
   getThreadDetailSnapshot: vi.fn(),
+  dispatchCommand: vi.fn(),
+  subscribeThread: vi.fn(),
 }));
 vi.mock("../../nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../nativeApi")>()),
   ensureNativeApi: () => ({ orchestration: api }),
+  readNativeApi: () => ({ orchestration: api }),
 }));
 import { ChatTranscriptPane } from "./ChatTranscriptPane";
 import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
@@ -37,6 +41,8 @@ import { deriveTimelineEntries, deriveWorkLogEntries } from "../../session-logic
 afterEach(() => {
   useStore.setState(initialState);
   api.getThreadDetailSnapshot.mockReset();
+  api.dispatchCommand.mockReset();
+  api.subscribeThread.mockReset();
 });
 const noop = () => {};
 const recent = Array.from({ length: 10 }, (_, index) => ({
@@ -90,6 +96,46 @@ const props: ComponentProps<typeof ChatTranscriptPane> = {
   workspaceRoot: undefined,
   worktreeSetup: null,
 };
+
+it("keeps the child thread's parent link and status alongside complete native history", async () => {
+  const child = makeThread();
+  useStore.setState({
+    ...makeState(child),
+    threadHistoryById: { [child.id]: { totalMessageCount: 0, olderCursor: null } },
+    threadDetailSyncById: { [child.id]: "synced" },
+  });
+  const openParent = vi.fn();
+  const subagentThread = {
+    parentThreadId: ThreadId.makeUnsafe("parent"),
+    parentTitle: "Parent work",
+    role: "Research",
+    modelLabel: "Luna",
+    provider: "codex" as const,
+    statusKind: "completed" as const,
+    startedAt: "2026-10-10T10:00:00.000Z",
+    endedAt: "2026-10-10T10:00:08.000Z",
+  };
+  await render(
+    <div style={{ height: 600 }}>
+      <ChatTranscriptPane
+        {...props}
+        activeThreadId={child.id}
+        isProjectImport={false}
+        timelineEntries={[]}
+        hasMessages={false}
+        subagentThread={subagentThread}
+        onOpenThread={openParent}
+      />
+    </div>,
+  );
+  await expect
+    .element(page.getByRole("button", { name: "Open parent thread Parent work" }))
+    .toBeVisible();
+  await expect.element(page.getByText("Done in 8s", { exact: true })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Start of conversation" })).toBeVisible();
+  await page.getByRole("button", { name: "Open parent thread Parent work" }).click();
+  expect(openParent).toHaveBeenCalledWith(subagentThread.parentThreadId);
+});
 
 it("prepends older imported messages without moving the reading position and isolates late responses after switching chats", async () => {
   let attempts = 0;
@@ -373,25 +419,23 @@ it("prepends native history while live settlement wins and the reader stays deta
     const before = firstRow();
     await page.getByRole("button", { name: "Load earlier messages" }).click();
     const newest = messages.at(-1)!;
-    useStore
-      .getState()
-      .applyOrchestrationEvents([
-        makeDomainEvent(
-          "thread.message-sent",
-          {
-            threadId: id,
-            messageId: newest.id,
-            role: "assistant",
-            text: newest.text + " Final live answer",
-            turnId: null,
-            streaming: false,
-            source: "native",
-            createdAt: newest.createdAt,
-            updatedAt: "2026-09-02T00:01:00.000Z",
-          },
-          { sequence: 21 },
-        ),
-      ]);
+    useStore.getState().applyOrchestrationEvents([
+      makeDomainEvent(
+        "thread.message-sent",
+        {
+          threadId: id,
+          messageId: newest.id,
+          role: "assistant",
+          text: newest.text + " Final live answer",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: newest.createdAt,
+          updatedAt: "2026-09-02T00:01:00.000Z",
+        },
+        { sequence: 21 },
+      ),
+    ]);
     finish({
       snapshotSequence: 19,
       history: { totalMessageCount: 30, olderCursor: null },
@@ -497,5 +541,64 @@ it("loads earlier tool-only work through the native history affordance with no c
   } finally {
     await screen.unmount();
     host.remove();
+  }
+});
+
+it("keeps the imported history cursor reachable with native metadata", async () => {
+  const id = ThreadId.makeUnsafe("imported-combination");
+  useStore.setState({
+    ...makeState(makeThread({ id })),
+    threadDetailSyncById: { [id]: "synced" },
+    threadHistoryById: { [id]: { totalMessageCount: 10, olderCursor: null } },
+  });
+  api.loadProjectImportHistory.mockResolvedValue({ messages: [], nextCursor: "imported-older" });
+  const screen = await render(
+    <ChatTranscriptPane {...props} activeThreadId={id} isProjectImport={true} />,
+  );
+  try {
+    await expect
+      .poll(() => api.loadProjectImportHistory.mock.calls.some(([input]) => input.threadId === id))
+      .toBe(true);
+    await expect
+      .poll(
+        () =>
+          page.getByRole("button", { name: "Load original chat history", exact: true }).query() !==
+          null,
+      )
+      .toBe(true);
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("does not answer an unverified cached async question", async () => {
+  const id = ThreadId.makeUnsafe("cached-question");
+  const messageId = MessageId.makeUnsafe("old-question");
+  useStore.setState({
+    ...makeState(
+      makeThread({
+        id,
+        messages: [
+          {
+            id: messageId,
+            role: "assistant",
+            text: "Question",
+            createdAt: "2026-10-10T00:00:00Z",
+            streaming: false,
+            asyncUserInput: { questions: [{ title: "Continue?", options: ["Yes"] }] },
+          },
+        ],
+      }),
+    ),
+    threadDetailSyncById: { [id]: "cached" },
+  });
+  api.dispatchCommand.mockResolvedValue({});
+  api.subscribeThread.mockResolvedValue({});
+  const screen = await renderHook(() => useAsyncUserInputResponse(id));
+  try {
+    await screen.result.current(messageId, ["Yes"]).catch(() => {});
+    expect(api.dispatchCommand).not.toHaveBeenCalled();
+  } finally {
+    await screen.unmount();
   }
 });

@@ -15,6 +15,7 @@ const snapshot = (sequence: number, text: string) => ({
 });
 import { useStore } from "../store";
 import { initialState } from "../storeState";
+import { isThreadDetailAwaitingVerification } from "../threadDetailAuthority";
 import { adoptVerifiedThreadCacheIdentity } from "../threadDetailCacheIdentity";
 import {
   hydrateCachedThreadDetail,
@@ -77,17 +78,15 @@ it("bounds durable entries and treats corrupt schema, quota and disabled storage
     label: "test cache",
   });
   const transaction = database.transaction("details", "readwrite");
-  transaction
-    .objectStore("details")
-    .put({
-      key: JSON.stringify([namespace.origin, namespace.serverInstanceId, id]),
-      namespace: JSON.stringify([namespace.origin, namespace.serverInstanceId]),
-      version: 999,
-      updatedAt: Date.now(),
-      bytes: 1,
-      sequence: 12,
-      payload: "{}",
-    });
+  transaction.objectStore("details").put({
+    key: JSON.stringify([namespace.origin, namespace.serverInstanceId, id]),
+    namespace: JSON.stringify([namespace.origin, namespace.serverInstanceId]),
+    version: 999,
+    updatedAt: Date.now(),
+    bytes: 1,
+    sequence: 12,
+    payload: "{}",
+  });
   await waitForIdbTransaction(transaction, "test corruption");
   database.close();
   expect(await readThreadDetailCache(namespace, id)).toBeNull();
@@ -130,10 +129,37 @@ it("captures applied detail rather than an enqueued cursor, restores privately, 
     expect(snapshotAppliedThreadDetail(useStore.getState(), id)).toBeNull();
     adoptVerifiedThreadCacheIdentity("fresh-process-journal");
     expect(getThreadDetailResumeCursor(id)).toBeUndefined();
-    expect(useStore.getState().threadDetailSyncById?.[id]).toBeUndefined();
+    expect(useStore.getState().threadDetailSyncById?.[id]).toBe("cached");
+    expect(isThreadDetailAwaitingVerification(id)).toBe(true);
     await hydrateCachedThreadDetail(id);
-    expect(useStore.getState().threadDetailSyncById?.[id]).toBeUndefined();
+    expect(useStore.getState().threadDetailSyncById?.[id]).toBe("cached");
+    useStore
+      .getState()
+      .syncServerThreadDetailHotPath(makeReadModelThread({ title: "new process" }), 1);
+    expect(isThreadDetailAwaitingVerification(id)).toBe(false);
   } finally {
     stop();
   }
+});
+
+it("bounds tombstones even when deletion is the only durable activity", async () => {
+  for (let index = 0; index < 514; index++)
+    await deleteThreadDetailCache(namespace, ThreadId.makeUnsafe(`deleted-${index}`));
+  const database = await openIndexedDbDatabase({
+    name: "synara-thread-detail-cache",
+    version: 1,
+    storeName: "details",
+    keyPath: "key",
+    label: "test cache",
+  });
+  const transaction = database.transaction("details", "readonly");
+  const request = transaction.objectStore("details").count();
+  await waitForIdbTransaction(transaction, "test count");
+  expect(request.result).toBe(512);
+  database.close();
+  await writeThreadDetailCache(namespace, {
+    ...snapshot(12, "late"),
+    thread: makeReadModelThread({ id: ThreadId.makeUnsafe("deleted-513") }),
+  });
+  expect(await readThreadDetailCache(namespace, ThreadId.makeUnsafe("deleted-513"))).toBeNull();
 });
