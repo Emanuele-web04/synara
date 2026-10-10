@@ -1847,9 +1847,10 @@ export function normalizeThreadFromReadModel(
   const pendingSourceProposedPlan =
     latestTurn?.sourceProposedPlan ??
     (incoming.session?.status === "running" ? previous?.pendingSourceProposedPlan : undefined);
-  // The read model carries no pending turn start; keep the live one until the
-  // next session start consumes it.
-  const pendingTurnStartMessageId = previous?.pendingTurnStartMessageId;
+  // Snapshots carry no pending request. Preserve known clears as well as live
+  // claims; native compaction explicitly clears the server's pending request.
+  const pendingTurnStartMessageId =
+    claudeCacheReview?.status === "compacting" ? null : previous?.pendingTurnStartMessageId;
 
   if (
     previous &&
@@ -1872,6 +1873,7 @@ export function normalizeThreadFromReadModel(
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
+    previous.pendingTurnStartMessageId === pendingTurnStartMessageId &&
     previous.lastVisitedAt === lastVisitedAt &&
     (previous.parentThreadId ?? null) === (incoming.parentThreadId ?? null) &&
     (previous.creationSource ?? null) === (incoming.creationSource ?? null) &&
@@ -1938,7 +1940,7 @@ export function normalizeThreadFromReadModel(
     isPinned: incoming.isPinned ?? false,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
-    ...(pendingTurnStartMessageId ? { pendingTurnStartMessageId } : {}),
+    ...(pendingTurnStartMessageId !== undefined ? { pendingTurnStartMessageId } : {}),
     lastVisitedAt,
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
@@ -2149,10 +2151,12 @@ export function normalizeThreadShellSnapshot(
       ...(latestTurn?.sourceProposedPlan
         ? { pendingSourceProposedPlan: latestTurn.sourceProposedPlan }
         : {}),
-      // Shell rows carry no pending turn start; the next session start consumes it.
-      ...(previous?.pendingTurnStartMessageId
-        ? { pendingTurnStartMessageId: previous.pendingTurnStartMessageId }
-        : {}),
+      // Keep known clears when shell snapshots replace the normalized turn state.
+      ...(claudeCacheReview?.status === "compacting"
+        ? { pendingTurnStartMessageId: null }
+        : previous?.pendingTurnStartMessageId !== undefined
+          ? { pendingTurnStartMessageId: previous.pendingTurnStartMessageId }
+          : {}),
     },
   };
 }

@@ -21,5 +21,15 @@ describe("thread detail events", () => {
     expect(isThreadDetailEventFor(detailEvent, threadId)).toBe(true);
     expect(isThreadDetailEventFor(shellOnlyEvent, threadId)).toBe(false);
     expect(isThreadDetailEventFor(detailEvent, ThreadId.makeUnsafe("thread-2"))).toBe(false);
+    for (const type of [
+      "thread.turn-start-requested",
+      "thread.claude-cache-set",
+      "thread.claude-cache-response-requested",
+      "thread.session-stop-requested",
+    ] as const) {
+      expect(isThreadDetailEventFor({ ...detailEvent, type } as OrchestrationEvent, threadId)).toBe(
+        true,
+      );
+    }
   });
 });
