@@ -18,6 +18,10 @@ import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { DevinAdapter, DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
+import {
+  ExternalAgentAdapter,
+  ExternalAgentAdapterShape,
+} from "../Services/ExternalAgentAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
@@ -205,6 +209,23 @@ const fakeAntigravityAdapter: AntigravityAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeExternalAdapter: ExternalAgentAdapterShape = {
+  provider: "external",
+  capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
 const registryLayer = (codexAdapter = fakeCodexAdapter) =>
   Layer.mergeAll(
     Layer.provide(
@@ -237,6 +258,7 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
             },
           },
         }),
+        Layer.succeed(ExternalAgentAdapter, fakeExternalAdapter),
       ),
     ),
     NodeServices.layer,
@@ -258,6 +280,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const opencode = yield* registry.getByProvider("opencode");
       const pi = yield* registry.getByProvider("pi");
       const omp = yield* registry.getByProvider("omp");
+      const external = yield* registry.getByProvider("external");
       assert.equal(codex, fakeCodexAdapter);
       assert.equal(claude, fakeClaudeAdapter);
       assert.equal(cursor, fakeCursorAdapter);
@@ -268,6 +291,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(opencode, fakeOpenCodeAdapter);
       assert.equal(pi, fakePiAdapter);
       assert.equal(omp, fakeOmpAdapter);
+      assert.equal(external, fakeExternalAdapter);
 
       const providers = yield* registry.listProviders();
       assert.deepEqual(providers, [
@@ -281,6 +305,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "opencode",
         "omp",
         "pi",
+        "external",
       ]);
     }),
   );
@@ -576,3 +601,12 @@ it.effect("routes untagged events through the facade that claimed their thread",
     );
   }).pipe(Effect.provide(registryLayer(adapter)));
 });
+
+it.effect("routes the external virtual instance without a built-in settings entry", () =>
+  Effect.gen(function* () {
+    const registry = yield* ProviderAdapterRegistry;
+    const adapter = yield* registry.getByInstance!("external");
+    assert.strictEqual(adapter.provider, "external");
+    assert.include(yield* registry.listInstances!(), "external");
+  }).pipe(Effect.provide(registryLayer())),
+);

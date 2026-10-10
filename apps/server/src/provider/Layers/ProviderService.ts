@@ -463,7 +463,7 @@ export function credentialsFingerprintForProvider(
   options: ProviderStartOptions | undefined,
   key: Uint8Array,
 ): string | undefined {
-  const providerOptions = options?.[provider];
+  const providerOptions = provider === "external" ? undefined : options?.[provider];
   if (!providerOptions || typeof providerOptions !== "object") {
     return undefined;
   }
@@ -527,7 +527,8 @@ function providerStartOptionsEqualForProvider(
     | ProviderStartOptions
     | undefined;
   return (
-    isDeepStrictEqual(persistedOptions?.[provider], currentOptions?.[provider]) &&
+    (provider === "external" ||
+      isDeepStrictEqual(persistedOptions?.[provider], currentOptions?.[provider])) &&
     persisted.credentialsFingerprint ===
       credentialsFingerprintForProvider(provider, current, credentialsFingerprintKey)
   );

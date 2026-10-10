@@ -47,7 +47,10 @@ export default function ProviderSignInDialog(props: {
   const [optionsSent, setOptionsSent] = useState(false);
   const alive = useRef(true);
   const checkInFlight = useRef(false);
-  const method = PROVIDER_AUTHENTICATION[props.provider];
+  const method =
+    props.provider === "external"
+      ? { instructions: "Manage authentication in the external agent profile." }
+      : PROVIDER_AUTHENTICATION[props.provider];
   const interactiveCommand = "interactiveCommand" in method ? method.interactiveCommand : null;
 
   const checkStatus = useCallback(async () => {

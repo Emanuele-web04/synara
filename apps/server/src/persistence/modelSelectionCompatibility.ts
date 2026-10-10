@@ -10,6 +10,7 @@ import {
 } from "@synara/contracts";
 import { isProviderKind } from "@synara/shared/providerInstances";
 import { Schema } from "effect";
+import { legacyAcpProfileId, legacyAcpRevisionId } from "../externalAgents/agentProfileIdentity";
 
 type ModelProviderKind =
   | "codex"
@@ -225,6 +226,18 @@ export function normalizeLegacyModelSelection(input: {
   readonly model: string;
   readonly options: unknown;
 }): Record<string, unknown> {
+  // The single legacy generic-ACP slot migrates deterministically to the
+  // canonical external profile: a fixed profile identity plus the fixed
+  // content-addressed revision of the migrated slot payload.
+  if (input.provider === "acp") {
+    return {
+      provider: "external",
+      profileId: legacyAcpProfileId(),
+      revisionId: legacyAcpRevisionId(),
+      model: input.model,
+      ...(input.options === undefined ? {} : { options: input.options }),
+    };
+  }
   const provider = inferLegacyModelProvider(input.provider, input.model);
   const migratedGeminiSelection = input.provider === "gemini";
   const normalizedOptions = migratedGeminiSelection
@@ -270,7 +283,7 @@ function resolveProviderFromSettings(
     return undefined;
   }
   const raw = settings.providerInstances[instanceId];
-  return raw && isProviderKind(raw.driver) ? raw.driver : undefined;
+  return raw && isProviderKind(raw.driver) && raw.driver !== "external" ? raw.driver : undefined;
 }
 
 export function normalizePersistedModelSelection(
@@ -278,6 +291,12 @@ export function normalizePersistedModelSelection(
   settings?: ServerSettings,
 ): unknown {
   if (!isRecord(input)) {
+    return input;
+  }
+
+  // External agent selections already carry canonical provider identity;
+  // pass them through untouched instead of re-inferring a built-in kind.
+  if (input.provider === "external") {
     return input;
   }
 

@@ -107,9 +107,10 @@ export function modelQueryOptionsForProviderInstance(input: {
   readonly enabled: boolean;
   readonly refresh?: "if-stale" | "now";
 }) {
-  const providerOptions = getProviderStartOptions(input.settings, input.instanceId)?.[
-    input.provider
-  ];
+  const providerOptions =
+    input.provider === "external"
+      ? undefined
+      : getProviderStartOptions(input.settings, input.instanceId)?.[input.provider];
   return providerModelsQueryOptions({
     provider: input.provider,
     instanceId: input.instanceId,
@@ -255,6 +256,9 @@ export function useProviderModelCatalog(input: {
     provider: ProviderKind,
     prefetchRequested = discoveryEnabled,
   ): boolean => {
+    // External agent profiles resolve from their connector; there is no
+    // discovery pipeline or server toggle for them.
+    if (provider === "external") return false;
     // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
     // undefined while the settings query is in flight and stays undefined if it
     // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
@@ -318,6 +322,7 @@ export function useProviderModelCatalog(input: {
     pi: queryOptionsForProvider("pi", piModelDiscoveryEnabled),
     devin: queryOptionsForProvider("devin", devinModelDiscoveryEnabled),
     omp: queryOptionsForProvider("omp", ompModelDiscoveryEnabled),
+    external: queryOptionsForProvider("external", false),
   } as const;
 
   const claudeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.claudeAgent);
@@ -509,6 +514,11 @@ export function useProviderModelCatalog(input: {
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
       devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
       omp: getAppModelOptions("omp", customModelsByProvider.omp, modelHintByProvider?.omp),
+      external: getAppModelOptions(
+        "external",
+        customModelsByProvider.external,
+        modelHintByProvider?.external,
+      ),
     };
     const result: Record<
       ProviderKind,
@@ -528,6 +538,7 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data,
       devin: devinDynamicModelsQuery.data,
       omp: ompDynamicModelsQuery.data,
+      external: undefined,
     };
     for (const provider of [
       "claudeAgent",
@@ -653,6 +664,7 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data?.models ?? [],
       devin: devinDynamicModelsQuery.data?.models ?? [],
       omp: ompDynamicModelsQuery.data?.models ?? [],
+      external: [],
     }),
     [
       antigravityModelsQuery.data?.models,
