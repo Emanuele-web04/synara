@@ -1564,6 +1564,60 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("publishes the effective fast mode state when a result changes it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const fastModeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "session.configured" &&
+            (event.payload.config as { fast_mode_state?: unknown }).fast_mode_state !== undefined,
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: { fastMode: true },
+        },
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hello", attachments: [] });
+
+      const emitResult = (uuid: string, fastMode: Record<string, string>) =>
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-1",
+          uuid,
+          ...fastMode,
+        } as unknown as SDKMessage);
+      const blocked = { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" };
+      emitResult("result-1", blocked);
+      // An unchanged state is not republished.
+      emitResult("result-2", blocked);
+      emitResult("result-3", { fast_mode_state: "cooldown" });
+
+      const events = Array.from(yield* Fiber.join(fastModeEventsFiber));
+      assert.deepEqual(
+        events.map((event) => (event.type === "session.configured" ? event.payload.config : null)),
+        [blocked, { fast_mode_state: "cooldown" }],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("ignores claude fast mode for non-opus models", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

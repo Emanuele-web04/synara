@@ -1124,6 +1124,46 @@ describe("provider runtime activity projection", () => {
       payload: { cleared: true },
     });
 
+    const [blockedFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-blocked",
+        provider: "claudeAgent",
+        payload: {
+          config: { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" },
+        },
+      }),
+    );
+    expect(blockedFastMode).toMatchObject({
+      id: "fast-mode-blocked",
+      kind: "fast-mode.state",
+      payload: { state: "off", disabledReason: "extra_usage_disabled" },
+    });
+
+    const [activeFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-on",
+        provider: "claudeAgent",
+        payload: { config: { fast_mode_state: "on" } },
+      }),
+    );
+    expect(activeFastMode).toMatchObject({ kind: "fast-mode.state", payload: { state: "on" } });
+
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "session.configured",
+          eventId: "fast-mode-with-context",
+          provider: "claudeAgent",
+          payload: { config: { autoCompactWindow: "1m", fast_mode_state: "cooldown" } },
+        }),
+      ).map((activity) => [activity.id, activity.kind]),
+    ).toEqual([
+      ["fast-mode-with-context", "context-window.configured"],
+      ["fast-mode-with-context:fast-mode", "fast-mode.state"],
+    ]);
+
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "turn.completed",
