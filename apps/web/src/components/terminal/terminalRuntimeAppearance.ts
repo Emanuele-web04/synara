@@ -9,6 +9,9 @@ const FALLBACK_MONO_FONT_FAMILY =
 const FALLBACK_TERMINAL_FONT_SIZE_PX = 12;
 const TERMINAL_FONT_WEIGHT = 300;
 const TERMINAL_BOLD_FONT_WEIGHT = 500;
+// WCAG AA. TUIs such as Claude Code default to truecolor palettes tuned for dark backgrounds,
+// which bypass the ANSI theme and fade into a light terminal unless xterm raises their contrast.
+const LIGHT_TERMINAL_MINIMUM_CONTRAST_RATIO = 4.5;
 
 const DARK_TERMINAL_THEME_FALLBACK = {
   background: "rgb(14, 18, 24)",
@@ -95,6 +98,14 @@ export function getTerminalFontWeight(): number {
 
 export function getTerminalBoldFontWeight(): number {
   return TERMINAL_BOLD_FONT_WEIGHT;
+}
+
+// 1 leaves colors untouched; the dark theme keeps its palette as designed.
+export function getTerminalMinimumContrastRatio(): number {
+  if (typeof document === "undefined" || document.documentElement.classList.contains("dark")) {
+    return 1;
+  }
+  return LIGHT_TERMINAL_MINIMUM_CONTRAST_RATIO;
 }
 
 function getColorNormalizationContext(): CanvasRenderingContext2D | null {
