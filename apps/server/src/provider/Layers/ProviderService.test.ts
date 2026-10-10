@@ -8127,6 +8127,120 @@ stopRetry.layer("ProviderServiceLive urgent Stop with text persistence retry", (
   );
 });
 
+for (const stopKind of ["stopSession", "stopRuntimeSession"] as const) {
+  for (const stopFails of [false, true]) {
+    let appendAttempts = 0;
+    let acceptedText = Effect.void;
+    const acceptedEvents: ProviderRuntimeEvent[] = [];
+    const batchStop = makeProviderServiceLayer(
+      {
+        persistRuntimeEvent: (event) =>
+          Effect.suspend(() => {
+            if (event.type === "content.delta" && ++appendAttempts === 1)
+              return Effect.fail(new Error("sqlite busy during session stop"));
+            acceptedEvents.push(event);
+            return (event.type === "content.delta" ? acceptedText : Effect.void).pipe(
+              Effect.map(() => ({ sequence: acceptedEvents.length, event })),
+            );
+          }),
+        runtimeEventRetryBaseDelayMs: 1,
+        runtimeEventRetryMaxDelayMs: 1,
+      },
+      { freshRuntimeEventDelivery: true },
+    );
+    batchStop.layer(`ProviderServiceLive durable ${stopKind} (stopFails=${stopFails})`, (it) => {
+      it.effect(
+        "starts physical session stop before retry and drains under the old generation",
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* ProviderService;
+            const directory = yield* ProviderSessionDirectory;
+            const threadId = asThreadId(`thread-durable-${stopKind}-${stopFails}`);
+            yield* provider.startSession(threadId, {
+              provider: "codex",
+              threadId,
+              runtimeMode: "full-access",
+            });
+            const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+            yield* batchStop.codex.waitForRuntimeSubscribers();
+            const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+            const textDrained = yield* Deferred.make<void>();
+            acceptedText = Deferred.succeed(textDrained, undefined).pipe(Effect.asVoid);
+            let physicalStopStarted = false;
+            const originalStop = batchStop.codex.stopSession.getMockImplementation()!;
+            const stopError = new ProviderAdapterProcessError({
+              provider: "codex",
+              threadId,
+              detail: "session teardown could not prove exit",
+            });
+            batchStop.codex.stopSession.mockImplementation((stoppedThreadId) =>
+              Effect.gen(function* () {
+                physicalStopStarted = true;
+                if (stopFails) return yield* Effect.fail(stopError);
+                // A teardown may await its runtime consumer. Serially awaiting
+                // the adapter before flushing would strand this drain too.
+                yield* Deferred.await(textDrained);
+                yield* originalStop(stoppedThreadId);
+              }),
+            );
+            const first: ProviderRuntimeEvent = {
+              type: "content.delta",
+              eventId: asEventId(`durable-${stopKind}-${stopFails}-first`),
+              provider: "codex",
+              providerInstanceId: binding.providerInstanceId,
+              threadId,
+              turnId: sent.turnId,
+              lifecycleGeneration: binding.lifecycleGeneration,
+              createdAt: "2026-10-10T00:00:00.000Z",
+              payload: { streamKind: "assistant_text", delta: "A" },
+            };
+            batchStop.codex.emit(first);
+            batchStop.codex.emit({
+              ...first,
+              eventId: asEventId(`durable-${stopKind}-${stopFails}-second`),
+              payload: { streamKind: "assistant_text", delta: "B" },
+            });
+            yield* sleep(20);
+            assert.lengthOf(acceptedEvents, 0);
+            const stop = provider[stopKind];
+            if (stop === undefined) assert.fail(`Expected ${stopKind} implementation`);
+            const stopping = yield* stop({ threadId }).pipe(Effect.exit, Effect.forkChild);
+            yield* waitUntil(() => appendAttempts === 1);
+            const physicalStopStartedBeforeRetry = physicalStopStarted;
+            const bindingDuringRetry = Option.getOrThrow(yield* directory.getBinding(threadId));
+            yield* TestClock.adjust("1 millis");
+            const stopExit = yield* Fiber.join(stopping);
+            assert.equal(physicalStopStartedBeforeRetry, true);
+            assert.equal(bindingDuringRetry.lifecycleGeneration, binding.lifecycleGeneration);
+            assert.equal(appendAttempts, 2);
+            assert.deepEqual(acceptedEvents, [
+              { ...first, payload: { streamKind: "assistant_text", delta: "AB" } },
+            ]);
+            const finalBinding = yield* directory.getBinding(threadId);
+            if (stopFails) {
+              assert.equal(Exit.isFailure(stopExit), true);
+              if (Exit.isFailure(stopExit))
+                assert.match(Cause.pretty(stopExit.cause), /could not prove exit/);
+              assert.equal(
+                Option.getOrThrow(finalBinding).lifecycleGeneration,
+                binding.lifecycleGeneration,
+              );
+              assert.equal(Option.getOrThrow(finalBinding).status, binding.status);
+            } else {
+              assert.equal(Exit.isSuccess(stopExit), true);
+              if (stopKind === "stopSession") assert.equal(Option.isNone(finalBinding), true);
+              else {
+                const stoppedBinding = Option.getOrThrow(finalBinding);
+                assert.equal(stoppedBinding.status, "stopped");
+                assert.notEqual(stoppedBinding.lifecycleGeneration, binding.lifecycleGeneration);
+              }
+            }
+          }),
+      );
+    });
+  }
+}
+
 const originalIdEvents: ProviderRuntimeEvent[] = [];
 const originalIdFanout = makeProviderServiceLayer({
   persistRuntimeEvent: (event) =>
