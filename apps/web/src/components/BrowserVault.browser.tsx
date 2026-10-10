@@ -60,6 +60,43 @@ beforeEach(() => {
 });
 
 describe("browser saved logins", () => {
+  it("imports Helium for the selected site and requires separate full-profile consent", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "helium", name: "Helium" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "Default", name: "Default" }]);
+    const destination = {
+      threadId: ThreadId.makeUnsafe("helium-test"),
+      tabId: "helium-tab",
+      origin: "https://example.test",
+    };
+    await render(<BrowserCookieImport api={api} destination={destination} />);
+    await page.getByRole("button", { name: "Import browser cookies" }).click();
+    await expect.element(page.getByRole("button", { name: "Import for this site" })).toBeEnabled();
+    await page.getByRole("button", { name: "Import for this site" }).click();
+    expect(api.importCookies).toHaveBeenCalledExactlyOnceWith({
+      ...destination,
+      browser: "helium",
+      profile: "Default",
+      scope: "site",
+    });
+    await expect.element(page.getByRole("status")).toHaveTextContent("0 cookies imported");
+    const scope = document.querySelector<HTMLSelectElement>('[aria-label="Cookie import scope"]')!;
+    scope.value = "profile";
+    scope.dispatchEvent(new Event("change", { bubbles: true }));
+    await expect.element(page.getByRole("button", { name: "Import all sites" })).toBeDisabled();
+    await page.getByRole("checkbox").click();
+    await page.getByRole("button", { name: "Import all sites" }).click();
+    expect(api.importCookies).toHaveBeenLastCalledWith({
+      threadId: destination.threadId,
+      tabId: destination.tabId,
+      browser: "helium",
+      profile: "Default",
+      scope: "profile",
+      confirmed: true,
+    });
+    await expect.element(page.getByRole("button", { name: "Import all sites" })).toBeDisabled();
+  });
+
   it("still reports actual permission denial after continuing past Safari setup", async () => {
     const previous = window.desktopBridge;
     const previousDecision = localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY);

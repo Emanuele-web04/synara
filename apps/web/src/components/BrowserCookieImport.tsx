@@ -109,14 +109,9 @@ export function BrowserCookieImport({
   };
 
   const run = async () => {
-    if (
-      busy ||
-      !profile ||
-      !["chrome", "safari", "edge"].includes(source) ||
-      (scope === "profile" && !confirmed)
-    )
+    if (busy || !profile || (scope === "profile" && !confirmed)) return;
+    if (source !== "chrome" && source !== "safari" && source !== "edge" && source !== "helium")
       return;
-    if (source !== "chrome" && source !== "safari" && source !== "edge") return;
     const request = ++generation.current;
     setBusy(true);
     setStatus(null);

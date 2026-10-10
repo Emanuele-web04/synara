@@ -8,7 +8,7 @@ import type { BrowserCookieImportInput, BrowserCookieImportResult } from "@synar
 import type { DesktopBrowserManager } from "../browserManager";
 import { synaraHostTarget } from "./betterwrightHostTarget";
 
-const SOURCES = new Set(["chrome", "safari", "edge"]);
+const SOURCES = new Set(["chrome", "safari", "edge", "helium"]);
 
 export class BrowserCookieImport {
   private busy = false;
