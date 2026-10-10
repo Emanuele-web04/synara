@@ -74,10 +74,9 @@ export function claudeTokenActivityCtes(sql: SqlClient.SqlClient, scope?: TokenS
           ) parent_usage
           WHERE parent_activity.thread_id = th.parent_thread_id
             AND parent_activity.kind = 'turn.completed'
-            AND (
-              th.source_turn_id IS NULL
-              OR parent_activity.turn_id = th.source_turn_id
-            )
+            -- Without source-turn provenance, no parent result is proven to
+            -- include this child. An older same-model turn cannot suppress it.
+            AND parent_activity.turn_id = th.source_turn_id
             AND json_valid(parent_activity.payload_json)
             AND json_extract(parent_activity.payload_json, '$.tokenAccountingVersion') = 1
             AND json_type(parent_activity.payload_json, '$.modelUsage') = 'object'
@@ -87,9 +86,9 @@ export function claudeTokenActivityCtes(sql: SqlClient.SqlClient, scope?: TokenS
                   OR json_extract(a.payload_json, '$.provider') = json_extract(th.model_selection_json, '$.provider'))
                 THEN json_extract(th.model_selection_json, '$.model') END, 'unknown') AS TEXT
             )))
-            AND json_type(parent_usage.value) = 'object'
             AND (
               CASE
+                WHEN parent_usage.type != 'object' THEN 0
                 WHEN json_type(parent_usage.value, '$.totalTokens') IN ('integer', 'real')
                   AND json_extract(parent_usage.value, '$.totalTokens') > 0
                 THEN json_extract(parent_usage.value, '$.totalTokens')

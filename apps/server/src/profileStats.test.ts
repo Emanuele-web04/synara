@@ -66,10 +66,12 @@ describe("ProfileStatsQuery", () => {
         const stats = yield* ProfileStatsQuery;
         for (const [threadId, parentThreadId, creationSource, sourceTurnId] of [
           ["root", null, null, null],
-          ["mirrored-child", "root", "provider_native", null],
+          ["mirrored-child", "root", "provider_native", "first"],
           ["independent-child", "root", "synara_mcp", null],
           ["uncovered-parent", null, null, null],
           ["uncovered-child", "uncovered-parent", "provider_native", "uncovered-parent-turn"],
+          ["unknown-source-child", "uncovered-parent", "provider_native", null],
+          ["scalar-parent-child", "root", "provider_native", "fallback"],
         ] as const) {
           yield* sql`
           INSERT INTO projection_threads
@@ -175,6 +177,18 @@ describe("ProfileStatsQuery", () => {
             },
           },
         });
+        // Missing source-turn provenance is not evidence that an older parent
+        // result includes this child's work. Background events can omit turnId.
+        yield* addActivity("9-unknown-source", "unknown-source-child", "unknown-source-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 700,
+        });
+        // A scalar model entry in the matching parent is unusable, and must not
+        // fail the SQLite query or suppress this child's valid fallback.
+        yield* addActivity("9-scalar-parent-child", "scalar-parent-child", "scalar-child-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 400,
+        });
         // A malformed numeric field must not make a parent look usable and
         // suppress the child's valid usage.
         yield* sql`
@@ -189,7 +203,7 @@ describe("ProfileStatsQuery", () => {
           (
             'malformed-child', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
             'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
-            'malformed-parent', 'provider_native', NULL
+            'malformed-parent', 'provider_native', 'malformed-parent-turn'
           )
         `;
         yield* addActivity("10-parent", "malformed-parent", "malformed-parent-turn", {
@@ -245,9 +259,9 @@ describe("ProfileStatsQuery", () => {
         // The verified fallback must outlive ordinary runtime-event retention.
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
-        expect(result.lifetimeTotalTokens).toBe(90_228);
+        expect(result.lifetimeTotalTokens).toBe(91_328);
         expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
-          { model: "claude-fable-5", tokens: 88_228 },
+          { model: "claude-fable-5", tokens: 89_328 },
           { model: "claude-opus-4-8", tokens: 2_000 },
         ]);
       }),
