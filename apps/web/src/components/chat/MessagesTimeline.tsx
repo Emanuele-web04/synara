@@ -1707,6 +1707,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <ChatMarkdown
                   text={segmentText}
                   cwd={markdownCwd}
+                  directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
@@ -2377,6 +2378,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <ChatMarkdown
                   text={item.message.text}
                   cwd={markdownCwd}
+                  directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
@@ -2563,6 +2565,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           : messageText
                       }
                       cwd={markdownCwd}
+                      directionMode="auto-blocks"
                       isStreaming={Boolean(row.message.streaming)}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
@@ -3840,6 +3843,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       <ChatMarkdown
         text={markdownText}
         cwd={props.markdownCwd}
+        directionMode="auto-blocks"
         variant="user"
         mentionReferences={props.mentionReferences}
         terminalContexts={props.terminalContexts}
@@ -3884,6 +3888,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       variant="user"
       text={props.text}
       cwd={props.markdownCwd}
+      directionMode="auto-blocks"
       isStreaming={false}
       mentionReferences={props.mentionReferences}
       className="font-system-ui"

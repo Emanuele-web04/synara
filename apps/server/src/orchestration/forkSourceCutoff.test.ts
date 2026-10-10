@@ -23,13 +23,13 @@ describe("resolveForkSourceCutoff", () => {
     });
   });
 
-  it("forks at the latest point when the chosen message ends the source", () => {
+  it("pins the chosen turn even when its message currently ends the source", () => {
     expect(
       resolveForkSourceCutoff({
         throughMessageId: MessageId.makeUnsafe("a2"),
         sourceMessages: [...twoTurns, message("s1", "system", null)],
       }),
-    ).toEqual({ kind: "latest" });
+    ).toEqual({ kind: "turn", turnId: TurnId.makeUnsafe("t2") });
   });
 
   it("stops native history at the chosen earlier turn", () => {

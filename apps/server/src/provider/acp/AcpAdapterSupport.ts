@@ -26,10 +26,15 @@ import {
 // collab_agent_tool_call presentation (agent icon, prompt preview, subagent live meta).
 export const ACP_SUBAGENT_TOOL_KIND = "agent";
 
+// ACP has no image-generation kind; keep this inferred presentation separate from permissions.
+export const ACP_IMAGE_GENERATION_TOOL_KIND = "image_generation";
+
 export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
   switch (kind) {
     case ACP_SUBAGENT_TOOL_KIND:
       return "collab_agent_tool_call";
+    case ACP_IMAGE_GENERATION_TOOL_KIND:
+      return "image_generation";
     case "execute":
       return "command_execution";
     case "edit":

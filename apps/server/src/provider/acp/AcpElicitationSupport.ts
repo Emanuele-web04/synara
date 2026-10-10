@@ -12,6 +12,9 @@ type FormElicitationRequest = Acp.ElicitationFormMode & {
   readonly _meta?: Record<string, unknown> | null;
 };
 type ElicitationProperty = Acp.ElicitationPropertySchema;
+type ElicitationMappingOptions = {
+  readonly otherAnswerConvention?: "droid";
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -79,18 +82,47 @@ function propertyOptions(property: ElicitationProperty): ReadonlyArray<{
   return [];
 }
 
+function otherAnswerCompanions(
+  properties: Readonly<Record<string, ElicitationProperty>>,
+): ReadonlyMap<string, string> {
+  const companions = new Map<string, string>();
+  for (const [id, property] of Object.entries(properties)) {
+    const companionId = `${id}_other`;
+    const companion = properties[companionId];
+    if (
+      companion?.type === "string" &&
+      propertyOptions(companion).length === 0 &&
+      propertyOptions(property).some((option) => option.label === "other")
+    ) {
+      companions.set(id, companionId);
+    }
+  }
+  return companions;
+}
+
 // Converts primitive ACP form fields into the question shape consumed by Synara's composer.
 export function elicitationQuestionsFromRequest(
   request: FormElicitationRequest,
+  options: ElicitationMappingOptions = {},
 ): ReadonlyArray<UserInputQuestion> {
   const properties = request.requestedSchema.properties ?? {};
-  return Object.entries(properties).map(([id, property], index) => ({
-    id,
-    header: trimmedString(property.title) ?? `Question ${index + 1}`,
-    question: trimmedString(property.description) ?? request.message,
-    options: propertyOptions(property),
-    multiSelect: property.type === "array",
-  }));
+  // The companion naming convention is Droid-specific, not part of ACP schemas.
+  const companions =
+    options.otherAnswerConvention === "droid"
+      ? otherAnswerCompanions(properties)
+      : new Map<string, string>();
+  const companionIds = new Set(companions.values());
+  return Object.entries(properties)
+    .filter(([id]) => !companionIds.has(id))
+    .map(([id, property], index) => ({
+      id,
+      header: trimmedString(property.title) ?? `Question ${index + 1}`,
+      question: trimmedString(property.description) ?? request.message,
+      options: propertyOptions(property).filter(
+        (option) => !companions.has(id) || option.label !== "other",
+      ),
+      multiSelect: property.type === "array",
+    }));
 }
 
 function firstAnswerValue(value: ProviderUserInputAnswers[string] | undefined): string | undefined {
@@ -131,9 +163,45 @@ function coerceElicitationAnswer(
 export function elicitationResponseFromAnswers(
   request: FormElicitationRequest,
   answers: ProviderUserInputAnswers,
+  options: ElicitationMappingOptions = {},
 ): Acp.CreateElicitationResponse {
   const content: Record<string, Acp.ElicitationContentValue> = {};
-  for (const [id, property] of Object.entries(request.requestedSchema.properties ?? {})) {
+  const properties = request.requestedSchema.properties ?? {};
+  // The companion naming convention is Droid-specific, not part of ACP schemas.
+  const companions =
+    options.otherAnswerConvention === "droid"
+      ? otherAnswerCompanions(properties)
+      : new Map<string, string>();
+  const companionIds = new Set(companions.values());
+  for (const [id, property] of Object.entries(properties)) {
+    if (companionIds.has(id)) continue;
+    const companionId = companions.get(id);
+    if (companionId !== undefined) {
+      const answer = coerceElicitationAnswer(property, answers[id]);
+      const values = typeof answer === "string" ? [answer] : Array.isArray(answer) ? answer : [];
+      const knownValues = new Set(propertyOptions(property).map((option) => option.label));
+      const selected = values.filter((value) => value !== "other" && knownValues.has(value));
+      const customValues = values.filter(
+        (value) => !knownValues.has(value) && value.trim().length > 0,
+      );
+      // Older clients may still show the companion as a separate input. Its text
+      // applies only when Other was selected, not to a stale hidden answer.
+      const customText =
+        customValues.join("\n") ||
+        (values.includes("other") || values.length === 0
+          ? firstAnswerValue(answers[companionId])
+          : undefined);
+      if (customText?.trim()) {
+        selected.push("other");
+        content[companionId] = customText;
+      }
+      if (property.type === "array") {
+        if (answer !== undefined || selected.length > 0) content[id] = selected;
+      } else if (selected[0] !== undefined) {
+        content[id] = selected[0];
+      }
+      continue;
+    }
     const value = coerceElicitationAnswer(property, answers[id]);
     if (value !== undefined) {
       content[id] = value;

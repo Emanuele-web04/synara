@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
-import { assert, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref } from "effect";
+import { assert, it as effectIt } from "@effect/vitest";
+import { Deferred, Duration, Effect, Fiber, Option, Ref } from "effect";
 
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 
-it.layer(TurnCheckpointCoordinatorLive)("TurnCheckpointCoordinator", (it) => {
+effectIt.layer(TurnCheckpointCoordinatorLive)("TurnCheckpointCoordinator", (it) => {
   it.effect("keeps a turn activation behind a validated checkpoint mutation", () =>
     Effect.gen(function* () {
       const coordinator = yield* TurnCheckpointCoordinator;
@@ -229,5 +229,154 @@ it.layer(TurnCheckpointCoordinatorLive)("TurnCheckpointCoordinator", (it) => {
         yield* Fiber.join(replacement);
         assert.deepEqual(yield* Ref.get(calls), ["replacement"]);
       }),
+  );
+
+  effectIt.live(
+    "admits concurrent provider activations but gives a workspace writer exclusive ownership",
+    () =>
+      Effect.gen(function* () {
+        const coordinator = yield* TurnCheckpointCoordinator;
+        const cwd = "/checkpoint-workspace/activation";
+        const firstEntered = yield* Deferred.make<void>();
+        const secondEntered = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        const releaseSecond = yield* Deferred.make<void>();
+        const writerEntered = yield* Deferred.make<void>();
+        const releaseWriter = yield* Deferred.make<void>();
+        const lateEntered = yield* Deferred.make<void>();
+        const first = yield* coordinator
+          .withWorkspaceActivationLease(
+            cwd,
+            Deferred.succeed(firstEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseFirst)),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(firstEntered);
+        const second = yield* coordinator
+          .withWorkspaceActivationLease(
+            `${cwd}/../activation`,
+            Deferred.succeed(secondEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseSecond)),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        try {
+          assert.isTrue(
+            Option.isSome(
+              yield* Deferred.await(secondEntered).pipe(Effect.timeoutOption(Duration.seconds(1))),
+            ),
+          );
+          const writer = yield* coordinator
+            .withWorkspaceLease(
+              cwd,
+              Deferred.succeed(writerEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseWriter)),
+              ),
+            )
+            .pipe(Effect.forkChild);
+          assert.isTrue(
+            Option.isNone(
+              yield* Deferred.await(writerEntered).pipe(Effect.timeoutOption(Duration.millis(50))),
+            ),
+          );
+          yield* Deferred.succeed(releaseFirst, undefined);
+          assert.isTrue(
+            Option.isNone(
+              yield* Deferred.await(writerEntered).pipe(Effect.timeoutOption(Duration.millis(50))),
+            ),
+          );
+          yield* Deferred.succeed(releaseSecond, undefined);
+          yield* Deferred.await(writerEntered);
+          const late = yield* coordinator
+            .withWorkspaceActivationLease(cwd, Deferred.succeed(lateEntered, undefined))
+            .pipe(Effect.forkChild);
+          assert.isTrue(
+            Option.isNone(
+              yield* Deferred.await(lateEntered).pipe(Effect.timeoutOption(Duration.millis(50))),
+            ),
+          );
+          yield* Deferred.succeed(releaseWriter, undefined);
+          yield* Fiber.join(writer);
+          yield* Fiber.join(late);
+          assert.isTrue(yield* Deferred.isDone(lateEntered));
+        } finally {
+          yield* Deferred.succeed(releaseFirst, undefined);
+          yield* Deferred.succeed(releaseSecond, undefined);
+          yield* Deferred.succeed(releaseWriter, undefined);
+          yield* Fiber.join(first);
+          yield* Fiber.join(second);
+        }
+      }).pipe(Effect.provide(TurnCheckpointCoordinatorLive)),
+  );
+
+  it.effect("releases a cancelled activation so a waiting workspace restore can proceed", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* TurnCheckpointCoordinator;
+      const held = yield* Deferred.make<void>();
+      const writerEntered = yield* Deferred.make<void>();
+      const reader = yield* coordinator
+        .withWorkspaceActivationLease(
+          "/checkpoint-workspace/activation-cancel",
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Effect.never)),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      const writer = yield* coordinator
+        .withWorkspaceLease(
+          "/checkpoint-workspace/activation-cancel",
+          Deferred.succeed(writerEntered, undefined),
+        )
+        .pipe(Effect.forkChild);
+      yield* Fiber.interrupt(reader);
+      yield* Fiber.join(writer);
+      assert.isTrue(yield* Deferred.isDone(writerEntered));
+      yield* coordinator.withWorkspaceActivationLease(
+        "/checkpoint-workspace/activation-cancel",
+        Effect.void,
+      );
+    }),
+  );
+
+  it.effect("cancels a queued activation without releasing the active workspace restore", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* TurnCheckpointCoordinator;
+      const cwd = "/checkpoint-workspace/queued-activation";
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const writer = yield* coordinator
+        .withWorkspaceLease(
+          cwd,
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      const cancelled = yield* coordinator
+        .withWorkspaceActivationLease(
+          cwd,
+          Ref.update(calls, (entries) => [...entries, "cancelled"]),
+        )
+        .pipe(Effect.forkChild);
+      yield* Fiber.interrupt(cancelled);
+      const replacement = yield* coordinator
+        .withWorkspaceActivationLease(
+          cwd,
+          Ref.update(calls, (entries) => [...entries, "replacement"]),
+        )
+        .pipe(Effect.forkChild);
+      try {
+        yield* coordinator.withWorkspaceActivationLease(
+          "/checkpoint-workspace/other-activation",
+          Effect.void,
+        );
+        assert.deepEqual(yield* Ref.get(calls), []);
+      } finally {
+        yield* Deferred.succeed(release, undefined);
+      }
+      yield* Fiber.join(writer);
+      yield* Fiber.join(replacement);
+      assert.deepEqual(yield* Ref.get(calls), ["replacement"]);
+    }),
   );
 });

@@ -29,6 +29,7 @@ import {
 } from "../../lib/composerSend";
 import { appendFileCommentsToPrompt } from "../../lib/fileComments";
 import { appendPullRequestContextsToPrompt } from "../../lib/pullRequestContext";
+import { prepareQueuedComposerResumeAfterSend } from "../../lib/queuedComposerDrain";
 import {
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
   appendTerminalContextsToPrompt,
@@ -307,6 +308,10 @@ export function useChatTurnSubmission({
         getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null ||
         isThreadDetailAwaitingVerification(activeThread.id);
       if (hasPendingCacheReview()) return false;
+      const resumeQueueAfterSend =
+        !queuedTurn || dispatchMode === "steer"
+          ? prepareQueuedComposerResumeAfterSend(activeThread.id)
+          : undefined;
       sendPreflightInFlightRef.current = true;
       const editorSaved = await flushWorkspaceEditors(
         queryClient,
@@ -513,6 +518,7 @@ export function useChatTurnSubmission({
             text: followUp.text,
             interactionMode: followUp.interactionMode,
             dispatchMode,
+            ...(resumeQueueAfterSend ? { resumeQueueAfterSend } : {}),
           });
         }
       }
@@ -1001,8 +1007,8 @@ export function useChatTurnSubmission({
       });
       // A message the user sends by hand (or steers from the queue) resumes a queue
       // paused by Stop; it goes first and the queue follows once its turn ends.
-      if (sent && (queuedChatTurn === null || dispatchMode === "steer")) {
-        useComposerDraftStore.getState().resumeQueuedTurns(threadIdForSend, null);
+      if (sent) {
+        resumeQueueAfterSend?.();
       }
       return sent;
     },

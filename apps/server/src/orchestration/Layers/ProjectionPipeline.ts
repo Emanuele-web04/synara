@@ -1012,7 +1012,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : {}),
               latestTurnId:
                 event.type === "thread.session-set"
-                  ? event.payload.session.activeTurnId
+                  ? (event.payload.session.activeTurnId ?? existingRow.value.latestTurnId)
                   : event.payload.preserveLatestTurn
                     ? existingRow.value.latestTurnId
                     : event.payload.turnId,
@@ -1525,6 +1525,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 (Option.isSome(pendingTurnStart)
                   ? pendingTurnStart.value.sourceProposedPlanId
                   : null),
+              startedWithoutGitWorkspace:
+                existingTurn.value.startedWithoutGitWorkspace === true ||
+                (Option.isSome(pendingTurnStart) &&
+                  pendingTurnStart.value.startedWithoutGitWorkspace === true),
               startedAt:
                 existingTurn.value.startedAt ?? event.payload.session.updatedAt ?? event.occurredAt,
               requestedAt:
@@ -1546,6 +1550,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               sourceProposedPlanId: Option.isSome(pendingTurnStart)
                 ? pendingTurnStart.value.sourceProposedPlanId
                 : null,
+              startedWithoutGitWorkspace: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.startedWithoutGitWorkspace === true
+                : false,
               assistantMessageId: null,
               state: "running",
               requestedAt: Option.isSome(pendingTurnStart)

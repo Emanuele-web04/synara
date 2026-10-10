@@ -468,8 +468,15 @@ export function MessageTrail({
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    const updateBounds = () =>
-      setViewportBounds({ scrollTop: viewport.scrollTop, height: viewport.clientHeight });
+    const updateBounds = () => {
+      const scrollTop = viewport.scrollTop;
+      const height = viewport.clientHeight;
+      setViewportBounds((current) =>
+        current.scrollTop === scrollTop && current.height === height
+          ? current
+          : { scrollTop, height },
+      );
+    };
     updateBounds();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(updateBounds);
