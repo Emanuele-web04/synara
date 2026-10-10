@@ -56,30 +56,12 @@ type SubagentThreadLike = {
   subagentAgentId?: string | null | undefined;
   subagentNickname?: string | null | undefined;
   subagentRole?: string | null | undefined;
-  createdAt?: string | null | undefined;
   activities?: ReadonlyArray<SubagentThreadActivityLike> | undefined;
 };
 
-// The parent's identity directory plus the first spawn prompt seen per child:
-// later collab items (send_input, wait) may carry follow-up messages that the
-// shared directory merge would prefer, but the label should name the task.
-type ParentSubagentIdentityIndex = {
-  directory: ReturnType<typeof buildSubagentIdentityDirectory>;
-  firstPromptByProviderThreadId: ReadonlyMap<string, string>;
-  firstPromptByAgentId: ReadonlyMap<string, string>;
-};
-
-const DEFAULT_SUBAGENT_LABEL = "Subagent";
-const SUBAGENT_PROMPT_LABEL_MAX_LENGTH = 60;
-
-const subagentIdentityIndexByActivities = new WeakMap<
+const subagentIdentityDirectoryByActivities = new WeakMap<
   ReadonlyArray<SubagentThreadActivityLike>,
-  ParentSubagentIdentityIndex
->();
-
-const siblingThreadIdsByThreads = new WeakMap<
-  ReadonlyArray<SubagentThreadLike>,
-  Map<string, ReadonlyArray<string>>
+  ReturnType<typeof buildSubagentIdentityDirectory>
 >();
 
 function basename(value: string): string {
@@ -87,9 +69,7 @@ function basename(value: string): string {
   return slashIndex >= 0 ? value.slice(slashIndex + 1) : value;
 }
 
-// Seeds the accent color only. Provider ids (tool_use ids, conversation uuids,
-// the `subagent:<parent>:<id>` tail) are never shown as a label.
-function fallbackAccentSeed(value: string | null): string | null {
+function fallbackSubagentLabel(value: string | null): string | null {
   const normalized = normalizeWhitespace(value);
   if (!normalized) {
     return null;
@@ -101,21 +81,6 @@ function fallbackAccentSeed(value: string | null): string | null {
   }
 
   return basename(normalized);
-}
-
-// Mirrors the server's prompt-derived child title: first non-empty line,
-// whitespace-collapsed, clipped to 60 characters.
-function subagentPromptLabel(prompt: string | null | undefined): string | null {
-  const line = prompt
-    ?.split(/\r?\n/)
-    .map((candidate) => normalizeWhitespace(candidate))
-    .find((candidate): candidate is string => candidate !== null);
-  if (!line) {
-    return null;
-  }
-  return line.length > SUBAGENT_PROMPT_LABEL_MAX_LENGTH
-    ? `${line.slice(0, SUBAGENT_PROMPT_LABEL_MAX_LENGTH - 1).trimEnd()}…`
-    : line;
 }
 
 function normalizeWhitespace(value: string | null | undefined): string | null {
@@ -134,18 +99,12 @@ function suppressWorkerTierRole(role: string | null): string | null {
   return role !== null && isWorkerTierSubagentRole(role) ? null : role;
 }
 
-// Placeholders the server persists before identity arrives: "Subagent",
-// "Subagent <provider id>" (older builds), and "Subagent [role]".
 function isGenericSubagentTitle(title: string | null): boolean {
   if (!title) {
     return true;
   }
   const normalized = title.trim().toLowerCase();
-  return (
-    GENERIC_SUBAGENT_TITLES.has(normalized) ||
-    /^subagent \S+$/.test(normalized) ||
-    /^subagent\s*\[[^\]]*\]$/.test(normalized)
-  );
+  return GENERIC_SUBAGENT_TITLES.has(normalized) || normalized.startsWith("subagent ");
 }
 
 function parseBracketedSubagentLabel(label: string | null): {
@@ -199,7 +158,6 @@ function resolveSubagentIdentityFromParentActivity(input: {
 }): {
   nickname: string | null;
   role: string | null;
-  promptLabel: string | null;
 } | null {
   const parentThreadId = normalizeWhitespace(input.thread.parentThreadId);
   if (!parentThreadId) {
@@ -212,105 +170,40 @@ function resolveSubagentIdentityFromParentActivity(input: {
   }
 
   const activities = parentThread.activities ?? [];
-  const identityIndex =
-    subagentIdentityIndexByActivities.get(activities) ??
+  const identityDirectory =
+    subagentIdentityDirectoryByActivities.get(activities) ??
     (() => {
-      const hints = activities.flatMap((activity) => {
-        const root = asRecord(activity?.payload);
-        const data = asRecord(root?.data);
-        const item = asRecord(data?.item) ?? data ?? root;
-        return item ? extractParsedSubagentIdentityHints(item) : [];
-      });
-      const firstPromptByProviderThreadId = new Map<string, string>();
-      const firstPromptByAgentId = new Map<string, string>();
-      for (const hint of hints) {
-        const promptLabel = subagentPromptLabel(hint.prompt);
-        if (!promptLabel) {
-          continue;
-        }
-        const providerThreadId = normalizeWhitespace(hint.providerThreadId);
-        if (providerThreadId && !firstPromptByProviderThreadId.has(providerThreadId)) {
-          firstPromptByProviderThreadId.set(providerThreadId, promptLabel);
-        }
-        const agentId = normalizeWhitespace(hint.agentId);
-        if (agentId && !firstPromptByAgentId.has(agentId)) {
-          firstPromptByAgentId.set(agentId, promptLabel);
-        }
-      }
-      const nextIndex: ParentSubagentIdentityIndex = {
-        directory: buildSubagentIdentityDirectory(hints),
-        firstPromptByProviderThreadId,
-        firstPromptByAgentId,
-      };
-      subagentIdentityIndexByActivities.set(activities, nextIndex);
-      return nextIndex;
+      const nextDirectory = buildSubagentIdentityDirectory(
+        activities.flatMap((activity) => {
+          const root = asRecord(activity?.payload);
+          const data = asRecord(root?.data);
+          const item = asRecord(data?.item) ?? data ?? root;
+          return item ? extractParsedSubagentIdentityHints(item) : [];
+        }),
+      );
+      subagentIdentityDirectoryByActivities.set(activities, nextDirectory);
+      return nextDirectory;
     })();
-  const providerThreadId = providerThreadIdForThread({
-    threadId: input.thread.id,
-    parentThreadId,
-  });
-  const agentId = normalizeWhitespace(input.thread.subagentAgentId);
-  const resolved = resolveSubagentIdentityFromDirectory(identityIndex.directory, {
-    providerThreadId,
-    agentId,
+  const resolved = resolveSubagentIdentityFromDirectory(identityDirectory, {
+    providerThreadId: providerThreadIdForThread({
+      threadId: input.thread.id,
+      parentThreadId,
+    }),
+    agentId: input.thread.subagentAgentId ?? null,
   });
 
   if (!resolved) {
     return null;
   }
 
-  const resolvedAgentId = agentId ?? normalizeWhitespace(resolved.agentId);
-  const resolvedProviderThreadId = normalizeWhitespace(resolved.providerThreadId);
   return {
     nickname: normalizeWhitespace(resolved.nickname),
     role: normalizeRole(resolved.role),
-    promptLabel:
-      identityIndex.firstPromptByProviderThreadId.get(providerThreadId) ??
-      (resolvedProviderThreadId
-        ? identityIndex.firstPromptByProviderThreadId.get(resolvedProviderThreadId)
-        : undefined) ??
-      (resolvedAgentId ? identityIndex.firstPromptByAgentId.get(resolvedAgentId) : undefined) ??
-      subagentPromptLabel(resolved.prompt),
   };
 }
 
-// "Subagent N": the child's 1-based position among threads sharing its parent,
-// ordered by creation time then id. Null when the thread list does not include
-// the child itself, since siblings cannot be counted reliably then.
-function resolveSubagentSiblingLabel(input: {
-  thread: Pick<SubagentThreadLike, "id" | "parentThreadId">;
-  threads: ReadonlyArray<SubagentThreadLike>;
-}): string | null {
-  const parentThreadId = normalizeWhitespace(input.thread.parentThreadId);
-  if (!parentThreadId) {
-    return null;
-  }
-  let siblingIdsByParent = siblingThreadIdsByThreads.get(input.threads);
-  if (!siblingIdsByParent) {
-    siblingIdsByParent = new Map();
-    siblingThreadIdsByThreads.set(input.threads, siblingIdsByParent);
-  }
-  let siblingIds = siblingIdsByParent.get(parentThreadId);
-  if (!siblingIds) {
-    siblingIds = input.threads
-      .filter((thread) => normalizeWhitespace(thread.parentThreadId) === parentThreadId)
-      .toSorted((left, right) => {
-        const leftCreatedAt = left.createdAt ?? "";
-        const rightCreatedAt = right.createdAt ?? "";
-        if (leftCreatedAt !== rightCreatedAt) {
-          return leftCreatedAt < rightCreatedAt ? -1 : 1;
-        }
-        return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
-      })
-      .map((thread) => thread.id)
-      .filter((id, index, ids) => ids.indexOf(id) === index);
-    siblingIdsByParent.set(parentThreadId, siblingIds);
-  }
-  const index = siblingIds.indexOf(input.thread.id);
-  return index >= 0 ? `${DEFAULT_SUBAGENT_LABEL} ${index + 1}` : null;
-}
-
-function hashLabelSeed(seed: string): number {
+// Stable 32-bit hash for per-subagent picks (accent color, avatar glyph).
+export function hashLabelSeed(seed: string): number {
   let hash = 0;
   for (const character of seed) {
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
@@ -329,9 +222,6 @@ export function resolveSubagentPresentation(input: {
   role?: string | null | undefined;
   title?: string | null | undefined;
   fallbackId?: string | null | undefined;
-  // Shown when no nickname, role, or usable title is known (defaults to
-  // "Subagent"); fallbackId only seeds the accent color, never the label.
-  placeholderLabel?: string | null | undefined;
 }): SubagentPresentation {
   const explicitNickname = normalizeWhitespace(input.nickname);
   const explicitRole = suppressWorkerTierRole(normalizeRole(input.role));
@@ -348,14 +238,10 @@ export function resolveSubagentPresentation(input: {
   const nickname = explicitNickname ?? parsedTitleNickname;
   const role = explicitRole ?? parsedTitleRole;
   const resolvedTitle = parsedTitleNickname ? null : titleLabel;
-  const identityLabel = nickname ?? resolvedTitle ?? capitalizeRoleLabel(role);
-  const primaryLabel =
-    identityLabel ?? normalizeWhitespace(input.placeholderLabel) ?? DEFAULT_SUBAGENT_LABEL;
+  const normalizedFallbackId = normalizeWhitespace(input.fallbackId);
+  const fallbackLabel = fallbackSubagentLabel(normalizedFallbackId) ?? "Subagent";
+  const primaryLabel = nickname ?? resolvedTitle ?? capitalizeRoleLabel(role) ?? fallbackLabel;
   const fullLabel = role && nickname ? `${nickname} [${role}]` : primaryLabel;
-  // Anonymous rows keep the color their provider id always seeded, so siblings
-  // sharing a placeholder label stay distinguishable.
-  const accentSeed =
-    identityLabel ?? fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ?? primaryLabel;
 
   return {
     primaryLabel,
@@ -363,7 +249,7 @@ export function resolveSubagentPresentation(input: {
     role,
     title: resolvedTitle,
     fullLabel,
-    accentColor: subagentAccentColor(accentSeed),
+    accentColor: subagentAccentColor(nickname ?? primaryLabel),
   };
 }
 
@@ -382,15 +268,11 @@ export function resolveSubagentPresentationForThread(input: {
         })
       : null;
 
-  const threads = input.threads;
   return resolveSubagentPresentation({
     nickname: input.thread.subagentNickname ?? derivedIdentity?.nickname,
     role: input.thread.subagentRole ?? derivedIdentity?.role,
     title: input.thread.title,
     fallbackId: input.thread.id,
-    placeholderLabel:
-      derivedIdentity?.promptLabel ??
-      (threads ? resolveSubagentSiblingLabel({ thread: input.thread, threads }) : null),
   });
 }
 
@@ -498,9 +380,9 @@ export function subagentStatusTextToneClassName(
 ): string {
   switch (statusKind) {
     case "running":
-      return "text-sky-300/85";
+      return "text-sky-600 dark:text-sky-300/85";
     case "failed":
-      return "text-rose-300/85";
+      return "text-rose-600 dark:text-rose-300/85";
     default:
       return "text-muted-foreground/55";
   }

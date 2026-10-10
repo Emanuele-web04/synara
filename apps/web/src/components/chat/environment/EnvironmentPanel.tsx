@@ -62,6 +62,8 @@ import {
   type EnvironmentSidechatPanelItem,
 } from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentSubagentsSection } from "./EnvironmentSubagentsSection";
+import type { EnvironmentSubagentRoster } from "./EnvironmentSubagentsSection.logic";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
@@ -119,6 +121,11 @@ export interface EnvironmentPanelProps {
   threadAutomations: readonly EnvironmentAutomationPanelItem[];
   /** Child side chats for a host thread. Null suppresses the section in embedded side chats. */
   sidechats: readonly EnvironmentSidechatPanelItem[] | null;
+  /**
+   * Every subagent the thread (or, from a subagent thread, its parent) spawned. The panel
+   * shows a compact summary that opens the full list in the right dock. Null hides it.
+   */
+  subagentRoster?: EnvironmentSubagentRoster | null;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
@@ -225,6 +232,7 @@ export function EnvironmentPanel({
   diffOpen,
   threadAutomations,
   sidechats,
+  subagentRoster: subagentRosterProp,
   diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
@@ -255,6 +263,7 @@ export function EnvironmentPanel({
   const groupFolderPath = groupFolderPathProp ?? null;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const recap = recapProp ?? null;
+  const subagentRoster = subagentRosterProp ?? null;
   const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -426,6 +435,16 @@ export function EnvironmentPanel({
                     : "An error occurred while deleting the side chat.",
               });
             });
+          }}
+        />
+      ) : null}
+
+      {settings.showEnvironmentSubagents && subagentRoster && activeThreadId ? (
+        <EnvironmentSubagentsSection
+          roster={subagentRoster}
+          onOpenList={() => {
+            openRightDockPane(activeThreadId, { kind: "subagents" });
+            onClose();
           }}
         />
       ) : null}
