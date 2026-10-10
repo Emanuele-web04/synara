@@ -243,12 +243,22 @@ layer("AgentProfileService", (it) => {
     }),
   );
 
-  it.effect("rejects a cli-basic profile created with an endpoint launch via the schema", () =>
+  it.effect("rejects malformed CLI creation before persisting and accepts matching framing", () =>
     Effect.gen(function* () {
       const service = yield* AgentProfileService;
-      // createProfile receives already-decoded input, so the schema rejection
-      // lives at the create-input decode boundary (verified in contracts). Here
-      // verify the service layer still persists a well-formed cli-basic profile.
+      const before = yield* service.listProfiles();
+      const invalid = yield* service
+        .createProfile({
+          name: "Invalid CLI",
+          displayName: "Invalid CLI",
+          connectorKind: "cli-basic",
+          launch: { kind: "command", command: "plain-cli", frameMode: "ndjson" },
+          credentialRefs: [],
+          provenance: { source: "manual" },
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(invalid.code, "invalid-connector-mapping");
+      assert.deepEqual(yield* service.listProfiles(), before);
       const created = yield* service.createProfile({
         name: "Basic CLI",
         displayName: "Basic CLI",

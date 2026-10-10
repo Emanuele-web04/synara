@@ -33,3 +33,5 @@ Capability evidence is scoped to both profile and revision. Re-certification re-
 ## Verification scope
 
 Tests cover a real local ACP fixture subprocess, streamed item lifecycle, profile mismatch rejection, overlapping-turn rejection, cancellation, profile membership/revert history, draft/queue round-trips, CLI framing limits and UTF-8 failures, migrations, discovery and conformance fixtures. These are synthetic agents. Live third-party agent credentials and a signed macOS build have not been exercised.
+
+Discovery's in-process memo expires after one minute, including missing binaries and registry outages; the registry client still owns its 24-hour network cache. CLI tests also run real synthetic subprocesses: explicit failures and premature EOF stay failed, foreign turn IDs cannot settle or add content to another turn, and a process-exit-completed basic session cannot be reused. The contracts RPC group uses explicit type references so packaged declaration emission does not exceed TypeScript's inferred-type serialization limit.

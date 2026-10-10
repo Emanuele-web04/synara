@@ -46,7 +46,10 @@ export interface DiscoveryOptions {
   readonly customCommands?: ReadonlyArray<string>;
 }
 
+export const DISCOVERY_MEMO_TTL_MS = 60_000;
+
 export interface DiscoveryServiceOptions {
+  readonly now?: () => number;
   /**
    * Recipe overlay (agentId → recipe) used to stamp compatibility onto
    * registry entries and demote `listed: false` agents (AC #5). Defaults to
@@ -161,11 +164,11 @@ export const makeDiscoveryService = (serviceOptions: DiscoveryServiceOptions = {
     const registryClient = yield* AcpRegistryClient;
     const recipes = serviceOptions.recipes ?? RECIPE_BY_AGENT_ID;
 
-    // C6b admission: recipe version-probe results and the registry catalog are
-    // memoized for the lifetime of this service instance, so a resolve that
-    // re-runs `listCandidates` does not re-probe binaries or re-read/re-decode
-    // the registry document it already has. Cross-instance freshness stays
-    // governed by the registry client's 24h TTL cache.
+    // Avoid re-probing on every picker render, but never cache missing binaries
+    // or registry outages for the lifetime of a long-running server. The
+    // registry client remains responsible for its 24-hour network cache.
+    const now = serviceOptions.now ?? Date.now;
+    let memoStartedAt: number | undefined;
     const recipeResolutionMemo = new Map<string, BinaryRecipeResolution>();
     let registryMemo:
       | {
@@ -179,6 +182,16 @@ export const makeDiscoveryService = (serviceOptions: DiscoveryServiceOptions = {
 
     const listCandidates: DiscoveryServiceShape["listCandidates"] = (options) =>
       Effect.gen(function* () {
+        const currentTime = now();
+        if (
+          memoStartedAt === undefined ||
+          currentTime < memoStartedAt ||
+          currentTime - memoStartedAt >= DISCOVERY_MEMO_TTL_MS
+        ) {
+          recipeResolutionMemo.clear();
+          registryMemo = undefined;
+          memoStartedAt = currentTime;
+        }
         const candidates: ConnectionCandidate[] = [];
         const invalidCustomCandidates: InvalidCustomCandidate[] = [];
         let order = 0;

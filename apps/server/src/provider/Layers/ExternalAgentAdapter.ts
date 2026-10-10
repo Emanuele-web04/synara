@@ -235,6 +235,7 @@ interface ExternalAgentSessionContext {
    * Undefined for ACP sessions and between turns.
    */
   cliTurnDeferred: Deferred.Deferred<ExternalCliTurnResult, Error> | undefined;
+  cliStreamEnded: boolean;
   stopped: boolean;
 }
 
@@ -502,6 +503,7 @@ function forkExternalCliNotificationFiber(input: {
   }>;
   readonly logNative: (threadId: ThreadId, method: string, payload: unknown) => Effect.Effect<void>;
   readonly lifecycleGeneration: string | undefined;
+  readonly onIdleStreamEnd: () => Effect.Effect<void>;
 }): Effect.Effect<Fiber.Fiber<void, never>, never, never> {
   const { ctx, sessionScope, offerRuntimeEvent, makeEventStamp } = input;
   // This fiber is only forked for CLI sessions; narrow the runtime once. The
@@ -521,6 +523,7 @@ function forkExternalCliNotificationFiber(input: {
   // and fails rather than inventing a successful terminal event.
   const settleOnStreamEnd = (): Effect.Effect<void> =>
     Effect.gen(function* () {
+      ctx.cliStreamEnded = true;
       const deferred = ctx.cliTurnDeferred;
       if (deferred !== undefined) {
         ctx.cliTurnDeferred = undefined;
@@ -544,6 +547,7 @@ function forkExternalCliNotificationFiber(input: {
           Effect.catchCause(() => Effect.void),
         );
       }
+      if (ctx.activeTurnId === undefined) yield* input.onIdleStreamEnd();
     });
 
   return Stream.runDrain(
@@ -569,6 +573,8 @@ function forkExternalCliNotificationFiber(input: {
         }
         if (event._tag === "structured") {
           const structured = event.event;
+          if (structured.type !== "session.hello" && structured.turnId !== String(ctx.activeTurnId))
+            return;
           if (
             structured.type === "turn.completed" ||
             structured.type === "turn.failed" ||
@@ -583,7 +589,11 @@ function forkExternalCliNotificationFiber(input: {
                   : structured.type === "turn.cancelled"
                     ? "cancelled"
                     : null;
-              yield* Deferred.succeed(deferred, { stopReason }).pipe(
+              yield* (
+                structured.type === "turn.failed"
+                  ? Deferred.fail(deferred, new Error(structured.message))
+                  : Deferred.succeed(deferred, { stopReason })
+              ).pipe(
                 Effect.asVoid,
                 Effect.catchCause(() => Effect.void),
               );
@@ -1307,6 +1317,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
             sessionUpdatesProcessed: 0,
             latestSessionCostUsd: undefined,
             cliTurnDeferred: undefined,
+            cliStreamEnded: false,
             stopped: false,
           };
 
@@ -1320,6 +1331,8 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                   makeEventStamp,
                   logNative,
                   lifecycleGeneration: input.lifecycleGeneration,
+                  onIdleStreamEnd: () =>
+                    stopSessionInternal(ctx).pipe(Effect.forkIn(adapterScope), Effect.asVoid),
                 })
               : yield* Stream.runDrain(
                   Stream.mapEffect(ctx.runtime.acp.getEvents(), (event) =>
@@ -1661,7 +1674,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
             .map((part) => (part.type === "text" ? part.text : ""))
             .filter((text) => text.length > 0)
             .join("\n");
-          if (ctx.stopped) {
+          if (ctx.stopped || ctx.cliStreamEnded) {
             return yield* new ProviderAdapterSessionNotFoundError({
               provider: PROVIDER,
               threadId: input.threadId,
@@ -1818,6 +1831,12 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                       ...completedCost,
                     },
                   });
+                  if (ctx.cliStreamEnded) {
+                    yield* stopSessionInternal(ctx).pipe(
+                      Effect.forkIn(adapterScope),
+                      Effect.asVoid,
+                    );
+                  }
                 }),
             }),
             Effect.onInterrupt(() =>
@@ -1932,14 +1951,14 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
     const listSessions: ExternalAgentAdapterShape["listSessions"] = () =>
       Effect.sync(() =>
         Array.from(sessions.values())
-          .filter((ctx) => !ctx.stopped)
+          .filter((ctx) => !ctx.stopped && !ctx.cliStreamEnded)
           .map((ctx) => ctx.session),
       );
 
     const hasSession: ExternalAgentAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => {
         const ctx = sessions.get(threadId);
-        return ctx !== undefined && !ctx.stopped;
+        return ctx !== undefined && !ctx.stopped && !ctx.cliStreamEnded;
       });
 
     const readThread: ExternalAgentAdapterShape["readThread"] = (threadId) =>
