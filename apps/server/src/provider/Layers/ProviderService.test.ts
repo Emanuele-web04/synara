@@ -6638,6 +6638,203 @@ manualIdleCleanup.layer("ProviderServiceLive manual idle cleanup", (it) => {
 
 const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
+  it.effect("rearms existing idle timers and remembers idle runtimes while disabled", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-timeout-settings");
+      const configure = provider.configureRuntimeIdleStopMs;
+      assert.ok(configure);
+      yield* Effect.gen(function* () {
+        idleCleanup.codex.stopSession.mockClear();
+        const session = yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("idle-timeout-settings-completed"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
+        );
+        configure(300);
+        yield* sleep(150);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        configure(0);
+        yield* sleep(350);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        configure(40);
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "provider.stopRuntimeSession",
+              ),
+            ),
+        );
+        assert.deepEqual(idleCleanup.codex.stopSession.mock.calls, [[threadId]]);
+        assert.deepEqual(
+          Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor,
+          session.resumeCursor,
+        );
+        yield* provider.stopSession({ threadId });
+      }).pipe(Effect.ensuring(Effect.sync(() => configure(undefined))));
+    }),
+  );
+
+  it.effect("does not rearm busy or preparing runtimes when the idle timeout changes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-settings-busy");
+      const configure = provider.configureRuntimeIdleStopMs;
+      assert.ok(configure);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        configure(0);
+        idleCleanup.codex.stopSession.mockClear();
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("idle-settings-before-busy"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
+        );
+        const sendTurn = idleCleanup.codex.sendTurn.getMockImplementation()!;
+        idleCleanup.codex.sendTurn.mockImplementationOnce((input) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(sendTurn(input)),
+          ),
+        );
+        const sending = yield* provider
+          .sendTurn({ threadId, input: "Preparing a turn" })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        configure(30);
+        yield* sleep(70);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(sending);
+        configure(0);
+        configure(20);
+        yield* sleep(60);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        yield* provider.stopSession({ threadId });
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(release, undefined).pipe(
+            Effect.andThen(Effect.sync(() => configure(undefined))),
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect("invalidates a fired idle probe on disable without retiring a later timer", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-settings-fired-probe");
+      const configure = provider.configureRuntimeIdleStopMs;
+      assert.ok(configure);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        idleCleanup.codex.stopSession.mockClear();
+        const session = yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        idleCleanup.codex.listSessions
+          .mockImplementationOnce(() => Effect.succeed([session]))
+          .mockImplementationOnce(() =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as([session]),
+            ),
+          );
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("idle-settings-fired-probe-completed"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        yield* Deferred.await(entered);
+        configure(0);
+        yield* Deferred.succeed(release, undefined);
+        yield* sleep(150);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        assert.equal(
+          Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+          before.lifecycleGeneration,
+        );
+        configure(undefined);
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "provider.stopRuntimeSession",
+              ),
+            ),
+        );
+        assert.deepEqual(idleCleanup.codex.stopSession.mock.calls, [[threadId]]);
+        yield* provider.stopSession({ threadId });
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(release, undefined).pipe(
+            Effect.andThen(Effect.sync(() => configure(undefined))),
+          ),
+        ),
+      );
+    }),
+  );
+
   it.effect("retries failed idle teardown after a delayed session exit notification", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -6674,6 +6871,8 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       });
       yield* waitUntil(() => idleCleanup.codex.stopSession.mock.calls.length === 1);
       yield* sleep(30);
+      // Disabling future idle cleanup must not abandon already-owned descendant cleanup.
+      provider.configureRuntimeIdleStopMs!(0);
       idleCleanup.codex.emit({
         type: "session.exited",
         eventId: asEventId("runtime-idle-delayed-exit"),
@@ -6707,7 +6906,13 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
           ),
       );
       yield* provider.stopSession({ threadId });
-    }),
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          (yield* ProviderService).configureRuntimeIdleStopMs!(undefined);
+        }),
+      ),
+    ),
   );
 
   it.effect("cancels a pending idle cleanup retry when new user work starts", () =>
@@ -7805,6 +8010,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-idle-failed-dispatch");
+      provider.configureRuntimeIdleStopMs!(0);
       const dispatchFailure = new ProviderAdapterSessionNotFoundError({
         provider: "codex",
         threadId,
@@ -7858,6 +8064,9 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       );
       assertFailure(failedTurn, dispatchFailure);
 
+      yield* sleep(150);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+      provider.configureRuntimeIdleStopMs!(undefined);
       yield* waitUntil(
         () => idleCleanup.codex.stopSession.mock.calls.length > 0,
         500,
@@ -7865,7 +8074,13 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         "idle runtime stop after failed dispatch",
       );
       assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
-    }),
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          (yield* ProviderService).configureRuntimeIdleStopMs!(undefined);
+        }),
+      ),
+    ),
   );
 });
 

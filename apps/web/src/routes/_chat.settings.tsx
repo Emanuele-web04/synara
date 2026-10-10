@@ -5,6 +5,7 @@
 
 import {
   type DesktopAudioInputDevice,
+  MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type SidechatExpiry,
@@ -31,6 +32,7 @@ import {
   MIN_TERMINAL_FONT_SIZE_PX,
   defaultDesktopAppIconForFlavor,
   normalizeChatFontSizePx,
+  normalizeProviderRuntimeIdleStopMinutes,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
   isGitTextGenerationSettingsDirty,
@@ -502,6 +504,9 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.providerRuntimeIdleStopMinutes !== defaults.providerRuntimeIdleStopMinutes
+      ? ["Stop idle agent processes"]
+      : []),
     ...(settings.collapseFinishedTurns !== defaults.collapseFinishedTurns
       ? ["Fold finished turns"]
       : []),
@@ -750,6 +755,48 @@ function SettingsRouteView() {
           resetLabel: "move sent messages to top",
           ariaLabel: "Move sent messages to top",
         })}
+
+        <SettingsRow
+          title="Stop idle agent processes after"
+          description="Release idle agent processes to free memory; the next message resumes the session. Use 0 to keep them running, or leave empty for the server default."
+          resetAction={
+            settings.providerRuntimeIdleStopMinutes !== defaults.providerRuntimeIdleStopMinutes ? (
+              <SettingResetButton
+                label="idle agent stop"
+                onClick={() =>
+                  updateSettings({
+                    providerRuntimeIdleStopMinutes: defaults.providerRuntimeIdleStopMinutes,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              <Input
+                type="number"
+                size="sm"
+                min={0}
+                max={MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES}
+                step={1}
+                inputMode="numeric"
+                variant="soft"
+                className="w-full text-right sm:w-28"
+                placeholder="Default"
+                value={settings.providerRuntimeIdleStopMinutes ?? ""}
+                onChange={(event) => {
+                  const value = event.target.value.trim();
+                  updateSettings({
+                    providerRuntimeIdleStopMinutes:
+                      value === "" ? null : normalizeProviderRuntimeIdleStopMinutes(Number(value)),
+                  });
+                }}
+                aria-label="Stop idle agent processes after minutes"
+              />
+              <span className="text-ui leading-snug text-muted-foreground">minutes</span>
+            </div>
+          }
+        />
 
         <SettingsRow
           title="Welcome tour"

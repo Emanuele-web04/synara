@@ -1,8 +1,8 @@
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
 import http from "node:http";
 
-import type { ServerSettingsError } from "@synara/contracts";
-import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
+import type { ServerSettings, ServerSettingsError } from "@synara/contracts";
+import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -49,7 +49,7 @@ import { ProviderService, type ProviderServiceShape } from "./provider/Services/
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { KeepAwakeService } from "./keepAwake";
-import { ServerSettingsService } from "./serverSettings";
+import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
 import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
 import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
@@ -162,6 +162,25 @@ export function startServerRuntimePipeline<R>(input: {
   });
 }
 
+export function startProviderRuntimeIdleStopSettings(input: {
+  readonly serverSettings: Pick<ServerSettingsShape, "getSettings" | "subscribeChanges">;
+  readonly providerService: Pick<ProviderServiceShape, "configureRuntimeIdleStopMs">;
+}): Effect.Effect<void, ServerSettingsError, Scope.Scope> {
+  const configure = input.providerService.configureRuntimeIdleStopMs;
+  if (!configure) return Effect.void;
+  const apply = (settings: ServerSettings) =>
+    Effect.sync(() => {
+      const minutes = settings.providerRuntimeIdleStopMinutes;
+      configure(minutes == null ? undefined : minutes * 60_000);
+    });
+  return Effect.gen(function* () {
+    // Attach before reading the snapshot so an update during startup is retained.
+    const changes = yield* input.serverSettings.subscribeChanges;
+    yield* apply(yield* input.serverSettings.getSettings);
+    yield* Stream.runForEach(changes, apply).pipe(Effect.forkScoped);
+  });
+}
+
 export const createEffectServer = Effect.fn(function* (
   shutdownController: ServerShutdownController,
 ) {
@@ -204,6 +223,7 @@ export const createEffectServer = Effect.fn(function* (
     ),
   );
   yield* serverSettings.start;
+  yield* startProviderRuntimeIdleStopSettings({ serverSettings, providerService });
   yield* readiness.markPushBusReady;
   yield* readiness.markKeybindingsReady;
 
