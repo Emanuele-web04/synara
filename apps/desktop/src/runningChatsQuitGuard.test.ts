@@ -74,7 +74,7 @@ describe("running chats quit guard", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("allows quit when the renderer reports no running chats", async () => {
+  it("waits for an explicit decision even when no chats are running", async () => {
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const send = vi.fn();
     const decision = guard.askRenderer({
@@ -83,6 +83,9 @@ describe("running chats quit guard", () => {
     });
 
     expect(send).toHaveBeenCalledWith({ requestId: "q1", presentation: "in-app" });
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 0, chats: [] });
+    expect(guard.hasPendingAsk()).toBe(true);
+    expect(guard.hasAllowedQuit()).toBe(false);
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
     await expect(decision).resolves.toBe(true);
     expect(guard.hasAllowedQuit()).toBe(true);
@@ -151,6 +154,30 @@ describe("running chats quit guard", () => {
     await vi.advanceTimersByTimeAsync(200);
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
     await expect(decision).resolves.toBe(false);
+  });
+
+  it("allows a pending ask when the renderer dies mid-confirmation, without latching", async () => {
+    const requestIds = ["q1", "q2"];
+    const guard = makeRunningChatsQuitGuard(() => requestIds.shift() ?? "unexpected");
+    const first = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+    });
+    expect(guard.hasPendingAsk()).toBe(true);
+
+    // The renderer hosting the ask is gone — the quit it was part of must
+    // proceed, but no user said yes, so the allowed latch must not set.
+    guard.allowPending();
+
+    await expect(first).resolves.toBe(true);
+    expect(guard.hasPendingAsk()).toBe(false);
+    expect(guard.hasAllowedQuit()).toBe(false);
+
+    const send = vi.fn();
+    const second = guard.askRenderer({ send, isRendererAvailable: () => true });
+    expect(send).toHaveBeenCalledWith({ requestId: "q2", presentation: "in-app" });
+    guard.receiveResponse({ requestId: "q2", phase: "decision", allow: true });
+    await expect(second).resolves.toBe(true);
   });
 
   it("cancels a pending decision when the renderer is replaced and can prompt again", async () => {

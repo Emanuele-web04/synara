@@ -1,0 +1,96 @@
+name: Cua native checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cua-native-check.yml"
+      - "apps/desktop/patches/cua-driver/**"
+      - "apps/desktop/src/cuaDriverHost*"
+      - "packages/shared/src/cuaDriver*"
+      - "packages/shared/src/cuaActionDiagnostics*"
+  push:
+    branches: ["codex/cua-verify-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cua-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: macOS native compilation
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      CUA_DRIVER_RS_TELEMETRY_ENABLED: "0"
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      CARGO_PROFILE_DEV_STRIP: none
+      CARGO_PROFILE_TEST_STRIP: none
+      # The pinned apple-metal Swift bridge needs the macOS 15 SDK.
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare the pinned native source and compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=packages/shared/src/cuaDriverRelease.json
+          source_commit=$(jq -r .source "$release")
+          rust_version=$(jq -r .rustVersion "$release")
+          patch_file="$GITHUB_WORKSPACE/apps/desktop/patches/cua-driver/0001-synara-native.patch"
+          expected=$(jq -r .patchSha256 "$release")
+          actual=$(shasum -a 256 "$patch_file" | cut -d ' ' -f 1)
+          test "$actual" = "$expected"
+          rustup toolchain install "$rust_version" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
+          native_source="$RUNNER_TEMP/cua-native-source"
+          git init "$native_source"
+          git -C "$native_source" fetch --depth=1 https://github.com/trycua/cua.git "$source_commit"
+          git -C "$native_source" checkout --detach FETCH_HEAD
+          test "$(git -C "$native_source" rev-parse HEAD)" = "$source_commit"
+          git -C "$native_source" apply --check "$patch_file"
+          git -C "$native_source" apply "$patch_file"
+          echo "CUA_NATIVE_SOURCE=$native_source" >> "$GITHUB_ENV"
+
+      - name: Compile all macOS native tests
+        run: cargo check --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p platform-macos --tests
+
+      - name: Run focus restoration and compact cursor regressions
+        run: |
+          cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p platform-macos --lib focus_restore_policy
+          cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cursor-overlay --lib compact
+
+  runtime:
+    name: macOS host IPC and computer lifecycle
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+
+      - name: Run host IPC and diagnostic regressions
+        run: |
+          bun run --cwd apps/desktop test src/cuaDriverHost.test.ts
+          bun run --cwd packages/shared test src/cuaActionDiagnostics.test.ts
+
+      - name: Run computer lifecycle and delivery regressions
+        run: >-
+          bun run --cwd apps/server test
+          src/computer/ComputerManager.test.ts
+          src/computer/ComputerManager.spaces.test.ts
+          src/computer/CuaComputerBackend.test.ts
+          src/computer/computerAuditLog.test.ts
+          src/computer/computerLockResume.test.ts
+          src/agentGateway/computerTools.test.ts
+          src/agentGateway/computerTools.menusFrames.test.ts
+          src/orchestration/Layers/ProviderRuntimeIngestion.test.ts

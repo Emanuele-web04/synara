@@ -9,7 +9,23 @@
      share frames instead of repeatedly recompositing the translucent sidebar
      and composer. Keep 1300ms / 26 steps equal to shimmer's 2000ms / 40 steps. */
   --animate-spin-stepped: spin-stepped 1.3s steps(26, end) infinite;
+  /* Same 50ms step, half the speed: background work that keeps going without you. */
+  --animate-spin-stepped-slow: spin-stepped 2.6s steps(52, end) infinite;
   --font-sans: var(--font-ui-family);
+  /* Font sizes that follow the size chosen in Settings (useAppTypography). */
+  --text-ui: var(--app-font-size-ui);
+  --text-ui-lg: var(--app-font-size-ui-lg);
+  /* A page's lede and headline figures: one step above ui-lg, still scaled by Settings. */
+  --text-ui-xl: calc(var(--app-font-size-ui-lg) * 1.3);
+  --text-ui-sm: var(--app-font-size-ui-sm);
+  --text-ui-xs: var(--app-font-size-ui-xs);
+  --text-ui-2xs: var(--app-font-size-ui-2xs);
+  --text-ui-meta: var(--app-font-size-ui-meta);
+  --text-ui-timestamp: var(--app-font-size-ui-timestamp);
+  --text-chat: var(--app-font-size-chat);
+  --text-chat-code: var(--app-font-size-chat-code);
+  --text-chat-meta: var(--app-font-size-chat-meta);
+  --text-chat-tiny: var(--app-font-size-chat-tiny);
   --font-display: var(--font-display-family);
   --font-mono: var(--font-mono-family);
   --color-warning-foreground: var(--warning-foreground);
@@ -81,7 +97,9 @@
   }
   body {
     @apply text-foreground relative;
-    background: var(--app-shell-background, transparent);
+    /* `--app-window-background` is the single translucent coat when the whole window is
+       glass (see theme.logic); otherwise it matches the shell background. */
+    background: var(--app-window-background, var(--app-shell-background, transparent));
   }
   :root {
     /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
@@ -109,14 +127,6 @@
     background: var(--color-background-button-secondary-hover);
   }
 
-  /* Let the renderer switch between Codex-style translucent and opaque shells
-     without duplicating sidebar markup or class strings. */
-  .app-sidebar-surface {
-    background: var(--app-sidebar-surface, var(--card));
-    -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
-    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
-  }
-
   /* Small circular icon badges that sit directly on the sidebar surface inside
      thread rows — the meta-chip stack, the handoff provider avatar, the terminal
      count badge. They take the SAME material as the sidebar (translucent or
@@ -125,10 +135,17 @@
      visually separated. Ring + shadow are one box-shadow so they don't affect
      layout. */
   .sidebar-icon-chip {
-    background: var(--app-sidebar-surface, var(--card));
+    background: var(--app-sidebar-chip-surface, var(--app-sidebar-surface, var(--card)));
     box-shadow:
       0 0 0 1px var(--sidebar-border),
       0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+
+  /* Route content surface (chat column, route wrappers, dock body). Opaque, unless the
+     whole window is translucent: then it goes clear and the body's single glass coat shows
+     through, so nested route surfaces never stack the fill. */
+  .app-content-surface {
+    background: var(--app-content-surface, var(--color-background-surface));
   }
 
   /* ─── Content seam (sidebar ↔ route divider) ──────────────────────────────────
@@ -183,6 +200,66 @@
   [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
     .chat-content-card::before {
     opacity: 0;
+  }
+
+  /* Rail layout, modeled on Codex. Three tones: the shell (top band + rail) is the lightest
+     in dark and a soft grey in light, the thread panel sits a step toward the surface, and
+     the route body is the surface itself. Panel, route body, and right dock form one inset
+     block under the top band: a hairline border, rounded corners, and a
+     small shell gap to the window's right and bottom edges. Route headers keep rendering
+     their titles and actions, now on the shell band above the block. */
+  [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 97%, black);
+    --app-rail-panel-background: var(--color-background-surface);
+    --app-rail-shell-background: color-mix(
+      in srgb,
+      var(--app-rail-shell-tone) var(--app-rail-shell-opacity, 100%),
+      transparent
+    );
+    /* Real CSS borders at 0.5px (one device pixel on Retina): per-side inset shadows would
+       overlap on the rounded corners and draw them thicker than the straight edges. */
+    --app-rail-inset-border-width: 0.5px;
+    --app-rail-inset-border: color-mix(in srgb, black 10%, transparent);
+    --app-rail-inset-radius: calc(var(--radius) * 1.3);
+    --app-rail-inset-gap: 3px;
+  }
+
+  .dark [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 95%, white);
+    --app-rail-panel-background: color-mix(in srgb, var(--color-background-surface) 98.3%, white);
+    --app-rail-inset-border: color-mix(in srgb, white 9%, transparent);
+  }
+
+  /* The panel is the block's left end: border on its outer three sides only. */
+  .app-rail-panel {
+    margin-bottom: var(--app-rail-inset-gap);
+    background: var(--app-rail-panel-background);
+    border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+    border-right-width: 0;
+    border-radius: var(--app-rail-inset-radius) 0 0 var(--app-rail-inset-radius);
+  }
+
+  /* No sidebar material sits behind the rail layout's rows, so chips take the panel tone. */
+  [data-sidebar-layout="rail"] .sidebar-icon-chip {
+    background: var(--app-rail-panel-background);
+  }
+
+  /* Whole-window glass: the rail layout's panel and chips share the body's coat instead of
+     painting their own tones over it. */
+  :root[data-window-translucency="window"] [data-sidebar-layout="rail"] {
+    --app-rail-panel-background: transparent;
+    /* The card the active tab normally matches is clear, so the tab takes the raised tint
+       the composer and the docked panels use, and reads lighter than the coat. */
+    --app-rail-tab-active-surface: var(--app-glass-raised-surface);
+  }
+
+  /* Dark: the raised tint is darker than the coat, so the tab keeps a light ink tint. */
+  :root.dark[data-window-translucency="window"] [data-sidebar-layout="rail"] {
+    --app-rail-tab-active-surface: color-mix(in srgb, var(--foreground) 8%, transparent);
+  }
+
+  :root[data-window-translucency="window"] [data-sidebar-layout="rail"] .sidebar-icon-chip {
+    background: var(--app-sidebar-chip-surface);
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
@@ -243,11 +320,40 @@
 
 .chat-pane-enter {
   animation: chat-pane-enter 140ms ease-out;
-  will-change: opacity;
+  /* Keeps the pane's stacking context without a standing `will-change: opacity`: that made
+     the pane a backdrop root, so the composer's blur sampled an empty layer instead of the
+     surface behind the pane and rendered as a dark slab on a glass window. */
+  isolation: isolate;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .chat-pane-enter {
+    animation: none;
+  }
+}
+
+/* The composer model trigger swaps to a fixed placeholder while its menu is open; this
+   plays on the model label when it comes back. */
+@keyframes composer-trigger-label-enter {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+.composer-trigger-label-enter {
+  animation: composer-trigger-label-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-trigger-label-enter {
     animation: none;
   }
 }
@@ -269,8 +375,10 @@
 }
 
 .sidebar-surface-enter {
-  animation: sidebar-surface-enter 160ms ease-out both;
-  will-change: opacity, transform;
+  /* Fill `backwards`, not `both`, and no `will-change`: a retained transform or standing
+     hint keeps the sidebar list on its own layer, which Chromium does not re-rasterize
+     after a display-scale change, so its text stays blurry until restart. */
+  animation: sidebar-surface-enter 160ms ease-out backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -381,6 +489,9 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
+  /* Depth of the fade where scrolling content meets an edge (transcript, sidebar
+     panel, ScrollArea `scrollFade`). */
+  --scroll-edge-fade-size: 1.5rem;
   --radius-user-message: 1rem;
   --font-ui-family: var(
     --theme-font-ui-family,
@@ -407,7 +518,13 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
-  --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
+  /* Width of the rail layout's fixed icon column (see AppRail): 36px buttons with 7.5px
+     either side. */
+  --app-rail-width: calc(3.25rem - 1px);
+  /* Short vertical hairline marking a boundary inside a top bar: the rail header divider
+     and the dividers between surface tabs share it so they read as the same mark. */
+  --app-chrome-divider-height: 1.25rem;
+  --app-chrome-divider-color: var(--color-border);
   --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
@@ -454,6 +571,15 @@
   --status-open: var(--color-decoration-added, var(--success));
   --status-merged: var(--color-indigo-500);
   --status-neutral: var(--color-zinc-500);
+  /* Project palette (Edit project → Icons). Same recipe as the status tints: the plain
+     color in light, a step toward white in dark. */
+  --project-red: var(--color-red-500);
+  --project-orange: var(--color-orange-500);
+  --project-yellow: var(--color-yellow-500);
+  --project-green: var(--color-green-500);
+  --project-blue: var(--color-blue-500);
+  --project-purple: var(--color-violet-500);
+  --project-pink: var(--color-pink-500);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -469,6 +595,14 @@
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --claude: #d97757;
+  /* Beta brand: vivid Xcode-blue tile, black Synara mark, white BETA pill.
+     The update pill uses the gradient with white text; the Beta badge
+     uses the white pill with blue ink, mirroring the pill baked into
+     the desktop icon. Stable uses only the pill tokens, on its Beta card. */
+  --beta-gradient: linear-gradient(135deg, #63b3ff 0%, #2e7ff2 55%, #0f5cd6 100%);
+  --beta-accent: #2e7ff2;
+  --beta-pill: #ffffff;
+  --beta-pill-ink: #2e7ff2;
 
   @variant dark {
     color-scheme: dark;
@@ -509,6 +643,13 @@
     );
     --status-merged: color-mix(in srgb, var(--color-indigo-500) 72%, var(--color-white));
     --status-neutral: color-mix(in srgb, var(--color-zinc-500) 72%, var(--color-white));
+    --project-red: color-mix(in srgb, var(--color-red-500) 72%, var(--color-white));
+    --project-orange: color-mix(in srgb, var(--color-orange-500) 72%, var(--color-white));
+    --project-yellow: color-mix(in srgb, var(--color-yellow-400) 80%, var(--color-white));
+    --project-green: color-mix(in srgb, var(--color-green-500) 72%, var(--color-white));
+    --project-blue: color-mix(in srgb, var(--color-blue-500) 72%, var(--color-white));
+    --project-purple: color-mix(in srgb, var(--color-violet-500) 72%, var(--color-white));
+    --project-pink: color-mix(in srgb, var(--color-pink-500) 72%, var(--color-white));
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-primary: var(--primary);
@@ -519,7 +660,6 @@
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
     /* Deepened toward black before thinning: a dense charcoal glass that still lets
        the desktop bleed through rather than a thin dark tint. */
     --app-sidebar-surface: color-mix(
@@ -593,6 +733,19 @@ input {
 .drag-region select,
 .drag-region a {
   -webkit-app-region: no-drag;
+}
+
+/* Chromium does not clip native app regions to scrolling ancestors. Exclude the
+   visible content-tab viewport once, instead of letting offscreen chips and their
+   buttons subtract rectangles from neighboring window chrome. The strip fits its
+   content up to the available width, leaving unused header space draggable. */
+.surface-content-tabs {
+  -webkit-app-region: no-drag;
+}
+
+.surface-content-tabs [data-surface-tab],
+.surface-content-tabs [data-surface-tab] button {
+  -webkit-app-region: initial;
 }
 
 /* Scrollbar styling.
@@ -744,6 +897,29 @@ label:has(> select#reasoning-effort) select {
   cursor: pointer;
 }
 
+/* Transcript markdown opts into native bidi ownership per prose block. Keep
+   list gutters on both inline edges so mixed-direction items cannot push a
+   checkbox or marker outside the message bubble. */
+.chat-markdown[data-direction-mode="auto-blocks"] ul,
+.chat-markdown[data-direction-mode="auto-blocks"] ol {
+  padding-inline: 1.25rem;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-markdown-task-checkbox {
+  margin-inline-start: -1.4em;
+  margin-inline-end: 0.4em;
+}
+
+.chat-markdown-technical-isolate {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .katex {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 .chat-markdown hr {
   margin: 1.5rem 0;
   border: 0;
@@ -838,10 +1014,64 @@ label:has(> select#reasoning-effort) select {
   border-bottom-right-radius: 0;
 }
 
+/* Find highlights can span several text fragments in either writing
+   direction. Reset the physical continuation edges above, then use logical
+   edges for transcript blocks so RTL matches keep their rounded ends. */
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match {
+  padding-inline: 0.2em;
+  border-radius: 0.45em;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-before {
+  padding-inline-start: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-after {
+  padding-inline-end: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
 .chat-markdown blockquote {
   border-left: 2px solid var(--border);
   padding-left: 0.8rem;
   color: var(--muted-foreground);
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] blockquote {
+  border-left: 0;
+  border-inline-start: 2px solid var(--border);
+  padding-left: 0;
+  padding-inline-start: 0.8rem;
+}
+
+/* GitHub `> [!NOTE]` alerts (tagged by remarkGithubAlerts). */
+.chat-markdown blockquote[data-github-alert] {
+  --github-alert-color: var(--info);
+  border-left-width: 3px;
+  border-left-color: var(--github-alert-color);
+  color: var(--foreground);
+}
+.chat-markdown blockquote[data-github-alert="tip"] {
+  --github-alert-color: var(--success);
+}
+.chat-markdown blockquote[data-github-alert="important"] {
+  --github-alert-color: var(--status-merged);
+}
+.chat-markdown blockquote[data-github-alert="warning"] {
+  --github-alert-color: var(--warning);
+}
+.chat-markdown blockquote[data-github-alert="caution"] {
+  --github-alert-color: var(--destructive);
+}
+.chat-markdown .markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  color: var(--github-alert-color);
+  font-weight: 500;
 }
 
 .chat-markdown :not(pre) > code {
@@ -1055,7 +1285,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .editor-file-viewer::-webkit-scrollbar-corner {
-  background: var(--color-background-surface);
+  background: var(--app-code-viewer-surface, var(--color-background-surface));
 }
 
 .editor-file-viewer__plain {
@@ -1244,7 +1474,7 @@ label:has(> select#reasoning-effort) select {
   align-items: center;
   justify-content: center;
   padding: 0;
-  background: var(--color-background-surface);
+  background: var(--app-code-viewer-sticky-surface, var(--color-background-surface));
   cursor: pointer;
 }
 
@@ -1309,7 +1539,7 @@ label:has(> select#reasoning-effort) select {
   height: 1.25rem;
   border-radius: 0.4375rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
-  background: var(--color-background-surface);
+  background: var(--app-code-viewer-sticky-surface, var(--color-background-surface));
 }
 
 /* Borderless request field: it blends into the card so the box reads as one
@@ -1323,7 +1553,7 @@ label:has(> select#reasoning-effort) select {
   /* Override the global `textarea { font-family: mono }` reset — this field is
      UI chrome, not code, so it must use the normal UI font. */
   font-family: var(--font-ui-family);
-  font-size: 13px;
+  font-size: var(--app-font-size-ui-lg, 13px);
   line-height: 1.5;
   color: var(--color-text-foreground);
   outline: none;
@@ -1335,7 +1565,10 @@ label:has(> select#reasoning-effort) select {
 }
 
 .editor-file-viewer--markdown-preview {
-  background: color-mix(in srgb, var(--background) 96%, var(--card));
+  background: var(
+    --app-code-viewer-surface,
+    color-mix(in srgb, var(--background) 96%, var(--card))
+  );
 }
 
 .editor-markdown-preview {
@@ -1563,13 +1796,13 @@ label:has(> select#reasoning-effort) select {
 }
 
 .local-image-error__title {
-  font-size: 0.8rem;
+  font-size: var(--app-font-size-ui, 13px);
   font-weight: 500;
   color: var(--foreground);
 }
 
 .local-image-error__subtitle {
-  font-size: 0.72rem;
+  font-size: var(--app-font-size-ui-sm, 12px);
   color: var(--muted-foreground);
 }
 
@@ -1578,7 +1811,7 @@ label:has(> select#reasoning-effort) select {
   gap: 0.35rem;
   flex: 0 0 auto;
   padding: 0.32rem 0.55rem;
-  font-size: 0.74rem;
+  font-size: var(--app-font-size-ui-sm, 12px);
   font-weight: 500;
 }
 
@@ -1689,13 +1922,13 @@ label:has(> select#reasoning-effort) select {
   padding: 16px;
   text-align: center;
   color: var(--destructive);
-  font-size: 12px;
+  font-size: var(--app-font-size-ui, 13px);
 }
 
 .pdf-viewer-page__error-detail {
   max-width: 90%;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--app-font-size-ui-sm, 12px);
   word-break: break-word;
 }
 
@@ -1785,8 +2018,7 @@ label:has(> select#reasoning-effort) select {
    (dist/tailwind.css `@utility scroll-fade`). Same rationale as the shimmer
    block below — importing the full `shadcn` stylesheet would clash with this
    project's custom theme, so the self-contained scroll-fade block lives here.
-   Applied to the transcript scroll container via `scroll-fade-b` so streamed
-   content dissolves toward the composer and the fade clears at the live edge.
+   The transcript's `scroll-edge-fade` (below) builds on these primitives.
    Scroll-aware through `animation-timeline: scroll()`; the `@property`
    initial-values keep it fade-free when the container is not scrollable, and a
    static-fade `@supports` fallback covers browsers without scroll timelines.
@@ -2220,6 +2452,74 @@ label:has(> select#reasoning-effort) select {
   --scroll-fade-mask: none;
 }
 
+/* Scroll edge fade for app chrome scroll areas (the chat transcript), built on the
+   vendored scroll-fade primitives above. Content dissolves to transparent over
+   `--scroll-edge-fade-size` at the top edge and at the bottom edge — or, when
+   `--scroll-edge-fade-inset-b` is set, at that distance above the bottom edge (the
+   floating composer's top) — so the frosted window material shows through instead
+   of a hard cut. Each edge only fades while content is scrolled past it.
+
+   Top: reuses the vendored `--scroll-fade-t` reveal. Bottom: a 0→1 progress slides
+   the whole fade band down past the viewport as the scroll reaches its end, instead
+   of shrinking it in place, so an inset edge never collapses into a hard step over
+   content still passing under the composer. `--scroll-edge-fade-layer` intersects an
+   extra mask (the composer's footer dissolve) with the edges. It is paint-only (no
+   layout or scroll feedback), so it cannot disturb auto-follow or list measurement.
+   ScrollArea's `scrollFade` reads the same `--scroll-edge-fade-size` token. */
+@property --scroll-edge-fade-b-progress {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@keyframes scroll-edge-fade-reveal-b {
+  from {
+    --scroll-edge-fade-b-progress: 1;
+  }
+  to {
+    --scroll-edge-fade-b-progress: 0;
+  }
+}
+
+@utility scroll-edge-fade {
+  --_scroll-fade-size-t: var(--scroll-edge-fade-size);
+  --_scroll-edge-fade-b-start: calc(
+    100% - (var(--scroll-edge-fade-inset-b, 0px) + var(--scroll-edge-fade-size)) *
+      var(--scroll-edge-fade-b-progress, 0)
+  );
+  --scroll-edge-fade-edges: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 var(--_scroll-edge-fade-b-start),
+    transparent calc(var(--_scroll-edge-fade-b-start) + var(--scroll-edge-fade-size))
+  );
+  -webkit-mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-edge-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-b-progress: 1;
+  }
+}
+
 /* Static end-of-line fade for single-line truncation. Unlike the scroll-fade-*
    family — which reveal/hide the fade based on scroll position and therefore
    need a scrollable container — this is a plain overflow:hidden clip whose
@@ -2257,11 +2557,18 @@ label:has(> select#reasoning-effort) select {
   --truncate-fade-size: --value([length], [percentage]);
 }
 
+/* Match the transcript's animated right inset before revealing its message rail. */
+@property --message-trail-content-inset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 /* Text shimmer utility — vendored verbatim from shadcn 4.12.0
    (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
    imported because it would clash with this project's custom theme, so the
-   self-contained shimmer block lives here instead. Applied on the
-   "Working for …" status line via the `shimmer` class. Provides `shimmer`,
+   self-contained shimmer block lives here instead. Applied on typing and
+   worktree-preparation indicators. Provides `shimmer`,
    `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`,
    `shimmer-color-*`, `shimmer-once`, `shimmer-reverse`, and `shimmer-none`.
    One deliberate deviation: the animation is duty-cycled via `--shimmer-timing`
@@ -2285,9 +2592,11 @@ label:has(> select#reasoning-effort) select {
   @keyframes tw-shimmer {
     from {
       background-position: 100% 0;
+      mask-position: 100% 0;
     }
     to {
       background-position: 0 0;
+      mask-position: 0 0;
     }
   }
 }
@@ -2332,6 +2641,22 @@ label:has(> select#reasoning-effort) select {
   }
 }
 
+/* Mask the whole indicator so SVG strokes shimmer together with its text. */
+@utility shimmer-group {
+  @apply shimmer;
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
+  mask-image: linear-gradient(
+    calc(90deg + var(--shimmer-angle)),
+    #000 calc(50% - var(--_spread)),
+    rgb(0 0 0 / 0.2) 50%,
+    #000 calc(50% + var(--_spread))
+  );
+  mask-repeat: no-repeat;
+  mask-size: calc(200% + var(--_spread) * 2) 100%;
+  mask-position: 0 0;
+}
+
 @utility shimmer-once {
   animation-iteration-count: 1;
 }
@@ -2372,6 +2697,11 @@ label:has(> select#reasoning-effort) select {
     animation: none;
     background-image: none;
     -webkit-text-fill-color: currentColor;
+  }
+
+  .shimmer-group {
+    animation: none;
+    mask-image: none;
   }
 }
 
@@ -2474,14 +2804,17 @@ diffs-container {
 .diff-panel-viewport {
   /* Keep raw patch fallback and any unthemed diff chrome on the coding font stack. */
   font-family: var(--font-chat-code-family);
-  background: color-mix(in srgb, var(--background) 94%, var(--card));
+  background: var(
+    --app-code-viewer-surface,
+    color-mix(in srgb, var(--background) 94%, var(--card))
+  );
 }
 
 .diff-render-file {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   overflow: clip;
-  background: var(--background);
+  background: var(--app-code-viewer-surface, var(--background));
 }
 
 .diff-render-file [data-diffs-header],
@@ -2541,6 +2874,13 @@ diffs-container {
   );
 }
 
+/* Split view: the focused pane is marked by its composer outline alone, tinted toward
+   the accent. Scoped to the composer slot so the pane's other raised chrome keeps the
+   neutral border. */
+[data-split-pane-focused="true"] [data-chat-composer-slot] {
+  --surface-border: color-mix(in srgb, var(--info) 50%, transparent);
+}
+
 /* Composer shell/surface corner geometry — single source of truth so radius
    tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
 :root {
@@ -2560,24 +2900,243 @@ diffs-container {
   padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
 }
 
-/* Composer and user bubbles share continuous corners; their radii remain the fallback.
-   Electron smoothing must not stack with browser corner-shape. */
-:root[data-runtime="electron"] .chat-composer-shell,
-:root[data-runtime="electron"] .chat-composer-surface,
-:root[data-runtime="electron"] .chat-composer-stacked-top,
-:root[data-runtime="electron"] .chat-composer-surface-banner,
-:root[data-runtime="electron"] .chat-user-message-bubble {
-  -electron-corner-smoothing: system-ui;
+/* Rail layout route body (unlayered: it overrides the card's background and height
+   utilities and the seam rules). The card element still spans the header band, so it turns
+   transparent and draws the body from pseudo-elements: ::before is the surface behind the
+   route's content, ::after the hairline above it. Margins leave the right and bottom shell
+   gaps, and the card's own bottom radius with its overflow clip rounds whatever the route
+   paints there (fixed overlays are unaffected). The block's top corners sit under the band,
+   inside the card, so the route wrappers that hold a top bar go transparent (below) and the
+   rounded ::before shows through. The block has no shadow: its edge is the 1px border. */
+[data-sidebar-layout="rail"] {
+  /* Route body corners: square only where the panel joins it. */
+  --app-rail-block-radii: 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius) 0;
+  /* The card's own corners: its top edge is the band, so only the bottom ones round. */
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) 0;
 }
 
-/* Browser: squircle via corner-shape when supported. */
-@supports (corner-shape: squircle) {
-  :root:not([data-runtime="electron"]) .chat-composer-shell,
-  :root:not([data-runtime="electron"]) .chat-composer-surface,
-  :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
-  :root:not([data-runtime="electron"]) .chat-composer-surface-banner,
-  :root:not([data-runtime="electron"]) .chat-user-message-bubble {
-    corner-shape: squircle;
+/* Panel collapsed: the route body is the whole block, so its left corners round too. They
+   wait for the panel to slide most of the way out, so no notch opens beside it meanwhile;
+   opening squares them at once. */
+[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"]) {
+  --app-rail-block-radii: var(--app-rail-inset-radius);
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius);
+  --app-rail-corner-delay: 180ms;
+}
+
+[data-sidebar-layout="rail"] .chat-content-card {
+  margin-right: var(--app-rail-inset-gap);
+  margin-bottom: var(--app-rail-inset-gap);
+  background: transparent;
+  border-radius: var(--app-rail-card-radii);
+  transition: border-radius 120ms ease-out var(--app-rail-corner-delay, 0ms);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card.h-dvh {
+  height: calc(100dvh - var(--app-rail-inset-gap));
+}
+
+/* Full-route wrappers (the ones holding the route's top bar, including the dock's surface)
+   repaint the surface as a plain rectangle over the block's rounded top corners; the card
+   body already paints that surface, so they go transparent. */
+[data-sidebar-layout="rail"]
+  .chat-content-card
+  :is(.app-content-surface, .app-settings-surface):has(.app-top-bar) {
+  background: transparent;
+}
+
+/* A maximized right dock covers the chat column, so it keeps an opaque body even when the
+   whole window is glass; otherwise the transcript would show through it. Unlayered and
+   placed after the rail rule above so it also wins over that transparent override. */
+:root[data-window-translucency="window"]
+  [data-dock-maximized]
+  [data-slot="sidebar-inner"].app-content-surface {
+  background: var(--color-background-surface);
+}
+
+/* Code, diff, and file viewers paint their own fill (`--synara-code-surface` in
+   diffRendering.ts). On whole-window glass they go clear like the surface around them in the
+   dock and the editor workspace, so the pane reads as one sheet of glass instead of an opaque
+   slab; only what content scrolls under (sticky diff headers, the gutter once a row scrolls
+   sideways) keeps the composer's dense tint. A maximized dock and the mobile sheet are opaque,
+   so their viewers keep their own fill. */
+:root[data-window-translucency="window"]
+  :is(
+    [data-slot="sidebar-container"]:not([data-dock-maximized]) [data-right-dock-content],
+    [data-editor-workspace]
+  ) {
+  --app-code-viewer-surface: transparent;
+  --app-code-viewer-sticky-surface: color-mix(in srgb, var(--popover) 96%, transparent);
+  --app-code-viewer-gutter-animation: synara-code-gutter-backing;
+  --app-code-viewer-addition-row: color-mix(in srgb, var(--success) 10%, transparent);
+  --app-code-viewer-deletion-row: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+
+/* Terminals follow the window's glass: xterm resolves its background from this token
+   (terminalRuntimeAppearance.ts) and turns transparent, so the body's coat shows through. Set
+   on the root because the color is resolved once for every terminal, wherever it is mounted;
+   over an opaque parent (maximized dock) the clear terminal simply shows that surface. */
+:root[data-window-translucency="window"] {
+  --app-terminal-surface: transparent;
+}
+
+/* xterm's stylesheet backs the viewport with black, normally hidden under the theme fill. */
+:root[data-window-translucency="window"] .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
+/* The dock's bottom-right corner is the block's corner. */
+[data-sidebar-layout="rail"] [data-slot="sidebar"][data-side="right"] [data-slot="sidebar-inner"] {
+  overflow: hidden;
+  border-bottom-right-radius: var(--app-rail-inset-radius);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before,
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  content: "";
+  position: absolute;
+  inset: var(--app-top-strip-height) 0 0 0;
+  pointer-events: none;
+  opacity: 1;
+  border-radius: var(--app-rail-block-radii);
+  transition: border-radius 120ms ease-out var(--app-rail-corner-delay, 0ms);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before {
+  z-index: -1;
+  background: var(--app-content-surface, var(--color-background-surface));
+  box-shadow: none;
+}
+
+/* The block's hairline border; with the panel open its left edge is the seam with the panel,
+   which draws no right border of its own. */
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  z-index: 30;
+  border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+}
+
+/* Panel collapsed: its zero-width box must not leave a border line next to the rail. The
+   border stays until the slide ends, so the shrinking panel keeps its edges. */
+[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  .app-rail-panel {
+  border-width: 0;
+  transition: border-width 0s linear 300ms;
+}
+
+/* Short divider on the shell band above the seam, detached from the band's edges, marking
+   where the route header starts next to the panel. Hidden with the panel. */
+[data-sidebar-layout="rail"] .app-rail-header-divider {
+  position: absolute;
+  top: calc((var(--app-top-strip-height) - var(--app-chrome-divider-height)) / 2);
+  left: 0;
+  z-index: 30;
+  width: 1px;
+  height: var(--app-chrome-divider-height);
+  pointer-events: none;
+  background: var(--app-chrome-divider-color);
+  transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* The same hairline between adjacent tabs of a SurfaceTabStrip with `dividers`, centered in
+   the strip's 4px (gap-1) gutter. It steps aside next to the active or hovered tab, whose
+   own fill already sets it apart, like browser tab strips. */
+.surface-tab-dividers > [data-surface-tab] + [data-surface-tab]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(-0.125rem - 0.5px);
+  width: 1px;
+  height: var(--app-chrome-divider-height);
+  translate: 0 -50%;
+  pointer-events: none;
+  background: var(--app-chrome-divider-color);
+  transition: opacity 150ms ease-out;
+}
+
+.surface-tab-dividers > [data-surface-tab]:is([data-surface-tab-active], :hover)::before,
+.surface-tab-dividers
+  > [data-surface-tab]:is([data-surface-tab-active], :hover)
+  + [data-surface-tab]::before {
+  opacity: 0;
+}
+
+[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  .app-rail-header-divider {
+  opacity: 0;
+}
+
+/* Settings floats its top bar over the scrolling page; on the opaque band the page must
+   start below it instead. */
+[data-sidebar-layout="rail"] [data-slot="sidebar-inset-surface"].app-settings-surface {
+  padding-top: var(--app-top-strip-height);
+}
+
+/* Route top bars sit on the shell band; the block's top border replaces their hairline.
+   The shell root already paints the band, so they stay clear: a second coat of the
+   translucent shell tone would read nearly opaque next to the rail. */
+[data-sidebar-layout="rail"] .app-top-bar {
+  background-color: transparent;
+  background-image: none;
+  /* The traffic-light gutter (below) arrives with the panel's collapse; ease it on the
+     panel's own curve so the header's content glides instead of stepping. */
+  transition: padding-left 300ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Reduced motion keeps the header, reserved controls, and block edges on the same
+   immediate toggle; a delayed gutter would leave the snapped dock off its anchor. */
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-layout="rail"] .app-top-bar,
+  [data-sidebar-layout="rail"] .chat-content-card,
+  [data-sidebar-layout="rail"] .chat-content-card::before,
+  [data-sidebar-layout="rail"] .chat-content-card::after,
+  [data-sidebar-layout="rail"] .app-rail-panel,
+  [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+    .app-rail-panel {
+    transition: none;
+  }
+}
+
+/* Right dock: its fixed container keeps the block's gap, and its surface is the card body
+   drawn above, so the dock header sits on the shell band like the route header. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"]
+  > [data-slot="sidebar-container"] {
+  right: var(--app-rail-inset-gap);
+  bottom: var(--app-rail-inset-gap);
+  height: auto;
+}
+
+/* Collapsed, the dock slides its own width off-screen; the gap above would leave its
+   left border and a sliver of content peeking at the window edge, so it slides the gap too. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"][data-collapsible="offcanvas"]
+  > [data-slot="sidebar-container"] {
+  translate: calc(100% + var(--app-rail-inset-gap)) 0;
+}
+
+/* Headers right of a collapsed panel clear the traffic lights from the rail's edge, not
+   the window's (the strip over rail + panel keeps the full inset). */
+:root[data-runtime="electron"]
+  [data-sidebar-layout="rail"]
+  .desktop-top-bar-traffic-light-gutter:not(.app-shell-top-strip) {
+  padding-left: calc(
+    var(--desktop-top-bar-traffic-light-gutter, 90px) - var(--app-rail-width)
+  ) !important;
+}
+
+/* Continuous ("squircle") corners, opt-in with the `squircle` class (composer, user
+   bubbles, palettes, open-thread tabs). The element's own border-radius stays the geometry
+   and the fallback: Electron smooths it natively, browsers that support corner-shape switch
+   to it, and everything else keeps plain rounded corners. Electron smoothing must not
+   stack with browser corner-shape. */
+@utility squircle {
+  :root[data-runtime="electron"] & {
+    -electron-corner-smoothing: system-ui;
+  }
+  @supports (corner-shape: squircle) {
+    :root:not([data-runtime="electron"]) & {
+      corner-shape: squircle;
+    }
   }
 }
 
@@ -2585,6 +3144,9 @@ diffs-container {
    Composes with .chat-markdown (which zeroes first/last child margins). */
 .pull-request-prose {
   line-height: 1.7;
+}
+.chat-markdown img[data-expandable-image] {
+  cursor: zoom-in;
 }
 .pull-request-prose p,
 .pull-request-prose ul,
@@ -2652,7 +3214,8 @@ diffs-container {
    pickers are built from, so the composer now lifts off the transcript exactly the
    way they do.
 
-   `--composer-glass-opacity` keeps every composer-family surface on one knob. */
+   `--composer-glass-opacity` keeps every composer-family surface on one knob. A
+   whole-window glass shell replaces this material entirely; see `.app-glass-raised`. */
 :root {
   --composer-glass-opacity: 55%;
   --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
@@ -2660,6 +3223,16 @@ diffs-container {
   /* Same base as `.composer-picker-menu-surface`, kept opaque here so the shared
      `--composer-glass-opacity` knob is the only thing thinning it. */
   --composer-glass-surface: var(--popover);
+}
+
+/* Sidebar-only glass still uses a translucent native macOS window behind the opaque
+   chat column. Avoid adding a second backdrop layer when its composer mounts: use
+   dense fills to keep the transcript from reading through without a CSS blur.
+   Whole-window glass keeps its shared raised tint and overlay cutouts below. */
+:root[data-window-transparent="true"][data-window-material="translucent"][data-window-translucency="sidebar"] {
+  --composer-glass-filter: none;
+  --composer-glass-opacity: 92%;
+  --composer-glass-stacked-opacity: 80%;
 }
 
 .chat-composer-surface,
@@ -2695,6 +3268,144 @@ diffs-container {
     var(--composer-glass-surface) var(--composer-glass-opacity),
     transparent
   );
+}
+
+/* Raised panels docked over the transcript (Environment, Library, Project). Opaque, so the
+   transcript never bleeds through; a whole-window glass shell swaps the fill below. */
+.chat-raised-panel-surface {
+  background: var(--popover);
+}
+
+/* ─── Raised chrome on a whole-window glass shell ─────────────────────────────────
+   The window's fill is the body's translucent coat, and the desktop behind it is blurred
+   natively. Raised surfaces therefore take one denser tint (`--app-glass-raised-surface`,
+   theme.logic) and NO backdrop-filter: Chromium paints the filtered backdrop over the
+   backdrop it sampled, so a blur here lays a second copy of the coat under the surface
+   and the surface reads as a solid slab (measured: a 30% coat came out at 59%).
+
+   `.app-glass-raised` opts in any other surface that paints an opaque fill of its own:
+   cards and filled controls. Unlayered, so it wins over the
+   surface's Tailwind fill only while the attribute is set. */
+:root[data-window-translucency="window"] :is(.chat-raised-panel-surface, .app-glass-raised),
+:root[data-window-translucency="window"]
+  :is([data-chat-composer-slot], [data-glass-cutout])
+  .chat-composer-surface {
+  background: var(--app-glass-raised-surface);
+}
+
+/* Composer surfaces are dense by default on a glass shell: one can float over anything, and
+   with no blur the raised tint would leave that content readable through it. A composer
+   takes the tint above only where nothing shows behind it: the chat composer's own slot
+   (`data-chat-composer-slot`, where the transcript dissolves at its top edge, see
+   `.scroll-edge-fade` below) and a slot whose content is cut out from under it
+   (`data-glass-cutout`, see glassOverlayCutout.ts). */
+:root[data-window-translucency="window"] .chat-composer-surface {
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
+:root[data-window-translucency="window"]
+  :is(.chat-composer-surface, .chat-raised-panel-surface, .app-glass-raised) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-window-translucency="window"]
+  :is(.chat-composer-surface, .chat-composer-stacked-top)::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The stacked rail stays the lighter continuation of the input. */
+:root[data-window-translucency="window"] .chat-composer-stacked-top {
+  background: color-mix(in srgb, var(--app-glass-raised-surface) 50%, transparent);
+}
+
+/* Interactive raised surfaces (cards, selects) lift one more step on hover. */
+:root[data-window-translucency="window"] .app-glass-raised:is(button, [role="button"]):hover {
+  background:
+    linear-gradient(var(--app-glass-raised-surface), var(--app-glass-raised-surface)),
+    var(--app-glass-raised-surface);
+}
+
+/* ─── Floating overlays ───────────────────────────────────────────────────────────
+   Menus, pickers, popovers, tooltips, and toasts share the composer's material
+   (`--app-overlay-surface`, theme.logic). What keeps the content behind them from
+   reading through depends on the window:
+     • Opaque window: the backdrop blur on the surface frosts it.
+     • Translucent window: a blur cannot do that. Over a see-through region Chromium
+       composites the blurred copy over the sharp original, so text stays readable.
+       glassOverlayCutout.ts cuts the page out from under each overlay instead, leaving
+       only the window's coat and the natively blurred desktop behind it, and the blur
+       is dropped (it would only lay a second copy of the coat under the fill). The
+       same cutout serves raised surfaces floating inside the page (a floating side
+       panel, the PR composer), which is why they share the docked surfaces' tint.
+   `--app-overlay-backing` is that coat where the body does not paint one. */
+:is(.app-popup-surface, .composer-picker-menu-surface) {
+  background:
+    linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
+    var(--app-overlay-backing, transparent);
+}
+
+:root[data-window-material="translucent"] :is(.app-popup-surface, .composer-picker-menu-surface) {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* An overlay sitting on another portaled layer (a select or tooltip inside a dialog) has
+   nothing cut out from under it: that layer is not the page. The thin fill would leave the
+   layer's text readable through it, so it goes near-opaque there (`data-glass-backed`,
+   glassOverlayCutout.ts). The same holds for an overlay rendered inside the page instead of
+   portaled (the message trail's turn preview): the cutout cannot remove the page from under
+   something that is part of it. Hover cards also use this backing: opening one must not
+   re-clip and re-composite the entire app every time the pointer crosses a sidebar row. */
+:root[data-window-material="translucent"]
+  :is(.app-popup-surface, .composer-picker-menu-surface):is(
+    [data-glass-backed],
+    [data-slot="tooltip-popup"],
+    [data-slot="preview-card-popup"]
+  ),
+:root[data-window-material="translucent"]
+  #root
+  :is(.app-popup-surface, .composer-picker-menu-surface) {
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
+:root[data-window-material="translucent"] .app-popup-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* A composer portaled next to the app root (the selection composer) is cut out like any
+   other overlay in both translucent modes. Sidebar-only glass also needs the coat backing. */
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface {
+  background:
+    linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
+    var(--app-overlay-backing, transparent);
+}
+
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The composer no longer frosts what scrolls beneath it, so the transcript dissolves over a
+   tuck-sized band (`--scroll-edge-fade-tuck`, composerOverlay.ts) that ends at the composer's
+   top edge instead of running under it: the sheer stacked panels (subagents, tasks, queue)
+   put their header text right at that edge. The resting tail stops above the band.
+   `--scroll-edge-fade-inset-b` is the composer's top edge; without it the gradient ends past
+   the viewport and masks nothing. */
+:root[data-window-translucency="window"] .scroll-edge-fade {
+  --scroll-edge-fade-glass: linear-gradient(
+    to bottom,
+    #000 calc(100% - var(--scroll-edge-fade-inset-b, 0px) - var(--scroll-edge-fade-tuck, 0px)),
+    transparent calc(100% - var(--scroll-edge-fade-inset-b, 0px))
+  );
+  -webkit-mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),
+    var(--scroll-edge-fade-glass);
+  mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),
+    var(--scroll-edge-fade-glass);
 }
 
 /* Recessed track: a hairline border + faint inner shadow read the base as a sunken

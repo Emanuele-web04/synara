@@ -26,7 +26,8 @@ const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const rejectConfigDuringLoadReplay =
   process.env.SYNARA_ACP_REJECT_CONFIG_DURING_LOAD_REPLAY === "1";
-const promptResponseText = process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT;
+const promptResponseText =
+  process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT ?? process.env.ACP_MOCK_PROMPT_RESPONSE_TEXT;
 const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === "1";
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";

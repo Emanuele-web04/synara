@@ -1,0 +1,129 @@
+name: Provision verified Cua
+description: Restore an exact trusted native build or build the pinned source on a cache miss
+inputs:
+  benchmark-baseline:
+    description: Full baseline commit for isolated cold A/B builds; bypasses all artifact caches
+    default: ""
+  save-cache:
+    description: Only the trusted default-branch producer may save
+    default: "false"
+  prepared-artifact:
+    description: Verified native preparation from this workflow run; never falls back to another source
+    default: ""
+outputs:
+  cache-hit:
+    value: ${{ steps.cache.outputs.cache-hit }}
+  cache-key:
+    value: ${{ steps.key.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - name: Select pinned native toolchains
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          test -d /Applications/Xcode_16.4.app/Contents/Developer
+          echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
+          echo 'CARGO_PROFILE_RELEASE_STRIP=none' >> "$GITHUB_ENV"
+        fi
+        rust_version=$(node -p 'require("./packages/shared/src/cuaDriverRelease.json").rustVersion')
+        rustup toolchain install "$rust_version" --profile minimal
+        echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
+
+    - name: Install Linux native build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
+
+    - name: Fingerprint native build inputs
+      id: key
+      shell: bash
+      run: node apps/desktop/scripts/cua-cache-key.mjs
+
+    - name: Restore exact Cua artifact
+      id: cache
+      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact == ''
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/cua-artifact
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Discard non-exact cache contents
+      if: inputs.benchmark-baseline == '' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/cua-artifact"
+
+    - name: Find trusted persistent Cua artifact
+      id: persistent
+      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact == '' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/github-script@v8
+      env:
+        CACHE_KEY: ${{ steps.key.outputs.key }}
+      with:
+        script: |
+          const { findCuaArtifact } = await import(`${process.env.GITHUB_WORKSPACE}/apps/desktop/scripts/find-cua-artifact.mjs`);
+          const artifact = await findCuaArtifact(github, context.repo, process.env.CACHE_KEY);
+          if (artifact) {
+            core.setOutput('artifact-id', artifact.artifactId);
+            core.setOutput('run-id', artifact.runId);
+          }
+
+    - name: Download trusted persistent Cua artifact
+      if: steps.persistent.outputs.artifact-id != ''
+      uses: actions/download-artifact@v8
+      with:
+        artifact-ids: ${{ steps.persistent.outputs.artifact-id }}
+        run-id: ${{ steps.persistent.outputs.run-id }}
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/cua-artifact
+
+    - name: Download this run's prepared Cua
+      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact != ''
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.prepared-artifact }}
+        path: ${{ runner.temp }}/cua-artifact
+
+    - name: Build on a valid cache miss
+      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact == '' && steps.cache.outputs.cache-hit != 'true' && steps.persistent.outputs.artifact-id == ''
+      shell: bash
+      env:
+        CACHE_KEY: ${{ steps.key.outputs.key }}
+      run: |
+        set -euo pipefail
+        unset SYNARA_CUA_ARTIFACT_DIR SYNARA_CUA_SIGN_IDENTITY
+        node apps/desktop/scripts/provision-cua-driver.mjs --destination "$RUNNER_TEMP/cua-artifact"
+        printf '%s\n' "$CACHE_KEY" > "$RUNNER_TEMP/cua-artifact/build-key.txt"
+
+    - name: Validate and stage cached Cua
+      if: inputs.benchmark-baseline == ''
+      shell: bash
+      env:
+        CACHE_KEY: ${{ steps.key.outputs.key }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        PERSISTENT_RUN: ${{ steps.persistent.outputs.run-id }}
+        PREPARED_ARTIFACT: ${{ inputs.prepared-artifact }}
+      run: |
+        set -euo pipefail
+        test "$(cat "$RUNNER_TEMP/cua-artifact/build-key.txt")" = "$CACHE_KEY"
+        unset SYNARA_CUA_SIGN_IDENTITY
+        node apps/desktop/scripts/provision-cua-driver.mjs --artifact-dir "$RUNNER_TEMP/cua-artifact" --destination "$RUNNER_TEMP/cua-verified"
+        echo "SYNARA_CUA_ARTIFACT_DIR=$RUNNER_TEMP/cua-verified" >> "$GITHUB_ENV"
+        echo "Cua exact cache hit: $CACHE_HIT; persistent run: $PERSISTENT_RUN; prepared artifact: $PREPARED_ARTIFACT; key: $CACHE_KEY" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Save trusted default-branch Cua artifact
+      if: inputs.benchmark-baseline == '' && inputs.save-cache == 'true' && inputs.prepared-artifact == '' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/cua-artifact
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Compare cold Cua builds and driver behavior
+      if: inputs.benchmark-baseline != ''
+      shell: bash
+      env:
+        BASELINE_COMMIT: ${{ inputs.benchmark-baseline }}
+      run: node scripts/benchmark-cua-build.ts "$BASELINE_COMMIT" "$RUNNER_TEMP/cua-benchmark"

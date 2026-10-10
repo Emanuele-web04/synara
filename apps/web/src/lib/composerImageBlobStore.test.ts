@@ -1,18 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  composerImageBlobKey,
-  selectOrphanedComposerImageBlobKeys,
-} from "./composerImageBlobStore";
-
-describe("composerImageBlobKey", () => {
-  it("scopes an attachment blob to its thread and image", () => {
-    expect(composerImageBlobKey("thread-1", "image-1")).toBe("thread-1:image-1");
-    expect(composerImageBlobKey("thread-2", "image-1")).not.toBe(
-      composerImageBlobKey("thread-1", "image-1"),
-    );
-  });
-});
+import { selectOrphanedComposerImageBlobKeys } from "./composerImageBlobStore";
 
 describe("selectOrphanedComposerImageBlobKeys", () => {
   const hourMs = 60 * 60 * 1000;

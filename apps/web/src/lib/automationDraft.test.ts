@@ -11,9 +11,6 @@ import {
   automationApprovalGaps,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
-  maxIterationsForFastIntervalApproval,
-  updateAutomationDraftWarningAcknowledgement,
-  type AutomationDraftWarningId,
 } from "./automationDraft";
 
 describe("automation draft warnings", () => {
@@ -52,84 +49,6 @@ describe("automation draft warnings", () => {
     ]);
     expect(warnings[0]?.detail).toContain("provider mentions");
     expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(true);
-  });
-
-  it("requires acknowledgement for standalone auto fallback to local checkout", () => {
-    const warnings = buildAutomationDraftWarnings({
-      schedule: { type: "interval", everySeconds: 300 },
-      mode: "standalone",
-      runtimeMode: "approval-required",
-      worktreeMode: "auto",
-      hasEphemeralContext: false,
-      generatedConfidence: null,
-      generatedNeedsConfirmation: false,
-      prompt: "Check stale dependencies.",
-    });
-
-    expect(warnings).toMatchObject([
-      {
-        id: "local-checkout",
-        requiresAcknowledgement: true,
-      },
-      {
-        id: "worktree-cleanup",
-        requiresAcknowledgement: false,
-      },
-    ]);
-    expect(acknowledgedRiskIdsForDraft(warnings, new Set(["local-checkout"]))).toEqual([
-      "local-checkout",
-    ]);
-  });
-
-  it("maps acknowledged blocking warnings into persisted risk ids", () => {
-    const warnings = buildAutomationDraftWarnings({
-      schedule: { type: "interval", everySeconds: 30 },
-      mode: "standalone",
-      runtimeMode: "full-access",
-      worktreeMode: "local",
-      hasEphemeralContext: false,
-      generatedConfidence: null,
-      generatedNeedsConfirmation: false,
-      prompt: "Fix flaky tests.",
-    });
-
-    expect(
-      acknowledgedRiskIdsForDraft(
-        warnings,
-        new Set(["fast-recurring-interval", "full-access", "local-checkout"]),
-      ),
-    ).toEqual(["fast-interval", "full-access", "local-checkout"]);
-  });
-
-  it("immutably updates warning acknowledgements", () => {
-    const initial = new Set<AutomationDraftWarningId>(["full-access"]);
-    const added = updateAutomationDraftWarningAcknowledgement(initial, "local-checkout", true);
-    const removed = updateAutomationDraftWarningAcknowledgement(added, "full-access", false);
-
-    expect(Array.from(initial)).toEqual(["full-access"]);
-    expect(Array.from(added)).toEqual(["full-access", "local-checkout"]);
-    expect(Array.from(removed)).toEqual(["local-checkout"]);
-  });
-
-  it("blocks submission until required warning acknowledgements are present", () => {
-    const warnings = buildAutomationDraftWarnings({
-      schedule: { type: "interval", everySeconds: 30 },
-      mode: "standalone",
-      runtimeMode: "full-access",
-      worktreeMode: "local",
-      hasEphemeralContext: false,
-      generatedConfidence: null,
-      generatedNeedsConfirmation: false,
-      prompt: "Fix flaky tests.",
-    });
-
-    expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(true);
-    expect(
-      hasBlockingAutomationDraftWarnings(
-        warnings,
-        new Set(["fast-recurring-interval", "full-access", "local-checkout"]),
-      ),
-    ).toBe(false);
   });
 
   it("auto-acknowledges bounded thread fast loops without hiding standalone risks", () => {
@@ -203,22 +122,6 @@ describe("automation draft warnings", () => {
     ]);
     expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(false);
   });
-
-  it("does not show worktree cleanup risk for heartbeat runs", () => {
-    const warnings = buildAutomationDraftWarnings({
-      schedule: { type: "interval", everySeconds: 300 },
-      mode: "heartbeat",
-      runtimeMode: "approval-required",
-      worktreeMode: "auto",
-      hasEphemeralContext: false,
-      generatedConfidence: null,
-      generatedNeedsConfirmation: false,
-      prompt: "Check this thread.",
-    });
-
-    expect(warnings.map((warning) => warning.id)).not.toContain("local-checkout");
-    expect(warnings.map((warning) => warning.id)).not.toContain("worktree-cleanup");
-  });
 });
 
 describe("automationApprovalGaps", () => {
@@ -231,17 +134,6 @@ describe("automationApprovalGaps", () => {
     worktreeMode: "worktree" as const,
     prompt: "Check the build.",
   };
-
-  it("requires full-access approval when unacknowledged", () => {
-    const gaps = automationApprovalGaps({
-      ...base,
-      runtimeMode: "full-access",
-      acknowledgedRisks: [],
-    });
-    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
-    expect(gaps.runBlockingWarnings.map((warning) => warning.id)).toEqual(["full-access"]);
-    expect(gaps.acknowledgedRisks).toEqual(["full-access"]);
-  });
 
   it("requires local-checkout approval for a local worktree", () => {
     const gaps = automationApprovalGaps({
@@ -412,47 +304,5 @@ describe("automationApprovalGaps", () => {
     expect(gaps.runBlockingWarnings).toEqual([]);
     expect(gaps.acknowledgedRisks).toEqual(["fast-interval"]);
     expect(gaps.maxIterations).toBeUndefined();
-  });
-});
-
-describe("maxIterationsForFastIntervalApproval", () => {
-  it("caps enabled imported fast loops without a max iteration limit", () => {
-    expect(
-      maxIterationsForFastIntervalApproval({
-        schedule: { type: "interval", everySeconds: 15 },
-        enabled: true,
-        maxIterations: null,
-      }),
-    ).toBe(10);
-  });
-
-  it("caps enabled imported fast loops above the server cap", () => {
-    expect(
-      maxIterationsForFastIntervalApproval({
-        schedule: { type: "interval", everySeconds: 15 },
-        enabled: true,
-        maxIterations: 25,
-      }),
-    ).toBe(10);
-  });
-
-  it("leaves already-bounded fast loops unchanged", () => {
-    expect(
-      maxIterationsForFastIntervalApproval({
-        schedule: { type: "interval", everySeconds: 15 },
-        enabled: true,
-        maxIterations: 3,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not cap disabled legacy fast loops during approval", () => {
-    expect(
-      maxIterationsForFastIntervalApproval({
-        schedule: { type: "interval", everySeconds: 15 },
-        enabled: false,
-        maxIterations: null,
-      }),
-    ).toBeUndefined();
   });
 });

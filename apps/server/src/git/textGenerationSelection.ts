@@ -26,14 +26,26 @@ export function hasDedicatedTextGenerationProvider(
 export function resolveTextGenerationInputForSelection(
   modelSelection: ModelSelection | undefined,
   providerOptions: ProviderStartOptions | undefined,
+  resolvedProvider?: ProviderKind,
 ): TextGenerationProviderInput | null {
-  if (!modelSelection || !hasDedicatedTextGenerationProvider(modelSelection.provider)) {
+  if (!modelSelection) {
+    return null;
+  }
+  const routedModelSelection =
+    resolvedProvider !== undefined && resolvedProvider !== modelSelection.provider
+      ? ({
+          provider: resolvedProvider,
+          instanceId: modelSelection.instanceId,
+          model: modelSelection.model,
+        } as ModelSelection)
+      : modelSelection;
+  if (!hasDedicatedTextGenerationProvider(routedModelSelection.provider)) {
     return null;
   }
 
-  if (modelSelection.provider === "codex") {
+  if (routedModelSelection.provider === "codex") {
     return {
-      modelSelection,
+      modelSelection: routedModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
       ...(providerOptions?.codex?.homePath
         ? { codexHomePath: providerOptions.codex.homePath }
@@ -42,7 +54,7 @@ export function resolveTextGenerationInputForSelection(
   }
 
   return {
-    modelSelection,
+    modelSelection: routedModelSelection,
     ...(providerOptions ? { providerOptions } : {}),
   };
 }

@@ -1,18 +1,26 @@
 // FILE: PullRequestTimelineTab.tsx
-// Purpose: The Timeline tab of the pull request detail surface — renders the chronological
+// Purpose: The Timeline tab of a pull request's or an issue's detail — renders the chronological
 //          event list (opened, commits, comments/reviews, merged/closed) produced by
 //          buildPullRequestTimelineEvents as a simple left-rail timeline.
 // Layer: Pull request presentation
 // Exports: PullRequestTimelineTab
 
-import type { PullRequestDetail } from "@synara/contracts";
 import { formatRelativeTime } from "~/lib/relativeTime";
-import { buildPullRequestTimelineEvents } from "./pullRequestDetail.logic";
+import {
+  buildPullRequestTimelineEvents,
+  type GitHubItemTimelineSource,
+} from "./pullRequestDetail.logic";
 import { PR_BODY_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 import { cn } from "~/lib/utils";
 
-export function PullRequestTimelineTab({ detail }: { detail: PullRequestDetail }) {
-  const events = buildPullRequestTimelineEvents(detail);
+export function PullRequestTimelineTab({
+  detail,
+  noun,
+}: {
+  detail: GitHubItemTimelineSource;
+  noun?: "pull request" | "issue";
+}) {
+  const events = buildPullRequestTimelineEvents(detail, noun);
   return (
     <div className="h-full overflow-y-auto px-5 py-5">
       <div className="relative ml-2 border-l border-border/70 pl-5">

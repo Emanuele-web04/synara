@@ -11,6 +11,7 @@ import { Schema } from "effect";
 import { useEffect, useRef, useState } from "react";
 
 import { APP_VERSION } from "../branding";
+import { useAnnouncementSheetSlot } from "../components/announcementSheetSlot";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { WHATS_NEW_ENTRIES } from "./entries";
 import {
@@ -104,6 +105,9 @@ export function useWhatsNew(options?: {
   // The popout starts visible only when we actually have something to show.
   const [isPopoutVisible, setIsPopoutVisible] = useState(initialState.kind === "show");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  // Keep one claim across the card → notes transition. Queuing never marks notes
+  // seen; only the existing explicit dismissal/close handlers acknowledge them.
+  const { open } = useAnnouncementSheetSlot(isPopoutVisible || isDialogOpen);
 
   // Silent bootstrap (first launch or no curated notes for this upgrade):
   // advance the marker in the background so the next upgrade is correctly
@@ -160,8 +164,8 @@ export function useWhatsNew(options?: {
     currentEntry,
     allEntries,
     currentVersion,
-    isPopoutVisible,
-    isDialogOpen,
+    isPopoutVisible: open && isPopoutVisible && !isDialogOpen,
+    isDialogOpen: open && isDialogOpen,
     openDialog,
     dismissPopout,
     onDialogOpenChange,

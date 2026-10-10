@@ -101,6 +101,7 @@ export function ComposerReferenceAttachments({
         <ComposerPullRequestContextCard
           key={context.id}
           scope={context.scope}
+          itemKind={context.itemKind}
           title={context.title}
           subtitle={context.subtitle}
           onRemove={() => onRemovePullRequestContext?.(context.id)}

@@ -10,6 +10,11 @@ import { Schema } from "effect";
 import { useEffect, useRef, useState } from "react";
 
 import { useAppSettings } from "../appSettings";
+import {
+  EMPTY_FEATURE_TOUR_SEEN,
+  FEATURE_TOUR_STORAGE_KEY,
+  FeatureTourSeenSchema,
+} from "../featureTour/store";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { serverConfigQueryOptions, serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import { isOrdinarySpaceProject } from "../lib/spaces";
@@ -46,6 +51,11 @@ export function useOnboarding(): UseOnboardingResult {
     INITIAL_STORAGE,
     OnboardingStorageSchema,
   );
+  const [, setFeatureTourSeen] = useLocalStorage(
+    FEATURE_TOUR_STORAGE_KEY,
+    EMPTY_FEATURE_TOUR_SEEN,
+    FeatureTourSeenSchema,
+  );
   const [sessionCompletion, setSessionCompletion] =
     useState<LocalOnboardingCompletion>(INITIAL_STORAGE);
   const { updateSettingsAndWait } = useAppSettings();
@@ -76,12 +86,18 @@ export function useOnboarding(): UseOnboardingResult {
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
-  // The Home chat and Studio containers are created automatically, so "no projects yet"
+  const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
+  // The Home chat and Groups containers are created automatically, so "no projects yet"
   // must count ordinary projects only or the tour would never show.
   const projectCount = useStore(
     (store) =>
       store.projects.filter((project) =>
-        isOrdinarySpaceProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+        isOrdinarySpaceProject(project, {
+          homeDir,
+          chatWorkspaceRoot,
+          studioWorkspaceRoot,
+          groupsWorkspaceRoot,
+        }),
       ).length,
   );
   const isOpen = useOnboardingDialogStore((store) => store.isOpen);
@@ -90,6 +106,8 @@ export function useOnboarding(): UseOnboardingResult {
   const openStore = useOnboardingDialogStore((store) => store.open);
   const closeStore = useOnboardingDialogStore((store) => store.close);
   const markStartupGateSettled = useOnboardingDialogStore((store) => store.markStartupGateSettled);
+  // The beta welcome sheet owns first-run on beta builds; the tour waits for it.
+  const betaWelcomePending = useOnboardingDialogStore((store) => store.betaWelcomePending);
 
   const settingsSettled = settingsQuery.isSuccess || settingsQuery.isError;
   const settingsAvailable = settingsQuery.isSuccess;
@@ -110,7 +128,7 @@ export function useOnboarding(): UseOnboardingResult {
   // startup snapshot, and an errored settings query can recover with a server marker), but
   // only while the user is still reading the intro/tour and has made no setup choices.
   useEffect(() => {
-    if (gate === "pending") return;
+    if (gate === "pending" || betaWelcomePending) return;
     markStartupGateSettled();
     if (gate === "show" && !isOpen) {
       openStore("first-run");
@@ -119,7 +137,16 @@ export function useOnboarding(): UseOnboardingResult {
     if (gate === "hidden" && isOpen && openReason === "first-run" && !engaged) {
       closeStore();
     }
-  }, [closeStore, engaged, gate, isOpen, markStartupGateSettled, openReason, openStore]);
+  }, [
+    betaWelcomePending,
+    closeStore,
+    engaged,
+    gate,
+    isOpen,
+    markStartupGateSettled,
+    openReason,
+    openStore,
+  ]);
 
   // Reconcile the server marker once per session: a completion whose write failed, or an
   // installation that predates the tour. Failures leave the local marker in place so the
@@ -148,6 +175,13 @@ export function useOnboarding(): UseOnboardingResult {
     // arrives. Only a known installation can safely retain a failed server write.
     if (installationKey !== null) {
       setStorage({ completedAt, installationKey });
+      // A new installation has just seen its welcome flow. Record this here, before
+      // delayed startup probes mount announcements, so it is not greeted twice.
+      if (openReason === "first-run") {
+        setFeatureTourSeen((seen) =>
+          seen.includes(installationKey) ? seen : [...seen, installationKey],
+        );
+      }
     }
     closeStore();
     if (serverCompletedAt === null) {

@@ -32,6 +32,10 @@ Use `browser_tabs` to inspect tabs in the task scope, then `browser_open` to cre
 
 Do not guess a tab ID from another task.
 
+## Page is clipped or leaves empty space
+
+An agent can use `browser_resize` to test a fixed page size. Resizing or reopening the browser panel, or switching between its floating and expanded views, restores the page to the panel's available space without reloading it. Moving a panel without changing its size preserves the requested viewport.
+
 ## Snapshot reference is stale
 
 Element references are bound to the snapshot that produced them.

@@ -13,8 +13,8 @@ import { cn } from "~/lib/utils";
 
 const SIZE_CLASS_NAME = {
   sm: "size-4 text-[8px]",
-  md: "size-5 text-[9px]",
-  lg: "size-7 text-[length:var(--app-font-size-ui-sm,11px)]",
+  md: "size-5 text-ui-2xs",
+  lg: "size-7 text-ui-sm",
 } as const;
 
 function initialFor(actor: PullRequestActor | null): string {

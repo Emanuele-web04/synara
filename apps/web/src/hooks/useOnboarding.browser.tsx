@@ -30,6 +30,7 @@ const clients: QueryClient[] = [];
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.removeItem("synara:onboarding:v2");
+  localStorage.removeItem("synara:feature-tour:since-0.9.2:v1");
   mocks.getConfig.mockReset().mockResolvedValue({ worktreesDir: "/a/worktrees" });
   // Keep the server marker absent to exercise the failed-write fallback.
   mocks.save.mockReset().mockResolvedValue(false);
@@ -44,6 +45,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   for (const client of clients.splice(0)) client.clear();
   localStorage.removeItem("synara:onboarding:v2");
+  localStorage.removeItem("synara:feature-tour:since-0.9.2:v1");
 });
 
 async function renderOnboarding() {
@@ -58,6 +60,20 @@ async function renderOnboarding() {
 }
 
 describe("onboarding installation identity", () => {
+  it("acknowledges the current highlights on first-run completion before announcements mount", async () => {
+    const { hook } = await renderOnboarding();
+    await vi.waitFor(() => expect(hook.result.current.isOpen).toBe(true));
+    expect(useOnboardingDialogStore.getState().openReason).toBe("first-run");
+    await act(async () => hook.result.current.complete());
+    expect(JSON.parse(localStorage.getItem("synara:feature-tour:since-0.9.2:v1") ?? "[]")).toEqual([
+      "/a/worktrees",
+    ]);
+    await hook.unmount();
+    const remounted = await renderOnboarding();
+    await vi.waitFor(() => expect(remounted.hook.result.current.isOpen).toBe(false));
+    await remounted.hook.unmount();
+  });
+
   it("keeps the intro open when a config refetch fails with a cached identity", async () => {
     const { client, hook } = await renderOnboarding();
     await vi.waitFor(() => expect(hook.result.current.isOpen).toBe(true));
@@ -70,6 +86,19 @@ describe("onboarding installation identity", () => {
     );
     await hook.rerender();
     expect(hook.result.current.isOpen).toBe(true);
+    await hook.unmount();
+  });
+
+  it("does not acknowledge highlights when authoritative settings auto-hide a provisional welcome", async () => {
+    const { client, hook } = await renderOnboarding();
+    await vi.waitFor(() => expect(hook.result.current.isOpen).toBe(true));
+    await act(async () => {
+      client.setQueryData(["server", "settings"], {
+        onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+      });
+    });
+    await vi.waitFor(() => expect(hook.result.current.isOpen).toBe(false));
+    expect(localStorage.getItem("synara:feature-tour:since-0.9.2:v1")).toBeNull();
     await hook.unmount();
   });
 
@@ -97,6 +126,7 @@ describe("onboarding installation identity", () => {
     );
     await hook.rerender();
     expect(hook.result.current.isOpen).toBe(false);
+    expect(localStorage.getItem("synara:feature-tour:since-0.9.2:v1")).toBeNull();
     expect(
       JSON.parse(localStorage.getItem("synara:onboarding:v2") ?? "null")?.completedAt ?? null,
     ).toBeNull();

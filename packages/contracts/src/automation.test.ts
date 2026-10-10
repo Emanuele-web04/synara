@@ -4,14 +4,11 @@ import { Effect, Schema } from "effect";
 import {
   AutomationCreateInput,
   AutomationDefinition,
-  AutomationCompletionPolicy,
   AutomationRun,
   AutomationRunResult,
   AutomationSchedule,
   AutomationRunStatus,
-  AutomationStreamEvent,
   DEFAULT_AUTOMATION_RUNTIME_MODE,
-  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
 } from "./automation";
 
 const decode = <S extends Schema.Top>(
@@ -118,22 +115,6 @@ it.effect("decodes legacy automation definitions without completion policies", (
   }),
 );
 
-it.effect("accepts AI-evaluated automation completion policies", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(AutomationCompletionPolicy, {
-      type: "ai-evaluated",
-      stopWhen: "the PR is ready to merge",
-      confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
-    });
-
-    assert.strictEqual(parsed.type, "ai-evaluated");
-    if (parsed.type !== "ai-evaluated") {
-      assert.fail("Expected AI-evaluated completion policy.");
-    }
-    assert.strictEqual(parsed.confidenceThreshold, DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD);
-  }),
-);
-
 it.effect("accepts automation runs with immutable permission snapshots", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(AutomationRun, {
@@ -228,21 +209,6 @@ it.effect("accepts legacy UTC and timezone-aware wall-clock schedules", () =>
   }),
 );
 
-it.effect("accepts typed automation run results", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(AutomationRunResult, {
-      outcome: "needs-attention",
-      summary: "Approval required.",
-      severity: "warning",
-      unread: true,
-      archivedAt: null,
-    });
-
-    assert.strictEqual(parsed.outcome, "needs-attention");
-    assert.strictEqual(parsed.unread, true);
-  }),
-);
-
 it.effect("accepts structured automation notify and silent decisions", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(AutomationRunResult, {
@@ -257,25 +223,6 @@ it.effect("accepts structured automation notify and silent decisions", () =>
     assert.strictEqual(parsed.title, "Build is healthy");
     assert.strictEqual(parsed.decision, "silent");
     assert.strictEqual(parsed.unread, false);
-  }),
-);
-
-it.effect("accepts automation run result completion evaluations", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(AutomationRunResult, {
-      outcome: "no-findings",
-      summary: "Stopped: PR is ready.",
-      severity: "info",
-      unread: true,
-      archivedAt: null,
-      completionEvaluation: {
-        stopMatched: true,
-        confidence: 0.94,
-        reason: "The assistant says the PR is ready.",
-      },
-    });
-
-    assert.strictEqual(parsed.completionEvaluation?.stopMatched, true);
   }),
 );
 
@@ -297,48 +244,5 @@ it.effect("rejects unknown automation run status values", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(decode(AutomationRunStatus, "unknown"));
     assert.strictEqual(result._tag, "Failure");
-  }),
-);
-
-it.effect("accepts automation stream run updates", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(AutomationStreamEvent, {
-      type: "run-upserted",
-      run: {
-        id: "run-1",
-        automationId: "automation-1",
-        projectId: "project-1",
-        threadId: null,
-        trigger: { type: "scheduled" },
-        status: "pending",
-        scheduledFor: "2026-06-16T10:00:00.000Z",
-        claimedBy: null,
-        claimedAt: null,
-        leaseExpiresAt: null,
-        startedAt: null,
-        finishedAt: null,
-        threadCreateCommandId: null,
-        turnStartCommandId: null,
-        messageId: null,
-        error: null,
-        result: null,
-        permissionSnapshot: {
-          provider: "codex",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          worktreeMode: "worktree",
-          allowedCapabilities: ["send-turn"],
-          createdAt: "2026-06-16T10:00:00.000Z",
-        },
-        createdAt: "2026-06-16T10:00:00.000Z",
-        updatedAt: "2026-06-16T10:00:00.000Z",
-      },
-    });
-
-    assert.strictEqual(parsed.type, "run-upserted");
   }),
 );

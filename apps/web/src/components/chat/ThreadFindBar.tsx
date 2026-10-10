@@ -25,6 +25,8 @@ import {
 
 interface ThreadFindBarProps {
   open: boolean;
+  historyIncomplete?: boolean;
+  historyError?: string | null;
   focusNonce: number;
   timelineEntries: readonly TimelineEntry[];
   onClose: () => void;
@@ -40,6 +42,8 @@ const FIND_STEP_BUTTON_CLASS_NAME =
 
 export function ThreadFindBar({
   open,
+  historyIncomplete,
+  historyError,
   focusNonce,
   timelineEntries,
   onClose,
@@ -189,7 +193,7 @@ export function ThreadFindBar({
           spellCheck={false}
           // The unlayered utility overrides the global `input { font-family: mono }`
           // reset — find is a UI field, not a code field.
-          className="font-system-ui h-11 min-w-0 flex-1 bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground placeholder:text-muted-foreground focus:outline-none"
+          className="font-system-ui h-11 min-w-0 flex-1 bg-transparent text-ui text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         <div aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
         <IconButton
@@ -222,16 +226,20 @@ export function ThreadFindBar({
           </div>
           <span
             className={cn(
-              "min-w-0 truncate pr-1 text-right text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums",
+              "min-w-0 truncate pr-1 text-right text-ui-sm tabular-nums",
               MUTED_LABEL_TEXT_CLASS_NAME,
             )}
             aria-live="polite"
           >
-            {hasQuery
-              ? matchCount === 0
-                ? "No results"
-                : `${safeIndex + 1} / ${matchCount} results`
-              : ""}
+            {historyIncomplete
+              ? historyError
+                ? "Earlier messages unavailable"
+                : "Searching earlier messages…"
+              : hasQuery
+                ? matchCount === 0
+                  ? "No results"
+                  : `${safeIndex + 1} / ${matchCount} results`
+                : ""}
           </span>
         </div>
       </DisclosureRegion>
@@ -241,6 +249,8 @@ export function ThreadFindBar({
 
 export function ChatThreadFindHost({
   open,
+  historyIncomplete,
+  historyError,
   focusNonce,
   timelineEntries,
   threadId,
@@ -266,6 +276,8 @@ export function ChatThreadFindHost({
         <ThreadFindBar
           key={threadId}
           open={open}
+          {...(historyIncomplete !== undefined ? { historyIncomplete } : {})}
+          {...(historyError !== undefined ? { historyError } : {})}
           focusNonce={focusNonce}
           timelineEntries={timelineEntries}
           onClose={onClose}
