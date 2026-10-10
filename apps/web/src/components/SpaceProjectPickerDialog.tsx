@@ -188,7 +188,7 @@ export function SpaceProjectPickerDialog(props: {
                         >
                           <span className="relative flex size-4 shrink-0 items-center justify-center">
                             <ProjectSidebarIcon
-                              cwd={project.cwd}
+                              projectId={project.id}
                               expanded={project.expanded}
                               appearance={project.appearance}
                             />

@@ -94,6 +94,12 @@ asking.
 
 A project is the folder Synara works with.
 
+Project rows can use a local favicon or logo as their primary icon. The server resolves the
+saved project ID to its workspace and confines icon discovery to that workspace; the client
+does not supply a filesystem path. A folder icon remains visible while an image loads, when
+none is available, or after a load failure. An explicit emoji, icon, or color choice takes
+precedence over the discovered image.
+
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
 that folder visible with its path.
