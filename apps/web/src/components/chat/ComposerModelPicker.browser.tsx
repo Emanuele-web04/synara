@@ -5,6 +5,7 @@ import {
   type ModelSlug,
   type ProviderInstanceId,
   type ProviderKind,
+  type ProviderModelDescriptor,
   type ServerProviderStatus,
   ThreadId,
 } from "@synara/contracts";
@@ -32,6 +33,32 @@ const THREAD_ID = ThreadId.makeUnsafe("thread-composer-model-picker");
 const GPT_5_5 = "gpt-5.5" as ModelSlug;
 const GPT_5_4 = "gpt-5.4" as ModelSlug;
 const SONNET = "claude-sonnet-4-6" as ModelSlug;
+const FUSION_UID = "fusion-claude-fable-5-1-high-fast-sidekick-swe-2-medium";
+const FUSION_RUNTIME_MODEL: ProviderModelDescriptor = {
+  slug: "fusion",
+  name: "Fusion",
+  modelVariants: [
+    {
+      model: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+      label: "Fusion (Claude Fable 5.1 High + SWE-2 Medium)",
+    },
+    {
+      model: FUSION_UID,
+      label: "Fusion (Claude Fable 5.1 High Fast + SWE-2 Medium)",
+    },
+    {
+      model: "fusion-claude-fable-5-1-low-sidekick-swe-2-medium",
+      label: "Fusion (Claude Fable 5.1 Low + SWE-2 Medium)",
+    },
+    {
+      model: "fusion-claude-fable-5-1-high-sidekick-claude-sonnet-5-5-medium",
+      label: "Fusion (Claude Fable 5.1 High + Claude Sonnet 5.5 Medium)",
+    },
+  ],
+};
+const DEVIN_MODEL_OPTIONS: ReadonlyArray<ProviderModelOption> = [
+  { slug: "fusion", name: "Fusion" },
+];
 
 const EMPTY_BY_PROVIDER: Record<ProviderKind, never[]> = {
   claudeAgent: [],
@@ -98,22 +125,32 @@ type HarnessProps = {
   effortControl?: "menu" | "slider";
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
   onRefreshModels?: React.ComponentProps<typeof ComposerModelPicker>["onRefreshModels"];
+  provider?: ProviderKind;
+  model?: ModelSlug;
+  runtimeModel?: ProviderModelDescriptor;
 };
 
 function Harness(props: HarnessProps) {
   const prompt = useComposerThreadDraft(THREAD_ID).prompt;
   const setPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const provider = props.provider ?? "codex";
   const { modelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId: THREAD_ID,
-    selectedProvider: "codex",
+    selectedProvider: provider,
     threadModelSelection: null,
     projectModelSelection: null,
     customModelsByProvider: EMPTY_BY_PROVIDER,
   });
+  const effectiveModel = props.model ?? ((selectedModel ?? GPT_5_5) as ModelSlug);
+  const modelOptionsForProvider = props.modelOptionsByProvider ?? {
+    ...MODEL_OPTIONS_BY_PROVIDER,
+    ...(provider === "devin" ? { devin: DEVIN_MODEL_OPTIONS } : {}),
+  };
+  const handleProviderModelChange = props.onProviderModelChange ?? vi.fn();
   return (
     <ComposerModelPicker
-      provider="codex"
-      model={(selectedModel ?? GPT_5_5) as ModelSlug}
+      provider={provider}
+      model={effectiveModel}
       lockedProvider={props.lockedProvider ?? null}
       boundProviderInstance={props.boundProviderInstance ?? null}
       effortControl={props.effortControl ?? "menu"}
@@ -125,11 +162,15 @@ function Harness(props: HarnessProps) {
       {...(props.modelOptionsByProviderInstance
         ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
         : {})}
-      modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
-      onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
+      modelOptionsByProvider={modelOptionsForProvider}
+      {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+      {...(props.runtimeModel
+        ? { runtimeModelsByProvider: { [provider]: [props.runtimeModel] } }
+        : {})}
+      onProviderModelChange={handleProviderModelChange}
       {...(props.onRefreshModels ? { onRefreshModels: props.onRefreshModels } : {})}
       threadId={THREAD_ID}
-      modelOptions={modelOptions?.codex}
+      modelOptions={modelOptions?.[provider]}
       prompt={prompt}
       onPromptChange={(next) => setPrompt(THREAD_ID, next)}
     />
@@ -158,7 +199,112 @@ function readStoredStars(): unknown {
   return JSON.parse(localStorage.getItem(STARRED_MODELS_STORAGE_KEY) ?? "[]");
 }
 
+describe("Devin Fusion pairing picker", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
+    localStorage.removeItem(STARRED_MODELS_STORAGE_KEY);
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: {},
+    });
+  });
+
+  it("shows the unpinned default, composes a pairing, and stars that exact UID", async () => {
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "devin",
+      model: "fusion" as ModelSlug,
+    });
+    const initialScreen = await render(
+      <Harness
+        provider="devin"
+        model={"fusion" as ModelSlug}
+        runtimeModel={FUSION_RUNTIME_MODEL}
+        providers={[readyProvider("devin")]}
+      />,
+    );
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: /^Lead Claude Fable 5.1$/u }))
+        .toBeVisible();
+      await page.screenshot({ path: "../../../../../.github/pr-assets/fusion-picker/before.png" });
+    } finally {
+      await initialScreen.unmount();
+    }
+
+    const screen = await render(
+      <Harness
+        provider="devin"
+        model={"fusion" as ModelSlug}
+        runtimeModel={FUSION_RUNTIME_MODEL}
+        providers={[readyProvider("devin")]}
+      />,
+    );
+    try {
+      const trigger = page.getByRole("button", { name: "Change model and reasoning" });
+      await trigger.click();
+      await expect
+        .element(page.getByRole("menuitem", { name: /^Lead Claude Fable 5.1$/u }))
+        .toBeVisible();
+      await expect.element(page.getByRole("menuitem", { name: /^Effort High$/u })).toBeVisible();
+      await expect.element(page.getByRole("menuitem", { name: /^Speed Standard$/u })).toBeVisible();
+      await expect
+        .element(page.getByRole("menuitem", { name: /^Sidekick SWE-2 Medium$/u }))
+        .toBeVisible();
+
+      await page.getByRole("menuitem", { name: /^Speed Standard$/u }).click();
+      await expect.element(page.getByRole("menuitemradio", { name: "Fast" })).toBeVisible();
+      await page.screenshot({
+        path: "../../../../../.github/pr-assets/fusion-picker/speed-menu.png",
+      });
+      await page.getByRole("menuitemradio", { name: "Fast" }).click();
+
+      const selected =
+        useComposerDraftStore.getState().stickyModelSelectionByProvider.devin?.options;
+      expect(selected).toMatchObject({ modelVariant: FUSION_UID });
+      expect(selected).not.toHaveProperty("reasoningEffort");
+      expect(selected).not.toHaveProperty("fastMode");
+
+      await expect
+        .element(trigger)
+        .toHaveTextContent(/Claude Fable 5.1 High Fast \+ SWE-2 Medium/u);
+      await page.screenshot({ path: "../../../../../.github/pr-assets/fusion-picker/after.png" });
+      await page.mark("Fast pairing selected");
+      await page
+        .getByRole("button", { name: "Star Fusion with its current effort and speed" })
+        .click();
+      expect(readStoredStars()).toEqual([
+        expect.objectContaining({
+          provider: "devin",
+          model: "fusion",
+          modelVariant: FUSION_UID,
+          variantLabel: "Claude Fable 5.1 High Fast + SWE-2 Medium",
+        }),
+      ]);
+      await page.screenshot({ path: "../../../../../.github/pr-assets/fusion-picker/starred.png" });
+      await page.mark("Fast pairing selected and saved as a distinct pairing preset");
+    } finally {
+      await screen.unmount();
+    }
+  });
+});
+
 describe("ComposerModelPicker", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
+    localStorage.removeItem(STARRED_MODELS_STORAGE_KEY);
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: {},
+    });
+  });
+
   it("hides a globally disabled provider's tabs and starred models, including the active default", async () => {
     const screen = await mountPicker(
       {
