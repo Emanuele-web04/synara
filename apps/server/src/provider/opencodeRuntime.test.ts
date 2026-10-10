@@ -3,29 +3,56 @@
 // Layer: Provider runtime tests
 // Exports: Vitest suites for opencodeRuntime.ts
 
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
+import { systemError } from "effect/PlatformError";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import { type ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
 import { resolveWindowsComSpec } from "@synara/shared/windowsProcess";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
-  buildOpenCodeServerProcessEnv,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   makeOpenCodeRuntimeLive,
+  OPENCODE_CLI_SPEC,
   OPENCODE_LOCAL_SERVER_IDLE_TTL_MS,
   parseOpenCodeCliModelsOutput,
   parseOpenCodeCredentialProviderIDs,
+  supportsVerboseModelsCommandFailure,
   toOpenCodeFileParts,
+  KILO_CLI_SPEC,
+  buildOpenCodeServerProcessEnv as buildIsolatedOpenCodeServerProcessEnv,
 } from "./opencodeRuntime.ts";
+import {
+  buildOpenCodeServerProcessEnv,
+  openCodeBinarySearchDirectories,
+} from "./providerBinaryResolution.ts";
 
 const encoder = new TextEncoder();
+let testHome: string;
+beforeEach(() => {
+  testHome = mkdtempSync(join(tmpdir(), "synara-opencode-runtime-"));
+  vi.stubEnv("HOME", testHome);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(testHome, { recursive: true, force: true });
+});
+
+const legacyProbeResponse = (url: string | URL | Request) =>
+  Promise.resolve(
+    String(url).endsWith("/api/info")
+      ? new Response("<html>OpenCode</html>", { headers: { "content-type": "text/html" } })
+      : Response.json({ all: [], connected: [], default: {} }),
+  );
 
 describe("OpenCode permission policy", () => {
   it("keeps full access non-interactive while enforcing read-only Plan turns", () => {
@@ -57,7 +84,7 @@ function mockOpenCodeServerHandle(input: {
   kill?: () => Effect.Effect<void, never>;
 }) {
   return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(input.pid ?? 1),
+    pid: ChildProcessSpawner.ProcessId(input.pid ?? 0x7fff_fffe),
     exitCode: input.exitCode ?? Effect.never,
     isRunning: Effect.succeed(true),
     kill: input.kill ?? (() => Effect.void),
@@ -87,23 +114,26 @@ function mockOpenCodeServerSpawnerLayer(input: {
 function mockPooledOpenCodeServerSpawnerLayer(state: {
   spawnUrls: Array<string>;
   spawnCwds?: Array<string | undefined>;
+  spawnEnvironments?: Array<NodeJS.ProcessEnv | undefined>;
   killUrls: Array<string>;
   processUrls?: Map<number, string>;
+  readyPrefix?: string;
 }) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
       const cmd = command as unknown as {
-        options?: { cwd?: string };
+        options?: { cwd?: string; env?: NodeJS.ProcessEnv };
       };
       const url = `http://127.0.0.1:${59000 + state.spawnUrls.length}`;
       const pid = 59_000 + state.spawnUrls.length;
       state.spawnUrls.push(url);
       state.spawnCwds?.push(cmd.options?.cwd);
+      state.spawnEnvironments?.push(cmd.options?.env);
       state.processUrls?.set(pid, url);
       return Effect.succeed(
         mockOpenCodeServerHandle({
-          stdout: `opencode server listening on ${url}\n`,
+          stdout: `${state.readyPrefix ?? OPENCODE_CLI_SPEC.serverReadyPrefix} on ${url}\n`,
           stderr: "",
           pid,
           kill: () =>
@@ -130,7 +160,10 @@ const advanceOpenCodePoolAlmostToIdle = Effect.gen(function* () {
 
 function openCodeRuntimePoolTestLayer(state: {
   spawnUrls: Array<string>;
+  spawnCwds?: Array<string | undefined>;
+  spawnEnvironments?: Array<NodeJS.ProcessEnv | undefined>;
   killUrls: Array<string>;
+  readyPrefix?: string;
 }) {
   const processUrls = new Map<number, string>();
   return Layer.merge(
@@ -141,6 +174,7 @@ function openCodeRuntimePoolTestLayer(state: {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
+      fetchImpl: legacyProbeResponse,
       teardownProcessTree: async ({ rootPid }) => {
         const url = processUrls.get(rootPid);
         if (url) state.killUrls.push(url);
@@ -239,7 +273,7 @@ describe("buildOpenCodeServerProcessEnv", () => {
     });
 
     expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
-    expect(env.PATH).toBe("/usr/bin");
+    expect(env.PATH?.split(delimiter)[0]).toBe("/usr/bin");
   });
 
   it("preserves an explicitly configured config-content environment value", () => {
@@ -265,6 +299,78 @@ describe("buildOpenCodeServerProcessEnv", () => {
     expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
     expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
   });
+
+  it("scrubs ambient account config before applying a selected instance environment", () => {
+    const env = buildIsolatedOpenCodeServerProcessEnv({
+      instanceId: "opencode_work",
+      baseEnv: {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://proxy.example",
+        OPENAI_API_KEY: "ambient-account-a",
+        OPENCODE_CONFIG_CONTENT: '{"provider":{"openai":{"account":"a"}}}',
+      },
+      environment: {
+        ANTHROPIC_API_KEY: "selected-account-b",
+      },
+    });
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe("selected-account-b");
+    expect(env.PATH?.split(delimiter)[0]).toBe("/usr/bin");
+    expect(env.HTTPS_PROXY).toBe("http://proxy.example");
+  });
+
+  it("appends install directories containing the CLI to PATH", () => {
+    const home = mkdtempSync(join(tmpdir(), "synara-opencode-env-"));
+    try {
+      mkdirSync(join(home, ".opencode", "bin"), { recursive: true });
+      const binary = join(home, ".opencode", "bin", "opencode");
+      writeFileSync(binary, "#!/bin/sh\n");
+      chmodSync(binary, 0o755);
+      const env = buildOpenCodeServerProcessEnv({
+        baseEnv: {
+          PATH: "/usr/bin",
+          HOME: home,
+        },
+      });
+      expect(env.PATH?.split(":")).toContain(join(home, ".opencode", "bin"));
+      expect(env.PATH?.startsWith("/usr/bin")).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("lists the installer and program dirs under Windows", () => {
+    const dirs = openCodeBinarySearchDirectories({
+      platform: "win32",
+      env: {
+        USERPROFILE: "C:\\Users\\test",
+        LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local",
+      },
+    });
+    expect(dirs).toContain("C:\\Users\\test\\.opencode\\bin");
+    expect(dirs).toContain("C:\\Users\\test\\AppData\\Local\\Programs\\opencode");
+  });
+});
+
+describe("parseOpenCodeCliModelsOutput", () => {
+  it("preserves nested provider model slugs used by OmniRoute", () => {
+    const models = parseOpenCodeCliModelsOutput(
+      [
+        "omniroute/antigravity/gemini-3.7-flash-high",
+        '  {"id":"antigravity/gemini-3.7-flash-high","name":"Gemini 3.7 Flash","providerID":"omniroute"}',
+      ].join("\n"),
+    );
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        slug: "omniroute/antigravity/gemini-3.7-flash-high",
+        providerID: "omniroute",
+        modelID: "antigravity/gemini-3.7-flash-high",
+      }),
+    ]);
+  });
 });
 
 describe("OpenCodeRuntime startup diagnostics", () => {
@@ -286,6 +392,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
         ).pipe(
           Effect.provide(
             makeOpenCodeRuntimeLive({
+              fetchImpl: legacyProbeResponse,
               teardownProcessTree: async () => ({
                 escalated: false,
                 signalErrors: [],
@@ -304,6 +411,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       );
 
       expect(server.url).toBe("http://127.0.0.1:58123");
+      expect(server.serverPassword).toMatch(/^[A-Za-z0-9_-]{32,}$/u);
       expect(spawnedCommands).toHaveLength(1);
       expect(spawnedCommands[0]).toMatchObject({
         command: resolveWindowsComSpec(),
@@ -319,6 +427,9 @@ describe("OpenCodeRuntime startup diagnostics", () => {
           windowsVerbatimArguments: true,
         },
       });
+      const spawnOptions = spawnedCommands[0]?.options as { env?: NodeJS.ProcessEnv } | undefined;
+      expect(spawnOptions?.env?.OPENCODE_SERVER_USERNAME).toBe("opencode");
+      expect(spawnOptions?.env?.OPENCODE_SERVER_PASSWORD).toBe(server.serverPassword);
     } finally {
       platformSpy.mockRestore();
     }
@@ -362,9 +473,227 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     expect(error.detail).toContain(
       "command: /custom/bin/opencode serve --hostname 127.0.0.1 --port 58123",
     );
-    expect(error.detail).toContain('OpenCode ready prefix: "opencode server listening"');
+    expect(error.detail).toContain('OpenCode ready prefix: "server listening"');
     expect(error.detail).toContain("stdout:\nbooting custom OpenCode wrapper");
     expect(error.detail).toContain("stderr:\nloading provider credentials");
+  });
+
+  it("accepts the OpenCode 2.x server startup marker", async () => {
+    vi.stubEnv("OPENCODE_PASSWORD", "inherited-mismatch");
+    const spawnedCommands: Array<ChildProcess.StandardCommand> = [];
+    const urls: string[] = [];
+    const server = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime.startOpenCodeServerProcess({
+            binaryPath: "opencode",
+            hostname: "127.0.0.1",
+            port: 58_123,
+          });
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: async (url) => {
+              urls.push(String(url));
+              return Response.json({ version: "2.0.25", pid: 1, urls: [] });
+            },
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                spawnedCommands,
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(server.url).toBe("http://127.0.0.1:58123");
+    expect(urls).toEqual(["http://127.0.0.1:58123/api/info"]);
+    expect(spawnedCommands[0]?.options.env?.OPENCODE_PASSWORD).toBe(server.serverPassword);
+    expect(server.serverPassword).not.toBe("inherited-mismatch");
+  });
+
+  it("fails startup when the server does not serve a supported V1 or V2 API", async () => {
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime
+            .startOpenCodeServerProcess({
+              binaryPath: "opencode",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            })
+            .pipe(Effect.flip);
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: () => Promise.resolve(new Response("{}", { status: 404 })),
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(OpenCodeRuntimeError.is(error)).toBe(true);
+    expect(error.detail).toContain("does not serve a supported V1 or V2 API");
+    expect(error.detail).toContain("GET /provider → HTTP 404");
+    expect(error.detail).not.toContain("2.x");
+  });
+
+  it("retries the surface probe through a transient failure before succeeding", async () => {
+    let probeCalls = 0;
+    const server = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime.startOpenCodeServerProcess({
+            binaryPath: "opencode",
+            hostname: "127.0.0.1",
+            port: 58_123,
+          });
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: (url) => {
+              if (String(url).endsWith("/api/info")) return legacyProbeResponse(url);
+              probeCalls += 1;
+              return probeCalls === 1
+                ? Promise.resolve(new Response("{}", { status: 500 }))
+                : legacyProbeResponse(url);
+            },
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(server.url).toBe("http://127.0.0.1:58123");
+    expect(probeCalls).toBe(2);
+  });
+
+  it("reports a distinct probe error for non-surface statuses like 401", async () => {
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime
+            .startOpenCodeServerProcess({
+              binaryPath: "opencode",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            })
+            .pipe(Effect.flip);
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: () => Promise.resolve(new Response("{}", { status: 401 })),
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(OpenCodeRuntimeError.is(error)).toBe(true);
+    expect(error.detail).toContain("rejected the server password");
+    expect(error.detail).toContain("HTTP 401");
+    expect(error.detail).not.toContain("2.x");
+  });
+
+  it("adds the install hint to spawn permission failures", async () => {
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime
+            .startOpenCodeServerProcess({
+              binaryPath: "opencode",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            })
+            .pipe(Effect.flip);
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              Layer.succeed(
+                ChildProcessSpawner.ChildProcessSpawner,
+                ChildProcessSpawner.make(() =>
+                  Effect.fail(
+                    systemError({
+                      _tag: "PermissionDenied",
+                      module: "ChildProcess",
+                      method: "spawn",
+                      description: "spawn opencode: EACCES",
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(OpenCodeRuntimeError.is(error)).toBe(true);
+    expect(error.detail).toContain("install it (https://opencode.ai)");
+  });
+
+  it("recognizes the OpenCode 2.x verbose-models flag error", () => {
+    expect(
+      supportsVerboseModelsCommandFailure(
+        "",
+        "Unrecognized flag: --verbose in command opencode models",
+      ),
+    ).toBe(true);
   });
 
   it("redacts likely secrets from startup timeout diagnostics and causes", async () => {
@@ -427,9 +756,10 @@ describe("OpenCodeRuntime local server pool", () => {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
+      fetchImpl: legacyProbeResponse,
       teardownProcessTree: async ({ rootPid }) => {
         teardownCalls += 1;
-        expect(rootPid).toBe(1);
+        expect(rootPid).toBe(0x7fff_fffe);
         await exitProof;
         return { escalated: false, signalErrors: [] };
       },
@@ -626,6 +956,133 @@ describe("OpenCodeRuntime local server pool", () => {
     );
   });
 
+  it("keeps custom Synara account roots separate in the managed pool", async () => {
+    const state = { spawnUrls: [] as string[], killUrls: [] as string[] };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const firstScope = yield* Scope.make();
+          const secondScope = yield* Scope.make();
+          const first = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              instanceId: "opencode_work",
+              homeDir: "/home/user",
+              isolationRootDir: "/tmp/synara-state-a",
+            })
+            .pipe(Effect.provideService(Scope.Scope, firstScope));
+          const second = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              instanceId: "opencode_work",
+              homeDir: "/home/user",
+              isolationRootDir: "/tmp/synara-state-b",
+            })
+            .pipe(Effect.provideService(Scope.Scope, secondScope));
+          expect(first.url).not.toBe(second.url);
+          yield* Scope.close(firstScope, Exit.void);
+          yield* Scope.close(secondScope, Exit.void);
+        }),
+      ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+    );
+  });
+
+  it.each([
+    { displayName: "OpenCode", binaryPath: "opencode", cliSpec: OPENCODE_CLI_SPEC },
+    { displayName: "Kilo", binaryPath: "kilo", cliSpec: KILO_CLI_SPEC },
+  ])(
+    "$displayName does not reuse an ambient server for an explicit empty environment, or vice versa",
+    async ({ binaryPath, cliSpec }) => {
+      const previousOpenAiKey = process.env.OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY = "ambient-account-a";
+
+      try {
+        for (const firstUsesEmptyEnvironment of [false, true]) {
+          const state = {
+            spawnUrls: [] as Array<string>,
+            spawnEnvironments: [] as Array<NodeJS.ProcessEnv | undefined>,
+            killUrls: [] as Array<string>,
+            readyPrefix: cliSpec.serverReadyPrefix,
+          };
+
+          await Effect.runPromise(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const runtime = yield* OpenCodeRuntime;
+                const firstScope = yield* Scope.make();
+                const secondScope = yield* Scope.make();
+                const first = yield* runtime
+                  .connectToOpenCodeServer({
+                    binaryPath,
+                    cliSpec,
+                    ...(firstUsesEmptyEnvironment ? { environment: {} } : {}),
+                  })
+                  .pipe(Effect.provideService(Scope.Scope, firstScope));
+                const second = yield* runtime
+                  .connectToOpenCodeServer({
+                    binaryPath,
+                    cliSpec,
+                    ...(!firstUsesEmptyEnvironment ? { environment: {} } : {}),
+                  })
+                  .pipe(Effect.provideService(Scope.Scope, secondScope));
+
+                expect(first.url).toBe("http://127.0.0.1:59000");
+                expect(second.url).toBe("http://127.0.0.1:59001");
+
+                yield* Scope.close(firstScope, Exit.void);
+                yield* Scope.close(secondScope, Exit.void);
+              }),
+            ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+          );
+
+          expect(state.spawnEnvironments).toHaveLength(2);
+          expect(state.spawnEnvironments[0]?.OPENAI_API_KEY).toBe(
+            firstUsesEmptyEnvironment ? undefined : "ambient-account-a",
+          );
+          expect(state.spawnEnvironments[1]?.OPENAI_API_KEY).toBe(
+            firstUsesEmptyEnvironment ? "ambient-account-a" : undefined,
+          );
+        }
+      } finally {
+        if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    },
+  );
+
+  it("keeps servers separate when environment values collide under the old 32-bit hash", async () => {
+    const state = { spawnUrls: [] as Array<string>, killUrls: [] as Array<string> };
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const firstScope = yield* Scope.make();
+          const secondScope = yield* Scope.make();
+          const first = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              environment: { OPENAI_API_KEY: "a02hh7njhk5" },
+            })
+            .pipe(Effect.provideService(Scope.Scope, firstScope));
+          const second = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              environment: { OPENAI_API_KEY: "p7fe9wsknu9" },
+            })
+            .pipe(Effect.provideService(Scope.Scope, secondScope));
+
+          expect(first.url).toBe("http://127.0.0.1:59000");
+          expect(second.url).toBe("http://127.0.0.1:59001");
+
+          yield* Scope.close(firstScope, Exit.void);
+          yield* Scope.close(secondScope, Exit.void);
+        }),
+      ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+    );
+  });
+
   it("starts local servers in the requested cwd and separates cwd-specific pools", async () => {
     const state = {
       spawnUrls: [] as Array<string>,
@@ -814,6 +1271,68 @@ openai/gpt-5.4
           { value: "high" },
         ],
         defaultReasoningEffort: "medium",
+      },
+    ]);
+  });
+
+  it.each([{ reasoningOptions: [{ type: "effort", values: ["low", "high", "max"] }] }])(
+    "preserves normalized CLI variants when raw metadata is %j",
+    ({ reasoningOptions }) => {
+      const models = parseOpenCodeCliModelsOutput(
+        `anthropic/claude-test\n${JSON.stringify({
+          reasoning_options: reasoningOptions,
+          variants: { high: { thinking: { budgetTokens: 4096 } } },
+        })}`,
+      );
+
+      expect(models[0]?.supportedReasoningEfforts).toEqual([{ value: "high" }]);
+    },
+  );
+
+  it.each([{ variants: {} }, { variants: { creative: { temperature: 0.9 } } }])(
+    "does not restore reasoning disabled in normalized CLI variants: %j",
+    ({ variants }) => {
+      const models = parseOpenCodeCliModelsOutput(
+        `anthropic/claude-test\n${JSON.stringify({
+          reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+          variants,
+        })}`,
+      );
+
+      expect(models[0]?.supportedReasoningEfforts).toEqual([]);
+    },
+  );
+
+  it("reads models.dev reasoning_options when verbose output has no variants", () => {
+    const models = parseOpenCodeCliModelsOutput(`
+opencode-go/muse-spark-1.3-contributor
+{
+  "id": "muse-spark-1.3-contributor",
+  "providerID": "opencode-go",
+  "name": "Muse Spark 1.3 Contributor",
+  "reasoning_options": [
+    {
+      "type": "effort",
+      "values": ["minimal", "low", "medium", "high", "xhigh"]
+    }
+  ]
+}
+`);
+
+    expect(models).toEqual([
+      {
+        slug: "opencode-go/muse-spark-1.3-contributor",
+        providerID: "opencode-go",
+        modelID: "muse-spark-1.3-contributor",
+        name: "Muse Spark 1.3 Contributor",
+        variants: [],
+        supportedReasoningEfforts: [
+          { value: "minimal" },
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+          { value: "xhigh" },
+        ],
       },
     ]);
   });

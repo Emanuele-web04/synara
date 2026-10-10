@@ -13,7 +13,7 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
-import { listFiles, pruneProductionPublicAssets } from "./build-utils/public-assets";
+import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -25,22 +25,33 @@ const buildSourcemap =
       ? "hidden"
       : false;
 
-// Prune public assets before generating compressed sidecars.
-function productionPublicAssetPlugin(): Plugin {
+// Prune before compression. closeBundle hooks are parallel by default;
+// enforce: "post" alone does not make the asynchronous compression hook wait.
+function centralIconPrunePlugin(): Plugin {
   let resolvedRoot = process.cwd();
   let resolvedOutDir = "dist";
   return {
-    name: "synara-production-public-assets",
+    name: "synara-central-icon-prune",
     apply: "build",
     configResolved(config) {
       resolvedRoot = config.root;
       resolvedOutDir = path.resolve(config.root, config.build.outDir);
     },
     closeBundle: {
+      order: "pre",
       sequential: true,
-      async handler(error) {
-        if (error) return;
-        await pruneProductionPublicAssets(resolvedRoot, resolvedOutDir);
+      async handler() {
+        await pruneProductionIcons(path.join(resolvedRoot, "public"), resolvedOutDir, [
+          path.join(resolvedRoot, "src"),
+          path.resolve(resolvedRoot, "../../packages/contracts/src"),
+          path.resolve(resolvedRoot, "../../packages/shared/src"),
+        ]);
+        // MSW is used by the dev-served browser tests, never the production app.
+        await Promise.all(
+          ["", ".gz", ".br"].map((suffix) =>
+            fs.rm(path.join(resolvedOutDir, `mockServiceWorker.js${suffix}`), { force: true }),
+          ),
+        );
       },
     },
   };
@@ -67,65 +78,61 @@ function precompressPlugin(): Plugin {
     configResolved(config) {
       resolvedOutDir = path.resolve(config.root, config.build.outDir);
     },
-    closeBundle: {
-      sequential: true,
-      async handler(error) {
-        if (error) return;
-        const files = (await listFiles(resolvedOutDir)).filter((file) =>
-          PRECOMPRESS_EXTENSIONS.has(path.extname(file)),
-        );
-        // A sidecar whose source shrank below threshold or stopped compressing
-        // smaller must be removed, not just skipped: emptyOutDir protects full
-        // builds, but partial/watch builds would otherwise serve a stale
-        // compressed body under a current filename.
-        const removeStale = (sidecarPath: string) => fs.rm(sidecarPath, { force: true });
-        // Write to a temp file and rename: a watch-build server reading a
-        // sidecar mid-write would otherwise get a truncated compressed stream.
-        // Rename is atomic within a directory, so readers see either the old
-        // sidecar or the complete new one.
-        let tempSequence = 0;
-        const writeSidecarAtomically = async (sidecarPath: string, data: Buffer) => {
-          // Unique per write so concurrent builds against one outDir cannot
-          // clobber each other's staging file.
-          tempSequence += 1;
-          const tempPath = `${sidecarPath}.${process.pid}.${tempSequence}.tmp`;
-          await fs.writeFile(tempPath, data);
-          await fs.rename(tempPath, sidecarPath);
-        };
-        let sidecarCount = 0;
-        await Promise.all(
-          files.map(async (file) => {
-            const source = await fs.readFile(file);
-            if (source.byteLength < PRECOMPRESS_MIN_BYTES) {
-              await Promise.all([removeStale(`${file}.gz`), removeStale(`${file}.br`)]);
-              return;
-            }
-            // Max-quality brotli on thousands of small files dominates plugin
-            // wall-clock; below 16 KiB quality 9 is byte-for-byte competitive.
-            const brotliQuality =
-              source.byteLength < 16 * 1024 ? 9 : zlib.constants.BROTLI_MAX_QUALITY;
-            const [gzipped, brotlied] = await Promise.all([
-              gzip(source, { level: zlib.constants.Z_BEST_COMPRESSION }),
-              brotliCompress(source, {
-                params: {
-                  [zlib.constants.BROTLI_PARAM_QUALITY]: brotliQuality,
-                  [zlib.constants.BROTLI_PARAM_SIZE_HINT]: source.byteLength,
-                },
-              }),
-            ]);
-            await Promise.all([
-              gzipped.byteLength < source.byteLength
-                ? writeSidecarAtomically(`${file}.gz`, gzipped)
-                : removeStale(`${file}.gz`),
-              brotlied.byteLength < source.byteLength
-                ? writeSidecarAtomically(`${file}.br`, brotlied)
-                : removeStale(`${file}.br`),
-            ]);
-            sidecarCount += 1;
-          }),
-        );
-        console.info(`[precompress] emitted gzip+brotli sidecars for ${sidecarCount} files.`);
-      },
+    async closeBundle() {
+      const files = (await listFiles(resolvedOutDir)).filter((file) =>
+        PRECOMPRESS_EXTENSIONS.has(path.extname(file)),
+      );
+      // A sidecar whose source shrank below threshold or stopped compressing
+      // smaller must be removed, not just skipped: emptyOutDir protects full
+      // builds, but partial/watch builds would otherwise serve a stale
+      // compressed body under a current filename.
+      const removeStale = (sidecarPath: string) => fs.rm(sidecarPath, { force: true });
+      // Write to a temp file and rename: a watch-build server reading a
+      // sidecar mid-write would otherwise get a truncated compressed stream.
+      // Rename is atomic within a directory, so readers see either the old
+      // sidecar or the complete new one.
+      let tempSequence = 0;
+      const writeSidecarAtomically = async (sidecarPath: string, data: Buffer) => {
+        // Unique per write so concurrent builds against one outDir cannot
+        // clobber each other's staging file.
+        tempSequence += 1;
+        const tempPath = `${sidecarPath}.${process.pid}.${tempSequence}.tmp`;
+        await fs.writeFile(tempPath, data);
+        await fs.rename(tempPath, sidecarPath);
+      };
+      let sidecarCount = 0;
+      await Promise.all(
+        files.map(async (file) => {
+          const source = await fs.readFile(file);
+          if (source.byteLength < PRECOMPRESS_MIN_BYTES) {
+            await Promise.all([removeStale(`${file}.gz`), removeStale(`${file}.br`)]);
+            return;
+          }
+          // Max-quality brotli on thousands of small files dominates plugin
+          // wall-clock; below 16 KiB quality 9 is byte-for-byte competitive.
+          const brotliQuality =
+            source.byteLength < 16 * 1024 ? 9 : zlib.constants.BROTLI_MAX_QUALITY;
+          const [gzipped, brotlied] = await Promise.all([
+            gzip(source, { level: zlib.constants.Z_BEST_COMPRESSION }),
+            brotliCompress(source, {
+              params: {
+                [zlib.constants.BROTLI_PARAM_QUALITY]: brotliQuality,
+                [zlib.constants.BROTLI_PARAM_SIZE_HINT]: source.byteLength,
+              },
+            }),
+          ]);
+          await Promise.all([
+            gzipped.byteLength < source.byteLength
+              ? writeSidecarAtomically(`${file}.gz`, gzipped)
+              : removeStale(`${file}.gz`),
+            brotlied.byteLength < source.byteLength
+              ? writeSidecarAtomically(`${file}.br`, brotlied)
+              : removeStale(`${file}.br`),
+          ]);
+          sidecarCount += 1;
+        }),
+      );
+      console.info(`[precompress] emitted gzip+brotli sidecars for ${sidecarCount} files.`);
     },
   };
 }
@@ -144,9 +151,21 @@ export default defineConfig({
       // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
       parserOpts: { plugins: ["typescript", "jsx"] },
       presets: [reactCompilerPreset()],
-    }),
+    }).then((plugin) => ({
+      ...plugin,
+      // Large chat modules make the compiler expensive on cold loads and every
+      // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
+      // Keep production builds and browser tests compiled, with an opt-in for
+      // debugging compiler-specific behavior in the development app.
+      apply: ((_config, { command, mode }) =>
+        command === "build" ||
+        mode === "test" ||
+        /^(1|true)$/i.test(
+          process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "",
+        )) satisfies Plugin["apply"],
+    })),
     tailwindcss(),
-    productionPublicAssetPlugin(),
+    centralIconPrunePlugin(),
     precompressPlugin(),
   ],
   optimizeDeps: {

@@ -26,6 +26,7 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
+  buildProjectDigestPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
@@ -169,6 +170,7 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         input,
         (input) =>
           buildCommitMessagePrompt({
+            writingPreferences: input.writingPreferences,
             branch: input.branch,
             stagedSummary: input.stagedSummary,
             stagedPatch: input.stagedPatch,
@@ -191,6 +193,7 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         input,
         (input) =>
           buildPrContentPrompt({
+            writingPreferences: input.writingPreferences,
             baseBranch: input.baseBranch,
             headBranch: input.headBranch,
             commitSummary: input.commitSummary,
@@ -258,6 +261,22 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         (generated, input) => ({
           recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
         }),
+      );
+    }),
+    generateProjectDigest: Effect.fn("DroidTextGeneration.generateProjectDigest")(function* (
+      input: OperationInputOf<"generateProjectDigest">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateProjectDigest",
+        input,
+        (input) =>
+          buildProjectDigestPrompt({
+            ...(input.previousSummary ? { previousSummary: input.previousSummary } : {}),
+            activity: input.activity,
+            coverage: input.coverage,
+            pinnedFocus: input.pinnedFocus,
+          }),
+        (generated) => generated,
       );
     }),
     generateAutomationIntent: Effect.fn("DroidTextGeneration.generateAutomationIntent")(function* (

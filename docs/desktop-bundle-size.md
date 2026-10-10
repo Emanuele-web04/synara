@@ -33,7 +33,7 @@ signing credentials. Download the evidence before its 14-day artifact expiry.
 
 ## Packaging policy
 
-`desktop-package-files.ts` omits dependency maps, declaration variants, verified
+`desktop-bundle-files.ts` omits dependency maps, declaration variants, verified
 compiled packages' TypeScript source copies, native compiler intermediates and
 artwork for other platforms. It retains runtime JavaScript, binaries, terminal
 helpers, license notices, Chromium locales and application language support.

@@ -1,28 +1,16 @@
-import type {
-  MessageId,
-  ModelSelection,
-  ProviderInteractionMode,
-  ProviderKind,
-  ProviderStartOptions,
-  RuntimeMode,
-  ThreadId,
-} from "@synara/contracts";
+import type { MessageId, ModelSelection, ProviderKind, ThreadId } from "@synara/contracts";
 import type { QueryClient, UseMutationResult } from "@tanstack/react-query";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import type { gitCreateDetachedWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import type { AppSettings } from "../../appSettings";
-import type {
-  DraftThreadEnvMode,
-  QueuedComposerChatTurn,
-  QueuedComposerPlanFollowUp,
-} from "../../composerDraftStore";
+import type { QueuedComposerChatTurn, QueuedComposerPlanFollowUp } from "../../composerDraftStore";
 import type { useComposerImageIntake } from "../../hooks/useComposerImageIntake";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { LatestProposedPlanState } from "../../session-logic";
 import type { useStore } from "../../store";
 import type { Project, Thread } from "../../types";
-import type { QueuedSteerGate } from "../ChatView.logic";
+import type { QueuedSteerGate, TurnDispatchSettings } from "../ChatView.logic";
 import type { useChatAutomationCreation } from "./useChatAutomationCreation";
 import type { useChatAutomationSetup } from "./useChatAutomationSetup";
 import type { useChatComposerDraft } from "./useChatComposerDraft";
@@ -42,6 +30,8 @@ export interface PlanFollowUpSubmission {
   interactionMode: "default" | "plan";
   dispatchMode: "queue" | "steer";
   queuedTurn?: QueuedComposerPlanFollowUp;
+  /** Carries the queue hold captured before the ordinary send path's async preflight. */
+  resumeQueueAfterSend?: () => void;
 }
 
 /**
@@ -73,14 +63,25 @@ export interface LateComposerSendHandlers {
 export interface ChatTurnSubmissionInput {
   threadId: ThreadId;
   hasLiveTurn: boolean;
+  /**
+   * Refuses a live send up front (before the message is shown) when the
+   * composer picked another provider but the thread cannot hand off yet.
+   */
+  canSendWithProviderHandoff?: (() => boolean) | undefined;
+  /**
+   * Runs right before the turn is dispatched, once the message is already on
+   * screen. When the composer picked another provider it hands the thread off
+   * in place first, and throws if that failed so the send rolls back and the
+   * message returns to the composer instead of reaching the wrong provider.
+   */
+  prepareProviderHandoffForSend?:
+    | ((thread: Thread, modelSelection: ModelSelection) => Promise<void>)
+    | undefined;
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;
   activeThread: Thread | undefined;
   isConnecting: boolean;
   sendPreflightInFlightRef: RefObject<boolean>;
   sendInFlightRef: RefObject<boolean>;
-  runtimeMode: RuntimeMode;
-  interactionMode: ProviderInteractionMode;
-  envMode: DraftThreadEnvMode;
   showPlanFollowUpPrompt: boolean;
   activeProposedPlan: LatestProposedPlanState | null;
   hasQueueableLiveTurn: boolean;
@@ -93,7 +94,7 @@ export interface ChatTurnSubmissionInput {
   hasNativeUserMessages: boolean;
   chatWorkspaceRoot: string | null;
   isHomeChatContainer: boolean;
-  isStudioContainer: boolean;
+  isGroupContainer: boolean;
   resolvedThreadWorktreePath: string | null;
   resolvedThreadWorkingDirectory: string | null;
   currentActiveGitBranch: string | null;
@@ -123,7 +124,6 @@ export interface ChatTurnSubmissionInput {
   >;
   isLocalDraftThread: boolean;
   threadNotes: string;
-  assistantDeliveryMode: "streaming" | "buffered";
   setSettledThreadBranchWarningDismissedThreadId: Dispatch<SetStateAction<ThreadId | null>>;
   setQueuedSteerGate: Dispatch<SetStateAction<QueuedSteerGate | null>>;
   planSidebarDismissedForTurnRef: RefObject<string | null>;
@@ -247,8 +247,11 @@ export interface ChatTurnSubmissionInput {
   selectedProvider: ProviderKind;
   selectedModel: string;
   selectedPromptEffort: ReturnType<typeof useChatProviderModels>["selectedPromptEffort"];
-  selectedModelSelection: ModelSelection;
-  providerOptionsForDispatch: ProviderStartOptions | undefined;
+  turnDispatchSettings: TurnDispatchSettings;
+  computerControlChangeSequence: RefObject<number>;
+  setComposerDraftComputerControlMode: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControlMode"];
   pendingAutomationConversationRef: ReturnType<
     typeof useChatAutomationSetup
   >["pendingAutomationConversationRef"];

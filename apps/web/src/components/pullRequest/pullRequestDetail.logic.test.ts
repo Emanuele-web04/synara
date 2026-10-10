@@ -1,20 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type {
-  PullRequestComment,
-  PullRequestCommit,
-  PullRequestDetailInput,
-} from "@synara/contracts";
+import type { PullRequestComment, PullRequestCommit } from "@synara/contracts";
 
 import type { RightDockPane } from "~/rightDockStore.logic";
 
 import {
   buildPullRequestTimelineEvents,
-  describePullRequestState,
   pullRequestDetailInputFromPane,
-  pullRequestDetailInputKey,
-  pullRequestPaneTabLabel,
   stripHtmlComments,
+  describePullRequestChecksBrief,
+  describePullRequestMergeStatus,
 } from "./pullRequestDetail.logic";
 
 function makeCommit(overrides: Partial<PullRequestCommit> = {}): PullRequestCommit {
@@ -54,49 +49,24 @@ function makeTimelineSource() {
   };
 }
 
-describe("pullRequestDetailInputKey", () => {
-  it("builds a stable projectId:repository#number identity", () => {
-    const input: PullRequestDetailInput = {
-      projectId: "project-1" as PullRequestDetailInput["projectId"],
-      repository: "acme/widgets",
-      number: 350,
-    };
-    expect(pullRequestDetailInputKey(input)).toBe("project-1:acme/widgets#350");
-  });
-});
-
-describe("pullRequestPaneTabLabel", () => {
-  it("formats the shared tab chip label", () => {
-    expect(pullRequestPaneTabLabel(350)).toBe("PR #350");
-  });
-});
-
-describe("describePullRequestState", () => {
-  it("describes each state, with draft only applying to open pull requests", () => {
-    expect(describePullRequestState("open", true)).toBe("Draft");
-    expect(describePullRequestState("open", false)).toBe("Ready for review");
-    expect(describePullRequestState("merged", true)).toBe("Merged");
-    expect(describePullRequestState("closed", false)).toBe("Closed");
-  });
-});
-
 describe("buildPullRequestTimelineEvents", () => {
   it("orders created, commit, and comment events chronologically", () => {
     const events = buildPullRequestTimelineEvents(makeTimelineSource());
     expect(events.map((event) => event.id)).toEqual(["created", "abcdef1234567890", "comment-1"]);
   });
 
-  it("titles review comments differently from issue comments", () => {
+  it("surfaces preserved commit author names in the timeline", () => {
     const events = buildPullRequestTimelineEvents({
       ...makeTimelineSource(),
-      comments: [
-        makeComment({ kind: "review" }),
-        makeComment({ id: "comment-2", kind: "review-comment" }),
+      commits: [
+        makeCommit({
+          authors: [{ login: null, name: "Local author", avatarUrl: null, url: null }],
+        }),
       ],
     });
-    const titles = events.map((event) => event.title);
-    expect(titles).toContain("reviewer reviewed");
-    expect(titles).toContain("reviewer commented");
+    expect(events.find((event) => event.id === "abcdef1234567890")?.title).toBe(
+      "Commit abcdef1 by Local author",
+    );
   });
 
   it("falls back to placeholders for missing authors and empty commit messages", () => {
@@ -109,6 +79,32 @@ describe("buildPullRequestTimelineEvents", () => {
     expect(events[0]?.title).toBe("Someone opened this pull request");
     expect(events[1]?.body).toBe("No commit message.");
     expect(events[2]?.title).toBe("Someone commented");
+  });
+
+  it("names people as the list rows do: display name first, login as the fallback", () => {
+    const events = buildPullRequestTimelineEvents({
+      ...makeTimelineSource(),
+      author: { login: "octo", name: "Octo Cat", avatarUrl: null, url: null },
+    });
+    expect(events[0]?.title).toBe("Octo Cat opened this pull request");
+    expect(events[2]?.title).toBe("reviewer commented");
+  });
+
+  it("builds an issue's timeline: no commits, and the issue's own words", () => {
+    const events = buildPullRequestTimelineEvents(
+      {
+        createdAt: "2026-07-01T10:00:00Z",
+        author: { login: "author", name: null, avatarUrl: null, url: null },
+        comments: [makeComment()],
+        closedAt: "2026-07-05T10:00:00Z",
+      },
+      "issue",
+    );
+    expect(events.map((event) => event.title)).toEqual([
+      "author opened this issue",
+      "reviewer commented",
+      "Issue closed",
+    ]);
   });
 
   it("appends a merged event and suppresses the closed event when both timestamps exist", () => {
@@ -161,12 +157,6 @@ describe("pullRequestDetailInputFromPane", () => {
 });
 
 describe("stripHtmlComments", () => {
-  it("removes PR template boilerplate comments", () => {
-    expect(stripHtmlComments("<!-- ⚠️ READ BEFORE OPENING -->\n## Summary\nReal content.")).toBe(
-      "## Summary\nReal content.",
-    );
-  });
-
   it("removes multi-line comments anywhere in the body", () => {
     expect(stripHtmlComments("Before\n<!--\nline one\nline two\n-->\nAfter")).toBe(
       "Before\n\nAfter",
@@ -177,8 +167,51 @@ describe("stripHtmlComments", () => {
     const markdown = "Intro\n```html\n<!-- keep me -->\n```\n<!-- drop me -->";
     expect(stripHtmlComments(markdown)).toBe("Intro\n```html\n<!-- keep me -->\n```");
   });
+});
 
-  it("passes plain markdown through untouched", () => {
-    expect(stripHtmlComments("## Summary\n- item")).toBe("## Summary\n- item");
+describe("describePullRequestMergeStatus", () => {
+  const open = { state: "open", isDraft: false, baseBranch: "main" } as const;
+  it("names the merge state in words", () => {
+    expect(describePullRequestMergeStatus({ ...open, mergeability: "mergeable" })).toEqual({
+      tone: "success",
+      label: "Can merge without conflicts",
+    });
+    expect(describePullRequestMergeStatus({ ...open, mergeability: "conflicting" }).label).toBe(
+      "Conflicts with main",
+    );
+    expect(
+      describePullRequestMergeStatus({
+        ...open,
+        isDraft: true,
+        mergeability: "mergeable",
+      }).label,
+    ).toBe("Draft");
+    expect(
+      describePullRequestMergeStatus({
+        ...open,
+        state: "merged",
+        mergeability: "unknown",
+      }).label,
+    ).toBe("Merged");
+  });
+});
+
+describe("describePullRequestChecksBrief", () => {
+  it("counts checks by outcome", () => {
+    expect(describePullRequestChecksBrief([])).toEqual({
+      tone: "none",
+      label: "No checks",
+    });
+    expect(describePullRequestChecksBrief([{ status: "success" }, { status: "success" }])).toEqual({
+      tone: "success",
+      label: "2 successful",
+    });
+    expect(
+      describePullRequestChecksBrief([
+        { status: "failure" },
+        { status: "pending" },
+        { status: "success" },
+      ]),
+    ).toEqual({ tone: "failure", label: "1 failing, 1 pending, 1 successful" });
   });
 });

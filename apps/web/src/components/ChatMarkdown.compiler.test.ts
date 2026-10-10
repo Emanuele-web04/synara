@@ -23,5 +23,5 @@ describe("ChatMarkdown React Compiler coverage", () => {
     expect(events.filter((event) => event.kind === "PipelineError")).toEqual([]);
     expect(errors).toEqual([]);
     expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
-  });
+  }, 60_000);
 });

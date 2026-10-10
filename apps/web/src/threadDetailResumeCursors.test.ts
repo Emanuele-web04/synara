@@ -26,10 +26,18 @@ describe("threadDetailResumeCursors", () => {
   it("subscribes without a cursor until cached detail exists, then resumes from it", () => {
     const thread = threadId("thread-1");
 
-    expect(buildThreadSubscribeInput(thread)).toEqual({ threadId: thread });
+    expect(buildThreadSubscribeInput(thread)).toEqual({
+      threadId: thread,
+      messageWindow: { limit: 100 },
+    });
 
     setThreadDetailResumeCursor(thread, 12);
-    expect(buildThreadSubscribeInput(thread)).toEqual({ threadId: thread, afterSequence: 12 });
+    expect(buildThreadSubscribeInput(thread)).toEqual({
+      threadId: thread,
+      afterSequence: 12,
+      batchReplay: true,
+      messageWindow: { limit: 100 },
+    });
   });
 
   it("advances monotonically for events but lets snapshots overwrite backwards", () => {
@@ -56,6 +64,9 @@ describe("threadDetailResumeCursors", () => {
     expect(hasThreadDetailResumeCursor(threadTwo)).toBe(true);
 
     clearThreadDetailResumeCursor(threadTwo);
-    expect(buildThreadSubscribeInput(threadTwo)).toEqual({ threadId: threadTwo });
+    expect(buildThreadSubscribeInput(threadTwo)).toEqual({
+      threadId: threadTwo,
+      messageWindow: { limit: 100 },
+    });
   });
 });

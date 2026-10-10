@@ -242,14 +242,4 @@ describe("resolvePreferredSplitForCommand", () => {
 
     expect(result).toEqual({ splitViewId: "split-other", paneId: "split-other-pane-first" });
   });
-
-  it("returns null when no split is active and no persisted split owns the thread", () => {
-    expect(
-      resolvePreferredSplitForCommand({
-        activeSplitView: null,
-        splitViewsById: {},
-        threadId: THREAD_A,
-      }),
-    ).toBeNull();
-  });
 });

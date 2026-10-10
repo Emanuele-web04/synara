@@ -1,0 +1,101 @@
+{
+  "baseline": {
+    "reports": [
+      {
+        "sample": 0,
+        "name": "short",
+        "inputP95Ms": 34.700000047683716,
+        "reactCommitTotalMs": 46
+      },
+      {
+        "sample": 0,
+        "name": "near-cap",
+        "inputP95Ms": 51.60000002384186,
+        "reactCommitTotalMs": 112.39999997615814
+      },
+      {
+        "sample": 1,
+        "name": "short",
+        "inputP95Ms": 34.200000047683716,
+        "reactCommitTotalMs": 44.60000002384186
+      },
+      {
+        "sample": 1,
+        "name": "near-cap",
+        "inputP95Ms": 51.300000071525574,
+        "reactCommitTotalMs": 106.50000023841858
+      },
+      {
+        "sample": 2,
+        "name": "short",
+        "inputP95Ms": 34.90000009536743,
+        "reactCommitTotalMs": 44.59999990463257
+      },
+      {
+        "sample": 2,
+        "name": "near-cap",
+        "inputP95Ms": 51.299999952316284,
+        "reactCommitTotalMs": 105.09999990463257
+      }
+    ],
+    "ratios": [2.3565022450530524, 2.387892380750825, 2.443478260351264]
+  },
+  "candidate": {
+    "reports": [
+      {
+        "sample": 0,
+        "name": "short",
+        "inputP95Ms": 34.5,
+        "reactCommitTotalMs": 22.00000035762787
+      },
+      {
+        "sample": 0,
+        "name": "near-cap",
+        "inputP95Ms": 34.299999952316284,
+        "reactCommitTotalMs": 40
+      },
+      {
+        "sample": 1,
+        "name": "short",
+        "inputP95Ms": 35.89999997615814,
+        "reactCommitTotalMs": 23.700000047683716
+      },
+      {
+        "sample": 1,
+        "name": "near-cap",
+        "inputP95Ms": 83.29999995231628,
+        "reactCommitTotalMs": 39.49999976158142
+      },
+      {
+        "sample": 2,
+        "name": "short",
+        "inputP95Ms": 34,
+        "reactCommitTotalMs": 22.899999856948853
+      },
+      {
+        "sample": 2,
+        "name": "near-cap",
+        "inputP95Ms": 34.60000002384186,
+        "reactCommitTotalMs": 39.69999980926514
+      }
+    ],
+    "ratios": [1.666666653253526, 1.7336244566490002, 1.8181817886257965]
+  },
+  "environment": {
+    "baseline": "2c2d2bb942f47c6717167ac061378421016aae1f",
+    "candidate": "e90ce8a4d656ab147c2a600060e17c0155e62c78",
+    "node": "24.21.0",
+    "bun": "1.4.2",
+    "runner": "Vitest4.1.10 Chromium",
+    "threshold": 2.5,
+    "samplesPerCase": 3,
+    "quietSerial": true,
+    "claim": "development fixture React commit work only; inputP95 noisy"
+  },
+  "initialCandidateAgainst626": {
+    "baselineMedianRatio": 2.39254385,
+    "candidateMedianRatios": [3.4957983, 3.61206893],
+    "threshold": 2.5,
+    "result": "failed; motivated profile and immutable-activity normalization reuse"
+  }
+}

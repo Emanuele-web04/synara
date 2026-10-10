@@ -28,9 +28,9 @@ import { composerPromptStillMatchesRestoredQueuedDraft } from "./queuedComposerP
 import { useChatComposerDraft } from "./useChatComposerDraft";
 import { useChatComposerEditing } from "./useChatComposerEditing";
 import { useChatPendingInteractions } from "./useChatPendingInteractions";
-import { useChatRuntimeModes } from "./useChatRuntimeModes";
 import { useComposerDiscovery } from "./useComposerDiscovery";
 import { useComposerReferences } from "./useComposerReferences";
+import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
 
 interface ChatComposerCommandsInput {
   threadId: ThreadId;
@@ -62,7 +62,11 @@ interface ChatComposerCommandsInput {
   updateSelectedComposerMentions: ReturnType<
     typeof useComposerReferences
   >["updateSelectedComposerMentions"];
-  onProviderModelSelect: (provider: ProviderKind, model: ModelSlug) => Promise<void>;
+  onProviderModelSelect: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    selectionOptions?: ComposerModelSelectionOptions,
+  ) => Promise<void>;
   composerMenuItems: ComposerCommandItem[];
   composerHighlightedItemId: string | null;
   activePendingQuestion: ReturnType<typeof useChatPendingInteractions>["activePendingQuestion"];
@@ -103,7 +107,6 @@ interface ChatComposerCommandsInput {
   setComposerCursor: ReturnType<typeof useChatComposerDraft>["setComposerCursor"];
   setComposerTrigger: ReturnType<typeof useChatComposerDraft>["setComposerTrigger"];
   clearComposerSlashDraft: ReturnType<typeof useChatComposerEditing>["clearComposerSlashDraft"];
-  toggleInteractionMode: ReturnType<typeof useChatRuntimeModes>["toggleInteractionMode"];
   composerMenuOpenRef: RefObject<boolean>;
   onSend: (
     e?: { preventDefault: () => void },
@@ -161,7 +164,6 @@ export function useChatComposerCommands({
   setComposerCursor,
   setComposerTrigger,
   clearComposerSlashDraft,
-  toggleInteractionMode,
   composerMenuOpenRef,
   onSend,
   settings,
@@ -265,7 +267,11 @@ export function useChatComposerCommands({
         return;
       }
       if (item.type === "model") {
-        onProviderModelSelect(item.provider, item.model);
+        onProviderModelSelect(
+          item.provider,
+          item.model,
+          item.instanceId ? { instanceId: item.instanceId } : undefined,
+        );
         applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
         return;
       }
@@ -451,10 +457,7 @@ export function useChatComposerCommands({
       return false;
     }
 
-    if (key === "Tab" && event.shiftKey) {
-      toggleInteractionMode();
-      return true;
-    }
+    if (key === "Tab" && event.shiftKey) return false;
 
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     const menuIsActive = composerMenuOpenRef.current || trigger !== null;

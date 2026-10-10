@@ -6,7 +6,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@synara/contracts";
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { VISIBLE_PROVIDER_DESCRIPTORS } from "./betaFeatures";
 
 import { orderedActivities, parseTaskListTasks } from "./workLog";
 
@@ -26,13 +26,16 @@ export {
   type PendingUserInput,
 } from "./pendingInteractionDerivation";
 export {
+  deriveSubagentTaskEnds,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
   isRoutedSubagentWorkEntry,
+  isSubagentStateOnlyWorkEntry,
   omitRoutedSubagentWorkEntries,
   orderedActivities,
+  type SubagentTaskEnd,
   type TimelineEntry,
   type WorkLogAutomation,
   type WorkLogEntry,
@@ -40,6 +43,8 @@ export {
   type WorkLogLiveActivityState,
   type WorkLogSubagent,
   type WorkLogSubagentAction,
+  type WorkLogSubagentRun,
+  type WorkLogSubagentRunMember,
   type WorkLogSynaraCreatedThread,
   type WorkLogSynaraThreadCreation,
 } from "./workLog";
@@ -50,7 +55,7 @@ export const PROVIDER_OPTIONS: Array<{
   value: ProviderPickerKind;
   label: string;
   available: boolean;
-}> = PROVIDER_DESCRIPTORS.map((descriptor) => ({
+}> = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => ({
   value: descriptor.kind,
   label: descriptor.displayName,
   available: descriptor.available,
@@ -86,19 +91,20 @@ function formatDuration(durationMs: number): string {
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
   if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1)}s`;
   if (durationMs < 60_000) return `${Math.round(durationMs / 1_000)}s`;
-  const minutes = Math.floor(durationMs / 60_000);
-  const seconds = Math.round((durationMs % 60_000) / 1_000);
-  if (seconds === 0) return `${minutes}m`;
-  if (seconds === 60) return `${minutes + 1}m`;
-  return `${minutes}m ${seconds}s`;
+  // Keep settled-time rounding while sharing larger units with live clocks.
+  return formatClockDuration(Math.round(durationMs / 1_000) * 1_000);
 }
 
+// Keep long-running timers compact with days/hours, hours/minutes, or minutes/seconds.
 export function formatClockDuration(durationMs: number): string {
   const elapsedSeconds = Math.max(0, Math.floor(durationMs / 1_000));
   if (elapsedSeconds < 60) return `${elapsedSeconds}s`;
 
-  const hours = Math.floor(elapsedSeconds / 3600);
-  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const days = Math.floor(elapsedSeconds / 86_400);
+  const hours = Math.floor((elapsedSeconds % 86_400) / 3_600);
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+
+  const minutes = Math.floor((elapsedSeconds % 3_600) / 60);
   const seconds = elapsedSeconds % 60;
   if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
@@ -272,13 +278,19 @@ export function deriveActiveTaskListState(
     : null;
 }
 
-// Counts still-running background work for the active turn so compact UI can surface agent activity.
-export function deriveActiveBackgroundTasksState(
+interface FoldedActiveTask {
+  taskType?: string | undefined;
+  isBackgrounded: boolean;
+}
+
+// Folds task.* activities into the set of still-running tasks. Pass a turnId to
+// scope task creation to that turn (terminal events always apply across turns).
+function foldActiveTasks(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
-): ActiveBackgroundTasksState | null {
+): Map<string, FoldedActiveTask> {
   const ordered = orderedActivities(activities);
-  const activeTasks = new Map<string, { taskType?: string | undefined }>();
+  const activeTasks = new Map<string, FoldedActiveTask>();
 
   for (const activity of ordered) {
     if (
@@ -325,6 +337,16 @@ export function deriveActiveBackgroundTasksState(
         status === "paused"
       ) {
         activeTasks.delete(taskId);
+        continue;
+      }
+      const previous = activeTasks.get(taskId);
+      const isBackgrounded =
+        payload && typeof payload.isBackgrounded === "boolean"
+          ? payload.isBackgrounded
+          : (previous?.isBackgrounded ?? false);
+      const inTurn = !latestTurnId || !activity.turnId || activity.turnId === latestTurnId;
+      if (previous !== undefined || (isBackgrounded && inTurn)) {
+        activeTasks.set(taskId, { taskType: previous?.taskType, isBackgrounded });
       }
       continue;
     }
@@ -333,15 +355,114 @@ export function deriveActiveBackgroundTasksState(
     const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
     activeTasks.set(taskId, {
       taskType: taskType ?? previous?.taskType,
+      isBackgrounded: previous?.isBackgrounded ?? false,
     });
   }
 
-  const activeTaskIds = [...activeTasks.entries()]
+  return activeTasks;
+}
+
+// Counts still-running background work for the active turn so compact UI can surface agent activity.
+export function deriveActiveBackgroundTasksState(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+): ActiveBackgroundTasksState | null {
+  const activeTaskIds = [...foldActiveTasks(activities, latestTurnId).entries()]
     .filter(([, task]) => task.taskType !== "plan")
     .map(([taskId]) => taskId);
   return activeTaskIds.length > 0
     ? { activeCount: activeTaskIds.length, taskIds: activeTaskIds }
     : null;
+}
+
+/**
+ * Background tasks (task.updated with isBackgrounded) started by the latest
+ * turn that have not reached a terminal state. Used after the latest turn
+ * settles to keep the thread visibly "waiting on background work". Returns
+ * null without a latest turn or a live session: stale isBackgrounded rows from
+ * older turns or a dead session must not pin the thread forever.
+ */
+export function derivePendingBackgroundWork(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null | undefined;
+  session: Pick<ThreadSession, "orchestrationStatus"> | null | undefined;
+}): { count: number; taskIds: string[] } | null {
+  const latestTurnId = input.latestTurn?.turnId;
+  if (!latestTurnId) {
+    return null;
+  }
+  const sessionStatus = input.session?.orchestrationStatus;
+  if (sessionStatus === undefined || sessionStatus === "stopped" || sessionStatus === "error") {
+    return null;
+  }
+  const taskIds = [...foldActiveTasks(input.activities, latestTurnId).entries()]
+    .filter(([, task]) => task.isBackgrounded)
+    .map(([taskId]) => taskId);
+  return taskIds.length > 0 ? { count: taskIds.length, taskIds } : null;
+}
+
+// Background tasks still running anywhere in the thread. Unlike
+// derivePendingBackgroundWork this is not scoped to the latest turn: once a
+// finished subagent wakes the agent into a new turn, the subagents launched by
+// the earlier turn are still outstanding. Claude announces backgrounded work
+// with a "Moved to background" notice, so both that notice and an
+// isBackgrounded patch count.
+export function deriveOutstandingBackgroundTaskIds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): string[] {
+  const outstanding = new Set<string>();
+  for (const activity of orderedActivities(activities)) {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    if (activity.kind === "runtime.warning") {
+      if (payload?.nativeEventType !== "background_tasks_changed") continue;
+      const data =
+        payload.data && typeof payload.data === "object"
+          ? (payload.data as Record<string, unknown>)
+          : null;
+      if (!Array.isArray(data?.tasks)) continue;
+      for (const task of data.tasks) {
+        const taskId =
+          task && typeof task === "object" ? (task as Record<string, unknown>).task_id : null;
+        if (typeof taskId === "string") outstanding.add(taskId);
+      }
+      continue;
+    }
+    const taskId = payload && typeof payload.taskId === "string" ? payload.taskId : null;
+    if (!taskId) continue;
+    if (activity.kind === "task.completed") {
+      outstanding.delete(taskId);
+    } else if (activity.kind === "task.updated") {
+      const status = typeof payload?.status === "string" ? payload.status : undefined;
+      if (
+        status === "completed" ||
+        status === "failed" ||
+        status === "killed" ||
+        status === "paused" ||
+        payload?.isBackgrounded === false
+      ) {
+        outstanding.delete(taskId);
+      } else if (payload?.isBackgrounded === true) {
+        outstanding.add(taskId);
+      }
+    }
+  }
+  return [...outstanding];
+}
+
+// Thread-wide count of background tasks still running while their session is
+// alive. A stopped or failed session cannot finish them, so they stop counting.
+export function countOutstandingBackgroundWork(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  session: Pick<ThreadSession, "orchestrationStatus"> | null | undefined;
+}): number {
+  const sessionStatus = input.session?.orchestrationStatus;
+  if (sessionStatus === undefined || sessionStatus === "stopped" || sessionStatus === "error") {
+    return 0;
+  }
+  return deriveOutstandingBackgroundTaskIds(input.activities).length;
 }
 
 // Keeps the UI "working" while the provider still has visible assistant text or

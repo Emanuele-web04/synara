@@ -4,14 +4,48 @@
 // Depends on: modelSelectionCompatibility.
 
 import { assert, it } from "@effect/vitest";
+import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 
 import { normalizePersistedModelSelection } from "./modelSelectionCompatibility.ts";
 
-it("preserves canonical Pi model selections", () => {
-  assert.deepEqual(normalizePersistedModelSelection({ provider: "pi", model: "openai/gpt-5.5" }), {
-    provider: "pi",
-    model: "openai/gpt-5.5",
-  });
+it("preserves explicit provider instance ids during compatibility normalization", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "claude-sonnet-4-6",
+    }),
+    {
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "claude-sonnet-4-6",
+    },
+  );
+});
+
+it("uses settings to resolve opaque provider instance ids", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection(
+      {
+        instanceId: "work",
+        model: "company-model",
+      },
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          work: {
+            driver: "claudeAgent",
+            enabled: true,
+          },
+        },
+      },
+    ),
+    {
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "company-model",
+    },
+  );
 });
 
 it("migrates legacy Kilo provider values and labels to OpenCode", () => {
@@ -49,20 +83,6 @@ it("migrates combined Antigravity model and effort labels", () => {
       provider: "antigravity",
       model: "Gemini 3.5 Flash",
       options: { reasoningEffort: "high" },
-    },
-  );
-});
-
-it("infers Antigravity from persisted instance labels", () => {
-  assert.deepEqual(
-    normalizePersistedModelSelection({
-      instanceId: "Antigravity CLI",
-      model: "Claude Sonnet 4.6 (Thinking)",
-    }),
-    {
-      provider: "antigravity",
-      model: "Claude Sonnet 4.6",
-      options: { reasoningEffort: "thinking" },
     },
   );
 });
@@ -115,6 +135,7 @@ it("infers Pi from persisted instance labels", () => {
     }),
     {
       provider: "pi",
+      instanceId: "local-pi-runtime-instance",
       model: "openai/gpt-5.5",
     },
   );
@@ -159,13 +180,6 @@ it("does not steal ambiguous provider-less Claude slugs from Claude Agent", () =
   assert.deepEqual(normalizePersistedModelSelection({ model: "claude-opus-4-8" }), {
     provider: "claudeAgent",
     model: "claude-opus-4-8",
-  });
-});
-
-it("preserves canonical Devin model selections", () => {
-  assert.deepEqual(normalizePersistedModelSelection({ provider: "devin", model: "devin-core" }), {
-    provider: "devin",
-    model: "devin-core",
   });
 });
 

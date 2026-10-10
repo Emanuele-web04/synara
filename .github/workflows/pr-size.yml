@@ -3,6 +3,10 @@ name: PR Size
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+    paths: [.github/workflows/pr-size.yml]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,32 +28,32 @@ jobs:
               {
                 name: "size:XS",
                 color: "0e8a16",
-                description: "0-9 effective changed lines (test files excluded in mixed PRs).",
+                description: "Under 50 changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
               {
                 name: "size:S",
                 color: "5ebd3e",
-                description: "10-29 effective changed lines (test files excluded in mixed PRs).",
+                description: "50-199 changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
               {
                 name: "size:M",
                 color: "fbca04",
-                description: "30-99 effective changed lines (test files excluded in mixed PRs).",
+                description: "200-599 changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
               {
                 name: "size:L",
                 color: "fe7d37",
-                description: "100-499 effective changed lines (test files excluded in mixed PRs).",
+                description: "600-999 changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
               {
                 name: "size:XL",
                 color: "d93f0b",
-                description: "500-999 effective changed lines (test files excluded in mixed PRs).",
+                description: "1,000-2,999 changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
               {
                 name: "size:XXL",
                 color: "b60205",
-                description: "1,000+ effective changed lines (test files excluded in mixed PRs).",
+                description: "3,000+ changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
             ];
 
@@ -113,25 +117,26 @@ jobs:
   label:
     name: Label PR size
     needs: [prepare-config, sync-label-definitions]
-    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      issues: read
+      issues: write
       pull-requests: write
     concurrency:
-      group: pr-size-${{ github.event.pull_request.number }}
+      group: pr-size-${{ github.event.pull_request.number || 'rollout' }}
       cancel-in-progress: true
     steps:
-      - name: Sync PR size label
+      - name: Sync PR size labels
         uses: actions/github-script@v8
         env:
           PR_SIZE_LABELS_JSON: ${{ needs.prepare-config.outputs.labels_json }}
         with:
           script: |
-            const issueNumber = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
             const managedLabels = JSON.parse(process.env.PR_SIZE_LABELS_JSON ?? "[]");
             const managedLabelNames = new Set(managedLabels.map((label) => label.name));
+            const removableLabelNames = managedLabelNames;
+
             // Keep this aligned with the repo's test entrypoints and test-only support files.
             const testFilePatterns = [
               /(^|\/)__tests__(\/|$)/,
@@ -140,115 +145,159 @@ jobs:
               /\.(test|spec|browser|integration)\.[^.\/]+$/,
             ];
 
+            // Never counted toward PR size: lockfiles, snapshots, bundled or
+            // generated output, media assets, and review evidence.
+            const skippedFilePatterns = [
+              /(^|\/)(bun\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/,
+              /\.snap$/,
+              /(^|\/)(dist|generated|__generated__)\//,
+              /\.(png|jpe?g|gif|webp|svg|ico|mp4|mov|webm)$/i,
+              /(^|\/)(evidence|audit)\//,
+              /^docs\/pr-screenshots\//,
+              /^\.github\/pr-assets\//,
+            ];
+
             const isTestFile = (filename) =>
               testFilePatterns.some((pattern) => pattern.test(filename));
 
+            const isSkippedFile = (filename) =>
+              skippedFilePatterns.some((pattern) => pattern.test(filename));
+
             const resolveSizeLabel = (totalChangedLines) => {
-              if (totalChangedLines < 10) {
+              if (totalChangedLines < 50) {
                 return "size:XS";
               }
 
-              if (totalChangedLines < 30) {
+              if (totalChangedLines < 200) {
                 return "size:S";
               }
 
-              if (totalChangedLines < 100) {
+              if (totalChangedLines < 600) {
                 return "size:M";
               }
 
-              if (totalChangedLines < 500) {
+              if (totalChangedLines < 1000) {
                 return "size:L";
               }
 
-              if (totalChangedLines < 1000) {
+              if (totalChangedLines < 3000) {
                 return "size:XL";
               }
 
               return "size:XXL";
             };
 
-            const files = await github.paginate(
-              github.rest.pulls.listFiles,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: issueNumber,
-                per_page: 100,
-              },
-              (response) => response.data,
-            );
-
-            if (files.length >= 3000) {
-              core.warning(
-                "The GitHub pull request files API may truncate results at 3,000 files; PR size may be undercounted.",
+            const syncSize = async (prNumber) => {
+              const files = await github.paginate(
+                github.rest.pulls.listFiles,
+                {
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                },
+                (response) => response.data,
               );
-            }
 
-            let testChangedLines = 0;
-            let nonTestChangedLines = 0;
-
-            for (const file of files) {
-              const changedLinesForFile = (file.additions ?? 0) + (file.deletions ?? 0);
-
-              if (changedLinesForFile === 0) {
-                continue;
+              if (files.length >= 3000) {
+                core.warning(
+                  "The GitHub pull request files API may truncate results at 3,000 files; PR size may be undercounted.",
+                );
               }
 
-              if (isTestFile(file.filename)) {
-                testChangedLines += changedLinesForFile;
-                continue;
+              let skippedChangedLines = 0;
+              let testChangedLines = 0;
+              let nonTestChangedLines = 0;
+
+              for (const file of files) {
+                const changedLinesForFile = (file.additions ?? 0) + (file.deletions ?? 0);
+
+                if (changedLinesForFile === 0) {
+                  continue;
+                }
+
+                if (isSkippedFile(file.filename)) {
+                  skippedChangedLines += changedLinesForFile;
+                  continue;
+                }
+
+                if (isTestFile(file.filename)) {
+                  testChangedLines += changedLinesForFile;
+                  continue;
+                }
+
+                nonTestChangedLines += changedLinesForFile;
               }
 
-              nonTestChangedLines += changedLinesForFile;
-            }
+              const changedLines = nonTestChangedLines === 0 ? testChangedLines : nonTestChangedLines;
+              const nextLabelName = resolveSizeLabel(changedLines);
 
-            const changedLines = nonTestChangedLines === 0 ? testChangedLines : nonTestChangedLines;
-            const nextLabelName = resolveSizeLabel(changedLines);
+              const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+                owner,
+                repo,
+                issue_number: prNumber,
+                per_page: 100,
+              });
 
-            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              per_page: 100,
-            });
+              for (const label of currentLabels) {
+                if (!removableLabelNames.has(label.name) || label.name === nextLabelName) {
+                  continue;
+                }
 
-            for (const label of currentLabels) {
-              if (!managedLabelNames.has(label.name) || label.name === nextLabelName) {
-                continue;
-              }
-
-              try {
-                await github.rest.issues.removeLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNumber,
-                  name: label.name,
-                });
-              } catch (removeError) {
-                if (removeError.status !== 404) {
-                  throw removeError;
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number: prNumber,
+                    name: label.name,
+                  });
+                } catch (removeError) {
+                  if (removeError.status !== 404) {
+                    throw removeError;
+                  }
                 }
               }
-            }
 
-            if (!currentLabels.some((label) => label.name === nextLabelName)) {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                labels: [nextLabelName],
+              if (!currentLabels.some((label) => label.name === nextLabelName)) {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: prNumber,
+                  labels: [nextLabelName],
+                });
+              }
+
+              const classification =
+                nonTestChangedLines === 0
+                  ? testChangedLines > 0
+                    ? "test-only PR"
+                    : skippedChangedLines > 0
+                      ? "only skipped files"
+                      : "no line changes"
+                  : testChangedLines > 0
+                    ? "test lines excluded"
+                    : "all non-test changes";
+
+              core.info(
+                `PR #${prNumber}: ${nonTestChangedLines} non-test lines, ${testChangedLines} test lines, ${skippedChangedLines} skipped lines, ${changedLines} effective lines -> ${nextLabelName} (${classification})`,
+              );
+            };
+
+            let targets;
+            if (context.eventName === "pull_request_target") {
+              targets = [context.payload.pull_request.number];
+            } else {
+              const openPulls = await github.paginate(github.rest.pulls.list, {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100,
               });
+              targets = openPulls.map((pull) => pull.number);
             }
 
-            const classification =
-              nonTestChangedLines === 0
-                ? testChangedLines > 0
-                  ? "test-only PR"
-                  : "no line changes"
-                : testChangedLines > 0
-                  ? "test lines excluded"
-                  : "all non-test changes";
+            for (const prNumber of targets) {
+              await syncSize(prNumber);
+            }
 
-            core.info(
-              `PR #${issueNumber}: ${nonTestChangedLines} non-test lines, ${testChangedLines} test lines, ${changedLines} effective lines -> ${nextLabelName} (${classification})`,
-            );
+            core.info(`Synced size labels on ${targets.length} pull request(s).`);

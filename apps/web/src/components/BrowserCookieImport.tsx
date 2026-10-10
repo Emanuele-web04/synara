@@ -166,7 +166,7 @@ export function BrowserCookieImport({
         Import browser cookies
       </Button>
       <DisclosureRegion open={open}>
-        <div className="space-y-3 pt-3 text-sm">
+        <div className="space-y-3 pt-3 text-ui leading-snug">
           <label className="block space-y-1">
             <span>Import scope</span>
             <select
@@ -186,7 +186,7 @@ export function BrowserCookieImport({
               <option value="profile">All sites in this profile</option>
             </select>
           </label>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-ui leading-snug text-muted-foreground">
             {scope === "profile"
               ? "Imports all compatible cookies from the selected profile. Every imported signed-in session becomes available across Synara browser tabs and agent workflows."
               : "Imports this site, its subdomains, and matching parent domains. Imported sessions are shared across Synara browser tabs and agent workflows."}
@@ -231,7 +231,7 @@ export function BrowserCookieImport({
             </label>
           </div>
           <DisclosureRegion open={scope === "profile"}>
-            <label className="flex items-start gap-2 text-xs">
+            <label className="flex items-start gap-2 text-ui leading-snug">
               <input
                 type="checkbox"
                 className="mt-0.5"
@@ -246,7 +246,7 @@ export function BrowserCookieImport({
             </label>
           </DisclosureRegion>
           {status ? (
-            <p role="status" className="text-xs text-muted-foreground">
+            <p role="status" className="text-ui leading-snug text-muted-foreground">
               {status}
             </p>
           ) : null}

@@ -4,6 +4,7 @@ import { Schema } from "effect";
 import {
   SynaraCapabilitiesResult,
   SynaraCreateThreadsInput,
+  SynaraCreatedThreadResult,
   SynaraCreateThreadsResult,
   SynaraGatewayErrorResult,
   SynaraWaitForThreadsInput,
@@ -23,6 +24,33 @@ const thread = {
 } as const;
 
 describe("agent gateway contracts", () => {
+  it("returns inherited Auto without accepting it as an explicit creation input", () => {
+    assert.throws(() =>
+      decodeCreate({ requestId: "auto-input", threads: [{ ...thread, runtimeMode: "auto" }] }),
+    );
+    assert.throws(() =>
+      decodeCreate({
+        requestId: "internal-input",
+        threads: [{ ...thread, inheritedRuntimeMode: "auto" }],
+      }),
+    );
+    const result = Schema.decodeUnknownSync(SynaraCreatedThreadResult)({
+      index: 0,
+      threadId: "auto-worker",
+      projectId: "hub",
+      title: "Task",
+      target: thread.target,
+      provider: "codex",
+      model: thread.target.model,
+      runtimeMode: "auto",
+      environment: "local",
+      branch: null,
+      worktreePath: null,
+      status: "task_dispatched",
+    });
+    assert.equal(result.runtimeMode, "auto");
+  });
+
   it("accepts one through twenty exact creation entries", () => {
     assert.equal(decodeCreate({ requestId: "request-1", threads: [thread] }).threads.length, 1);
     assert.equal(
@@ -54,7 +82,10 @@ describe("agent gateway contracts", () => {
 
   it("decodes provider-specific model options without folding them into the slug", () => {
     const decoded = decodeCreate({ requestId: "terra-low", threads: [thread] });
-    assert.deepEqual(decoded.threads[0]?.target, thread.target);
+    assert.deepEqual(decoded.threads[0]?.target, {
+      ...thread.target,
+      instanceId: "codex",
+    });
     assert.throws(() =>
       decodeCreate({
         requestId: "cross-provider-options",
@@ -70,6 +101,17 @@ describe("agent gateway contracts", () => {
         ],
       }),
     );
+
+    const instanceTarget = decodeCreate({
+      requestId: "terra-work",
+      threads: [
+        {
+          ...thread,
+          target: { ...thread.target, instanceId: "codex_work" },
+        },
+      ],
+    });
+    assert.equal(instanceTarget.threads[0]?.target.instanceId, "codex_work");
   });
 
   it("bounds wait targets and timeout", () => {
@@ -107,6 +149,7 @@ describe("agent gateway contracts", () => {
             },
             exampleTarget: {
               provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.5",
               options: { reasoningEffort: "low" },
             },
@@ -117,6 +160,14 @@ describe("agent gateway contracts", () => {
             provider: "codex",
             defaultModel: "gpt-5.5",
             models: [{ slug: "gpt-5.5", name: "GPT-5.5" }],
+            instances: [
+              {
+                instanceId: "codex",
+                displayName: "Codex",
+                isDefault: true,
+                enabled: true,
+              },
+            ],
             enabled: true,
             available: true,
             authStatus: "authenticated",

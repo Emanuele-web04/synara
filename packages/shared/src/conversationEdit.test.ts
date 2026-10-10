@@ -7,6 +7,60 @@ import {
 } from "./conversationEdit";
 
 describe("conversationEdit", () => {
+  it.each([null, "turn-1", "turn-2"])(
+    "does not skip an async answer with turn %s to edit the earlier native prompt",
+    (answerTurnId) => {
+      const messages = [
+        { id: "prompt", role: "user", source: "native", turnId: "turn-1" },
+        { id: "answer", role: "user", source: "async-user-input", turnId: answerTurnId },
+      ];
+      expect(
+        resolveLatestTailUserMessageEditTarget({ messages, activeTurnId: "turn-1" }).editable,
+      ).toBe(false);
+      expect(
+        resolveTailUserMessageEditTarget({ messages, messageId: "prompt", activeTurnId: "turn-1" }),
+      ).toEqual({ editable: false, reason: "not-latest-native-user-message" });
+    },
+  );
+
+  it("allows a new native prompt after a structured answer", () => {
+    expect(
+      resolveLatestTailUserMessageEditTarget({
+        messages: [
+          { id: "answer", role: "user", source: "async-user-input", turnId: "turn-1" },
+          { id: "prompt", role: "user", source: "native", turnId: "turn-2" },
+        ],
+      }),
+    ).toMatchObject({ editable: true, messageId: "prompt", removedTurnIds: ["turn-2"] });
+  });
+  it("rejects generated question replies even when the question is outside the loaded history", () => {
+    expect(
+      resolveLatestTailUserMessageEditTarget({
+        messages: [{ id: "answer", role: "user", source: "async-user-input", turnId: "turn-2" }],
+      }).editable,
+    ).toBe(false);
+    expect(
+      resolveTailUserMessageEditTarget({
+        messages: [{ id: "answer", role: "user", source: "async-user-input", turnId: "turn-2" }],
+        messageId: "answer",
+      }).editable,
+    ).toBe(false);
+  });
+
+  it("also protects legacy native replies linked to a structured question", () => {
+    expect(
+      resolveLatestTailUserMessageEditTarget({
+        messages: [
+          {
+            id: "question",
+            role: "assistant",
+            asyncUserInput: { response: { messageId: "answer" } },
+          },
+          { id: "answer", role: "user", source: "native", turnId: "turn-2" },
+        ],
+      }),
+    ).toEqual({ editable: false, reason: "structured-answer" });
+  });
   it("collects unique turn ids from a target message through the tail", () => {
     expect(
       collectTailTurnIds({

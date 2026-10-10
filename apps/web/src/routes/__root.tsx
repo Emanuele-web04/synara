@@ -1,5 +1,8 @@
+import { hydrateCachedThreadDetail, startThreadDetailCachePersistence } from "../threadDetailCache";
+import { ServerBusyIndicator } from "../components/ServerBusyIndicator";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type OrchestrationEvent,
@@ -20,7 +23,6 @@ import {
   type ErrorComponentProps,
   useNavigate,
   useParams,
-  useRouterState,
 } from "@tanstack/react-router";
 import {
   Suspense,
@@ -36,11 +38,16 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
+import { isBetaFeatureOn } from "../betaFeatures";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
+import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
+import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
+import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
@@ -68,6 +75,7 @@ import {
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
+import { registerThreadDetailSyncRetry, retryThreadDetailSync } from "../threadDetailSyncRetry";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
@@ -75,7 +83,7 @@ import {
 } from "../composerDraftStore";
 import { useStore } from "../store";
 import { EMPTY_THREAD_IDS } from "../storeState";
-import { createAllThreadsSelector } from "../storeSelectors";
+import { createAllThreadsSelector, createThreadSelector } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
 import {
@@ -84,6 +92,7 @@ import {
   onServerSettingsUpdated,
   onServerWelcome,
   onThreadStreamFailure,
+  onShellStreamFailure,
 } from "../wsNativeApi";
 import {
   addWsCompatibilityIssueListener,
@@ -118,6 +127,14 @@ import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
 import { derivePendingApprovals, derivePendingUserInputs } from "../pendingInteractionDerivation";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import {
+  bufferPreSnapshotThreadEvent,
+  createPreSnapshotThreadEventBuffer,
+  drainPreSnapshotThreadEvents,
+  shouldApplyThreadStreamSnapshot,
+  isCompleteAppliedThreadReplay,
+  type PreSnapshotThreadEventBuffer,
+} from "./-threadDetailSnapshotOrdering";
+import {
   doesSnapshotSatisfyTerminalFence,
   isTerminalThreadSessionStatus,
 } from "./-threadTerminalFence";
@@ -126,7 +143,9 @@ import { coalesceOrchestrationUiEvents } from "../orchestrationEventCoalescing";
 import { isThreadDetailVerifiedInSync } from "../threadDetailCatchupPolicy";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useChatWidth } from "../hooks/useChatWidth";
+import { useCommittedPathname } from "../hooks/useCommittedPathname";
 import { useDesktopAppIcon } from "../hooks/useDesktopAppIcon";
+import { useDesktopMenuShortcuts } from "../hooks/useDesktopMenuShortcuts";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
@@ -139,6 +158,7 @@ import {
   runEmptyRouteRestoreRefresh,
 } from "../routeRestoreRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { useComputerEventBridge } from "../hooks/useComputerEventBridge";
 import { useDeviceEventBridge } from "../hooks/useDeviceEventBridge";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
@@ -147,11 +167,22 @@ import {
 import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
+import {
+  GITHUB_INBOX_DOCK_HOST_ID,
+  resolveVisibleDockSidechatThreadIds,
+} from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
-import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
-import { didProviderEnablementChange, useAppSettings } from "../appSettings";
+import {
+  providerDiscoveryQueryKeys,
+  providerModelsQueryOptions,
+} from "../lib/providerDiscoveryReactQuery";
+import {
+  didProviderCommandDiscoverySettingsChange,
+  didProviderEnablementChange,
+  useAppSettings,
+} from "../appSettings";
+
 import { getNavigatorPlatform } from "../lib/utils";
 import {
   getNotifiableProviderUpdateStatuses,
@@ -161,6 +192,7 @@ import {
   PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
   withProviderUpdateTimeout,
 } from "../providerUpdates";
+import { isProviderKind } from "../providerOrdering";
 import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
@@ -170,6 +202,7 @@ import {
   shouldInvalidateProviderQueriesForEvent,
 } from "./-rootEventInvalidation";
 import { createDesktopProjectRecoveryAttemptGate } from "./-desktopProjectRecoveryAttempt";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -195,6 +228,14 @@ const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
 const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
 const seenProviderUpdateNotificationKeys = new Set<string>();
+
+function providerStatusDisplayName(provider: ServerProviderStatus): string {
+  if (provider.displayName?.trim()) {
+    return provider.displayName;
+  }
+  const driver = provider.driver ?? provider.provider;
+  return isProviderKind(driver) ? PROVIDER_DISPLAY_NAMES[driver] : driver;
+}
 
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 type ActiveProviderUpdateToast =
@@ -282,6 +323,7 @@ function RootRouteView() {
   const desktopChrome = (
     <>
       <RunningChatsQuitCoordinator />
+      <ServerBusyIndicator />
       {desktopWindowControls}
     </>
   );
@@ -300,7 +342,7 @@ function RootRouteView() {
       <>
         <div className="flex h-screen flex-col bg-background text-foreground">
           <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-ui leading-snug text-muted-foreground">
               Connecting to {APP_DISPLAY_NAME} server...
             </p>
           </div>
@@ -318,16 +360,23 @@ function RootRouteView() {
           <EventRouter />
           <EditorDirtyRouteGuard />
           <ProviderStatusRefreshCoordinator />
+          <ProviderModelDiscoveryWarmer />
           <GlobalShortcutsDialog />
           <BrowserVaultDialog />
           <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <SafariAccessOnboarding>
-            <AppSnapWelcomeDialog />
+          {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
+          <BetaWelcomeDialog />
+          <SafariAccessOnboarding startup>
+            <AppSnapWelcomeDialog>
+              <FeatureTourDialog />
+            </AppSnapWelcomeDialog>
           </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
+          <ProjectImportAnnouncementDialog />
+          <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
           <Outlet />
@@ -359,11 +408,11 @@ function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) 
         <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
       </div>
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
+        <p className="text-ui-sm font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
         <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">{title}</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{issue.message}</p>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{guidance}</p>
-        <p className="mt-4 text-xs text-muted-foreground/80">
+        <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{issue.message}</p>
+        <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{guidance}</p>
+        <p className="mt-4 text-ui leading-snug text-muted-foreground/80">
           Client {APP_VERSION} · Server {issue.serverBuild}
         </p>
         <div className="mt-5">
@@ -444,6 +493,37 @@ function ProviderStatusRefreshCoordinator() {
   );
 }
 
+function ProviderModelDiscoveryWarmer() {
+  // OMP is the only provider with no static model fallback whose catalog also
+  // takes ~3s to fetch (`omp models --json` cold-start), so it is the lone
+  // provider that doesn't render instantly when the model picker opens. Warm it
+  // at app startup — ahead of the picker opening — so the catalog is ready by
+  // the time the user browses to OMP. The server caches that catalog globally
+  // (keyed by binary path + agent dir), so any warm primes it for every later
+  // query; `modelRoles` merge a per-cwd project layer, so the picker's own
+  // cwd-scoped query key then only pays for the config reads on top.
+  const { settings } = useAppSettings();
+  const queryClient = useQueryClient();
+  const ompHidden = !isBetaFeatureOn("omp") || settings.hiddenProviders.includes("omp");
+  const ompBinaryPath = settings.ompBinaryPath;
+  const ompAgentDir = settings.ompAgentDir;
+  useEffect(() => {
+    if (ompHidden) return;
+    // Build options from the two primitive fields the omp query reads:
+    // `settings` is rebuilt every render, so depending on it would re-fire the
+    // query (and its retry chain against a failing binary) on every render.
+    void queryClient.prefetchQuery(
+      providerModelsQueryOptions({
+        provider: "omp",
+        binaryPath: ompBinaryPath || null,
+        agentDir: ompAgentDir || null,
+        priority: "background",
+      }),
+    );
+  }, [queryClient, ompHidden, ompBinaryPath, ompAgentDir]);
+  return null;
+}
+
 // Extracted to module scope so its run-always cleanup can stay a try/finally: the
 // React Compiler does not compile module functions, so the finally block is fine
 // here even though it would bail out the component body.
@@ -479,7 +559,7 @@ async function runProviderUpdateAll(params: {
       title: "Updating providers...",
       description:
         providers.length === 1
-          ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+          ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
           : `Updating ${providers.length} providers.`,
       timeout: 0,
     });
@@ -497,7 +577,7 @@ async function runProviderUpdateAll(params: {
     title: "Updating providers...",
     description:
       providers.length === 1
-        ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+        ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
         : `Updating ${providers.length} providers.`,
     actionProps: undefined,
     data: { onClose: dismissProgressToast },
@@ -510,11 +590,26 @@ async function runProviderUpdateAll(params: {
     const api = ensureNativeApi();
     for (const provider of providers) {
       try {
+        const driver = provider.driver ?? provider.provider;
+        if (!isProviderKind(driver)) {
+          failures.push({
+            provider,
+            reason: "This provider driver cannot be updated by this Synara build.",
+          });
+          continue;
+        }
         const result = await withProviderUpdateTimeout({
-          provider: provider.provider,
-          request: api.server.updateProvider({ provider: provider.provider }),
+          provider: driver,
+          request: api.server.updateProvider({
+            provider: driver,
+            ...(provider.instanceId ? { instanceId: provider.instanceId } : {}),
+          }),
         });
-        const refreshed = result.providers.find((entry) => entry.provider === provider.provider);
+        const refreshed = result.providers.find(
+          (entry) =>
+            (entry.driver ?? entry.provider) === driver &&
+            (entry.instanceId ?? entry.provider) === (provider.instanceId ?? provider.provider),
+        );
         const updateState = refreshed?.updateState;
         if (updateState?.status === "failed" || updateState?.status === "unchanged") {
           failures.push({
@@ -571,7 +666,7 @@ async function runProviderUpdateAll(params: {
       ),
     );
     const failureLines = failures
-      .map(({ provider, reason }) => `${PROVIDER_DISPLAY_NAMES[provider.provider]}: ${reason}`)
+      .map(({ provider, reason }) => `${providerStatusDisplayName(provider)}: ${reason}`)
       .join("\n");
     toastManager.update(toastId, {
       type: "error",
@@ -597,7 +692,7 @@ async function runProviderUpdateAll(params: {
     type: "success",
     title:
       providers.length === 1
-        ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
+        ? `${providerStatusDisplayName(providers[0]!)} updated`
         : `${providers.length} providers updated`,
     description: "New sessions will use the refreshed provider tools.",
     data: { onClose: dismissProgressToast },
@@ -670,7 +765,7 @@ function ProviderUpdateNotifications({
 
     const firstProvider = outdatedProviders[0]!;
     const additionalCount = outdatedProviders.length - 1;
-    const providerName = PROVIDER_DISPLAY_NAMES[firstProvider.provider];
+    const providerName = providerStatusDisplayName(firstProvider);
     const title =
       outdatedProviders.length === 1
         ? `${providerName} update available`
@@ -725,6 +820,7 @@ function GlobalShortcutsDialog() {
   const [open, setOpen] = useState(false);
   const { focusedThreadId, activeProject } = useFocusedChatContext();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  useDesktopMenuShortcuts(serverConfigQuery.data?.keybindings);
   const keybindings = serverConfigQuery.data?.keybindings ?? [];
   const platform = getNavigatorPlatform();
   const activeThreadTerminalState = useTerminalStateStore((state) =>
@@ -772,8 +868,13 @@ function GlobalShortcutsDialog() {
 }
 
 function GlobalFeedbackDialog() {
-  const { activeProject, activeThread } = useFocusedChatContext();
+  const { activeProject, focusedThreadId } = useFocusedChatContext();
   const isOpen = useFeedbackDialogStore((state) => state.isOpen);
+  // The report describes the live thread, transcript counts included; only follow it while
+  // the dialog is open so a closed dialog does not re-render for every streamed token.
+  const activeThread = useStore(
+    useMemo(() => createThreadSelector(isOpen ? focusedThreadId : null), [focusedThreadId, isOpen]),
+  );
   const requestedContext = useFeedbackDialogStore((state) => state.context);
   const setOpen = useFeedbackDialogStore((state) => state.setOpen);
   const context: FeedbackThreadContext = requestedContext ?? {
@@ -819,6 +920,26 @@ function GlobalOnboardingDialog() {
         onOpenChange={onboarding.onOpenChange}
         onComplete={onboarding.complete}
       />
+    </Suspense>
+  );
+}
+
+const ProjectImportDialog = lazy(() =>
+  import("../projectImport/ProjectImportDialog").then((module) => ({
+    default: module.ProjectImportDialog,
+  })),
+);
+
+function GlobalProjectImportDialog() {
+  const isOpen = useProjectImportDialogStore((store) => store.isOpen);
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (isOpen) setHasOpened(true);
+  }, [isOpen]);
+  if (!isOpen && !hasOpened) return null;
+  return (
+    <Suspense fallback={null}>
+      <ProjectImportDialog />
     </Suspense>
   );
 }
@@ -876,9 +997,9 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
       </div>
 
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
+        <p className="text-ui-sm font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
         <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
+        <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <Button size="sm" className={dialogActionButtonClassName} onClick={() => reset()}>
@@ -895,7 +1016,7 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
         </div>
 
         <details className="group mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
-          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-muted-foreground">
+          <summary className="cursor-pointer list-none px-3 py-2 text-ui leading-snug font-medium text-muted-foreground">
             <span className="group-open:hidden">Show error details</span>
             <span className="hidden group-open:inline">Hide error details</span>
           </summary>
@@ -1112,6 +1233,7 @@ function releaseOrphanedThreadDetail(input: {
 
 function EventRouter() {
   useDeviceEventBridge();
+  useComputerEventBridge();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);
@@ -1126,7 +1248,7 @@ function EventRouter() {
   const serverThreadIds = useStore((store) => store.threadIds ?? EMPTY_THREAD_IDS);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useCommittedPathname();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
@@ -1147,17 +1269,21 @@ function EventRouter() {
   // Right-dock sidechat panes render a full ChatView for their embedded thread,
   // so they need a detail lease exactly like split-view panes: without one the
   // sidechat's snapshot never syncs and its transcript stays on the loading state.
+  // The Inbox route (`/pull-requests`) hosts a thread-less dock for standalone side chats.
   const dockStateByThreadId = useRightDockStore((store) => store.dockStateByThreadId);
+  const isGitHubInboxRoute = pathname === "/pull-requests" || pathname === "/pull-requests/";
   const visibleThreadIds = useMemo(
     () => [
       ...hostThreadIds,
       ...resolveVisibleDockSidechatThreadIds({
         dockRendered: routeSearch.view !== "editor",
         dockStateByThreadId,
-        hostThreadIds,
+        hostThreadIds: isGitHubInboxRoute
+          ? [...hostThreadIds, GITHUB_INBOX_DOCK_HOST_ID]
+          : hostThreadIds,
       }),
     ],
-    [dockStateByThreadId, hostThreadIds, routeSearch.view],
+    [dockStateByThreadId, hostThreadIds, isGitHubInboxRoute, routeSearch.view],
   );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIdSet = useMemo(() => new Set(serverThreadIds), [serverThreadIds]);
@@ -1166,7 +1292,7 @@ function EventRouter() {
     () =>
       new Set(
         serverThreadIds.filter((threadId) =>
-          Boolean(sidebarThreadSummaryById[threadId]?.sidechatSourceThreadId),
+          isSidechatThread(sidebarThreadSummaryById[threadId] ?? {}),
         ),
       ),
     [serverThreadIds, sidebarThreadSummaryById],
@@ -1211,6 +1337,7 @@ function EventRouter() {
     const api = readNativeApi();
     if (!api) return;
     let disposed = false;
+    const stopThreadDetailCachePersistence = startThreadDetailCachePersistence();
     let needsProviderInvalidation = false;
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
@@ -1218,6 +1345,9 @@ function EventRouter() {
     let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
+    // Set while a batched cursor-resume replay is being queued: the batch ends
+    // with one synchronous flush, so no event inside it may flush on its own.
+    let queueingThreadReplayBatch = false;
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let shellSubscriptionGeneration = 0;
@@ -1225,7 +1355,13 @@ function EventRouter() {
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
-    const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
+    const pendingThreadEventsById = new Map<
+      ThreadId,
+      PreSnapshotThreadEventBuffer<OrchestrationEvent>
+    >();
+    // Cached resume cursor each subscription started from, until a current
+    // snapshot confirms the subscription. Before that, a lower snapshot can be a server reset.
+    const threadResumeSeedSequenceById = new Map<ThreadId, number>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadSnapshotRefreshPending = new Set<ThreadId>();
     const threadSnapshotNotFoundRetryAttempted = new Set<ThreadId>();
@@ -1351,6 +1487,12 @@ function EventRouter() {
       return THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS * 2 ** entry.reconcileNoopStreak;
     };
 
+    const cachedThreadVerificationTimers = new Map<ThreadId, number>();
+    const clearCachedVerificationTimer = (threadId: ThreadId) => {
+      const timer = cachedThreadVerificationTimers.get(threadId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      cachedThreadVerificationTimers.delete(threadId);
+    };
     const beginThreadSubscription = (threadId: ThreadId) => {
       // Cursor resume delivers no snapshot: the stream replays only the gap on
       // top of the cached detail. Seed the live cursor so gap/live events apply
@@ -1360,10 +1502,12 @@ function EventRouter() {
       const resumeCursor = getThreadDetailResumeCursor(threadId);
       if (resumeCursor === undefined) {
         threadSnapshotSequenceById.delete(threadId);
+        threadResumeSeedSequenceById.delete(threadId);
       } else {
         threadSnapshotSequenceById.set(threadId, resumeCursor);
+        threadResumeSeedSequenceById.set(threadId, resumeCursor);
       }
-      pendingThreadEventsById.set(threadId, []);
+      pendingThreadEventsById.set(threadId, createPreSnapshotThreadEventBuffer());
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       threadSnapshotNotFoundRetryAttempted.delete(threadId);
@@ -1373,11 +1517,33 @@ function EventRouter() {
       threadCatchupBackoffById.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
       threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
+      clearCachedVerificationTimer(threadId);
+      if (useStore.getState().threadDetailSyncById?.[threadId] === "cached") {
+        const generation = nextThreadSubscriptionGeneration;
+        // Older servers suppress an empty batched replay. A scoped authoritative
+        // snapshot verifies restored controls even when no stream item arrives.
+        cachedThreadVerificationTimers.set(
+          threadId,
+          window.setTimeout(() => {
+            cachedThreadVerificationTimers.delete(threadId);
+            if (
+              !disposed &&
+              subscribedThreadIds.has(threadId) &&
+              threadSubscriptionGenerationById.get(threadId) === generation &&
+              useStore.getState().threadDetailSyncById?.[threadId] === "cached"
+            ) {
+              void reconcileThreadProjection(threadId).catch(() => undefined);
+            }
+          }, 2000),
+        );
+      }
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
       );
     };
+
+    const threadOverflowToastId = (threadId: ThreadId) => `stream-overflow:thread:${threadId}`;
 
     // Single choke point for handing a thread detail event to the reducer.
     // The reducer silently ignores detail events for a thread the store no
@@ -1386,8 +1552,13 @@ function EventRouter() {
     // cursor first would vouch for events that never landed — a later cursor
     // resume would then skip them forever. When the thread is missing, drop
     // the resume bookkeeping and re-snapshot through the projection instead.
-    const applyFencedThreadEvent = (threadId: ThreadId, event: OrchestrationEvent): boolean => {
-      if (!getThreadFromState(useStore.getState(), threadId)) {
+    const applyFencedThreadEvent = (
+      threadId: ThreadId,
+      event: OrchestrationEvent,
+      source: "stream" | "replay",
+    ): boolean => {
+      const state = useStore.getState();
+      if (!getThreadFromState(state, threadId)) {
         threadSnapshotSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         clearThreadDetailResumeCursor(threadId);
@@ -1399,6 +1570,12 @@ function EventRouter() {
       threadSnapshotSequenceById.set(threadId, event.sequence);
       advanceThreadDetailResumeCursor(threadId, event.sequence);
       queueDomainEvent(event);
+      // Catch-up replay can advance a dead stream's cursor; only that stream's
+      // own delivery proves recovery and can dismiss its exhausted failure.
+      if (source === "stream" && state.threadDetailSyncById?.[threadId] === "failed") {
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        toastManager.close(threadOverflowToastId(threadId));
+      }
       // Any applied event — live or replayed — is fresh activity: drop the
       // replay backoff so a subsequently lost event repairs at base cadence.
       const backoff = threadCatchupBackoffById.get(threadId);
@@ -1411,15 +1588,23 @@ function EventRouter() {
     };
 
     const flushThreadBuffer = (threadId: ThreadId, snapshotSequence: number) => {
-      const pendingEvents = pendingThreadEventsById.get(threadId) ?? [];
+      const { events, lostEvents } = drainPreSnapshotThreadEvents(
+        pendingThreadEventsById.get(threadId),
+        threadSnapshotSequenceById.get(threadId) ?? snapshotSequence,
+      );
       pendingThreadEventsById.delete(threadId);
-      let latestThreadSequence = threadSnapshotSequenceById.get(threadId) ?? snapshotSequence;
-      for (const event of pendingEvents.toSorted((left, right) => left.sequence - right.sequence)) {
-        if (event.sequence > latestThreadSequence) {
-          latestThreadSequence = event.sequence;
-          if (!applyFencedThreadEvent(threadId, event)) {
-            return;
-          }
+      if (lostEvents) {
+        // Buffer overflow dropped events the applied snapshot does not cover.
+        // Applying the rest would leave a hole in streamed text, so keep the
+        // snapshot, buffer live events again, and resync from a fresh snapshot.
+        threadSnapshotSequenceById.delete(threadId);
+        pendingThreadEventsById.set(threadId, createPreSnapshotThreadEventBuffer());
+        void refreshThreadSnapshot(threadId);
+        return;
+      }
+      for (const event of events) {
+        if (!applyFencedThreadEvent(threadId, event, "stream")) {
+          return;
         }
       }
     };
@@ -1445,6 +1630,7 @@ function EventRouter() {
       // holds its slot gets the new thread's stream rejected at admission.
       for (const threadId of removals) {
         threadSnapshotSequenceById.delete(threadId);
+        threadResumeSeedSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         threadSnapshotRequestInFlight.delete(threadId);
         threadSnapshotRefreshPending.delete(threadId);
@@ -1454,6 +1640,7 @@ function EventRouter() {
         threadProjectionReconcilePendingById.delete(threadId);
         clearThreadProjectionTerminalFence(threadId);
         threadSubscriptionGenerationById.delete(threadId);
+        clearCachedVerificationTimer(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
         threadCatchupBackoffById.delete(threadId);
         subscribedThreadIds.delete(threadId);
@@ -1469,6 +1656,8 @@ function EventRouter() {
         ),
       );
 
+      await Promise.all(additions.map((threadId) => hydrateCachedThreadDetail(threadId)));
+      if (disposed) return;
       for (const threadId of additions) {
         beginThreadSubscription(threadId);
         subscribedThreadIds.add(threadId);
@@ -1488,6 +1677,34 @@ function EventRouter() {
         .then(operation);
       return reconcileThreadSubscriptionsChain;
     };
+
+    const unregisterThreadDetailSyncRetry = registerThreadDetailSyncRetry((threadId) =>
+      enqueueThreadSubscriptionOperation(async () => {
+        if (disposed || !subscribedThreadIds.has(threadId)) return;
+        // Both retry surfaces use the owner's normal cursor/fence initialization.
+        beginThreadSubscription(threadId);
+        const generation = threadSubscriptionGenerationById.get(threadId);
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        try {
+          await api.orchestration.subscribeThread(buildThreadSubscribeInput(threadId));
+        } catch {
+          if (
+            disposed ||
+            !subscribedThreadIds.has(threadId) ||
+            threadSubscriptionGenerationById.get(threadId) !== generation
+          )
+            return;
+          useStore.getState().markThreadDetailSyncFailed(threadId);
+          toastManager.add({
+            id: `stream-overflow:retry-failed:${threadId}`,
+            type: "error",
+            title: "Unable to resume thread updates",
+            description: "Try again when the server responds.",
+            data: { threadId },
+          });
+        }
+      }),
+    );
 
     const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
       const nextThreadIds = [...threadIds];
@@ -1515,7 +1732,9 @@ function EventRouter() {
         // never-synced detail), so a cursor resume would skip exactly the
         // snapshot being requested.
         clearThreadDetailResumeCursor(threadId);
-        await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
+        await api.orchestration
+          .subscribeThread(buildThreadSubscribeInput(threadId))
+          .catch(() => undefined);
       }).finally(() => {
         threadSnapshotRequestInFlight.delete(threadId);
         if (!threadSnapshotRefreshPending.delete(threadId)) {
@@ -1657,6 +1876,9 @@ function EventRouter() {
           .catch(() => loadBootstrapShellSnapshotIfMissing(generation));
         await enqueueThreadSubscriptionOperation(async () => {
           threadSnapshotSequenceById.clear();
+          for (const threadId of cachedThreadVerificationTimers.keys())
+            clearCachedVerificationTimer(threadId);
+          threadResumeSeedSequenceById.clear();
           pendingThreadEventsById.clear();
           threadSnapshotRequestInFlight.clear();
           threadSnapshotRefreshPending.clear();
@@ -1780,6 +2002,15 @@ function EventRouter() {
       }
     };
 
+    // Every queued event already advanced its thread cursor, so any snapshot the
+    // router accepts (at or past that cursor) contains it. Apply the queue first:
+    // flushing it on top of the snapshot would re-append streamed deltas and
+    // regress newer session state.
+    const flushQueuedDomainEventsBeforeSnapshot = () => {
+      domainEventFlushThrottler.cancel();
+      flushPendingDomainEvents();
+    };
+
     const queueDomainEvent = (event: OrchestrationEvent) => {
       pendingDomainEvents.push(event);
       if (shouldInvalidateProviderQueriesForEvent(event)) {
@@ -1801,9 +2032,15 @@ function EventRouter() {
           needsBroadGitInvalidation = true;
         }
       }
-      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
+      if (
+        shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds) &&
+        !queueingThreadReplayBatch
+      ) {
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
+        return;
+      }
+      if (queueingThreadReplayBatch) {
         return;
       }
       domainEventFlushThrottler.maybeExecute();
@@ -1843,7 +2080,7 @@ function EventRouter() {
             if (event.sequence <= latestThreadSequence) {
               continue;
             }
-            if (!applyFencedThreadEvent(threadId, event)) {
+            if (!applyFencedThreadEvent(threadId, event, "replay")) {
               break;
             }
             appliedEventCount += 1;
@@ -1883,7 +2120,10 @@ function EventRouter() {
       let projectionSatisfiesTerminalFence = false;
       let projectionAttemptFailed = false;
       try {
-        const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
+        const snapshot = await api.orchestration.getThreadDetailSnapshot({
+          threadId,
+          messageWindow: { limit: 100 },
+        });
         if (
           snapshot === null ||
           disposed ||
@@ -1927,15 +2167,17 @@ function EventRouter() {
           Math.max(currentSequence, snapshot.snapshotSequence),
         );
         advanceThreadDetailResumeCursor(threadId, snapshot.snapshotSequence);
-        // Apply even when the cursor did not advance. The projection is
-        // authoritative and can repair a client that advanced its cursor while
-        // dropping or failing to reduce one of the corresponding live events.
-        const stateBeforeProjectionApply = useStore.getState();
         // Resolve the entry before applying: when this snapshot is what starts the next
         // turn, the resync belongs to the turn that requested it, and the new turn must
         // still get its own.
         const catchupEntryBeforeApply = resolveThreadCatchupBackoff(threadId);
-        syncServerThreadDetailHotPath(snapshot.thread);
+        flushQueuedDomainEventsBeforeSnapshot();
+        // Apply even when the cursor did not advance. The projection is
+        // authoritative and can repair a client that advanced its cursor while
+        // dropping or failing to reduce one of the corresponding live events.
+        const stateBeforeProjectionApply = useStore.getState();
+        syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence, snapshot.history);
+        threadResumeSeedSequenceById.delete(threadId);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
         projectionConfirmed = true;
@@ -2012,6 +2254,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
+        toastManager.close("stream-overflow:shell");
         shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
         const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
         shellSnapshotSequence = item.snapshot.snapshotSequence;
@@ -2031,6 +2274,7 @@ function EventRouter() {
         return;
       }
       shellSnapshotSequence = item.sequence;
+      toastManager.close("stream-overflow:shell");
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
@@ -2087,6 +2331,52 @@ function EventRouter() {
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
       }
     });
+    const applyThreadStreamEvent = (event: OrchestrationEvent) => {
+      const threadId = ThreadId.makeUnsafe(String(event.aggregateId));
+      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
+      if (latestThreadSequence === undefined) {
+        const pendingThreadEvents =
+          pendingThreadEventsById.get(threadId) ?? createPreSnapshotThreadEventBuffer();
+        bufferPreSnapshotThreadEvent(pendingThreadEvents, event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
+        pendingThreadEventsById.set(threadId, pendingThreadEvents);
+        if (
+          event.type === "thread.session-set" &&
+          isTerminalThreadSessionStatus(event.payload.session.status)
+        ) {
+          // Arm even while buffered: the immediate reconcile below may return a
+          // premature session-set snapshot, and the fence must outlive it (#548).
+          armThreadProjectionTerminalFence(threadId, event.sequence);
+        } else if (event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
+        }
+        if (subscribedThreadIds.has(threadId)) {
+          void reconcileThreadProjection(threadId).catch(() => undefined);
+        }
+        return;
+      }
+      if (event.sequence <= latestThreadSequence) {
+        return;
+      }
+      if (!applyFencedThreadEvent(threadId, event, "stream")) {
+        return;
+      }
+      if (
+        event.type === "thread.session-set" &&
+        isTerminalThreadSessionStatus(event.payload.session.status)
+      ) {
+        // Arm after the generic post-event schedule so the fast first-reconcile
+        // delay is not overwritten back to the slower cadence.
+        armThreadProjectionTerminalFence(threadId, event.sequence);
+      } else {
+        if (event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
+        }
+        nextThreadProjectionReconcileAtById.set(
+          threadId,
+          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+        );
+      }
+    };
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
       if (item.kind === "snapshot") {
         const threadId = item.snapshot.thread.id;
@@ -2100,7 +2390,24 @@ function EventRouter() {
           clearThreadDetailResumeCursor(threadId);
           return;
         }
-        syncServerThreadDetailHotPath(item.snapshot.thread);
+        // A slower stream snapshot can land after a projection read or live
+        // events already moved the cursor past it. Applying it would roll the
+        // thread back and move the cursor behind consumed events.
+        if (
+          !shouldApplyThreadStreamSnapshot({
+            snapshotSequence: item.snapshot.snapshotSequence,
+            appliedSequence: threadSnapshotSequenceById.get(threadId),
+            resumeSeedSequence: threadResumeSeedSequenceById.get(threadId),
+          })
+        ) {
+          return;
+        }
+        flushQueuedDomainEventsBeforeSnapshot();
+        syncServerThreadDetailHotPath(
+          item.snapshot.thread,
+          item.snapshot.snapshotSequence,
+          item.snapshot.history,
+        );
         // The projection can discard a tombstoned snapshot (deleted thread or
         // project) instead of applying it; committing the cursor or the stream
         // fence first would leave resume bookkeeping vouching for detail that
@@ -2113,6 +2420,9 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        clearCachedVerificationTimer(threadId);
+        threadResumeSeedSequenceById.delete(threadId);
+        toastManager.close(threadOverflowToastId(threadId));
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
         // even when it is lower than the previous one (server-side reset).
@@ -2126,63 +2436,117 @@ function EventRouter() {
         return;
       }
 
-      const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
-      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
-      if (latestThreadSequence === undefined) {
-        const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
-        appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
-        pendingThreadEventsById.set(threadId, pendingThreadEvents);
+      if (item.kind === "replay") {
+        // A cursor-resume gap delivered as one batch: queue every event through
+        // the per-event path, then commit them in a single store update so a
+        // stale cached turn does not flicker through its intermediate states.
+        queueingThreadReplayBatch = true;
+        try {
+          for (const event of item.events) {
+            applyThreadStreamEvent(event);
+          }
+        } finally {
+          queueingThreadReplayBatch = false;
+        }
+        domainEventFlushThrottler.cancel();
+        flushPendingDomainEvents();
+        const replayThreadId =
+          item.threadId ??
+          (item.events[0]?.aggregateKind === "thread"
+            ? (item.events[0].aggregateId as ThreadId)
+            : undefined);
         if (
-          item.event.type === "thread.session-set" &&
-          isTerminalThreadSessionStatus(item.event.payload.session.status)
+          replayThreadId &&
+          subscribedThreadIds.has(replayThreadId) &&
+          threadResumeSeedSequenceById.has(replayThreadId) &&
+          item.events.every((event) => isThreadDetailEventFor(event, replayThreadId))
         ) {
-          // Arm even while buffered: the immediate reconcile below may return a
-          // premature session-set snapshot, and the fence must outlive it (#548).
-          armThreadProjectionTerminalFence(threadId, item.event.sequence);
-        } else if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
-        }
-        if (subscribedThreadIds.has(threadId)) {
-          void reconcileThreadProjection(threadId).catch(() => undefined);
+          if (
+            isCompleteAppliedThreadReplay({
+              threadId: replayThreadId,
+              resumeSeedSequence: threadResumeSeedSequenceById.get(replayThreadId),
+              appliedSequence:
+                useStore.getState().threadDetailAppliedSequenceById?.[replayThreadId],
+              events: item.events,
+            })
+          ) {
+            useStore.getState().confirmThreadDetailReplay(replayThreadId);
+            clearCachedVerificationTimer(replayThreadId);
+          }
         }
         return;
       }
-      if (item.event.sequence <= latestThreadSequence) {
-        return;
-      }
-      if (!applyFencedThreadEvent(threadId, item.event)) {
-        return;
-      }
-      if (
-        item.event.type === "thread.session-set" &&
-        isTerminalThreadSessionStatus(item.event.payload.session.status)
-      ) {
-        // Arm after the generic post-event schedule so the fast first-reconcile
-        // delay is not overwritten back to the slower cadence.
-        armThreadProjectionTerminalFence(threadId, item.event.sequence);
-      } else {
-        if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
-        }
-        nextThreadProjectionReconcileAtById.set(
-          threadId,
-          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
-        );
-      }
+      applyThreadStreamEvent(item.event);
+    });
+    const unsubShellStreamFailure = onShellStreamFailure(() => {
+      if (disposed) return;
+      const toastId = "stream-overflow:shell";
+      toastManager.add({
+        id: toastId,
+        type: "error",
+        title: "Workspace updates paused",
+        description:
+          "The update stream could not keep up after repeated retries. Retry to resume workspace updates.",
+        timeout: 0,
+        actionProps: {
+          children: "Retry updates",
+          onClick: () => {
+            toastManager.close(toastId);
+            if (disposed) return;
+            // Reset only the shell snapshot fence. Thread subscriptions and
+            // their applied cursors stay on the existing connection.
+            shellSnapshotSequence = -1;
+            pendingShellEvents = [];
+            const generation = shellSubscriptionGeneration;
+            void api.orchestration.subscribeShell().catch(() => {
+              if (disposed || shellSubscriptionGeneration !== generation) return;
+              toastManager.add({
+                id: "stream-overflow:shell:retry-failed",
+                type: "error",
+                title: "Unable to resume workspace updates",
+                description: "Try again when the server responds.",
+              });
+            });
+          },
+        },
+      });
     });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);
       if (disposed || !subscribedThreadIds.has(threadId)) {
         return;
       }
-      // The stream is dead with retries and reconnects exhausted: forget its
-      // cursor so a future resubscribe requests a fresh snapshot, and surface
-      // the failure so the thread view stops posing as an empty conversation.
-      clearThreadDetailResumeCursor(threadId);
-      threadSnapshotSequenceById.delete(threadId);
+      // Overflow retries preserve the last applied cursor, including exhaustion.
+      // Other terminal faults still request a fresh snapshot on resubscribe.
+      if (failure.code !== ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        clearThreadDetailResumeCursor(threadId);
+        threadSnapshotSequenceById.delete(threadId);
+      }
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
+      if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        const toastId = threadOverflowToastId(threadId);
+        const threadTitle = getThreadFromState(useStore.getState(), threadId)?.title;
+        const threadLabel = threadTitle ? `“${threadTitle}”` : "this thread";
+        toastManager.add({
+          id: toastId,
+          type: "error",
+          title: "Thread updates paused",
+          description: `The update stream for ${threadLabel} could not keep up after repeated retries. Retry to resume updates.`,
+          timeout: 0,
+          data: { threadId },
+          actionProps: {
+            children: "Retry updates",
+            onClick: () => {
+              toastManager.close(toastId);
+              if (disposed || !subscribedThreadIds.has(threadId)) return;
+              void retryThreadDetailSync(threadId).catch(() => undefined);
+            },
+          },
+        });
+      }
+
       if (
         failure.code === "THREAD_SNAPSHOT_NOT_FOUND" &&
         !threadSnapshotNotFoundRetryAttempted.has(threadId) &&
@@ -2203,7 +2567,7 @@ function EventRouter() {
         return;
       }
       threadSnapshotSequenceById.delete(threadId);
-      pendingThreadEventsById.set(threadId, []);
+      pendingThreadEventsById.set(threadId, createPreSnapshotThreadEventBuffer());
       void refreshThreadSnapshot(threadId);
     });
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
@@ -2264,6 +2628,7 @@ function EventRouter() {
           homeDir: payload.homeDir,
           chatWorkspaceRoot: payload.chatWorkspaceRoot,
           studioWorkspaceRoot: payload.studioWorkspaceRoot,
+          groupsWorkspaceRoot: payload.groupsWorkspaceRoot,
         });
         await ensureScopedSubscriptions();
         if (disposed) {
@@ -2355,6 +2720,9 @@ function EventRouter() {
           queryKey: ["provider-discovery", "models", "cursor"],
         });
         void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "claudeAgent"],
+        });
+        void queryClient.invalidateQueries({
           queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode"),
         });
       }
@@ -2376,6 +2744,9 @@ function EventRouter() {
       if (didProviderEnablementChange(previousSettings, payload.settings)) {
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
         void invalidateProviderUsageQueries(queryClient);
+      } else if (didProviderCommandDiscoverySettingsChange(previousSettings, payload.settings)) {
+        // Another window toggled it; the local patch path already invalidates its own.
+        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }
       void queryClient.invalidateQueries({
         queryKey: serverSettingsQueryOptions().queryKey,
@@ -2468,6 +2839,9 @@ function EventRouter() {
 
     return () => {
       flushPendingDomainEvents();
+      stopThreadDetailCachePersistence();
+      for (const threadId of cachedThreadVerificationTimers.keys())
+        clearCachedVerificationTimer(threadId);
       disposed = true;
       if (shellSnapshotFallbackTimer !== null) {
         window.clearTimeout(shellSnapshotFallbackTimer);
@@ -2488,6 +2862,7 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();
+      unregisterThreadDetailSyncRetry();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
       // only the visible threads. Keeping those avoids blanking the open chat, and
@@ -2504,6 +2879,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubThreadStreamFailure();
+      unsubShellStreamFailure();
       unsubThreadDetailEviction();
       unsubTerminalEvent();
       unsubDevServerEvent();
