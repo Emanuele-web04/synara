@@ -842,6 +842,62 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.providerContextLifecycle?.recapPreview?.length).toBeLessThanOrEqual(600);
   });
 
+  it("marks each side of a handoff with the fast mode state its own session reported", () => {
+    const handoffPayload = {
+      sourceProvider: "claudeAgent",
+      sourceModel: "claude-opus-4-6",
+      targetProvider: "claudeAgent",
+      targetModel: "claude-opus-4-6",
+    };
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "fast-blocked",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:01.000Z",
+          payload: { state: "off", disabledReason: "extra_usage_disabled" },
+        }),
+        makeActivity({
+          id: "handoff-1",
+          kind: "provider.handoff",
+          createdAt: "2026-10-10T00:00:02.000Z",
+          payload: handoffPayload,
+        }),
+        makeActivity({
+          id: "fast-on",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:03.000Z",
+          payload: { state: "on" },
+        }),
+        makeActivity({
+          id: "handoff-2",
+          kind: "provider.handoff",
+          createdAt: "2026-10-10T00:00:04.000Z",
+          payload: handoffPayload,
+        }),
+        makeActivity({
+          id: "fast-cooldown",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:05.000Z",
+          payload: { state: "cooldown" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+
+    expect(
+      entries.map((entry) => [
+        entry.id,
+        entry.providerHandoff?.sourceFastModeNotice?.kind ?? null,
+        entry.providerHandoff?.targetFastModeNotice?.kind ?? null,
+      ]),
+    ).toEqual([
+      ["handoff-1", "blocked", null],
+      ["handoff-2", null, "cooldown"],
+    ]);
+  });
+
   it("derives same-thread handoff rows with source, target, and transferred context", () => {
     const entries = deriveWorkLogEntries(
       [

@@ -22,12 +22,21 @@ const BLOCKED_DETAIL_BY_REASON: Record<string, string> = {
   network_error: "Claude could not check its availability",
 };
 
+export const FAST_MODE_STATE_ACTIVITY_KIND = "fast-mode.state";
+
 // Read the fast-mode state the provider last reported for the thread. Returns
 // null when fast mode is serving requests or nothing contradicts the request.
 export function deriveFastModeNotice(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): FastModeNotice | null {
-  const activity = activities.findLast((item) => item.kind === "fast-mode.state");
+  return fastModeNoticeFromActivity(
+    activities.findLast((item) => item.kind === FAST_MODE_STATE_ACTIVITY_KIND),
+  );
+}
+
+export function fastModeNoticeFromActivity(
+  activity: OrchestrationThreadActivity | null | undefined,
+): FastModeNotice | null {
   const payload =
     activity?.payload && typeof activity.payload === "object"
       ? (activity.payload as Record<string, unknown>)

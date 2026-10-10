@@ -8,7 +8,8 @@ import type { ProviderKind } from "@synara/contracts";
 import { useState } from "react";
 
 import type { FastModeNotice } from "~/lib/fastModeState";
-import { ChevronDownIcon, FastModeIcon, FastModeOutlineIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronDownIcon, SettingsIcon } from "~/lib/icons";
+import { FastModeBadgeIcon } from "./FastModeBadgeIcon";
 import { cn } from "~/lib/utils";
 import { ProviderAccountDot } from "../ProviderAccountMark";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
@@ -130,20 +131,10 @@ export function ComposerModelMenuTrigger(props: {
             </span>
           )}
           {label.showsFastBadge ? (
-            props.fastModeNotice ? (
-              <span className="inline-flex shrink-0" title={props.fastModeNotice.detail}>
-                <FastModeOutlineIcon
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 text-muted-foreground opacity-70"
-                />
-                <span className="sr-only">{props.fastModeNotice.label}</span>
-              </span>
-            ) : (
-              <FastModeIcon
-                aria-hidden="true"
-                className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"
-              />
-            )
+            <FastModeBadgeIcon
+              notice={props.fastModeNotice}
+              className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"
+            />
           ) : null}
           {label.statusLabel ? (
             props.hideStatusLabel ? (
