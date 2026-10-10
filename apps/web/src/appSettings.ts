@@ -21,6 +21,8 @@ import {
   ProviderInstanceId,
   GitHubInboxSort,
   KeepAwakeMode,
+  MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
+  ProviderRuntimeIdleStopMinutes,
   TrimmedNonEmptyString,
   ProviderKind,
   SidechatExpiry,
@@ -476,6 +478,9 @@ export const AppSettingsSchema = Schema.Struct({
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  providerRuntimeIdleStopMinutes: Schema.NullOr(ProviderRuntimeIdleStopMinutes).pipe(
+    withDefaults(() => null),
+  ),
   // Fold each finished turn's tool calls and intermediate messages behind one
   // "Worked for…" line. Off keeps every step of finished turns visible.
   collapseFinishedTurns: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -762,6 +767,13 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
   }
 
   return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
+}
+
+export function normalizeProviderRuntimeIdleStopMinutes(
+  value: number | null | undefined,
+): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.min(MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES, Math.max(0, Math.round(value)));
 }
 
 export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
@@ -1465,6 +1477,9 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     agentCursorFillColor: normalizeCursorHexColor(settings.agentCursorFillColor),
     agentCursorRimColor: normalizeCursorHexColor(settings.agentCursorRimColor),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
+    providerRuntimeIdleStopMinutes: normalizeProviderRuntimeIdleStopMinutes(
+      settings.providerRuntimeIdleStopMinutes,
+    ),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
     terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
@@ -1534,6 +1549,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
     sidechatExpiry: settings.sidechatExpiry,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    providerRuntimeIdleStopMinutes: settings.providerRuntimeIdleStopMinutes ?? null,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     keepAwakeMode: settings.keepAwakeMode,
     lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
@@ -1671,6 +1687,14 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "enableProviderUpdateChecks")) {
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
+  }
+  if (
+    hasOwn(patch, "providerRuntimeIdleStopMinutes") &&
+    patch.providerRuntimeIdleStopMinutes !== undefined
+  ) {
+    serverPatch.providerRuntimeIdleStopMinutes = normalizeProviderRuntimeIdleStopMinutes(
+      patch.providerRuntimeIdleStopMinutes,
+    );
   }
   if (
     patch.keepAwakeMode === "always" ||
@@ -1904,6 +1928,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "cursorBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
+    "providerRuntimeIdleStopMinutes",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
     "keepAwakeMode",

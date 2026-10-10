@@ -136,11 +136,21 @@ export const KeepAwakeMode = Schema.Literals(["always", "agent", "off"]);
 export type KeepAwakeMode = typeof KeepAwakeMode.Type;
 export const DEFAULT_KEEP_AWAKE_MODE: KeepAwakeMode = "off";
 
+export const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES = 10;
+export const MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES = 24 * 60;
+export const ProviderRuntimeIdleStopMinutes = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES),
+);
+export type ProviderRuntimeIdleStopMinutes = typeof ProviderRuntimeIdleStopMinutes.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
   lowerProviderProcessPriority: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  // Missing/null inherits the server's environment override or default; 0 disables.
+  providerRuntimeIdleStopMinutes: Schema.optionalKey(Schema.NullOr(ProviderRuntimeIdleStopMinutes)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   // The GitHub inbox reads one repository per project (the preferred remote). When true it also
@@ -208,6 +218,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   keepAwakeMode: Schema.optionalKey(KeepAwakeMode),
   lowerProviderProcessPriority: Schema.optionalKey(Schema.Boolean),
+  providerRuntimeIdleStopMinutes: Schema.optionalKey(Schema.NullOr(ProviderRuntimeIdleStopMinutes)),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),

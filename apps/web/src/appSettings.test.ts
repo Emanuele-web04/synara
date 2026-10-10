@@ -39,6 +39,7 @@ import {
   mergeProviderInstanceConfigPatch,
   mergeProviderStartOptions,
   normalizeChatFontSizePx,
+  normalizeProviderRuntimeIdleStopMinutes,
   normalizeInitialStoredAppSettingsForServerMigration,
   normalizeStoredAppSettings,
   normalizeTerminalFontFamily,
@@ -51,6 +52,41 @@ import {
   resolveTerminalFontFamilyStack,
   serverSettingsToAppSettings,
 } from "./appSettings";
+
+describe("idle agent timeout settings", () => {
+  it("inherits the server default until a local preference is explicitly saved", () => {
+    const settings = Schema.decodeSync(AppSettingsSchema)({});
+    expect(settings.providerRuntimeIdleStopMinutes).toBeNull();
+    expect(buildInitialServerSettingsMigrationPatch(settings)).not.toHaveProperty(
+      "providerRuntimeIdleStopMinutes",
+    );
+    expect(
+      buildInitialServerSettingsMigrationPatch({ ...settings, providerRuntimeIdleStopMinutes: 0 }),
+    ).toMatchObject({ providerRuntimeIdleStopMinutes: 0 });
+    expect(
+      serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW).providerRuntimeIdleStopMinutes,
+    ).toBeNull();
+  });
+
+  it("keeps explicit zero and nullable reset distinct through the server mapping", () => {
+    for (const minutes of [null, 0, 5]) {
+      expect(
+        appSettingsPatchToServerSettingsPatch({ providerRuntimeIdleStopMinutes: minutes }),
+      ).toEqual({
+        providerRuntimeIdleStopMinutes: minutes,
+      });
+      expect(
+        serverSettingsToAppSettings({
+          ...DEFAULT_SERVER_SETTINGS_VIEW,
+          providerRuntimeIdleStopMinutes: minutes,
+        }).providerRuntimeIdleStopMinutes,
+      ).toBe(minutes);
+    }
+    expect(normalizeProviderRuntimeIdleStopMinutes(1.6)).toBe(2);
+    expect(normalizeProviderRuntimeIdleStopMinutes(-1)).toBe(0);
+    expect(normalizeProviderRuntimeIdleStopMinutes(1_500)).toBe(1_440);
+  });
+});
 
 describe("provider process priority settings", () => {
   it("defaults on and forwards explicit opt-out and reset to the server", () => {

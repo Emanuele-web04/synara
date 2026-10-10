@@ -86,6 +86,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream. chat enter send scroll anchor",
   },
   {
+    id: "general:idle-agent-stop",
+    section: "general",
+    title: "Stop idle agent processes after",
+    keywords:
+      "Release idle provider processes after a timeout in minutes to free memory. 0 never auto-stop server default resume session process RAM",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",
