@@ -662,7 +662,9 @@ export function projectProviderRuntimeActivities(
   // Claude previews are coalesced by ingestion; other providers publish their
   // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
   if (
-    (((event.provider === "codex" || event.provider === "antigravity") &&
+    (((event.provider === "codex" ||
+      event.provider === "antigravity" ||
+      event.provider === "opencode") &&
       event.type === "item.completed") ||
       (event.provider === "claudeAgent" &&
         (event.type === "item.updated" || event.type === "item.completed"))) &&
