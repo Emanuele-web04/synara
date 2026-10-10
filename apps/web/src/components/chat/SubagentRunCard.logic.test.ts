@@ -187,7 +187,7 @@ describe("foldSubagentRunWorkEntries", () => {
     ]);
   });
 
-  it("folds a turn's launches and progress into one card at the first launch", () => {
+  it("keeps launch positions and applies progress to its owning invocation", () => {
     const entries = [
       entry({ id: "read", label: "Read calc.py" }),
       spawn("spawn-a", "2026-10-10T00:00:01.000Z", [
@@ -207,11 +207,17 @@ describe("foldSubagentRunWorkEntries", () => {
 
     const folded = foldSubagentRunWorkEntries(entries);
 
-    expect(folded.map((item) => item.id)).toEqual(["read", "subagent-run:spawn-a", "after"]);
+    expect(folded.map((item) => item.id)).toEqual([
+      "read",
+      "subagent-run:spawn-a",
+      "subagent-run:spawn-b",
+      "after",
+    ]);
     const card = folded[1]!;
     expect(card.tone).toBe("info");
-    expect(card.subagents?.map((subagent) => subagent.threadId)).toEqual(["toolu_a", "toolu_b"]);
-    expect(card.subagentRun?.members).toEqual([
+    expect(card.subagents?.map((subagent) => subagent.threadId)).toEqual(["toolu_a"]);
+    expect(folded[2]!.subagents?.map((subagent) => subagent.threadId)).toEqual(["toolu_b"]);
+    expect(folded.flatMap((entry) => entry.subagentRun?.members ?? [])).toEqual([
       {
         key: "toolu_a",
         launchedAt: "2026-10-10T00:00:01.000Z",
@@ -692,4 +698,18 @@ describe("firstLinePreview", () => {
     expect(firstLinePreview("```\ncode\n```")).toBe("code");
     expect(firstLinePreview("   ")).toBeNull();
   });
+});
+
+it("retains each launch position so narration can separate distinct children", () => {
+  const first = spawn("first", launchedAtIso, [{ threadId: "a", rawStatus: "running" }]);
+  const second = spawn("second", "2026-10-10T00:00:05.000Z", [
+    { threadId: "b", rawStatus: "running" },
+  ]);
+  const folded = foldSubagentRunWorkEntries([first, second]);
+  expect(
+    folded.map((row) => [row.id, row.createdAt, row.subagents?.map((child) => child.threadId)]),
+  ).toEqual([
+    ["subagent-run:first", launchedAtIso, ["a"]],
+    ["subagent-run:second", second.createdAt, ["b"]],
+  ]);
 });

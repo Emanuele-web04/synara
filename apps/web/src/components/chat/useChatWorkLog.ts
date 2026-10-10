@@ -91,9 +91,9 @@ export function useChatWorkLog({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
-  // Subagents are presented by the composer strip (and their own threads); the
-  // transcript drops the routed fan-out rows entirely. The enriched list above is
-  // still what feeds the strip-adjacent derivations that need receiver metadata.
+  // Preserve each launch position for timeline grouping; state-only updates and
+  // progress attach to their owning invocation. The shared roster remains the
+  // source of parent/sibling retention and Environment navigation.
   const workLogEntries = useMemo(
     () => foldSubagentRunWorkEntries(enrichedWorkLogEntries),
     [enrichedWorkLogEntries],
@@ -129,14 +129,34 @@ export function useChatWorkLog({
     ],
   );
   const subagentRoster = useSubagentRoster(subagentSource);
-  const subagentTaskEnds = useMemo(() => deriveSubagentTaskEnds(subagentSource.stripSourceActivities), [subagentSource.stripSourceActivities]);
-  const subagentThreadRunRow = useMemo(() =>
-    activeThread?.parentThreadId && activeThreadId ? findLatestSubagentThreadRun({
-      entries: foldSubagentRunWorkEntries(stripWorkLogEntries), threads: subagentSource.stripRelevantWorkLogThreads,
-      parentThreadId: stripSourceThreadId, liveTurnId: stripLiveTurnId, childThreadId: activeThreadId,
-      taskEndByToolUseId: subagentTaskEnds, backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
-    }) : null,
-    [activeThread?.parentThreadId, activeThreadId, stripWorkLogEntries, subagentSource.stripRelevantWorkLogThreads, stripSourceThreadId, stripLiveTurnId, subagentTaskEnds, backgroundedSubagentToolUseIds]);
+  const subagentTaskEnds = useMemo(
+    () => deriveSubagentTaskEnds(subagentSource.stripSourceActivities),
+    [subagentSource.stripSourceActivities],
+  );
+  const subagentThreadRunRow = useMemo(
+    () =>
+      activeThread?.parentThreadId && activeThreadId
+        ? findLatestSubagentThreadRun({
+            entries: foldSubagentRunWorkEntries(stripWorkLogEntries),
+            threads: subagentSource.stripRelevantWorkLogThreads,
+            parentThreadId: stripSourceThreadId,
+            liveTurnId: stripLiveTurnId,
+            childThreadId: activeThreadId,
+            taskEndByToolUseId: subagentTaskEnds,
+            backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+          })
+        : null,
+    [
+      activeThread?.parentThreadId,
+      activeThreadId,
+      stripWorkLogEntries,
+      subagentSource.stripRelevantWorkLogThreads,
+      stripSourceThreadId,
+      stripLiveTurnId,
+      subagentTaskEnds,
+      backgroundedSubagentToolUseIds,
+    ],
+  );
   // Links workflow agent rows to their subagent child threads (and models) when the
   // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
   const workflowSubagentThreadsByToolUseId = useMemo(() => {

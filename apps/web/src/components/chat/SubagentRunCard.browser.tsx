@@ -92,6 +92,10 @@ it("keeps Stop visible, Message keyboard reachable, and nested controls collapse
       </SubagentRunContext.Provider>
     </div>,
   );
+  const disclosure = screen.getByTestId("subagent-run-card").element().querySelector("button")!;
+  expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  await expect.element(screen.getByRole("button", { name: "Stop all", exact: true })).toBeVisible();
+  await userEvent.click(disclosure);
   await expect.element(screen.getByText("+1 nested")).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Stop Survey calc.py" })).toBeVisible();
   expect(
@@ -227,18 +231,38 @@ const answer = {
   streaming: false,
 };
 
-it("keeps a historical run accessible through the timeline controller after the turn folds", async () => {
+it("groups adjacent launches in one compact card while preserving each controller target after parent completion", async () => {
+  const second: WorkLogEntry = {
+    ...entry,
+    id: "subagent-run:second",
+    subagents: [{ threadId: "second", nickname: "Second child", rawStatus: "running" }],
+    subagentRun: {
+      members: [
+        {
+          key: "second",
+          launchedAt,
+          latestStep: null,
+          outcome: null,
+          failure: null,
+          settledAt: null,
+        },
+      ],
+    },
+  };
   const onNavigate = vi.fn();
   function Harness() {
     const controller = useRef<MessagesTimelineController | null>(null);
     return (
       <>
-        <button onClick={() => controller.current?.scrollToWorkEntry(entry.id)}>
+        <button onClick={() => controller.current?.scrollToWorkEntry(second.id)}>
           Show subagents
         </button>
         <div style={{ width: 850, height: 450 }}>
           <SubagentRunContext.Provider
-            value={context({ liveTurnId: null, backgroundedProviderThreadIds: new Set(["outer"]) })}
+            value={context({
+              liveTurnId: null,
+              backgroundedProviderThreadIds: new Set(["outer", "second"]),
+            })}
           >
             <Timeline
               controllerRef={controller}
@@ -246,6 +270,12 @@ it("keeps a historical run accessible through the timeline controller after the 
               timelineEntries={[
                 { id: "brief", kind: "message", createdAt: brief.createdAt, message: brief },
                 { id: entry.id, kind: "work", createdAt: "2026-10-10T00:00:01.000Z", entry },
+                {
+                  id: second.id,
+                  kind: "work",
+                  createdAt: "2026-10-10T00:00:02.000Z",
+                  entry: second,
+                },
                 { id: "answer", kind: "message", createdAt: answer.createdAt, message: answer },
               ]}
             />
@@ -256,8 +286,15 @@ it("keeps a historical run accessible through the timeline controller after the 
   }
   const screen = await render(<Harness />);
   await expect.element(screen.getByText(answer.text, { exact: true })).toBeVisible();
-  await expect.element(screen.getByRole("button", { name: /1 subagent/ })).toBeVisible();
+  expect(screen.container.querySelectorAll("[data-subagent-run-card]")).toHaveLength(1);
+  const header = screen.getByTestId("subagent-run-card").element().querySelector("button")!;
+  expect(header).toHaveAttribute("aria-expanded", "false");
+  expect(header.textContent).toContain("2 subagents");
+  const cardTarget = screen.getByTestId("subagent-run-card").element();
+  const scroll = vi.spyOn(cardTarget, "scrollIntoView");
   await screen.getByRole("button", { name: "Show subagents" }).click();
+  expect(scroll).toHaveBeenCalledWith({ block: "center", inline: "nearest", behavior: "smooth" });
+  scroll.mockRestore();
   await vi.waitFor(() => {
     const card = screen.container.querySelector("[data-subagent-run-card]");
     expect(card).not.toBeNull();
