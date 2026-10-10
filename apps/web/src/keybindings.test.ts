@@ -1299,3 +1299,26 @@ describe("suspendShortcutDispatch", () => {
     assert.equal(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options), "terminal.toggle");
   });
 });
+
+it("matches physical Option+Space with a layout-dependent key value", () => {
+  assert.equal(
+    resolveShortcutCommand(
+      event({ key: "\u00a0", code: "Space", altKey: true }),
+      [
+        {
+          command: "composer.voice.toggle",
+          shortcut: {
+            key: " ",
+            modKey: false,
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: true,
+          },
+        },
+      ],
+      { platform: "MacIntel" },
+    ),
+    "composer.voice.toggle",
+  );
+});

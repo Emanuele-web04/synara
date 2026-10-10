@@ -68,8 +68,8 @@ export interface UseComposerVoiceControllerResult {
   showVoiceNotesControl: boolean;
   startComposerVoiceRecording: () => Promise<void>;
   // Resolves true only when a current transcript reached onTranscriptReady.
-  submitComposerVoiceRecording: () => Promise<boolean>;
-  cancelComposerVoiceRecording: () => void;
+  submitComposerVoiceRecording: (action?: { source: "shortcut" }) => Promise<boolean>;
+  cancelComposerVoiceRecording: (action?: { source: "shortcut" }) => void;
 }
 
 const DEFAULT_FAILURE_COPY: ComposerVoiceFailureCopy = {
@@ -262,11 +262,11 @@ export function useComposerVoiceController(
     }
   };
 
-  const submitComposerVoiceRecording = (): Promise<boolean> => {
+  const submitComposerVoiceRecording = (action?: { source: "shortcut" }): Promise<boolean> => {
     if (!activeProject || !isVoiceRecording) {
       return Promise.resolve(false);
     }
-    if (!isVoiceActionArmed()) {
+    if (action?.source !== "shortcut" && !isVoiceActionArmed()) {
       return Promise.resolve(false);
     }
 
@@ -370,8 +370,8 @@ export function useComposerVoiceController(
       });
   };
 
-  const cancelComposerVoiceRecording = () => {
-    if (!isVoiceActionArmed()) {
+  const cancelComposerVoiceRecording = (action?: { source: "shortcut" }) => {
+    if (action?.source !== "shortcut" && !isVoiceActionArmed()) {
       return;
     }
     voiceTranscriptionRequestIdRef.current += 1;
