@@ -686,6 +686,25 @@ export function useChatTranscriptScroll({
       });
   }, [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached]);
 
+  const previousStreamingRef = useRef({ activeThreadId, hasStreamingAssistantText });
+  useLayoutEffect(() => {
+    const previous = previousStreamingRef.current;
+    previousStreamingRef.current = { activeThreadId, hasStreamingAssistantText };
+    if (
+      previous.activeThreadId !== activeThreadId ||
+      !previous.hasStreamingAssistantText ||
+      hasStreamingAssistantText ||
+      isInactiveSplitPane ||
+      isUserScrollDetachedRef.current ||
+      !isAtEndRef.current ||
+      tailAnchorScrollInFlightRef.current
+    )
+      return;
+    // The final batch can grow after list-owned live follow switches off.
+    // Reuse the bounded settling path; any reader gesture invalidates it.
+    onScrollToBottom();
+  }, [activeThreadId, hasStreamingAssistantText, isInactiveSplitPane, onScrollToBottom]);
+
   const previousThreadIdRef = useRef(activeThreadId);
   const pendingStreamingThreadRef = useRef<ThreadId | null>(null);
   useEffect(() => {
