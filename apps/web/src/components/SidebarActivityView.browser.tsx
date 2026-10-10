@@ -668,6 +668,94 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
+  it("reveals a selected Activity row without moving focus or following background updates", async () => {
+    const leading = Array.from({ length: 8 }, (_, index) => makeThread(700 + index));
+    const old = makeThread(720, {
+      title: "Selected conversation",
+      latestHumanMessageAt: "2026-05-04T10:00:00.000Z",
+      createdAt: "2026-05-04T09:00:00.000Z",
+    });
+    const layout = (rows: readonly SidebarThreadSummary[], activeThreadId: ThreadId | null) => (
+      <section data-testid="activity-reveal-example" className="w-80 bg-background p-3">
+        <input aria-label="Composer focus" className="mb-3 w-full" />
+        <div data-slot="scroll-area-viewport" className="h-64 overflow-y-auto">
+          {renderActivity({ threads: rows, activeThreadId })}
+        </div>
+      </section>
+    );
+    const threads = [...leading, old];
+    const mounted = await render(layout(threads, null));
+    try {
+      const composer = page.getByRole("textbox", { name: "Composer focus" }).element();
+      composer.focus();
+      await mounted.rerender(layout(threads, old.id));
+      const viewport = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+      const row = page.getByTestId(`activity-thread-${old.id}`).element();
+      await vi.waitFor(() => {
+        expect(row.getAttribute("aria-current")).toBe("page");
+        expect(row.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+          viewport.getBoundingClientRect().top - 1,
+        );
+        expect(row.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          viewport.getBoundingClientRect().bottom + 1,
+        );
+        expect(viewport.scrollTop).toBeGreaterThan(0);
+      });
+      expect(document.activeElement).toBe(composer);
+      await expect
+        .element(page.getByRole("button", { name: "Earlier", exact: true }))
+        .toHaveAttribute("aria-expanded", "false");
+
+      // The reader can browse elsewhere after the one-time route reveal.
+      viewport.scrollTop = 0;
+      await mounted.rerender(
+        layout([...leading.slice(1), { ...old, hasLiveTailWork: true }], old.id),
+      );
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      expect(viewport.scrollTop).toBe(0);
+      expect(document.activeElement).toBe(composer);
+
+      // A later route selection reveals it again.
+      await mounted.rerender(layout(threads, null));
+      await mounted.rerender(layout(threads, old.id));
+      await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(0));
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("reveals the active pin after reopening Pinned and changing scope", async () => {
+    const threads = Array.from({ length: 10 }, (_, index) => makeThread(740 + index));
+    const activeThreadId = threads[0]!.id;
+    const layout = (selection: ActivityScopeSelection) => (
+      <div data-slot="scroll-area-viewport" className="h-64 w-80 overflow-y-auto">
+        {renderActivity({
+          threads,
+          activeThreadId,
+          pinnedThreadIdSet: new Set(threads.map((thread) => thread.id)),
+          scope: { selection, onChange: vi.fn() },
+        })}
+      </div>
+    );
+    const mounted = await render(layout(null));
+    try {
+      const viewport = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+      await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(0));
+      const pinned = page.getByRole("button", { name: "Pinned", exact: true });
+      await pinned.click();
+      await expect.element(pinned).toHaveAttribute("aria-expanded", "false");
+      await pinned.click();
+      await expect.element(pinned).toHaveAttribute("aria-expanded", "true");
+      viewport.scrollTop = 0;
+      await mounted.rerender(layout(PROJECT_A));
+      await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(0));
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("keeps an old open thread on screen under collapsed Earlier until another thread opens", async () => {
     const recent = makeThread(600);
     const old = makeThread(601, {

@@ -521,6 +521,47 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     manager.dispose();
   });
 
+  it("does not repaint a hidden panel's page at its old bounds", async () => {
+    const contents = new FakeWebContents(102);
+    Object.assign(contents, {
+      capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from("page") })),
+    });
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(view);
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      isDestroyed: () => false,
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    try {
+      const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+      const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
+      const panelBounds = { x: 700, y: 70, width: 560, height: 650 };
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: panelBounds });
+      expect(view.setBounds).toHaveBeenLastCalledWith(panelBounds);
+      manager.hide({ threadId: THREAD_ID });
+      view.setBounds.mockClear();
+      view.setVisible.mockClear();
+
+      // With the panel unmounted, a prompt screenshot, a reopen and a link open
+      // all reach the hidden thread. None of them may show its page again.
+      await manager.captureScreenshot(input);
+      manager.open({ threadId: THREAD_ID });
+      manager.navigate({ ...input, url: "https://example.test/next" });
+
+      expect(view.setBounds).not.toHaveBeenCalledWith(panelBounds);
+      expect(view.setVisible).not.toHaveBeenCalledWith(true);
+    } finally {
+      manager.dispose();
+    }
+  });
+
   it("applies explicit page zoom to native and renderer guests, then resets it on hide", () => {
     const nativeWebContents = new FakeWebContents(101);
     const nativeView = {

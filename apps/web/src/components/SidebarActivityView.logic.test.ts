@@ -400,6 +400,93 @@ describe("buildActivityViewModel", () => {
     expect(model.settled).toEqual([]);
     expect(model.pinned.map((thread) => thread.id)).toEqual(["pinned-draft", "pinned-plain"]);
   });
+
+  it("keeps the open thread and working threads out of Drafts while their composer has text", () => {
+    const turn = completedTurn("2026-08-01T09:30:00.000Z");
+    const idleDraft = makeThread({
+      id: "idle-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T08:00:00.000Z",
+    });
+    const runningDraft = makeThread({
+      id: "running-draft",
+      session: makeSession("running"),
+      latestTurn: null,
+      latestHumanMessageAt: "2026-08-01T11:00:00.000Z",
+    });
+    const connectingDraft = makeThread({
+      id: "connecting-draft",
+      session: makeSession("connecting"),
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T10:30:00.000Z",
+    });
+    // Just sent: the session runs but latestTurn is still the previous, settled turn.
+    const startingDraft = makeThread({
+      id: "starting-draft",
+      session: makeSession("running"),
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T10:15:00.000Z",
+    });
+    const openDraft = makeThread({
+      id: "open-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T10:00:00.000Z",
+    });
+    const pinnedPlain = makeThread({
+      id: "pinned-plain",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T12:00:00.000Z",
+    });
+    const pinnedRunningDraft = makeThread({
+      id: "pinned-running-draft",
+      session: makeSession("running"),
+      latestTurn: null,
+      latestHumanMessageAt: "2026-08-01T07:00:00.000Z",
+    });
+    const pinnedIdleDraft = makeThread({
+      id: "pinned-idle-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T06:00:00.000Z",
+    });
+
+    const model = buildActivityViewModel({
+      threads: [
+        idleDraft,
+        runningDraft,
+        connectingDraft,
+        startingDraft,
+        openDraft,
+        pinnedPlain,
+        pinnedRunningDraft,
+        pinnedIdleDraft,
+      ],
+      pinnedThreadIdSet: new Set([pinnedPlain.id, pinnedRunningDraft.id, pinnedIdleDraft.id]),
+      draftThreadIdSet: new Set([
+        idleDraft.id,
+        runningDraft.id,
+        connectingDraft.id,
+        startingDraft.id,
+        openDraft.id,
+        pinnedRunningDraft.id,
+        pinnedIdleDraft.id,
+      ]),
+      activeThreadId: openDraft.id,
+    });
+
+    expect(model.drafts.map((thread) => thread.id)).toEqual(["idle-draft"]);
+    expect(model.active.map((thread) => thread.id)).toEqual([
+      "running-draft",
+      "connecting-draft",
+      "starting-draft",
+      "open-draft",
+    ]);
+    // Only the idle draft leads Pinned; the running one keeps its recency slot.
+    expect(model.pinned.map((thread) => thread.id)).toEqual([
+      "pinned-idle-draft",
+      "pinned-plain",
+      "pinned-running-draft",
+    ]);
+  });
 });
 
 describe("date buckets", () => {
