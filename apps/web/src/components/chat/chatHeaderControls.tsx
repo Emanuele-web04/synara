@@ -567,7 +567,7 @@ export function ChatHeaderGroupDivider() {
   );
 }
 
-export type DiffRenderMode = "stacked" | "split";
+export type { DiffRenderMode } from "../../diffRenderMode";
 
 /** Visual treatment shared across the header row. `surface` is the quiet icon-only
  *  look of the panel toggles (muted glyph at rest, filled on hover), for icon buttons
