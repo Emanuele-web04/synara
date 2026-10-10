@@ -338,16 +338,19 @@ function bindPendingTurnStartMessage(
     return null;
   }
   const pendingMessageId = thread.pendingTurnStartMessageId;
-  // Without a recorded request (the detail stream can attach after the first
-  // send's request), fall back to the one unanswered request at the tail.
-  const messageIndex =
-    pendingMessageId !== undefined
-      ? thread.messages.findLastIndex((message) => message.id === pendingMessageId)
-      : soleUnansweredRequestIndex(thread.messages);
-  if (pendingMessageId === undefined && messageIndex < 0) {
+  if (
+    pendingMessageId === null ||
+    pendingMessageId === undefined ||
+    thread.claudeCacheReview?.status === "compacting" ||
+    thread.claudeCacheReview?.compactionTurnId === session.activeTurnId
+  ) {
     return null;
   }
-  const { pendingTurnStartMessageId: _consumed, ...rest } = thread;
+  // A cancelled prompt can remain unanswered after a cold reload. Only an
+  // observed request owns a new turn; late-attached clients get accepted links
+  // from the authoritative detail snapshot's projection_turns mapping.
+  const messageIndex = thread.messages.findLastIndex((message) => message.id === pendingMessageId);
+  const rest = { ...thread, pendingTurnStartMessageId: null };
   const message = messageIndex >= 0 ? thread.messages[messageIndex] : undefined;
   const turnId = session.activeTurnId;
   if (
@@ -358,7 +361,7 @@ function bindPendingTurnStartMessage(
     thread.messages.some((candidate) => candidate.turnId === turnId) ||
     thread.activities.some((activity) => activity.turnId === turnId)
   ) {
-    return pendingMessageId === undefined ? null : rest;
+    return rest;
   }
   return { ...rest, messages: thread.messages.with(messageIndex, { ...message, turnId }) };
 }
@@ -369,20 +372,6 @@ function isUnboundTurnRequest(message: Thread["messages"][number]): boolean {
     message.startsNewTurn !== false &&
     (message.turnId === undefined || message.turnId === null)
   );
-}
-
-function soleUnansweredRequestIndex(messages: Thread["messages"]): number {
-  let found = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.role === "assistant" || (message.turnId !== undefined && message.turnId !== null)) {
-      break;
-    }
-    if (!isUnboundTurnRequest(message)) continue;
-    if (found >= 0) return -1;
-    found = index;
-  }
-  return found;
 }
 
 function reconcileLatestTurnFromSession(
@@ -1332,8 +1321,26 @@ function applyOrchestrationEvent(
               ? (thread.claudeCacheReview ?? null)
               : event.payload.review,
             claudeCacheReviewSequence: event.sequence,
+            ...(event.payload.review?.status === "compacting"
+              ? { pendingTurnStartMessageId: null }
+              : {}),
             updatedAt,
           };
+        },
+        options,
+      );
+
+    case "thread.claude-cache-response-requested":
+      if (event.payload.decision === "compact") return state;
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pendingTurnStartMessageId =
+            event.payload.decision === "continue" ? event.payload.review.messageId : null;
+          return thread.pendingTurnStartMessageId === pendingTurnStartMessageId
+            ? thread
+            : { ...thread, pendingTurnStartMessageId };
         },
         options,
       );
@@ -1444,7 +1451,9 @@ function applyOrchestrationEvent(
         event.payload.threadId,
         (thread) => {
           if (thread.session === null) {
-            return thread;
+            return thread.pendingTurnStartMessageId === null
+              ? thread
+              : { ...thread, pendingTurnStartMessageId: null };
           }
           const latestTurn =
             thread.latestTurn !== null &&
@@ -1462,6 +1471,7 @@ function applyOrchestrationEvent(
               : thread.latestTurn;
           return {
             ...thread,
+            pendingTurnStartMessageId: null,
             session: {
               ...thread.session,
               status: "closed",
@@ -1832,6 +1842,7 @@ function applyOrchestrationEvent(
         (thread) => ({
           ...thread,
           archivedAt: event.payload.archivedAt ?? event.occurredAt,
+          pendingTurnStartMessageId: null,
           snoozedUntil: null,
           snoozeReminderAt: null,
           snoozeSequence: event.sequence,
