@@ -1,4 +1,10 @@
-import { OrchestrationProposedPlanId, ProjectId, ThreadId } from "@synara/contracts";
+import {
+  AgentProfileId,
+  AgentProfileRevisionId,
+  OrchestrationProposedPlanId,
+  ProjectId,
+  ThreadId,
+} from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { partializeComposerDraftStoreState, useComposerDraftStore } from "./composerDraftStore";
 import {
@@ -968,4 +974,31 @@ describe("flushStorageBeforePageHide", () => {
       }),
     ).not.toThrow();
   });
+});
+
+it("round-trips pinned external profiles in drafts and queued turns", () => {
+  resetComposerDraftStore();
+  const threadId = ThreadId.makeUnsafe("external-persistence");
+  const selection = {
+    provider: "external" as const,
+    instanceId: "external" as const,
+    profileId: AgentProfileId.makeUnsafe("profile-a"),
+    revisionId: AgentProfileRevisionId.makeUnsafe("revision-a"),
+    model: "default",
+  };
+  const store = useComposerDraftStore.getState();
+  store.setPrompt(threadId, "Keep this draft");
+  store.setModelSelection(threadId, selection);
+  store.enqueueQueuedTurn(threadId, {
+    ...makeQueuedChatTurn("external-queue"),
+    selectedProvider: "external",
+    modelSelection: selection,
+  });
+  const serialized = JSON.stringify(
+    partializeComposerDraftStoreState(useComposerDraftStore.getState()),
+  );
+  const restored = normalizeCurrentPersistedComposerDraftStoreState(JSON.parse(serialized));
+  const draft = toHydratedThreadDraft(threadId, restored.draftsByThreadId[threadId]!);
+  expect(draft.modelSelectionByProvider.external).toEqual(selection);
+  expect(draft.queuedTurns[0]?.modelSelection).toEqual(selection);
 });

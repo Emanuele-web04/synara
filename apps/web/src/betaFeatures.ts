@@ -51,7 +51,10 @@ export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BE
 export function visibleProviderDescriptors(
   isOn: (feature: string) => boolean = isBetaFeatureOn,
 ): (typeof PROVIDER_DESCRIPTORS)[number][] {
-  return PROVIDER_DESCRIPTORS.filter((d) => isOn(d.kind));
+  // External is a profile-backed runtime, not one installable built-in agent.
+  // A bare external choice has no profile/revision and cannot be launched.
+  // Existing external threads still use the complete display metadata.
+  return PROVIDER_DESCRIPTORS.filter((d) => d.kind !== "external" && isOn(d.kind));
 }
 
 export const VISIBLE_PROVIDER_DESCRIPTORS = visibleProviderDescriptors();

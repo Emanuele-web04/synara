@@ -26,6 +26,8 @@ import { AsyncUserInput, AsyncUserInputQuestions, AsyncUserInputResponse } from 
 import { ProjectKind } from "./project";
 import { ClaudeCacheObservation } from "./claudeCache";
 import {
+  AgentProfileId,
+  AgentProfileRevisionId,
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -85,6 +87,12 @@ export const ProviderKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  // `external` is a profile-driven connector: its launch command/args/env come
+  // from an AgentProfileRevision resolved at session start, not from a fixed
+  // binary path. It shares the adapter registry and provider-service dispatch
+  // path with built-in providers, but has no built-in model catalog or settings
+  // binary — the profile supplies everything needed to spawn the agent.
+  "external",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -235,7 +243,7 @@ function inferProviderForModelSelection(input: {
 function defaultModelForProvider(provider: ProviderKind): string {
   // OMP has no static default model; an empty model fails the per-provider
   // schema below instead of inventing one.
-  if (provider === "omp") return "";
+  if (provider === "omp" || provider === "external") return "";
   return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
@@ -318,8 +326,22 @@ export const DevinModelSelection = Schema.Struct({
   options: Schema.optional(DevinModelOptions),
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
+export const ExternalAgentModelSelection = Schema.Struct({
+  provider: Schema.Literal("external"),
+  instanceId: Schema.Literal("external").pipe(
+    Schema.withDecodingDefault(() => "external" as const),
+  ),
+  profileId: AgentProfileId,
+  revisionId: AgentProfileRevisionId,
+  model: TrimmedNonEmptyString,
+  // Connector-specific model options. The shape is defined by the external
+  // agent connector, so it is intentionally untyped here.
+  options: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+});
+export type ExternalAgentModelSelection = typeof ExternalAgentModelSelection.Type;
 
 const ModelSelectionByProvider = Schema.Union([
+  ExternalAgentModelSelection,
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
@@ -345,6 +367,8 @@ const ModelSelectionJsonValue: Schema.Codec<unknown, unknown> = Schema.Json.pipe
 );
 
 const ModelSelectionSource = Schema.Struct({
+  profileId: Schema.optional(ModelSelectionJsonValue),
+  revisionId: Schema.optional(ModelSelectionJsonValue),
   provider: Schema.optional(ModelSelectionJsonValue),
   instanceId: Schema.optional(ModelSelectionJsonValue),
   model: Schema.optional(ModelSelectionJsonValue),
@@ -372,6 +396,10 @@ export const ModelSelection: Schema.Codec<typeof ModelSelectionByProvider.Type, 
             instanceId,
             model,
           };
+          if (provider === "external") {
+            base.profileId = raw.profileId;
+            base.revisionId = raw.revisionId;
+          }
           if (raw.options !== undefined) {
             base.options = raw.options;
           }

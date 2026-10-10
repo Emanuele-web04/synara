@@ -897,6 +897,8 @@ export const makeProviderUpdateEnv = (
       ? instance.environment
       : undefined;
   switch (instance.driver) {
+    case "external":
+      throw new Error("External agents use profile-scoped discovery and updates.");
     case "claudeAgent":
       return makeProviderProbeEnv("claude", environment);
     case "codex":
@@ -2620,6 +2622,8 @@ export function isProviderEnabledForSettings(
   provider: ProviderKind,
   settings: ServerSettings,
 ): boolean {
+  // External profiles have no per-provider settings entry; availability comes from the profile.
+  if (provider === "external") return true;
   return (
     settings.providers[provider]?.enabled !== false && settings.providers[provider] !== undefined
   );
@@ -3254,6 +3258,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       > => {
         const binaryPath = readInstanceConfigString(instance, "binaryPath");
         switch (instance.driver) {
+          case "external":
+            return Effect.succeed(Option.none());
           case "codex": {
             // Launches derive their Codex homes and seeded account discriminator
             // from these start options, so probe the same isolated account.

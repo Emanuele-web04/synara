@@ -302,6 +302,8 @@ function completeAutomationRun(input: {
       sourceProposedPlanThreadId: null,
       sourceProposedPlanId: null,
       assistantMessageId: null,
+      externalAgentRevisionId: null,
+      spawningProfileId: null,
       state: "completed",
       requestedAt: now,
       startedAt: now,
@@ -693,7 +695,7 @@ layer("AutomationService", (it) => {
         const unchanged = yield* service.list({ projectId });
         assert.deepEqual(
           unchanged.definitions.find((entry) => entry.id === created.id)?.modelSelection,
-          { ...selected.modelSelection, instanceId: "claudeAgent" },
+          { ...selected.modelSelection, instanceId: "claudeAgent" } as unknown,
         );
         const nextSelection = {
           provider: "claudeAgent" as const,
@@ -737,7 +739,7 @@ layer("AutomationService", (it) => {
       const listed = yield* service.list({ projectId });
       assert.deepEqual(
         listed.definitions.find((entry) => entry.id === created.id)?.modelSelection,
-        { ...created.modelSelection, instanceId: "codex" },
+        { ...created.modelSelection, instanceId: "codex" } as unknown,
       );
     }),
   );
@@ -1153,6 +1155,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "running",
         requestedAt: now,
         startedAt: now,
@@ -2205,6 +2209,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "running",
         requestedAt: now,
         startedAt: now,
@@ -2273,6 +2279,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "running",
         requestedAt: now,
         startedAt: now,
@@ -2336,6 +2344,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "pending",
         requestedAt: now,
         startedAt: null,
@@ -2755,6 +2765,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "running",
         requestedAt: now,
         startedAt: now,
@@ -2776,6 +2788,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "error",
         requestedAt: now,
         startedAt: now,
@@ -3025,6 +3039,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "completed",
         requestedAt: now,
         startedAt: now,
@@ -5180,6 +5196,8 @@ layer("AutomationService", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "completed",
         requestedAt: now,
         startedAt: now,

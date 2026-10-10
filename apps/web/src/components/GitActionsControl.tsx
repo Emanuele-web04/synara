@@ -261,7 +261,7 @@ export default function GitActionsControl({
   const visibleWhen = visibleWhenProp ?? "always";
   const isPanel = variant === "panel";
   const createBranchNameFieldId = useId();
-  const { settings } = useAppSettings();
+  const { settings, serverSettings } = useAppSettings();
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const providerOptions = useMemo(
     () =>
@@ -271,19 +271,21 @@ export default function GitActionsControl({
       ),
     [settings],
   );
-  const gitTextGenerationModelSelection = useMemo(
-    (): ModelSelection => ({
+  const gitTextGenerationModelSelection = useMemo((): ModelSelection | undefined => {
+    if (settings.textGenerationProvider === "external")
+      return serverSettings?.textGenerationModelSelection;
+    return {
       provider: settings.textGenerationProvider ?? "codex",
       instanceId:
         settings.textGenerationProviderInstanceId ?? settings.textGenerationProvider ?? "codex",
       model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
-    }),
-    [
-      settings.textGenerationModel,
-      settings.textGenerationProvider,
-      settings.textGenerationProviderInstanceId,
-    ],
-  );
+    };
+  }, [
+    settings.textGenerationProvider,
+    settings.textGenerationProviderInstanceId,
+    settings.textGenerationModel,
+    serverSettings?.textGenerationModelSelection,
+  ]);
   // Shell-only slice: the full derived Thread gets a new reference on every
   // streamed delta, which re-rendered this always-mounted control per token.
   const activeThread = useStore(
@@ -363,7 +365,9 @@ export default function GitActionsControl({
       queryClient,
       codexHomePath: settings.codexHomePath || null,
       model: settings.textGenerationModel ?? null,
-      modelSelection: gitTextGenerationModelSelection,
+      ...(gitTextGenerationModelSelection
+        ? { modelSelection: gitTextGenerationModelSelection }
+        : {}),
       ...(providerOptions ? { providerOptions } : {}),
     }),
   );
