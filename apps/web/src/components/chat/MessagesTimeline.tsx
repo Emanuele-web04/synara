@@ -3739,29 +3739,6 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   );
 });
 
-// Measures the clamped message against its content before paint so the fade mask
-// never flickers. Kept in a module helper (not compiled) so the synchronous
-// overflow setState — unavoidable for a layout measurement — stays out of the
-// compiled component.
-function measureUserMessageOverflow(
-  collapsed: boolean,
-  contentRef: RefObject<HTMLDivElement | null>,
-  setOverflowing: (overflowing: boolean) => void,
-): (() => void) | undefined {
-  if (!collapsed) {
-    return undefined;
-  }
-  const element = contentRef.current;
-  if (!element) {
-    return undefined;
-  }
-  const measure = () => {
-    setOverflowing(element.scrollHeight - element.clientHeight > 1);
-  };
-  measure();
-  return observeUserMessageOverflow(element, measure);
-}
-
 // Show more/less for long user messages: a visual max-height clamp (with a fade
 // mask) around the fully rendered message instead of the old character slice.
 const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(props: {
@@ -3776,21 +3753,26 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
   const [overflowing, setOverflowing] = useState(() => userMessageLikelyOverflows(props.text));
   const collapsed = !props.expanded;
 
-  useLayoutEffect(
-    () => measureUserMessageOverflow(collapsed, contentRef, setOverflowing),
-    [collapsed, props.text],
-  );
-
   const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(props.chatFontSizePx);
   const clampHeightPx = USER_MESSAGE_COLLAPSED_MAX_LINES * lineHeightPx;
   const fadeStartPx = clampHeightPx - USER_MESSAGE_COLLAPSED_FADE_LINES * lineHeightPx;
   const clamped = collapsed && overflowing;
 
+  // Observe the natural content inside the clamp. ResizeObserver reports its
+  // height after layout, including wrapping/font changes, so mounting recycled
+  // transcript rows never forces layout with scrollHeight/clientHeight reads.
+  useEffect(() => {
+    const element = contentRef.current;
+    if (!element || !collapsed) return;
+    return observeUserMessageOverflow(element, (contentHeight) => {
+      setOverflowing(contentHeight - clampHeightPx > 1);
+    });
+  }, [collapsed, clampHeightPx, props.text]);
+
   return (
     <>
       <div
         id={contentId}
-        ref={contentRef}
         data-user-message-clamp={clamped ? "true" : "false"}
         className={cn("min-w-0", collapsed && "overflow-hidden")}
         style={
@@ -3806,7 +3788,9 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
             : undefined
         }
       >
-        {props.children}
+        <div ref={contentRef} className="flow-root min-w-0">
+          {props.children}
+        </div>
       </div>
       {(clamped || props.expanded) && (
         <button
