@@ -272,9 +272,8 @@ type ProviderDiffPlaceholder = {
 type NativeChildSlotState = {
   initialized: boolean;
   readonly childIds: Set<string>;
-  // Distinct children refused by the cap. The notice is published once per
-  // budget; later refusals must not re-dispatch it with a new timestamp.
-  readonly overflowChildIds: Set<string>;
+  // The notice is attempted once per budget; refused identities are not retained.
+  overflowNoticeAttempted: boolean;
 };
 
 /**
@@ -1067,7 +1066,7 @@ const make = Effect.gen(function* () {
       Effect.succeed({
         initialized: false,
         childIds: new Set<string>(),
-        overflowChildIds: new Set<string>(),
+        overflowNoticeAttempted: false,
       }),
   });
 
@@ -1095,8 +1094,8 @@ const make = Effect.gen(function* () {
       return { admitted: true, budgetKey } as const;
     }
     if (childIds.size >= MAX_NATIVE_CHILDREN_PER_PARENT_TURN) {
-      const firstOverflow = slotState.overflowChildIds.size === 0;
-      slotState.overflowChildIds.add(childThreadId);
+      const firstOverflow = !slotState.overflowNoticeAttempted;
+      slotState.overflowNoticeAttempted = true;
       return { admitted: false, budgetKey, firstOverflow } as const;
     }
     childIds.add(childThreadId);

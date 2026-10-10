@@ -203,6 +203,10 @@ export interface ComposerThreadDraftState {
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
+  // Turn the user stopped while this queue was waiting, and the turn whose stop or
+  // failure the user acknowledged with Resume (see lib/queuedComposerPause.ts).
+  queueStoppedTurnId?: string | null;
+  queueResumedTurnId?: string | null;
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
   modelSelectionByProvider: ModelSelectionByProviderInstance;
   activeProvider: ProviderInstanceId | null;
@@ -381,6 +385,8 @@ export interface ComposerDraftStoreState {
   enqueueQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn) => void;
   insertQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn, index: number) => void;
   removeQueuedTurn: (threadId: ThreadId, queuedTurnId: string) => void;
+  pauseQueuedTurnsAfterStop: (threadId: ThreadId, stoppedTurnId: string | null) => void;
+  resumeQueuedTurns: (threadId: ThreadId, pausedTurnId: string | null) => void;
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => boolean;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => number;
   removeImage: (threadId: ThreadId, imageId: string) => void;
