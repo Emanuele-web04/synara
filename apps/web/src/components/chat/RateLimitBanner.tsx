@@ -7,6 +7,7 @@ import type { OrchestrationThreadActivity } from "@synara/contracts";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
+import { useNowMs } from "~/hooks/useNowMs";
 import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
 
 export type RateLimitStatus = {
@@ -44,10 +45,10 @@ export function deriveLatestRateLimitStatus(
   return null;
 }
 
-function formatResetsAt(resetsAt: string): string {
+function formatResetsAt(resetsAt: string, nowMs: number): string {
   const ms = Date.parse(resetsAt);
   if (Number.isNaN(ms)) return "";
-  const secondsLeft = Math.max(0, Math.ceil((ms - Date.now()) / 1000));
+  const secondsLeft = Math.max(0, Math.ceil((ms - nowMs) / 1000));
   if (secondsLeft < 60) return ` Resets in ${secondsLeft}s.`;
   const minutesLeft = Math.ceil(secondsLeft / 60);
   return ` Resets in ${minutesLeft}m.`;
@@ -60,14 +61,24 @@ export const RateLimitBanner = function RateLimitBanner({
   onDismiss?: () => void;
   rateLimitStatus: RateLimitStatus | null;
 }) {
+  // Tick while a reset time is on screen so the countdown actually counts down
+  // instead of freezing at the value captured on mount. Sub-minute countdowns
+  // tick every second; minute labels only need a 30s cadence.
+  const resetsAtMs = rateLimitStatus?.resetsAt ? Date.parse(rateLimitStatus.resetsAt) : NaN;
+  const hasResetsAt = !Number.isNaN(resetsAtMs);
+  const nowMs = useNowMs(
+    hasResetsAt,
+    hasResetsAt && resetsAtMs - Date.now() < 90_000 ? 1_000 : 30_000,
+  );
+
   if (!rateLimitStatus) return null;
 
   const { status, resetsAt, utilization } = rateLimitStatus;
   const isRejected = status === "rejected";
 
   const message = isRejected
-    ? `Rate limit reached.${resetsAt ? formatResetsAt(resetsAt) : ""}`
-    : `Approaching rate limit${utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : ""}.${resetsAt ? formatResetsAt(resetsAt) : ""}`;
+    ? `Rate limit reached.${resetsAt ? formatResetsAt(resetsAt, nowMs) : ""}`
+    : `Approaching rate limit${utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : ""}.${resetsAt ? formatResetsAt(resetsAt, nowMs) : ""}`;
 
   return (
     <ChatColumnBannerFrame>

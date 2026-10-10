@@ -21,6 +21,7 @@ import { PullRequestList } from "./PullRequestList";
 import { PullRequestRow } from "./PullRequestRow";
 import { groupPullRequestEntriesByInvolvement } from "./pullRequestList.logic";
 import { focusPullRequestRow, isFocusInsideRightDock } from "./pullRequestFocus";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 function makeEntry(isPinned: boolean): GitHubInboxPullRequestItem {
   return {
@@ -125,7 +126,8 @@ function FocusRestoreHarness() {
 }
 
 describe("PullRequestRow pin control", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 
@@ -283,7 +285,8 @@ describe("PullRequestRow issue rows", () => {
 });
 
 describe("PullRequestAvatar", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

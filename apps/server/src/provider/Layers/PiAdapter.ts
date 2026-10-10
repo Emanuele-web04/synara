@@ -2119,6 +2119,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         type: "runtime.warning",
         payload: {
           message: input.message,
+          willRetry: true,
           detail: input.detail ?? { method: input.method },
         },
         raw: {

@@ -1,3 +1,4 @@
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 // FILE: KanbanProjectBoardView.tsx
 // Purpose: Full 4-column board for one project — drag a Draft card onto In Progress to
 //          dispatch its prompt, or reorder drafts; other moves are derived-only.
@@ -7,6 +8,7 @@
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   closestCorners,
   pointerWithin,
@@ -126,6 +128,13 @@ export function KanbanProjectBoardView({
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
+    }),
+    // Space lifts a focused card, arrows move it, Space drops, Escape cancels.
+    // Enter stays a plain click so it keeps opening the card; mid-drag it
+    // drops instead (the sensor preventDefaults, suppressing the click).
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] },
     }),
   );
   const handleOpenCard = (card: KanbanCard) => {
@@ -395,7 +404,7 @@ export function KanbanProjectBoardView({
           />
         </div>
       </div>
-      <DragOverlay dropAnimation={null}>
+      <DragOverlay>
         {activeCard ? (
           <KanbanCardView card={activeCard} isOverlay prByThreadId={prByThreadId} {...nowMsProps} />
         ) : null}

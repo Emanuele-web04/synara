@@ -41,8 +41,21 @@ describe("shared question form with blocking prompts", () => {
   it("offers Cancel with choices and stops pending auto-advance", async () => {
     const callbacks = props();
     const screen = await render(<ComposerPendingUserInputPanel {...callbacks} />);
-    await screen.getByRole("button", { name: /Second/ }).click();
-    await screen.getByRole("button", { name: "Cancel" }).click();
+    await expect.element(screen.getByRole("button", { name: /Second/ })).toBeVisible();
+    // Synchronous DOM clicks: the 200ms single-select auto-advance must not
+    // beat the input pipeline, or the cancel races question 2 rendering. An
+    // awaited locator click would leave a task boundary the timer could slip
+    // through under load.
+    const choiceButton = Array.from(document.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Second"),
+    );
+    expect(choiceButton, "Second choice button not found").toBeDefined();
+    choiceButton!.click();
+    const cancelButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Cancel",
+    );
+    expect(cancelButton, "Cancel button not found").toBeDefined();
+    cancelButton!.click();
     expect(callbacks.onCancel).toHaveBeenCalledOnce();
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(callbacks.onAdvance).not.toHaveBeenCalled();

@@ -756,7 +756,7 @@ function normalizeToolDescriptor(value: string | null): string | null {
     return "Search";
   }
   const readable = /[_-]/.test(value) ? humanizeMcpToken(collapsed) : collapsed;
-  return readable.length > 64 ? `${readable.slice(0, 61).trimEnd()}...` : readable;
+  return readable.length > 64 ? `${readable.slice(0, 61).trimEnd()}…` : readable;
 }
 
 function humanizeMcpToken(value: string | undefined): string {
@@ -1214,7 +1214,7 @@ function compactInlineCommand(command: string): string {
   if (normalized.length <= 140) {
     return normalized;
   }
-  return `${normalized.slice(0, 137).trimEnd()}...`;
+  return `${normalized.slice(0, 137).trimEnd()}…`;
 }
 
 function firstShellCommandSegment(command: string): string {
@@ -1313,7 +1313,7 @@ function normalizeSearchPatternToken(token: string): string | null {
   if (!/[a-z0-9]/i.test(trimmed)) {
     return null;
   }
-  return trimmed.length > 30 ? `${trimmed.slice(0, 27)}...` : trimmed;
+  return trimmed.length > 30 ? `${trimmed.slice(0, 27)}…` : trimmed;
 }
 
 function normalizeSearchPathToken(token: string): string | null {

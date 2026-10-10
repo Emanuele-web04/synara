@@ -1474,7 +1474,7 @@ export default function DiffPanel({
           {gitRepoStatusError}
         </PanelStateMessage>
       ) : gitRepoStatus === undefined && diffQueriesEnabled && activeCwd ? (
-        <DiffPanelLoadingState label="Checking git repository..." />
+        <DiffPanelLoadingState label="Checking git repository…" />
       ) : diffEnvironmentPending ? (
         <PanelStateMessage density="compact" fill="flex">
           This chat environment is still being prepared. Diffs will be available once the worktree
@@ -1506,10 +1506,10 @@ export default function DiffPanel({
               viewKind={diffViewKind}
               loadingLabel={
                 diffViewKind !== "repo"
-                  ? "Loading checkpoint diff..."
+                  ? "Loading checkpoint diff…"
                   : repoDiffScope === "ref"
-                    ? `Loading diff ${resolveRepoDiffScopeLabel(repoDiffScope, repoDiffCompareRef)}...`
-                    : `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
+                    ? `Loading diff ${resolveRepoDiffScopeLabel(repoDiffScope, repoDiffCompareRef)}…`
+                    : `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff…`
               }
               emptyLabel={
                 diffViewKind === "repo"

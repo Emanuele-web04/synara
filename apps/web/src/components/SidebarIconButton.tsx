@@ -21,7 +21,7 @@ import { type SidebarGlyphVariant, sidebarGlyphClass } from "./sidebarGlyphs";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const SLOT_SIZE = {
-  sm: "size-[18px]",
+  sm: "size-5",
   md: "size-5",
   /**
    * Sidebar header-bar chrome (Search, Activity bell): a roomier hit target with a

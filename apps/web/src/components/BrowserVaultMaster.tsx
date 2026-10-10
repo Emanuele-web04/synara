@@ -153,7 +153,7 @@ export function BrowserVaultMaster({
             </Button>
             <Button type="submit" size="sm" disabled={busy || !password}>
               {busy
-                ? "Verifying..."
+                ? "Verifying…"
                 : action.kind === "setup"
                   ? "Set master password"
                   : action.kind === "unlock"

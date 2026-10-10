@@ -17,6 +17,7 @@ import {
   BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
   type BrowserChromeStatus,
 } from "./BrowserPanel.logic";
+import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME } from "./chat/chatHeaderControls";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useHorizontalWheelScroll } from "./chat/chatHeaderControls";
@@ -54,14 +55,15 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-1.5 border-b border-border px-2 py-1",
+        "flex items-center gap-1.5 px-2 py-1",
+        CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
         props.dragRegion && "drag-region",
       )}
     >
       <div
         ref={stripRef}
         data-testid="browser-tab-strip"
-        className="flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-contain"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {props.tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
@@ -82,7 +84,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
               }}
               className={cn(
                 BROWSER_CHROME_CONTROL_CLASS_NAME,
-                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-ui transition-colors [-webkit-app-region:no-drag]",
+                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-ui-sm transition-colors [-webkit-app-region:no-drag]",
                 isActive
                   ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
                   : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
@@ -106,7 +108,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
                 type="button"
                 variant="ghost"
                 size="icon-chip"
-                className="rounded-md text-muted-foreground/60 hover:text-foreground"
+                className="rounded-md text-muted-foreground hover:text-foreground"
                 onClick={(event) => {
                   event.stopPropagation();
                   onCloseTab(tab.id);

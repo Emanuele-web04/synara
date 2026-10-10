@@ -89,7 +89,7 @@ function GitFileRow(props: {
       >
         <FileEntryIcon pathValue={filePath} kind="file" theme={props.theme} className="size-4" />
         <span className="min-w-0 truncate text-ui text-foreground">
-          {dir ? <span className="text-muted-foreground/70">{dir}</span> : null}
+          {dir ? <span className="text-muted-foreground/80">{dir}</span> : null}
           <span>{name}</span>
         </span>
       </button>
@@ -155,7 +155,7 @@ function GitFileSection(props: {
         ) : null}
       </header>
       {props.files.length === 0 ? (
-        <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">{props.emptyLabel}</p>
+        <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/80">{props.emptyLabel}</p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {props.files.map((file) => {
@@ -324,10 +324,10 @@ export function GitPanel(props: {
           </Alert>
         ) : null}
         {!error && isLoading && !hasChanges ? (
-          <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">Loading changes...</p>
+          <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/80">Loading changes…</p>
         ) : null}
         {!error && !isLoading && !hasChanges ? (
-          <p className="px-1.5 py-2 text-center text-ui text-muted-foreground/70">
+          <p className="px-1.5 py-2 text-center text-ui text-muted-foreground/80">
             No changes in the working tree.
           </p>
         ) : null}

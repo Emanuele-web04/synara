@@ -37,6 +37,8 @@ interface ChatComposerFooterProps {
     answersComplete: boolean;
   } | null;
   submission: {
+    interruptible?: boolean;
+    stopping?: boolean;
     phase: SessionPhase;
     busy: boolean;
     connecting: boolean;
@@ -168,7 +170,8 @@ export function ChatComposerFooter({
                 ? "Submit answers"
                 : "Next question"}
           </Button>
-        ) : submission.phase === "running" || submission.connecting ? (
+        ) : (submission.interruptible ??
+          (submission.phase === "running" || submission.connecting)) ? (
           <>
             {/* Dictating a follow-up is allowed mid-turn: the transcript lands in the
                 composer and sending it follows the queue/steer behavior. */}
@@ -196,7 +199,8 @@ export function ChatComposerFooter({
                 size="icon-xs"
                 className="sm:size-[26px]"
                 onClick={submission.onInterrupt}
-                aria-label="Stop generation"
+                disabled={submission.stopping}
+                aria-label={submission.stopping ? "Stopping" : "Stop generation"}
                 title="Stop the current response. On Mac, press Ctrl+C to interrupt."
               >
                 <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
@@ -217,7 +221,7 @@ export function ChatComposerFooter({
                   submission.hasPendingCacheReview
                 }
               >
-                {submission.connecting || submission.busy ? "Sending..." : "Refine"}
+                {submission.connecting || submission.busy ? "Sending…" : "Refine"}
               </Button>
             ) : (
               <div className="flex items-center">
@@ -232,7 +236,7 @@ export function ChatComposerFooter({
                     submission.hasPendingCacheReview
                   }
                 >
-                  {submission.connecting || submission.busy ? "Sending..." : "Implement"}
+                  {submission.connecting || submission.busy ? "Sending…" : "Implement"}
                 </Button>
                 <Menu>
                   <MenuTrigger

@@ -148,8 +148,8 @@ it.each(["light", "dark"] as const)(
       await screen.rerender(view());
       await expect.element(source()).toHaveAttribute("aria-checked", "true");
       await page.getByRole("button", { name: "Search files", exact: true }).click();
-      await page.getByPlaceholder("Search files...").fill("settings");
-      await expect.element(page.getByPlaceholder("Search files...")).toHaveValue("settings");
+      await page.getByPlaceholder("Search files…").fill("settings");
+      await expect.element(page.getByPlaceholder("Search files…")).toHaveValue("settings");
       await page.getByRole("button", { name: "Files", exact: true }).click();
       await expect.element(source()).toHaveAttribute("aria-checked", "true");
     }

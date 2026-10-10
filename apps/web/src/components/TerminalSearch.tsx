@@ -114,11 +114,17 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
 
   useEffect(() => () => clearSearchTimer(), [clearSearchTimer]);
 
+  // Escape lives on the bar container so it also works while focus is on the
+  // nav/close buttons; Enter stays on the input so button presses don't re-run search.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
       e.preventDefault();
       onClose();
-    } else if (e.key === "Enter") {
+    }
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
       e.preventDefault();
       handleSearch(e.shiftKey ? "previous" : "next");
     }
@@ -133,13 +139,16 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
   if (!isOpen) return null;
 
   return (
-    <div className="absolute right-1 top-1 z-10 flex max-w-[calc(100%-0.5rem)] items-center rounded bg-popover/95 pl-2 pr-0.5 shadow-lg ring-1 ring-border/40 backdrop-blur">
+    <div
+      className="absolute right-1 top-1 z-10 flex max-w-[calc(100%-0.5rem)] items-center rounded bg-popover/95 pl-2 pr-0.5 shadow-lg ring-1 ring-border/40 backdrop-blur"
+      onKeyDown={handleKeyDown}
+    >
       <input
         ref={inputRef}
         type="text"
         value={query}
         onChange={handleInputChange}
-        onKeyDown={handleKeyDown}
+        onKeyDown={handleInputKeyDown}
         placeholder="Find"
         className="h-6 w-28 min-w-0 flex-shrink bg-transparent text-ui leading-snug text-foreground placeholder:text-muted-foreground focus:outline-none"
       />
@@ -150,6 +159,7 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
       )}
       <div className="flex shrink-0 items-center">
         <IconButton
+          aria-pressed={caseSensitive}
           onClick={() => setCaseSensitive((v) => !v)}
           label="Match case"
           className={cn(
@@ -178,7 +188,7 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
         <IconButton
           onClick={handleClose}
           className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
-          label="Close search (Esc)"
+          label="Close find (Esc)"
         >
           <XIcon className="size-3.5" />
         </IconButton>

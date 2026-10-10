@@ -158,6 +158,9 @@ it("pauses autosave while a reload discard decision is pending", async () => {
   await expect.element(page.getByRole("textbox")).toHaveValue("mine\n");
   await page.getByRole("button", { name: "Reload", exact: true }).click();
   await expect.element(page.getByTestId("intent")).toHaveTextContent("reload");
+  // Under load the 400ms autosave can fire before the Reload click lands; only
+  // writes during the pending window itself violate the pause.
+  api.projects.writeFile.mockClear();
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(api.projects.writeFile).not.toHaveBeenCalled();
   api.projects.readFile.mockResolvedValue(loaded("agent edit\n"));

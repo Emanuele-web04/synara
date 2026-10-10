@@ -1,3 +1,4 @@
+import { shouldHoldLocalDispatchAcrossTurnStart } from "../ChatView.logic";
 import { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useSyncExternalStore, type SetStateAction } from "react";
 import { create } from "zustand";
@@ -156,7 +157,16 @@ export function useChatLocalDispatch({
   );
   const isSendBusy =
     isSettlingTurnDispatch || (localDispatch !== null && !serverAcknowledgedLocalDispatch);
-  const isAwaitingTurnStart = localDispatch !== null && !turnTakenOver;
+  const holdDispatchAcrossTurnStart = shouldHoldLocalDispatchAcrossTurnStart({
+    phase,
+    latestTurn: activeLatestTurn,
+    session: activeThread?.session ?? null,
+    hasPendingApproval: activePendingApproval !== null,
+    hasPendingUserInput: activePendingUserInput !== null,
+    threadError: activeThread?.error,
+  });
+  const isAwaitingTurnStart =
+    localDispatch !== null && (!turnTakenOver || holdDispatchAcrossTurnStart);
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
 
@@ -263,7 +273,7 @@ export function useChatLocalDispatch({
 
   const localDispatchWorktreeSetupFailed = worktreeSetupHasError(activeWorktreeSetup);
   useEffect(() => {
-    if (!turnTakenOver) {
+    if (!turnTakenOver || holdDispatchAcrossTurnStart) {
       return;
     }
     // A failed worktree setup would otherwise reset in the same commit that
@@ -295,12 +305,17 @@ export function useChatLocalDispatch({
     localDispatchWorktreeSetupFailed,
     resetLocalDispatch,
     turnTakenOver,
+    holdDispatchAcrossTurnStart,
   ]);
 
   // Fail-open: if takeover never arrives, clear the awaiting-turn bridge so
   // Thinking cannot stick forever. Skipped while worktree setup is active.
   useEffect(() => {
-    if (!localDispatch || turnTakenOver || localDispatch.worktreeSetup) {
+    if (
+      !localDispatch ||
+      (turnTakenOver && !holdDispatchAcrossTurnStart) ||
+      localDispatch.worktreeSetup
+    ) {
       return;
     }
     const startedAtMs = Date.parse(localDispatch.startedAt);
@@ -316,7 +331,7 @@ export function useChatLocalDispatch({
       resetLocalDispatch();
     }, remainingMs);
     return () => window.clearTimeout(timer);
-  }, [localDispatch, resetLocalDispatch, turnTakenOver]);
+  }, [localDispatch, resetLocalDispatch, turnTakenOver, holdDispatchAcrossTurnStart]);
   return {
     isSettlingTurnDispatch,
     localDispatch,

@@ -68,8 +68,9 @@ export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps
 
   return (
     <div
+      aria-hidden={!isVisible}
       className={cn(
-        "absolute bottom-4 left-1/2 z-10 -translate-x-1/2 transition-all duration-200",
+        "absolute bottom-4 left-1/2 z-10 -translate-x-1/2 transition-[opacity,transform] duration-200",
         isVisible ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0",
       )}
     >
@@ -78,6 +79,7 @@ export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps
         className="size-7 rounded-full border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground sm:size-7"
         label="Scroll to bottom"
         size="icon-xs"
+        tabIndex={isVisible ? 0 : -1}
         variant="outline"
       >
         <ArrowDownIcon className="size-3.5" />

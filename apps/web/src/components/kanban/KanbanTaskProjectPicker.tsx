@@ -46,7 +46,9 @@ export function KanbanTaskProjectPicker({
         />
       }
     >
-      <span className="min-w-0 truncate">{selectedProjectOption?.name ?? "No project"}</span>
+      <span className="min-w-0 truncate" title={selectedProjectOption?.name}>
+        {selectedProjectOption?.name ?? "No project"}
+      </span>
       <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-60" />
     </ProjectMenuPicker>
   );

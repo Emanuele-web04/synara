@@ -47,7 +47,7 @@ export function DeviceSetupScreen(props: {
   return (
     <div className="flex h-full flex-col overflow-hidden px-[9%] pt-[16%] pb-[9%]">
       <div className="space-y-1.5 text-center">
-        <h3 className={cn("text-balance font-semibold text-[13px] leading-tight", SCREEN_TEXT)}>
+        <h3 className={cn("text-balance font-semibold text-ui leading-tight", SCREEN_TEXT)}>
           {props.title}
         </h3>
         <p className={cn("text-pretty text-ui-xs leading-snug", SCREEN_MUTED)}>
@@ -112,7 +112,7 @@ export function DeviceSetupScreen(props: {
 
       <div className="mt-auto space-y-3 pt-4">
         {props.footnote ? (
-          <p className={cn("text-pretty text-center text-[8.5px] leading-snug", SCREEN_DIM)}>
+          <p className={cn("text-pretty text-center text-ui-2xs leading-snug", SCREEN_MUTED)}>
             {props.footnote}
           </p>
         ) : null}

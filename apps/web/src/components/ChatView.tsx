@@ -1,3 +1,5 @@
+import { useStartingProviderName, useLatchedActiveWorkStartedAt } from "./chat/useWorkingIndicator";
+import { localDispatchSessionStartReached, isUnsettledTurnWork } from "./ChatView.logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -1759,6 +1761,15 @@ export default function ChatView({
   });
   // Keep Thinking through the post-ack gap where the server has the message /
   // turn request but the provider session is not live yet (common on first send).
+  const hasUnsettledTurnWork = isUnsettledTurnWork({
+    latestTurn: activeLatestTurn,
+    latestTurnSettled,
+    phase,
+    sessionStatus: activeThread?.session?.status,
+  });
+  const isTurnInterruptible =
+    hasLiveTurn || localDispatchSessionStartReached(localDispatch) || hasUnsettledTurnWork;
+
   const isWorking =
     hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint || isAwaitingTurnStart;
   const hasStreamingAssistantText =
@@ -1768,11 +1779,24 @@ export default function ChatView({
   const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
   const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
   const previousActiveTurnLayoutKeyRef = useRef<string | null>(null);
-  const activeWorkStartedAt = hasLiveTurnTail
+  const activeWorkStartedAtCandidate = hasLiveTurnTail
     ? (activeLatestTurn?.startedAt ?? null)
     : hasLiveTurn
       ? deriveActiveWorkStartedAt(activeLatestTurn, activeThread?.session ?? null, null)
       : null;
+  const activeWorkStartedAt = useLatchedActiveWorkStartedAt({
+    isWorking,
+    threadId: activeThreadId,
+    candidate: localDispatch?.startedAt ?? activeWorkStartedAtCandidate,
+  });
+  const startingProviderName = useStartingProviderName({
+    isWorking,
+    isConnecting,
+    isRunning: phase === "running",
+    providerName: providerDisplayName,
+    threadId: activeThreadId,
+  });
+
   const activeTurnLayoutKey =
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
@@ -3605,10 +3629,82 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  // Local "stopping" marker keyed to the thread + turn: the indicator reads
+  // "Stopping…" and the Stop control disables until the turn settles, the
+  // interrupt rejects, the thread changes, or the fail-open bound hits.
+  const [stoppingTurn, setStoppingTurn] = useState<{
+    threadId: ThreadId;
+    turnId: TurnId | null;
+    at: number;
+  } | null>(null);
+  const isStoppingTurn = stoppingTurn !== null && stoppingTurn.threadId === activeThreadId;
+  useEffect(() => {
+    if (stoppingTurn === null) {
+      return;
+    }
+    if (stoppingTurn.threadId !== activeThreadId) {
+      setStoppingTurn(null);
+      return;
+    }
+    // Settled once the tracked turn reports a terminal state, or a NEWER turn
+    // lands terminal — a stale completed latestTurn on an existing thread must
+    // not clear "Stopping…" while the real turn is still starting. A missing
+    // latestTurn is NOT settle evidence — the detail snapshot lags live turns.
+    const latestTurn = activeLatestTurn;
+    const latestTurnTerminal = latestTurn !== null && latestTurn.state !== "running";
+    const trackedTurnSettled =
+      stoppingTurn.turnId !== null &&
+      latestTurnTerminal &&
+      latestTurn.turnId === stoppingTurn.turnId;
+    const newerTerminalTurnSettled =
+      latestTurnTerminal &&
+      latestTurn.turnId !== stoppingTurn.turnId &&
+      (Date.parse(latestTurn.requestedAt) > stoppingTurn.at ||
+        Date.parse(latestTurn.completedAt ?? "") > stoppingTurn.at);
+    const turnSettled = trackedTurnSettled || newerTerminalTurnSettled;
+    // The interrupt races session startup: phase flaps connecting → ready
+    // while the dispatch bridge is still held, and that gap must not clear
+    // "Stopping…" before the interrupt lands.
+    const dispatchBridgeHeld = isAwaitingTurnStart || localDispatch !== null;
+    if (turnSettled || (!isTurnInterruptible && !hasUnsettledTurnWork && !dispatchBridgeHeld)) {
+      setStoppingTurn(null);
+    }
+  }, [
+    activeLatestTurn,
+    activeThreadId,
+    hasUnsettledTurnWork,
+    isAwaitingTurnStart,
+    isTurnInterruptible,
+    localDispatch,
+    stoppingTurn,
+  ]);
+  // Fail-open: a settle event that never arrives must not stick "Stopping…".
+  useEffect(() => {
+    if (stoppingTurn === null) {
+      return;
+    }
+    const remainingMs = 30_000 - (Date.now() - stoppingTurn.at);
+    const timer = window.setTimeout(() => setStoppingTurn(null), Math.max(remainingMs, 0));
+    return () => window.clearTimeout(timer);
+  }, [stoppingTurn]);
+
   // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
   // UI spinning with no explanation, so the stop affordances report it.
   const onInterruptFromStopControl = useCallback(() => {
+    if (!activeThreadId || isStoppingTurn) return;
+    const marker = {
+      threadId: activeThreadId,
+      // Only a live turn is a valid stop target: during startup there may be
+      // none yet, and a stale completed latestTurn must not be captured —
+      // its terminal state would settle "Stopping…" in one frame.
+      turnId:
+        activeThread?.session?.activeTurnId ??
+        (activeLatestTurn?.state === "running" ? activeLatestTurn.turnId : null),
+      at: Date.now(),
+    };
+    setStoppingTurn(marker);
     void onInterrupt().catch((error: unknown) => {
+      setStoppingTurn((current) => (current === marker ? null : current));
       toastManager.add({
         type: "error",
         title: "Could not stop the current response",
@@ -3618,7 +3714,13 @@ export default function ChatView({
             : "The interrupt request failed. Try again in a moment.",
       });
     });
-  }, [onInterrupt]);
+  }, [
+    activeLatestTurn,
+    activeThread?.session?.activeTurnId,
+    activeThreadId,
+    onInterrupt,
+    isStoppingTurn,
+  ]);
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
@@ -3841,6 +3943,10 @@ export default function ChatView({
     isFocusedPane,
     activeThreadId,
     hasLiveTurn,
+    canInterruptTurn: isTurnInterruptible,
+    isStoppingTurn,
+    composerOverlayOpen,
+    expandedImageOpen: expandedImage !== null,
     composerFormRef,
     onInterruptFromStopControl,
     composerSubagentStripItems,
@@ -6275,6 +6381,8 @@ export default function ChatView({
                   }
                   submission={{
                     phase,
+                    interruptible: isTurnInterruptible,
+                    stopping: isStoppingTurn,
                     busy: isSendBusy,
                     connecting: isConnecting,
                     expired: isSidechatExpired,
@@ -6574,10 +6682,15 @@ export default function ChatView({
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}
+                    interruptedTurnId={
+                      activeLatestTurn?.state === "interrupted" ? activeLatestTurn.turnId : null
+                    }
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
                     workingLabel={resolveWorkingLabel({
+                      stoppingTurn: isStoppingTurn,
+                      startingProviderName,
                       isSettlingTurnDispatch,
                       isSendBusy,
                       turnTakenOver,
@@ -6590,7 +6703,9 @@ export default function ChatView({
                     activeTurnInProgress={activeTurnInProgress}
                     subagentsRunning={hasRunningSubagents}
                     collapseFinishedTurns={settings.collapseFinishedTurns}
-                    activeTurnStartedAt={activeWorkStartedAt}
+                    activeTurnStartedAt={
+                      activeWorkStartedAtCandidate !== null ? activeWorkStartedAt : null
+                    }
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
                     findHighlightStore={threadFindHighlightStore}

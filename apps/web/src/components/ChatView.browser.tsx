@@ -6593,7 +6593,16 @@ describe("ChatView transcript geometry (full app)", () => {
           const paragraphs = container
             .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
             ?.querySelectorAll("p");
-          expect(paragraphs?.length).toBe(13);
+          expect(
+            paragraphs?.length,
+            JSON.stringify({
+              renderedChars: Array.from(paragraphs ?? []).reduce(
+                (sum, p) => sum + (p.textContent?.length ?? 0),
+                0,
+              ),
+              tail: paragraphs?.[paragraphs.length - 1]?.textContent?.slice(-80),
+            }),
+          ).toBe(13);
           expect(paragraphs?.[12]?.textContent).toBe("More streaming output. ".repeat(35).trim());
         },
         { timeout: 10_000, interval: 20 },
@@ -7599,10 +7608,10 @@ describe("ChatView transcript geometry (full app)", () => {
       branchTrigger.click();
 
       const branchSearch = await waitForElement(
-        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches…"]'),
         "Unable to find branch selector search input.",
       );
-      await page.getByPlaceholder("Search branches...").fill("stale-query");
+      await page.getByPlaceholder("Search branches…").fill("stale-query");
       expect(branchSearch.value).toBe("stale-query");
 
       await mounted.router.navigate({
@@ -7619,7 +7628,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(
-            document.querySelector('input[placeholder="Search branches..."]'),
+            document.querySelector('input[placeholder="Search branches…"]'),
             "Branch selector state remained open after switching threads.",
           ).toBeNull();
         },
@@ -7632,7 +7641,7 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       nextBranchTrigger.click();
       const resetSearch = await waitForElement(
-        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches…"]'),
         "Unable to reopen branch selector after switching threads.",
       );
       expect(resetSearch.value).toBe("");
@@ -14508,6 +14517,797 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(transitionFrames).toBe(0);
     } finally {
       await mounted.cleanup();
+    }
+  });
+  it("interrupts a live turn with Escape in the composer and shows Stopping…", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-interrupt" as MessageId,
+        targetText: "escape interrupt target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await expect.element(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+      // A lingering pointer can leave a hover preview card mid-open from an
+      // earlier interaction — the card owns Escape while it is open, so let it
+      // settle before dispatching the interrupt.
+      await vi.waitFor(() =>
+        expect(document.querySelector("[data-slot='preview-card-popup']")).toBeNull(),
+      );
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+      // The interrupt is acknowledged locally: shimmer reads Stopping… and the
+      // Stop control is disabled against repeat interrupts.
+      await vi.waitFor(() => {
+        expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+          "Stopping…",
+        );
+        const stop = document.querySelector<HTMLButtonElement>('button[aria-label="Stopping"]');
+        expect(stop).not.toBeNull();
+        expect(stop!.disabled).toBe(true);
+      });
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not interrupt on Escape from other inputs, menus, or when idle", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-guard" as MessageId,
+        targetText: "escape guard target",
+        sessionStatus: "running",
+      }),
+    });
+    const interruptDispatched = () =>
+      wsRequests.some(
+        (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+      );
+
+    try {
+      // Composer command menu owns its own Escape (closes the menu).
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await userEvent.keyboard("/");
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector('[data-slot="command-item"]') !== null ||
+            document.body.textContent?.includes("Loading commands"),
+        ).toBe(true);
+      });
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+
+      // Escape inside a non-composer input (the thread find bar) stays there.
+      await dispatchConfiguredShortcutWhenReady(window, { key: "f" });
+      const findInput = await waitForElement(
+        () => document.querySelector<HTMLElement>('input[aria-label="Find in thread"]'),
+        "Thread find input did not open.",
+      );
+      await vi.waitFor(() => expect(document.activeElement).toBe(findInput));
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+
+    // Idle: no live turn means Escape is a no-op.
+    const idleMounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-idle" as MessageId,
+        targetText: "escape idle target",
+      }),
+    });
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+    } finally {
+      await idleMounted.cleanup();
+    }
+  });
+
+  it("settles a stopped turn as 'Stopped after Xs'", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const turnId = TurnId.makeUnsafe("turn-browser-fixture-active");
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-settle" as MessageId,
+        targetText: "stop settle target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+          "Stopping…",
+        );
+      });
+
+      // The server settles the turn as interrupted.
+      const thread = fixture.snapshot.threads.find((t) => t.id === THREAD_ID)!;
+      const settledThread = {
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            ...createAssistantMessage({
+              id: "msg-assistant-stopped-preamble" as MessageId,
+              text: "Preamble before the stop.",
+              offsetSeconds: 1_500,
+            }),
+            turnId,
+          },
+          {
+            ...createAssistantMessage({
+              id: "msg-assistant-stopped-final" as MessageId,
+              text: "Partial answer before it was stopped.",
+              offsetSeconds: 1_501,
+            }),
+            turnId,
+            completedAt: isoAt(1_502),
+          },
+        ],
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "interrupted" as const,
+              activeTurnId: null,
+              updatedAt: isoAt(1_502),
+            }
+          : null,
+        latestTurn: {
+          turnId,
+          state: "interrupted" as const,
+          requestedAt: isoAt(1_400),
+          startedAt: isoAt(1_401),
+          completedAt: isoAt(1_502),
+          assistantMessageId: "msg-assistant-stopped-final" as MessageId,
+        },
+      };
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((t) => (t.id === THREAD_ID ? settledThread : t)),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+      useStore.getState().syncServerThreadDetailHotPath(settledThread);
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Stopped after");
+          expect(document.querySelector(".shimmer")).toBeNull();
+        },
+        { timeout: 6_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("marks a stopped plain reply 'Stopped' in the meta row (no collapsed header)", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const turnId = TurnId.makeUnsafe("turn-browser-fixture-plain-stop");
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-plain" as MessageId,
+        targetText: "stop plain target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+
+      // Settle the turn as interrupted with a single plain assistant reply —
+      // nothing folds, so no "Stopped after" header can render.
+      const thread = fixture.snapshot.threads.find((t) => t.id === THREAD_ID)!;
+      const settledThread = {
+        ...thread,
+        messages: [
+          ...thread.messages,
+          createUserMessage({
+            id: "msg-user-stop-plain-send" as MessageId,
+            text: "tell me a story",
+            offsetSeconds: 1_499,
+          }),
+          {
+            ...createAssistantMessage({
+              id: "msg-assistant-stopped-plain" as MessageId,
+              text: "Partial answer before it was stopped.",
+              offsetSeconds: 1_500,
+            }),
+            turnId,
+            completedAt: isoAt(1_501),
+          },
+        ],
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "interrupted" as const,
+              activeTurnId: null,
+              updatedAt: isoAt(1_501),
+            }
+          : null,
+        latestTurn: {
+          turnId,
+          state: "interrupted" as const,
+          requestedAt: isoAt(1_400),
+          startedAt: isoAt(1_401),
+          completedAt: isoAt(1_501),
+          assistantMessageId: "msg-assistant-stopped-plain" as MessageId,
+        },
+      };
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((t) => (t.id === THREAD_ID ? settledThread : t)),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+      useStore.getState().syncServerThreadDetailHotPath(settledThread);
+      await vi.waitFor(
+        () => {
+          const metaRow = [...document.querySelectorAll("p.tabular-nums")].find((el) =>
+            el.textContent?.includes("Stopped"),
+          );
+          expect(metaRow?.textContent).toContain("Stopped");
+          expect(document.body.textContent ?? "").not.toContain("Stopped after");
+          expect(document.querySelector(".shimmer")).toBeNull();
+        },
+        { timeout: 6_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not interrupt on Escape while the composer extras panel is open", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-extras" as MessageId,
+        targetText: "escape extras target",
+        sessionStatus: "running",
+      }),
+    });
+    const interruptDispatched = () =>
+      wsRequests.some(
+        (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+      );
+
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await expect.element(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+      await page.getByRole("button", { name: "Composer extras" }).click();
+      await expect.element(page.getByTestId("composer-extras-panel")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      // The panel owns Escape: it closes and the turn is not interrupted.
+      await expect.element(page.getByTestId("composer-extras-panel")).not.toBeInTheDocument();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not interrupt on Escape while a non-modal dialog is open", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-dialog" as MessageId,
+        targetText: "escape dialog target",
+        sessionStatus: "running",
+      }),
+    });
+    const interruptDispatched = () =>
+      wsRequests.some(
+        (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+      );
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.textContent = "fixture dialog";
+    document.body.appendChild(dialog);
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+
+      // Removing the layer hands Escape back to the interrupt shortcut.
+      dialog.remove();
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => expect(interruptDispatched()).toBe(true));
+    } finally {
+      dialog.remove();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps Stopping… visible through the connecting → ready gap", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-gap" as MessageId,
+        targetText: "stop gap target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      // The send dispatches on a ready session; provider startup then flaps the
+      // session to connecting while the dispatch bridge is still held.
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "send then connect");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      syncThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "starting" as const, activeTurnId: null }
+          : null,
+      }));
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+          "Stopping…",
+        );
+      });
+
+      // Session startup flaps back through ready before the turn starts; the
+      // bridge is still held, so the marker must survive the gap.
+      syncThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "ready" as const,
+              activeTurnId: null,
+              updatedAt: isoAt(1_500),
+            }
+          : null,
+      }));
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+      expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+        "Stopping…",
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("interrupts a pending turn with Escape during the connecting gap", async () => {
+    // Regression for the live finding: Escape was a no-op while the session
+    // flapped through startup — the Stop affordance dropped out of
+    // isTurnInterruptible even though the dispatch bridge was held.
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-gap" as MessageId,
+        targetText: "escape gap target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncSessionStatus = (status: "starting" | "ready" | "running") => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                session: thread.session ? { ...thread.session, status, activeTurnId: null } : null,
+              }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "send then connect");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      // Focus while the session is still ready — the editor goes read-only once
+      // the session flaps to connecting.
+      await userEvent.click(await waitForComposerEditor());
+      syncSessionStatus("starting");
+      await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      // The provider is still starting — a hover preview card cannot be open in
+      // a fresh mount, but guard the press anyway like the sibling test.
+      await vi.waitFor(() =>
+        expect(document.querySelector("[data-slot='preview-card-popup']")).toBeNull(),
+      );
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+          "Stopping…",
+        );
+      });
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps Stop mounted continuously from dispatch through the ready gap", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-continuous" as MessageId,
+        targetText: "stop continuous target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncSessionStatus = (status: "starting" | "ready" | "running") => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                session: thread.session ? { ...thread.session, status } : null,
+              }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "send then flap");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      // Poll synchronously across the phase flap: the action button must stay
+      // Stop (mounted and enabled) through connecting and the ready gap.
+      for (const status of ["starting", "ready", "running"] as const) {
+        syncSessionStatus(status);
+        await vi.waitFor(() => {
+          expect(
+            document.querySelector(
+              'button[aria-label="Stop generation"], button[aria-label="Stopping"]',
+            ),
+          ).not.toBeNull();
+        });
+        const stop = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Stop generation"]',
+        );
+        expect(stop?.disabled ?? false).toBe(false);
+      }
+      // And the idle control is never the Send button mid-span.
+      expect(
+        document.querySelector('[data-chat-composer-form] button[aria-label="Send message"]'),
+      ).toBeNull();
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("clears Stopping promptly when a startup interrupt stops the session", async () => {
+    // The server retires a starting session on interrupt without a live turn —
+    // the terminal session status must release the dispatch bridge so the
+    // working row, Stop, and "Stopping…" clear now, not at the fail-open bound.
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-startup" as MessageId,
+        targetText: "startup stop target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncSessionStatus = (status: "starting" | "stopped") => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                session: thread.session ? { ...thread.session, status, activeTurnId: null } : null,
+              }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "stop me at startup");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      syncSessionStatus("starting");
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+          "Stopping…",
+        );
+      });
+      // The interrupt retires the session before a turn exists.
+      syncSessionStatus("stopped");
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector(".shimmer")).toBeNull();
+          expect(
+            document.querySelector(
+              'button[aria-label="Stop generation"], button[aria-label="Stopping"]',
+            ),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps Stopping… through startup when a prior turn already completed", async () => {
+    // A stale completed latestTurn must not settle the stop request — only the
+    // tracked turn going terminal (or a genuinely newer turn) may.
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-stale-turn" as MessageId,
+        targetText: "stale turn stop target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      // Give the thread a completed turn in the past before the send.
+      syncActiveThread((thread) => ({
+        ...thread,
+        latestTurn: {
+          turnId: "turn-old" as never,
+          state: "completed",
+          requestedAt: isoAt(500),
+          startedAt: isoAt(600),
+          completedAt: isoAt(1_400),
+          assistantMessageId: null,
+        },
+      }));
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "stop the new turn");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      syncActiveThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "starting", activeTurnId: null }
+          : null,
+      }));
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+          "Stopping…",
+        );
+      });
+      // The stale completed turn must not settle it — give it a beat to prove
+      // no one-frame flash.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      expect(document.querySelector("[data-chat-working-indicator]")?.textContent).toBe(
+        "Stopping…",
+      );
+      // The interrupt retires the starting session; that settles the stop.
+      syncActiveThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "stopped", activeTurnId: null }
+          : null,
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector(".shimmer")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("hides Stop during pre-session worktree setup and shows it at start-session", async () => {
+    let releaseWorktree!: () => void;
+    const createWorktreeGate = {
+      hold: new Promise<void>((resolve) => {
+        releaseWorktree = resolve;
+      }) as Promise<void> | null,
+    };
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      beforeWorktreeCreation: async () => {
+        await createWorktreeGate.hold;
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-worktree-stop" as MessageId,
+        targetText: "worktree stop target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("new-thread-button").click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      (await waitForWorktreeCheckbox()).click();
+      await vi.waitFor(() =>
+        expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.envMode).toBe(
+          "worktree",
+        ),
+      );
+      useComposerDraftStore.getState().setPrompt(newThreadId, "worktree stop coverage");
+
+      const composerForm = document.querySelector<HTMLFormElement>(
+        'form[data-chat-composer-form="true"]',
+      );
+      expect(composerForm).not.toBeNull();
+      composerForm!.requestSubmit();
+
+      // The worktree creation RPC is held: the send is parked on a pre-session
+      // step, and there is nothing server-side for an interrupt to cancel.
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('[data-timeline-row-kind="worktree-setup"]'),
+          ).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+
+      // Once the setup reaches start-session the provider session is real —
+      // Stop must appear.
+      createWorktreeGate.hold = null;
+      releaseWorktree();
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('button[aria-label="Stop generation"]')).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      createWorktreeGate.hold = null;
+      releaseWorktree?.();
+      await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 });

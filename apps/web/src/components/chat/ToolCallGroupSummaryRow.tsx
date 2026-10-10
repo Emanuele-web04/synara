@@ -16,6 +16,7 @@ import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { extractWebFetchUrl } from "../../lib/toolCallLabel";
 import { LinkChipIcon } from "../LinkChipIcon";
 import type { WorkLogEntry } from "../../session-logic";
+import { TRANSCRIPT_TEXT_BUTTON_CLASS_NAME } from "./MessageActionButton";
 import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
   renderWorkEntryIcon,
@@ -54,6 +55,9 @@ export function ToolCallGroupSummaryRow(props: {
   // so folding a run of tool calls keeps the leading glyph of the row it hides.
   const iconEntry = liveEntry ?? summary.iconEntry;
   const iconWebFetchUrl = extractWebFetchUrl(iconEntry);
+  const labelText = liveEntry
+    ? (multiFileEditLabel(liveEntry) ?? workEntryDisplayText(liveEntry))
+    : summary.label;
 
   return (
     <div>
@@ -63,6 +67,7 @@ export function ToolCallGroupSummaryRow(props: {
         className={cn(
           "inline-flex max-w-full items-center gap-1.5 py-0.5 text-left transition-colors duration-200 hover:text-foreground",
           MUTED_LABEL_TEXT_CLASS_NAME,
+          TRANSCRIPT_TEXT_BUTTON_CLASS_NAME,
         )}
         style={{ fontSize: `${fontSizePx}px` }}
         onClick={() => onToggle(!open)}
@@ -74,10 +79,12 @@ export function ToolCallGroupSummaryRow(props: {
             renderWorkEntryIcon(workEntryLeftIcon(iconEntry), "size-3.5")
           )}
         </span>
-        <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
-          {liveEntry
-            ? (multiFileEditLabel(liveEntry) ?? workEntryDisplayText(liveEntry))
-            : summary.label}
+        <span
+          className="min-w-0 truncate"
+          title={labelText}
+          data-tool-group-live={liveEntry ? "true" : undefined}
+        >
+          {labelText}
         </span>
         {/* One step quieter than the label, matching the per-row disclosure chevron. */}
         <DisclosureChevron open={open} className="text-muted-foreground/70" />

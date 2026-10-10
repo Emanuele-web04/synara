@@ -50,7 +50,7 @@ export function CodeEditBoundary(props: { children: ReactNode }) {
   if (!createEditor) {
     return (
       <PanelStateMessage density="compact" fill="flex">
-        <p>Loading editor...</p>
+        <p>Loading editor…</p>
       </PanelStateMessage>
     );
   }

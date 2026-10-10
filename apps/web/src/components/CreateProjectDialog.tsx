@@ -573,7 +573,7 @@ export function CreateProjectDialog(props: {
                     ) : pickedFolderName ? (
                       <span className="flex min-w-0 flex-col">
                         <span className="truncate">{pickedFolderName}</span>
-                        <span className="truncate text-ui-xs text-muted-foreground/70">
+                        <span className="truncate text-ui-xs text-muted-foreground">
                           {pickedPath}
                         </span>
                       </span>
@@ -683,7 +683,7 @@ export function CreateProjectDialog(props: {
             <div id={errorId} role="alert" className="space-y-1">
               <p className="text-ui-xs text-destructive">{formError}</p>
               {formErrorMeaning ? (
-                <p className="text-ui-xs text-muted-foreground/70">{formErrorMeaning}</p>
+                <p className="text-ui-xs text-muted-foreground">{formErrorMeaning}</p>
               ) : null}
             </div>
           ) : null}

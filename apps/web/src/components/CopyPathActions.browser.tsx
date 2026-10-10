@@ -35,6 +35,7 @@ vi.mock("./LocalImagePreview", () => ({
   LocalImagePreview: () => null,
 }));
 
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 import { DiffPanelFileList } from "./DiffPanelFileList";
 import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
 
@@ -99,7 +100,8 @@ async function expectPathCopied(path: string): Promise<void> {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await waitForTransientPopups();
   document.body.innerHTML = "";
   harness.toastAdd.mockReset();
   restoreProperty(navigator, "clipboard", originalClipboardDescriptor);

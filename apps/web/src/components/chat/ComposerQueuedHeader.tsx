@@ -21,6 +21,7 @@ import {
 import {
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "./composerStackedPanelStyles";
 import { QueuedComposerActions } from "./QueuedComposerActions";
 
@@ -80,30 +81,34 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
 
   return (
     <ComposerStackedPanel attachedToPrevious={attachedToPrevious} className="flex flex-col">
-      {queuedTurns.map((queuedTurn, queuedTurnIndex) => (
-        <ComposerStackedPanelRow
-          key={queuedTurn.id}
-          compact
-          data-testid="queued-follow-up-row"
-          className={cn(queuedTurnIndex > 0 && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}
-        >
-          <ComposerStackedPanelRowMain>
-            <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-            <ChatMarkdown
-              text={compactQueuedComposerPreviewMarkdown(queuedTurn.previewText)}
-              cwd={cwd}
-              isStreaming={false}
-              className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}
+      {/* Cap unbounded queues the same way the sibling strips do, so a long queue
+          can't push the composer input off-screen. */}
+      <div className={COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME}>
+        {queuedTurns.map((queuedTurn, queuedTurnIndex) => (
+          <ComposerStackedPanelRow
+            key={queuedTurn.id}
+            compact
+            data-testid="queued-follow-up-row"
+            className={cn(queuedTurnIndex > 0 && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}
+          >
+            <ComposerStackedPanelRowMain>
+              <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+              <ChatMarkdown
+                text={compactQueuedComposerPreviewMarkdown(queuedTurn.previewText)}
+                cwd={cwd}
+                isStreaming={false}
+                className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}
+              />
+            </ComposerStackedPanelRowMain>
+            <QueuedComposerActions
+              queuedTurn={queuedTurn}
+              onSteer={onSteer}
+              onRemove={onRemove}
+              onEdit={onEdit}
             />
-          </ComposerStackedPanelRowMain>
-          <QueuedComposerActions
-            queuedTurn={queuedTurn}
-            onSteer={onSteer}
-            onRemove={onRemove}
-            onEdit={onEdit}
-          />
-        </ComposerStackedPanelRow>
-      ))}
+          </ComposerStackedPanelRow>
+        ))}
+      </div>
     </ComposerStackedPanel>
   );
 };

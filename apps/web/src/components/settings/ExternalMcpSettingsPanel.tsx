@@ -14,7 +14,7 @@ import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn, getNavigatorPlatform } from "~/lib/utils";
-import { ensureNativeApi } from "~/nativeApi";
+import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import {
   buildExternalMcpClientConfiguration,
   buildExternalMcpExamplePrompt,
@@ -154,6 +154,18 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
       }),
   });
 
+  const confirmAndRevokeIntegration = async (integration: {
+    integrationId: string;
+    name: string;
+  }) => {
+    const api = readNativeApi() ?? ensureNativeApi();
+    const confirmed = await api.dialogs.confirm(
+      `Revoke “${integration.name}”?\n\nThe connection stops working right away and you'll need to pair again.`,
+    );
+    if (!confirmed) return;
+    revokeMutation.mutate(integration.integrationId);
+  };
+
   const refreshPairingMutation = useMutation({
     mutationFn: (integrationId: string) =>
       ensureNativeApi().server.refreshExternalMcpPairing({ integrationId }),
@@ -267,7 +279,13 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           <SettingsRow
             title="Access all of Synara"
             description="The agent can discover and work in every project, including ones you add later. Turn off to pick specific projects."
-            control={<Switch checked={allProjects} onCheckedChange={setAllProjects} />}
+            control={
+              <Switch
+                checked={allProjects}
+                onCheckedChange={setAllProjects}
+                aria-label="Access all of Synara"
+              />
+            }
           >
             <DisclosureRegion open={!allProjects} contentClassName="mt-3">
               <div className="grid gap-2 sm:grid-cols-2">
@@ -331,7 +349,11 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     Without this permission, the agent can read only tasks it creates.
                   </div>
                 </div>
-                <Switch checked={allowProjectRead} onCheckedChange={setAllowProjectRead} />
+                <Switch
+                  checked={allowProjectRead}
+                  onCheckedChange={setAllowProjectRead}
+                  aria-label="Allow project read"
+                />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -343,7 +365,11 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     isolated worktree.
                   </div>
                 </div>
-                <Switch checked={allowLocal} onCheckedChange={setAllowLocal} />
+                <Switch
+                  checked={allowLocal}
+                  onCheckedChange={setAllowLocal}
+                  aria-label="Allow local files"
+                />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -355,17 +381,25 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     you to approve tool actions.
                   </div>
                 </div>
-                <Switch checked={allowFullAccess} onCheckedChange={setAllowFullAccess} />
+                <Switch
+                  checked={allowFullAccess}
+                  onCheckedChange={setAllowFullAccess}
+                  aria-label="Allow full access"
+                />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-medium">Computer control</div>
-                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <div className="text-ui leading-snug font-medium">Computer control</div>
+                  <div className="mt-0.5 text-ui-sm leading-relaxed text-muted-foreground">
                     High impact. Tasks may drive this Mac&apos;s screen — observe, click, type,
                     menus, clipboard. Every computer action still asks for your approval.
                   </div>
                 </div>
-                <Switch checked={allowComputerControl} onCheckedChange={setAllowComputerControl} />
+                <Switch
+                  checked={allowComputerControl}
+                  onCheckedChange={setAllowComputerControl}
+                  aria-label="Allow computer control"
+                />
               </div>
             </DisclosureRegion>
           </SettingsRow>
@@ -373,8 +407,8 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             title="Create connection"
             description="The connection lasts 30 days and can be revoked at any time. The next screen gives you one prompt to paste into your agent."
             control={
-              <Button size="sm" disabled={!canCreate} onClick={() => createMutation.mutate()}>
-                {createMutation.isPending ? "Creating..." : "Create connection"}
+              <Button size="xs" disabled={!canCreate} onClick={() => createMutation.mutate()}>
+                {createMutation.isPending ? "Creating…" : "Create connection"}
               </Button>
             }
           />
@@ -391,10 +425,10 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   className={cn(
                     "size-2 rounded-full",
                     setupUnavailable
-                      ? "bg-destructive"
+                      ? "bg-status-failure"
                       : connected
-                        ? "bg-green-500"
-                        : "bg-amber-500",
+                        ? "bg-status-success"
+                        : "bg-warning",
                   )}
                 />
                 {setupStatus}
@@ -424,7 +458,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   size="xs"
                   variant="destructive-outline"
                   disabled={revokeMutation.isPending}
-                  onClick={() => revokeMutation.mutate(setupIntegration.integrationId)}
+                  onClick={() => void confirmAndRevokeIntegration(setupIntegration)}
                 >
                   Revoke and start over
                 </Button>
@@ -436,7 +470,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     disabled={refreshPairingMutation.isPending}
                     onClick={() => refreshPairingMutation.mutate(setupIntegration.integrationId)}
                   >
-                    {refreshPairingMutation.isPending ? "Resuming..." : "Resume pairing"}
+                    {refreshPairingMutation.isPending ? "Resuming…" : "Resume pairing"}
                   </Button>
                   <Button size="xs" variant="ghost" onClick={closeSetup}>
                     Back
@@ -559,7 +593,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
 
       <SettingsSection title="Connected agents">
         {integrationsQuery.isLoading ? (
-          <SettingsListRow title="Loading connections..." />
+          <SettingsListRow title="Loading connections…" />
         ) : integrationsQuery.data?.length ? (
           integrationsQuery.data.map((integration) => {
             const active =
@@ -610,7 +644,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                         size="xs"
                         variant="destructive-outline"
                         disabled={revokeMutation.isPending}
-                        onClick={() => revokeMutation.mutate(integration.integrationId)}
+                        onClick={() => void confirmAndRevokeIntegration(integration)}
                       >
                         Revoke
                       </Button>

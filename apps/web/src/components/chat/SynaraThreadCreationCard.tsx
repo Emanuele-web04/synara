@@ -43,9 +43,9 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
           <p className="truncate font-system-ui text-ui-lg font-medium text-foreground/95">
             {title}
           </p>
-          <p className="truncate font-system-ui text-ui-sm text-muted-foreground/65">{summary}</p>
+          <p className="truncate font-system-ui text-ui-sm text-muted-foreground/80">{summary}</p>
           {singleThread ? (
-            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground/52">
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground/80">
               <ProviderIcon provider={singleThread.provider} className="size-3 shrink-0" />
               <span className="truncate">{threadMeta(singleThread)}</span>
             </div>
@@ -76,7 +76,7 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
                 <p className="truncate font-system-ui text-ui font-medium text-foreground/90">
                   {thread.title}
                 </p>
-                <p className="truncate font-system-ui text-ui-xs text-muted-foreground/52">
+                <p className="truncate font-system-ui text-ui-xs text-muted-foreground/80">
                   {threadMeta(thread)}
                 </p>
               </div>
