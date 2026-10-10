@@ -39,8 +39,8 @@ import sidechatContextSchema from "./126_ProjectionThreadsSidechatContext.ts";
 import threadSnoozeSchema from "./129_ProjectionThreadsSnooze.ts";
 import projectSourceFoldersSchema from "./131_ProjectSourceFolders.ts";
 
-import externalAgentProfilesSchema from "./132_ExternalAgentProfiles.ts";
-import externalAgentLifecycleSchema from "./134_ExternalAgentLifecycle.ts";
+import externalAgentProfilesSchema from "./133_ExternalAgentProfiles.ts";
+import externalAgentLifecycleSchema from "./135_ExternalAgentLifecycle.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),

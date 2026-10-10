@@ -1,4 +1,4 @@
-// FILE: 134_ExternalAgentLifecycle.ts
+// FILE: 135_ExternalAgentLifecycle.ts
 // Purpose: KAR-529 persisted lifecycle state for external agent profiles.
 // Adds the lifecycle/trust columns to `external_agent_profiles` and the
 // attribution columns (external agent revision + spawning profile) to

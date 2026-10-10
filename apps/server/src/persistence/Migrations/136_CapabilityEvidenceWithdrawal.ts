@@ -1,4 +1,4 @@
-// FILE: 135_CapabilityEvidenceWithdrawal.ts
+// FILE: 136_CapabilityEvidenceWithdrawal.ts
 // Purpose: Adds a `withdrawn_at` column to the append-only capability
 // observation store (KAR-530). Observations are never rewritten: when a live
 // session withdraws a capability's evidence (unsafe outcome) the prior rows are
