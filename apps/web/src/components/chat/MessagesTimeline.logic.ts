@@ -417,6 +417,32 @@ export interface ThreadFindJumpTarget {
  * earlier assistant messages out of the live list and fold them into the
  * terminal row's collapsed narration, so jumping by message id alone misses.
  */
+export function resolveWorkEntryJumpTarget(
+  rows: readonly MessagesTimelineRow[],
+  entryId: string,
+): { rowIndex: number; expandCollapsedWorkMessageId?: MessageId } | null {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex]!;
+    if (row.kind === "work" && row.groupedEntries.some((entry) => entry.id === entryId)) {
+      return { rowIndex };
+    }
+    if (row.kind !== "message") continue;
+    const hasEntry = (entries: readonly WorkLogEntry[] | undefined) =>
+      (entries ?? []).some((entry) => entry.id === entryId);
+    if (hasEntry(row.leadingWorkEntries) || hasEntry(row.inlineWorkEntries)) {
+      return { rowIndex };
+    }
+    if (
+      (row.collapsedTurnItems ?? []).some(
+        (item) => item.kind === "work" && item.entry.id === entryId,
+      )
+    ) {
+      return { rowIndex, expandCollapsedWorkMessageId: row.message.id };
+    }
+  }
+  return null;
+}
+
 export function resolveThreadFindJumpTarget(
   rows: readonly MessagesTimelineRow[],
   match: { messageId: MessageId; segmentIndex?: number },
@@ -677,9 +703,14 @@ export function deriveTerminalAssistantMessageIds(
 // Server-posted coordinator notices and provider handoff boundaries keep their own
 // row: they are not turn work, so they never merge into or fold with a turn.
 export function isStandaloneWorkEntry(
-  entry: Pick<WorkLogEntry, "synaraWorkerNotice" | "providerHandoff" | "turnFailure">,
+  entry: Pick<
+    WorkLogEntry,
+    "synaraWorkerNotice" | "providerHandoff" | "turnFailure" | "subagentRun"
+  >,
 ): boolean {
-  return Boolean(entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure);
+  return Boolean(
+    entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure || entry.subagentRun,
+  );
 }
 
 // Derives transcript rows from timeline entries while keeping live narration and
@@ -785,6 +816,33 @@ export function deriveMessagesTimelineRows(input: {
       // conversation-only surfaces, so they must never join a mergeable group.
       // Background task completions do too: they separate two responses.
       for (const runEntry of run) {
+        if (runEntry.entry.subagentRun) {
+          flushPendingWorkGroup({ attachToPreviousAssistant: false });
+          const previous = nextRows.at(-1);
+          const members = runEntry.entry.subagentRun.members;
+          if (
+            runEntry.entry.turnId &&
+            previous?.kind === "work" &&
+            previous.groupedEntries.every(
+              (entry) =>
+                entry.subagentRun &&
+                entry.turnId === runEntry.entry.turnId &&
+                !entry.subagentRun.members.some((member) =>
+                  members.some((next) => next.key === member.key),
+                ),
+            )
+          ) {
+            previous.groupedEntries.push(runEntry.entry);
+          } else {
+            nextRows.push({
+              kind: "work",
+              id: runEntry.id,
+              createdAt: runEntry.createdAt,
+              groupedEntries: [runEntry.entry],
+            });
+          }
+          continue;
+        }
         const userInputExchange = runEntry.entry.userInputExchange;
         if (userInputExchange) {
           flushPendingWorkGroup({ attachToPreviousAssistant: false });
@@ -1290,6 +1348,25 @@ function workLogSubagentsEqual(
   });
 }
 
+// The subagent card's per-subagent step and outcome are visible row content too.
+function workLogSubagentRunsEqual(a: WorkLogEntry["subagentRun"], b: WorkLogEntry["subagentRun"]) {
+  if (a === b) return true;
+  if (!a || !b || a.members.length !== b.members.length) return false;
+  return a.members.every((member, index) => {
+    const other = b.members[index];
+    return (
+      other !== undefined &&
+      member.key === other.key &&
+      member.launchedAt === other.launchedAt &&
+      member.latestStep === other.latestStep &&
+      member.outcome === other.outcome &&
+      member.failure === other.failure &&
+      member.settledAt === other.settledAt &&
+      member.nextLaunchedAt === other.nextLaunchedAt
+    );
+  });
+}
+
 // Automation card fields are visible row content, so stale equality would freeze the transcript UI.
 function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry["automation"]) {
   if (a === b) return true;
@@ -1416,6 +1493,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     stringArraysEqual(a.changedFiles, b.changedFiles) &&
     workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
     workLogSubagentsEqual(a.subagents, b.subagents) &&
+    workLogSubagentRunsEqual(a.subagentRun, b.subagentRun) &&
     workLogAutomationsEqual(a.automation, b.automation) &&
     workLogSynaraThreadCreationsEqual(a.synaraThreadCreation, b.synaraThreadCreation) &&
     workLogLiveActivitiesEqual(a.liveActivity, b.liveActivity) &&
