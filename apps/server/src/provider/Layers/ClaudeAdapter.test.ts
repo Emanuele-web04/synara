@@ -23,7 +23,18 @@ import {
 } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Random, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Random,
+  Schema,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, vi } from "vitest";
 
@@ -71,6 +82,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   }> = [];
   private done = false;
   private failure: unknown | undefined;
+  private pendingNext: Promise<IteratorResult<SDKMessage>> | undefined;
 
   public readonly interruptCalls: Array<void> = [];
   public readonly stopTaskCalls: Array<string> = [];
@@ -228,12 +240,21 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
             value: undefined,
           });
         }
-        return new Promise((resolve, reject) => {
+        const pending = new Promise<IteratorResult<SDKMessage>>((resolve, reject) => {
           this.waiters.push({
             resolve,
             reject,
           });
         });
+        this.pendingNext = pending;
+        return pending;
+      },
+      // The SDK query is an async generator: `return()` settles only after the pending
+      // `next()` does, so a consumer that awaits it while Claude is idle waits until
+      // something else (close, a message) settles that read.
+      return: async () => {
+        await this.pendingNext?.catch(() => undefined);
+        return { done: true, value: undefined };
       },
     };
   }
@@ -2785,6 +2806,7 @@ describe("ClaudeAdapterLive", () => {
         usage: { total_tokens: 123, tool_uses: 4, duration_ms: 987 },
         session_id: "sdk-session-subagent",
         uuid: "task-progress-subagent-1",
+        summary: "  Reviewing the migration.\n",
       } as unknown as SDKMessage);
 
       harness.query.emit({
@@ -2794,7 +2816,7 @@ describe("ClaudeAdapterLive", () => {
         tool_use_id: "tool-task-1",
         status: "completed",
         output_file: "/tmp/task-1-output.md",
-        summary: "Reviewed the migration.",
+        summary: "  Reviewed the migration.\n",
         session_id: "sdk-session-subagent",
         uuid: "task-notification-1",
       } as unknown as SDKMessage);
@@ -2870,6 +2892,17 @@ describe("ClaudeAdapterLive", () => {
           event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 123,
       );
       assert.equal(taskUsage?.type, "thread.token-usage.updated");
+
+      const taskProgress = runtimeEvents.find((event) => event.type === "task.progress");
+      assert.equal(taskProgress?.type, "task.progress");
+      if (taskProgress?.type === "task.progress") {
+        assert.equal(taskProgress.payload.summary, "Reviewing the migration.");
+      }
+      const taskCompleted = runtimeEvents.find((event) => event.type === "task.completed");
+      assert.equal(taskCompleted?.type, "task.completed");
+      if (taskCompleted?.type === "task.completed") {
+        assert.equal(taskCompleted.payload.summary, "Reviewed the migration.");
+      }
 
       const childTurnCompleted = childEvents.find((event) => event.type === "turn.completed");
       assert.equal(childTurnCompleted?.type, "turn.completed");
@@ -3885,6 +3918,7 @@ describe("ClaudeAdapterLive", () => {
           ),
         );
 
+      const nextCallsBeforeTaskStart = harness.query.iteratorNextCalls;
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3895,6 +3929,15 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-steer",
         uuid: "task-started-steer-1",
       } as unknown as SDKMessage);
+      // Wait for the stream handler to register the subagent run before steering it:
+      // it pulls the next SDK message only after handling this one.
+      for (
+        let i = 0;
+        i < 10_000 && harness.query.iteratorNextCalls <= nextCallsBeforeTaskStart;
+        i += 1
+      ) {
+        yield* Effect.yieldNow;
+      }
 
       // No pending steer: the hook stays a clean passthrough.
       assert.deepEqual(yield* invokeHook("task-steer-1"), {});
@@ -3965,6 +4008,7 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
+      const nextCallsBeforeTaskStart = harness.query.iteratorNextCalls;
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3975,6 +4019,15 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-steer-attach",
         uuid: "task-started-steer-attach-1",
       } as unknown as SDKMessage);
+      // Wait for the stream handler to register the subagent run before steering it:
+      // it pulls the next SDK message only after handling this one.
+      for (
+        let i = 0;
+        i < 10_000 && harness.query.iteratorNextCalls <= nextCallsBeforeTaskStart;
+        i += 1
+      ) {
+        yield* Effect.yieldNow;
+      }
 
       const hook = harness.getLastCreateQueryInput()?.options.hooks?.PreToolUse?.[0]?.hooks[0];
       assert.isDefined(hook);
@@ -4362,6 +4415,81 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.stopTask(session.threadId, "wf-1");
       assert.deepEqual(harness.query.stopTaskCalls, ["wf-1"]);
       assert.equal(harness.query.interruptCalls.length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("trims task event strings so untrimmed SDK descriptions stay journalable", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) => event.type === "task.updated" && event.payload.taskId === "bash-untrimmed",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "bash-untrimmed",
+        tool_use_id: "toolu-bash-untrimmed",
+        task_type: "local_bash",
+        description: "bun run test\n",
+        session_id: "sdk-session-untrimmed",
+        uuid: "bash-untrimmed-started",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "bash-untrimmed",
+        description: "  bun run test \n",
+        last_tool_name: "Bash ",
+        session_id: "sdk-session-untrimmed",
+        uuid: "bash-untrimmed-progress",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bash-untrimmed",
+        patch: { status: "failed", error: "exit code 1\n" },
+        session_id: "sdk-session-untrimmed",
+        uuid: "bash-untrimmed-updated",
+      } as unknown as SDKMessage);
+
+      const taskEvents = Array.from(yield* Fiber.join(runtimeEventsFiber)).filter(
+        (event) =>
+          (event.type === "task.started" ||
+            event.type === "task.progress" ||
+            event.type === "task.updated") &&
+          event.payload.taskId === "bash-untrimmed",
+      );
+      assert.deepEqual(
+        taskEvents.map((event) => event.type),
+        ["task.started", "task.progress", "task.updated"],
+      );
+      for (const event of taskEvents) {
+        const encoded = yield* Schema.encodeEffect(ProviderRuntimeEvent)(event).pipe(Effect.exit);
+        assert.equal(Exit.isSuccess(encoded), true, `${event.type} must encode`);
+        if (event.type === "task.started" || event.type === "task.progress") {
+          assert.equal(event.payload.description, "bun run test");
+        }
+        if (event.type === "task.progress") {
+          assert.equal(event.payload.lastToolName, "Bash");
+        }
+        if (event.type === "task.updated") {
+          assert.equal(event.payload.error, "exit code 1");
+        }
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -5620,6 +5748,35 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
+    );
+  });
+
+  it.effect("stops an idle session without waiting on the SDK query's pending read", () => {
+    // Regression: quit left Claude running. Interrupting the stream awaited the SDK
+    // generator's return(), which queues behind a read that never settles while
+    // Claude is idle, so teardown never reached query.close() or the process tree.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      for (let i = 0; i < 10_000 && harness.query.iteratorNextCalls === 0; i += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      const stopping = yield* adapter.stopSession(THREAD_ID).pipe(Effect.forkChild);
+      for (let i = 0; i < 10_000 && stopping.pollUnsafe() === undefined; i += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      assert.notEqual(stopping.pollUnsafe(), undefined, "stopSession must not hang");
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
     );
   });
 

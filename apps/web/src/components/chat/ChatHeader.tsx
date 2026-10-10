@@ -592,7 +592,12 @@ export function ChatHeader({
     <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
       <div
         className={cn(
-          "flex min-w-0 flex-1 items-center",
+          // Keep the whole leading/header surface draggable when the chat pane
+          // is mounted inside the frameless Electron window. Interactive
+          // descendants are excluded by the shared `.drag-region` rules and
+          // their explicit no-drag controls, while the empty space between
+          // them remains a reliable caption target.
+          "drag-region flex min-w-0 flex-1 items-center",
           editorChatControls ? "h-full overflow-visible" : "overflow-hidden",
           "gap-2 sm:gap-3",
         )}
@@ -662,7 +667,7 @@ export function ChatHeader({
                     </span>
                   )}
                   <h2
-                    className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground"
+                    className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground [-webkit-app-region:no-drag]"
                     title={activeThreadTitle}
                     onDoubleClick={() => onRenameThread()}
                   >

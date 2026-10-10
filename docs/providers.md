@@ -47,6 +47,11 @@ Slow Git work in one workspace leaves other workspaces free to progress. Recover
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
 is reported for inspection instead of automatically changing the workspace again.
 
+Pi preserves separate assistant messages within a turn, including progress before tool calls
+and the final response. Reasoning items also end with their SDK message. Retries start new
+message items while the overall turn remains active until Pi settles. This applies to newly
+received messages; previously stored concatenated replies are not rewritten.
+
 Claude's readable reasoning appears as compact progress text between tool actions while it works.
 Open a reasoning row to read its available detail. This text comes from the running provider;
 Synara does not make another model request to generate it. Models that do not return readable
@@ -59,6 +64,12 @@ These rows use events already supplied by the provider and do not trigger extra 
 The Environment panel's Usage section shows enabled accounts for the active provider, with a
 separate row and detail menu for each account. Providers with multiple accounts show account names
 beside the provider label. Settings → Usage uses the same account-specific snapshots.
+In Settings → Usage → Sidebar, select up to two enabled accounts for the rail rings, including
+two accounts of the same provider (for example, personal and work Claude accounts). Each ring's
+hover card identifies the account and shows its own usage. The rings use the same account color
+dots as the model picker. Existing provider selections keep
+their default accounts selected. Temporarily disabled accounts keep their saved selection;
+only the first two available selected accounts appear in the rail.
 Usage checks follow each account's configured credentials; unassigned thread telemetry and
 provider-wide local totals are not used as a fallback for an individual account.
 
@@ -188,6 +199,36 @@ Starred models absent from the current catalog remain saved and can be removed, 
 selected. They become selectable again when discovery or custom model settings add them to the
 catalog.
 
+## OpenCode V2
+
+Synara selects the native `@opencode/client` API after a read-only `/api/info` probe;
+`@opencode-ai/sdk/v2` remains the V1-server fallback (its package subpath is not the V2
+server protocol). Managed and external servers use the same adapter boundary. V2 session
+permissions, model/agent selection, prompt receipts, messages, execution events, forms,
+MCP configuration, and pagination use their native contracts.
+
+Scoped root dependency overrides keep Synara's Effect platform, SQLite, and test packages on
+the catalog runtime. OpenCode's protocol/schema dependencies retain their own Effect version.
+
+Install V2 following the [official guide](https://opencode.ai/v2/docs/), then select its
+`opencode` executable in the existing provider account. Restart provider sessions and refresh
+model discovery. V2 uses `@opencode/cli` or `anomalyco/tap/opencode-v2` for package updates;
+V1 retains its own packages. External-server updates belong to that server's operator.
+
+Preserve the OpenCode account/data directories to retain native session IDs. OpenCode owns
+migration of its history and credentials. Synara does not copy provider databases or silently
+replace missing resumed sessions. Existing supported V1 configuration remains readable by V2;
+V1 plugins need migration. See [OpenCode's migration guide](https://opencode.ai/v2/docs/migrate-v1/).
+
+The task-scoped Agent Gateway retains its existing credentials, capabilities, cancellation,
+and ownership checks. V2 uses MCP PUT registration followed by status discovery. Computer
+Use still requires a connected gateway on a managed server. V2 execution terminal events,
+not individual assistant steps, settle turns; disconnect recovery checks native outcomes and
+replays message snapshots before accepting a terminal event. Failed snapshot reads leave the
+turn active for recovery to retry.
+Rollback commits a cut at a user-turn boundary with provider file restoration disabled because
+Synara owns workspace checkpoints.
+
 ## Provider sessions
 
 Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and
@@ -209,9 +250,18 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
-If a Codex turn is aborted for inactivity and its gateway access was revoked, Synara renews
-the provider runtime and resumes the saved conversation before dispatching another turn.
-You can continue in the same task.
+After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
+Once native background work settles, it keeps the app-server process alive, unsubscribes the
+native conversation, verifies that Codex unloaded it, and resumes the same conversation with
+a fresh credential. The credential is sent through the app-server pipe as thread configuration;
+Synara does not put it in the shared Codex config or the child process environment.
+This avoids process startup and initialization between ordinary replies while preserving
+the rejection of stale tool requests. It still reloads the native conversation and its MCP clients.
+
+If additional native threads remain loaded, native unloading or resume cannot be verified, or
+a turn was interrupted, failed, or aborted for inactivity, Synara uses the full process-restart
+recovery path. You can continue in the same task. Idle provider processes still shut down after
+10 minutes by default.
 
 ### Claude Auto / 200k / 1M selection
 
@@ -309,11 +359,11 @@ boundaries and remaining live validation.
 
 ### OpenCode
 
-Synara uses OpenCode's legacy endpoint family, including `/session` and MCP
-for the Synara tools attached to managed sessions. Startup checks `GET /provider`
-and rejects a server that reports that route as unavailable; this does not identify
-the CLI's version. The SDK is pinned exactly (`1.18.31`) — bump it deliberately,
-never by range.
+Synara detects the server protocol with a read-only `GET /api/info` request.
+V2 uses native `/api` session and MCP endpoints. V1 retains the legacy `/session`
+endpoint family and must pass a `GET /provider` readiness check. An HTML app shell
+is not API readiness. The V1 SDK (`1.18.31`) and V2 client (`2.0.25`) are pinned
+exactly — bump them deliberately, never by range.
 
 The `opencode` executable resolves from `PATH` first, then the standard install
 locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
@@ -464,9 +514,10 @@ failure checks.
 Blocking questions show **Cancel** whether or not they offer choices. Cancel applies to
 the whole pending request, including any later questions in the same set. Once an
 answer or cancellation is being submitted, the form disables Cancel until the
-request settles. For OpenCode, cancellation uses its `question.reject` operation;
-submitting completed answers uses `question.reply`. Both requests are scoped to
-the task's OpenCode working directory.
+request settles. For OpenCode V1, cancellation uses `question.reject` and answers use `question.reply`.
+V2 uses the owning session’s native form cancellation/reply endpoints. External, hidden,
+or conditional V2 fields remain visible with a cancellation action and a direction to
+complete the form in OpenCode. Requests retain their task and provider-session scope.
 
 ## Codex asynchronous questions
 
