@@ -335,6 +335,10 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
+File Undo and thread revert refuse to change a workspace while another thread has an active or
+pending turn in that same Git checkout. Symlinks and nested folders share this protection;
+separate Git worktrees remain independent. Stop the active turn before retrying Undo.
+
 Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;
 invalid values use the default and positive values are clamped to that range. When preparation fails
