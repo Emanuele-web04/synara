@@ -146,10 +146,11 @@ task when the work needs a different owner, branch, or review boundary.
 Each settled turn has a **Worked** header with its duration, completion time, and final state.
 The model appears when it changes from the previous turn. Expand the header to read the tools and
 full narration; turning off finished-turn folding keeps the same header with the work visible.
-**Stopped by you** requires a Stop request followed by an interrupted outcome. Provider failures,
-usage limits, and interruptions without a recorded Stop request say **Interrupted**, with a reason
-when known. Background commands keep one row as they run and settle; a completion that wakes the
-provider starts a separate **Resumed** response with its own duration.
+**Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
+outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor
+say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
+keep one row as they run and settle; a completion that wakes the provider starts a separate **Resumed**
+response with its own live and settled duration, even when the provider reuses the launch's turn ID.
 
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.

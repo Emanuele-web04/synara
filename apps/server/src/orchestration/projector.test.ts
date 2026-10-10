@@ -18,6 +18,7 @@ function makeEvent(input: {
   aggregateKind: OrchestrationEvent["aggregateKind"];
   aggregateId: string;
   commandId: string | null;
+  causationEventId?: string | null;
   payload: unknown;
 }): OrchestrationEvent {
   return {
@@ -33,7 +34,7 @@ function makeEvent(input: {
           : ThreadId.makeUnsafe(input.aggregateId),
     occurredAt: input.occurredAt,
     commandId: input.commandId === null ? null : CommandId.makeUnsafe(input.commandId),
-    causationEventId: null,
+    causationEventId: input.causationEventId ? EventId.makeUnsafe(input.causationEventId) : null,
     correlationId: null,
     metadata: {},
     payload: input.payload as never,
@@ -135,17 +136,23 @@ describe("orchestration projector", () => {
           aggregateId: "thread-1",
           occurredAt: "2026-01-01T00:00:02Z",
           commandId: "cmd-stop",
-          payload: { threadId: "thread-1", createdAt: "2026-01-01T00:00:02Z" },
+          payload: { threadId: "thread-1", requestedBy: "user", createdAt: "2026-01-01T00:00:02Z" },
         }),
       ),
     );
     expect(next.threads[0]?.activities).toMatchObject([
-      { kind: "turn.stop-requested", turnId: "turn-1" },
+      { kind: "turn.stop-requested", turnId: "turn-1", payload: { requestedBy: "user" } },
     ]);
     expect(next.threads[0]?.latestTurn?.state).toBe("running");
   });
 
-  it("does not attribute an intentional application quit to the user Stop control", async () => {
+  it.each([
+    { commandId: "quit-resume-interrupt:thread-1", causationEventId: null },
+    { commandId: "agent:probe:interrupt", causationEventId: null },
+    { commandId: "agent-recovery:probe", causationEventId: null },
+    { commandId: "cmd-steer", causationEventId: "queued-steer" },
+    { commandId: "unknown-interrupt", causationEventId: null },
+  ])("does not certify $commandId as a user Stop", async ({ commandId, causationEventId }) => {
     const before = await projectThreadWithRunningTurn({
       createdAt: "2026-01-01T00:00:00Z",
       startedAt: "2026-01-01T00:00:01Z",
@@ -159,7 +166,8 @@ describe("orchestration projector", () => {
           aggregateKind: "thread",
           aggregateId: "thread-1",
           occurredAt: "2026-01-01T00:00:02Z",
-          commandId: "quit-resume-interrupt:thread-1",
+          commandId,
+          causationEventId,
           payload: { threadId: "thread-1", createdAt: "2026-01-01T00:00:02Z" },
         }),
       ),
