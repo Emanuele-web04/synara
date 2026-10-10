@@ -172,7 +172,7 @@ describe("decodeSubagentReceiverAgents", () => {
       {
         providerThreadId: "child-provider-1",
         nickname: "Deep audit",
-        // Worker-tier agent types are internal effort carriers, never a role.
+        // worker-tier agent types are internal effort carriers, never a role
         model: "sonnet",
         modelIsRequestedHint: true,
         effort: "high",

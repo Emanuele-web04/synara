@@ -28,13 +28,11 @@ import { useSplitViewStore } from "../splitViewStore";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 
 export type RestoreRouteResolverInput = {
-  // Split views currently known to the client. Callers that support split-view restore should
-  // filter their resolved route's `splitViewId` against this set.
+  // Split views currently known to the client. Callers that support split-view restore should filter their resolved route's `splitViewId` against this set.
   readonly availableSplitViewIds: ReadonlySet<string>;
 };
 
-// Resolves which thread route (if any) this surface should restore to. Returning `null` defers
-// to `createFreshChat` (e.g. because there is a draft to reopen instead of an existing thread).
+// Resolves which thread route (if any) this surface should restore to. Returning `null` defers to `createFreshChat` (e.g. because there is a draft to reopen instead of an existing thread).
 export type RestoreRouteResolver = (input: RestoreRouteResolverInput) => LastThreadRoute | null;
 
 export function RestoreOrCreateChatRoute({
@@ -61,8 +59,7 @@ export function RestoreOrCreateChatRoute({
     useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
   const emptyRestoreRecoveryRunRef = useRef(0);
-  // One fresh-chat creation at a time per mount: a dep change mid-create re-runs the effect,
-  // and without this guard the superseded run and the new run could both mint a draft.
+  // One fresh-chat creation at a time per mount: a dep change mid-create re-runs the effect, and without this guard the superseded run and the new run could both mint a draft.
   const createFreshChatInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -75,8 +72,7 @@ export function RestoreOrCreateChatRoute({
     if (!(threadIds.length > 0 && emptyRestoreRecoveryState !== "idle")) {
       return;
     }
-    // Timeout-0 keeps the state write asynchronous (compiler-eligible); the
-    // recovery machine only gates async restore flows.
+    // Timeout-0 keeps the state write asynchronous (compiler-eligible); the recovery machine only gates async restore flows.
     const timeoutId = window.setTimeout(() => {
       emptyRestoreRecoveryRunRef.current += 1;
       setEmptyRestoreRecoveryState("idle");
@@ -92,8 +88,7 @@ export function RestoreOrCreateChatRoute({
     let cancelled = false;
 
     void (async () => {
-      // Yield one microtask so every state write below happens asynchronously
-      // (no wasted pre-paint render; keeps the component compiler-eligible).
+      // Yield one microtask so every state write below happens asynchronously (no wasted pre-paint render; keeps the component compiler-eligible).
       await Promise.resolve();
       if (cancelled) {
         return;
@@ -151,8 +146,7 @@ export function RestoreOrCreateChatRoute({
         return;
       }
       createFreshChatInFlightRef.current = true;
-      // .finally instead of try/finally: React Compiler does not yet support
-      // try/finally and would skip optimizing this whole component.
+      // .finally instead of try/finally: React Compiler does not yet support try/finally and would skip optimizing this whole component.
       const result: StartContainerChatResult = await createFreshChat().finally(() => {
         createFreshChatInFlightRef.current = false;
       });

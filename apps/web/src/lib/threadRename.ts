@@ -1,9 +1,3 @@
-// Purpose: Share the thread-title rename flow between header and sidebar surfaces,
-// including draft-thread promotion when a title is edited before the first send.
-// The promotion path mirrors the first-send flow, but routes through the shared
-// idempotent helper so concurrent draft promotion callers do not surface duplicate
-// `thread.create` invariant failures as user-visible toasts.
-
 import {
   type ModelSelection,
   type OrchestrationThreadPullRequest,

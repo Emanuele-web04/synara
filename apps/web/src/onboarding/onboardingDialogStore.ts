@@ -1,8 +1,3 @@
-// FILE: onboardingDialogStore.ts
-// Purpose: Open/close state for the welcome tour shared between the first-run gate, the
-//          Settings "replay" button, and the dialog itself.
-// Layer: Web UI store
-
 import { create } from "zustand";
 
 export type OnboardingOpenReason = "first-run" | "replay";

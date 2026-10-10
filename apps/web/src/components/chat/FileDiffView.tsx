@@ -1,11 +1,3 @@
-// FILE: FileDiffView.tsx
-// Purpose: Shared diff viewer chrome — a virtualized scroll surface plus a themed
-//          per-file card — used by both the turn/repo DiffPanel and the source
-//          control GitPanel so they share font/theme behavior, the Synara file
-//          header, and the @pierre/diffs `unsafeCSS` theming.
-// Layer: Chat/diff UI primitives
-// Depends on: @pierre/diffs FileDiff/Virtualizer, diffRendering (theme + unsafeCSS), FileDiffHeader
-
 import {
   FileDiff,
   type FileDiffMetadata,
@@ -24,9 +16,7 @@ const DIFF_VIRTUALIZER_CONFIG = {
   intersectionObserverMargin: 600,
 };
 
-// Virtualized scroll container shared by single-file (GitPanel) and multi-file
-// (DiffPanel) diff lists. Callers own the inner per-file wrapper markup because
-// it differs (collapse click capture, data-diff-file-path scroll anchors, etc.).
+// Virtualized scroll container shared by single-file (GitPanel) and multi-file (DiffPanel) diff lists. Callers own the inner per-file wrapper markup because it differs (collapse click capture, data-diff-file-path scroll anchors, etc.).
 export function FileDiffSurface(props: { className?: string; children: ReactNode }) {
   return (
     <Virtualizer
@@ -42,9 +32,7 @@ type FileDiffCardOptions = NonNullable<FileDiffProps<unknown>["options"]>;
 
 export type DiffLineClickProps = Parameters<NonNullable<FileDiffCardOptions["onLineClick"]>>[0];
 
-// A single themed file diff with Synara's custom file header. Bakes in the shared
-// `unsafeCSS` theming so every surface renders with the chat code font and
-// themed addition/deletion backgrounds.
+// A single themed file diff with Synara's custom file header. Bakes in the shared `unsafeCSS` theming so every surface renders with the chat code font and themed addition/deletion backgrounds.
 export function FileDiffCard(props: {
   fileDiff: FileDiffMetadata;
   theme: "light" | "dark";

@@ -1,10 +1,3 @@
-// FILE: GitCommitDialog.tsx
-// Purpose: Render the Commit dialog: branch summary, commit message, a compact
-//          file selection with diff stats, and the shared git action rows
-//          (commit on new branch / commit / commit & push / create PR).
-// Layer: Header action control
-// Depends on: GitActionsControl.logic resolvers and the shared git dialog chrome.
-
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";

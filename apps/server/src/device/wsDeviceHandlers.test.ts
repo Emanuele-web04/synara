@@ -21,8 +21,7 @@ describe("device WebSocket handlers", () => {
   it("handles every request method in the RPC group", async () => {
     const { handlers } = await setup();
 
-    // The stream method is wired in wsRpc where the admission guard lives; the
-    // other nineteen must all be present or the handler map is not exhaustive.
+    // the stream method is wired in wsRpc where the admission guard lives — the other nineteen must all be present or the map isn't exhaustive
     const expected = Object.values(DEVICE_WS_METHODS).filter(
       (method) => method !== DEVICE_WS_METHODS.subscribeEvents,
     );

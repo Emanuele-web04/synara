@@ -68,9 +68,7 @@ function parseFileUrlHref(
   }
 }
 
-// Encode literal filesystem names before Markdown treats percent/hash/query
-// characters as URL syntax. File URIs also preserve Windows drive paths through
-// the renderer's existing URL sanitization boundary.
+// encode literal filesystem names before Markdown reads percent/hash/query as URL syntax; file URIs preserve Windows drive paths through the sanitization boundary
 export function markdownFilePathHref(path: string): string {
   const normalized = path.replaceAll("\\", "/");
   const encoded = normalized
@@ -181,10 +179,6 @@ const BACKTICK_SPAN_PATTERN = /`([^`]+)`/g;
 const BARE_POSIX_ABSOLUTE_PATH_PATTERN =
   /(?:^|[\s(])(\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root)\/[^\s`'")]*)/g;
 
-/**
- * Absolute local files and directories already written in the markdown.
- * Used to join later relative chips (`scripts/foo.py`) onto `Dir: /abs`.
- */
 export function extractAbsoluteFilesystemPaths(text: string): string[] {
   const found = new Set<string>();
   const consider = (raw: string) => {
@@ -218,11 +212,6 @@ function uniqueJoinAgainstKnownDirectories(
   return matches.size === 1 ? ([...matches][0] ?? null) : null;
 }
 
-/**
- * If exactly one known absolute path already ends with this relative
- * reference, return that path. Zero or several matches return null so the
- * caller can keep the workspace cwd join.
- */
 export function resolveUniqueAbsoluteSuffixTarget(
   reference: string,
   knownAbsolutePaths: ReadonlyArray<string>,
@@ -295,8 +284,7 @@ export function resolveMarkdownFileLinkTarget(
   const isExplicitRelativeDirectory =
     /[\\/]$/.test(pathWithoutPosition) &&
     isWorkspaceRelativePathSafe(pathWithoutPosition.replace(/[\\/]+$/, ""));
-  // Rewritten file URIs can contain forward-slash UNC paths. Use workspace
-  // containment to distinguish these from protocol-relative web links.
+  // rewritten file URIs can hold forward-slash UNC paths — workspace containment distinguishes them from protocol-relative web links
   const isWorkspacePath =
     cwd !== undefined &&
     (localPathsEqual(pathWithoutPosition, cwd) ||

@@ -1,8 +1,4 @@
-/**
- * Adds `dispatch_origin` to projected thread messages so automation-dispatched
- * user turns can be badged distinctly from human sends in the transcript.
- * Nullable: absent/NULL is treated as a human ("user") send.
- */
+/** dispatch_origin badges automation-dispatched user turns distinctly; NULL = human send */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

@@ -1,10 +1,3 @@
-// FILE: InlineSkillChip.tsx
-// Purpose: Shared inline skill mention chip (building-blocks icon + formatted
-//          label), so the composer echo and any read-only prompt render skills
-//          identically. Mirrors InlineMentionChip / InlineLinkChip.
-// Layer: Shared UI component
-// Exports: InlineSkillChip
-
 import { CentralIcon } from "~/lib/central-icons";
 import {
   COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,

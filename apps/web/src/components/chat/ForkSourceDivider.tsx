@@ -1,7 +1,3 @@
-// FILE: ForkSourceDivider.tsx
-// Purpose: Link a forked transcript back to the immediate source chat.
-// Layer: Chat transcript UI
-
 import { type ThreadId } from "@synara/contracts";
 import { memo, type MouseEvent } from "react";
 

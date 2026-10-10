@@ -152,9 +152,7 @@ export function KanbanNewTaskDialog({
   const [interactionMode, setInteractionMode] =
     useState<ProviderInteractionMode>(DEFAULT_INTERACTION_MODE);
   const [envMode, setEnvMode] = useState<DraftThreadEnvMode>("local");
-  // Off by default: a new task is sent straight to In Progress (like starting a
-  // fresh chat). The Draft column's "+" opens the dialog with the toggle on, so
-  // the task parks in Draft — matching where the user clicked.
+  // off by default (new task → In Progress); the Draft column's "+" opens it with the toggle on, matching where the user clicked
   const [sendAsDraft, setSendAsDraft] = useState(initialSendAsDraft);
   // Off by default: create-and-send starts the task with its prompt as the
   // agent goal. Disabled while "Send as draft" is on (a parked draft has no
@@ -316,8 +314,7 @@ export function KanbanNewTaskDialog({
 
   const isVoiceActive = voice.isVoiceRecording || voice.isVoiceTranscribing;
 
-  // Cmd/Ctrl+Enter submits from anywhere in the dialog, not just the textarea —
-  // the focus is often on a picker (model/effort/project) when the user commits.
+  // Cmd/Ctrl+Enter submits from anywhere in the dialog — focus is often on a picker when the user commits
   const handleSubmitShortcut = useCallback(
     (event: React.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {

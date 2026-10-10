@@ -109,7 +109,7 @@ layer("101_RemoveTranscriptMarkers", (it) => {
         threadId: "thread-1",
         ...oldEvents[5][1],
       });
-      // Lineage recovery can rerun migrations: this removal must also be idempotent.
+      // lineage recovery can rerun migrations — this removal must also be idempotent
       yield* removeTranscriptMarkers;
       assert.deepStrictEqual(
         yield* sql`SELECT sequence, event_id, stream_version, command_id FROM orchestration_events ORDER BY sequence`,

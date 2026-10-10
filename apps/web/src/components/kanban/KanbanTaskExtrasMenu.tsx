@@ -1,8 +1,3 @@
-// FILE: KanbanTaskExtrasMenu.tsx
-// Purpose: Compact plus-menu for kanban task mode/environment toggles.
-// Layer: Kanban UI component
-// Exports: KanbanTaskExtrasMenu
-
 import type { ProviderInteractionMode } from "@synara/contracts";
 
 import {
@@ -30,11 +25,6 @@ interface KanbanTaskExtrasMenuProps {
   readonly onEnvModeChange: (mode: DraftThreadEnvMode) => void;
 }
 
-/**
- * The composer `+` analog: a single chrome icon button hosting the task's quick
- * toggles (Plan mode and Local/Worktree environment), mirroring how the
- * composer's ComposerExtrasMenu collapses mode switches behind one `+`.
- */
 export function KanbanTaskExtrasMenu({
   interactionMode,
   onInteractionModeChange,

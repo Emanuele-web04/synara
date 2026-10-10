@@ -1,8 +1,3 @@
-// FILE: useProfileHandle.ts
-// Purpose: Editable, locally-persisted @handle for the Profile card. Falls back to the
-// server-derived default (home-dir basename) until the user overrides it. Local-only.
-// Layer: web profile feature.
-
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { Schema } from "effect";
 import { normalizeHandle } from "./profileFormatting";

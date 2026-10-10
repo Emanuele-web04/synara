@@ -120,10 +120,7 @@ const ServerProviderStatusWire = Schema.Struct({
       status: Schema.Literals(["unknown", "current", "behind_latest"]),
       currentVersion: Schema.NullOr(TrimmedNonEmptyString),
       latestVersion: Schema.NullOr(TrimmedNonEmptyString),
-      // False when Synara has no registry to learn the latest version from (a
-      // self-updating CLI like `cursor-agent`), so `status` can never leave
-      // "unknown" no matter how current the install is. Absent on older servers,
-      // where callers must assume a source exists and keep the legacy behavior.
+      // false when there's no registry to learn the latest version from (a self-updating CLI) — status can never leave "unknown"; absent on older servers
       latestVersionKnowable: Schema.optional(Schema.Boolean),
       updateCommand: Schema.NullOr(TrimmedNonEmptyString),
       canUpdate: Schema.Boolean,
@@ -255,12 +252,6 @@ export const ServerProviderUsageLine = Schema.Struct({
 });
 export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 
-// Lifecycle of a live provider usage fetch. Absent status is treated as "ok" so
-// existing local-archive snapshots stay valid without setting it.
-//   ok          – fetched fresh usage from the provider backend
-//   needs-auth  – no/expired credential, or the backend rejected the token (read-only mode never refreshes)
-//   unsupported – the provider has no fetchable usage source for the current auth (e.g. API-key-only)
-//   error       – the fetch failed unexpectedly (network/parse); detail carries the reason
 export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
 export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
 
@@ -322,8 +313,7 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerCodexResetCredits),
-  // True when this is a re-served last-good snapshot (e.g. the provider is rate-limiting live
-  // fetches) rather than a fresh read; `updatedAt` then still reflects the original fetch time.
+  // re-served last-good snapshot vs a fresh read — `updatedAt` still reflects the original fetch time
   stale: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
@@ -364,8 +354,7 @@ export const ServerLocalServerProcess = Schema.Struct({
   command: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   pageTitle: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
-  // Working directory of the listening process, when resolvable. Surfaced in the
-  // UI and used to attribute manually-started dev servers to a project by folder.
+  // attributes manually-started dev servers to a project by folder
   cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
   args: Schema.String.check(Schema.isMaxLength(1_000)),
   ports: Schema.Array(PositiveInt),
@@ -464,8 +453,7 @@ export const ServerVoiceTranscriptionResult = Schema.Struct({
 });
 export type ServerVoiceTranscriptionResult = typeof ServerVoiceTranscriptionResult.Type;
 
-// Compact, stateless recap generation. The caller owns debounce/cache policy so
-// this endpoint never participates in the hot transcript projection path.
+// the caller owns debounce/cache — this endpoint never joins the hot transcript projection path
 export const ServerGenerateThreadRecapInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   previousRecap: Schema.optional(Schema.String.check(Schema.isMaxLength(1_000))),
@@ -483,8 +471,7 @@ export const ServerGenerateThreadRecapResult = Schema.Struct({
 });
 export type ServerGenerateThreadRecapResult = typeof ServerGenerateThreadRecapResult.Type;
 
-// Schema-validated automation intent extraction for composer-triggered creation.
-// The UI still owns confirmation/error copy; this result only describes what the model understood.
+// the UI owns confirmation/error copy; this result only describes what the model understood
 export const ServerAutomationIntentMissingField = Schema.Literals([
   "schedule",
   "taskPrompt",
@@ -628,7 +615,7 @@ export const ServerLifecycleStreamEvent = Schema.Union([
       task: Schema.Literal("thread-retention"),
       state: Schema.Literals(["started", "progress", "completed", "failed"]),
       at: IsoDateTime,
-      // Legacy wire name retained so older clients can read retention progress.
+      // legacy wire name retained so older clients can read retention progress
       deletedCount: Schema.optional(Schema.Number),
       totalCount: Schema.optional(Schema.Number),
       error: Schema.optional(Schema.String),

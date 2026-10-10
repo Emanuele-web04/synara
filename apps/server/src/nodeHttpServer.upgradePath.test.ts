@@ -1,10 +1,4 @@
-// Compression eligibility is decided from the raw upgrade target before any
-// routing happens, so it must agree with the router's matching semantics
-// (find-my-way-ts: case-insensitive, duplicate slashes and trailing slashes
-// ignored). A spelling the router sends to the pre-auth bootstrap route while
-// this says "compressed" is a live zlib-amplification bypass, so the table
-// below is the security boundary. The live-socket assertions in
-// wsRpc.connectionLifecycle.test.ts cover the negotiation itself.
+// compression eligibility is decided from the raw upgrade target before routing, so it must agree with the router's matching semantics — a spelling the router sends to pre-auth bootstrap while this says "compressed" is a live zlib-amplification bypass; this table is the security boundary
 
 import { describe, expect, it } from "vitest";
 
@@ -55,8 +49,7 @@ describe("upgradePathAllowsCompression", () => {
       "/ws/negotiate",
       "/ws/..",
       "/ws/%2e%2e/ws",
-      // Invalid percent-encoding: decoding throws, so the raw target stands
-      // and cannot match the feature route.
+      // invalid percent-encoding throws on decode — the raw target stands and can't match the feature route
       "/ws/%zz",
       "/%C0%AFws",
       "/ws\\bootstrap",

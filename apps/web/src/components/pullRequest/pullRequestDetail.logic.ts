@@ -48,9 +48,7 @@ export function pullRequestDetailInputFromPane(pane: RightDockPane): PullRequest
   };
 }
 
-// Plain-language state descriptor shown next to the author line — the state color itself is
-// already conveyed by the PullRequestStateGlyph in the header, so this stays neutral text.
-// State only, matching git: conflicts are a merge signal and render as their own row.
+// plain-language state descriptor next to the author line — the color is already conveyed by the header glyph; state only, conflicts are a merge signal rendered as their own row
 export function describePullRequestState(state: PullRequestState, isDraft: boolean): string {
   if (isDraft && state === "open") return "Draft";
   if (state === "open") return "Ready for review";

@@ -188,8 +188,7 @@ export function createDevRunnerEnv({
     const webPort = BASE_WEB_PORT + webOffset;
     const resolvedBaseDir = yield* resolveBaseDir(synaraHome, mode, baseEnv.SYNARA_DESKTOP_FLAVOR);
     const configuredHost = host ?? "127.0.0.1";
-    // Brackets are URL syntax, not valid listen-host syntax. Keep the bind host
-    // portable while adding brackets back only when constructing an IPv6 URL.
+    // brackets are URL syntax, not listen-host syntax — added back only for the IPv6 URL
     const serverHost = configuredHost.replace(/^\[([^\]]+)\]$/, "$1");
     const clientHost =
       serverHost === "0.0.0.0" ? "127.0.0.1" : serverHost === "::" ? "::1" : serverHost;
@@ -220,11 +219,7 @@ export function createDevRunnerEnv({
         output.PATH = augmentedPath;
       }
     }
-    // The dev runner itself is launched from the user's terminal environment.
-    // Tell the child server not to synchronously source the login shell again:
-    // that duplicate probe can block listening for the full timeout when a
-    // shell plugin hangs. An empty inherited PATH remains unmarked so the
-    // server still performs its normal recovery.
+    // tell the child server not to re-source the login shell: a hanging plugin can block listening for the full timeout
     applyShellEnvironmentHydrationMarker(output, inheritedPathIsUsable);
 
     if (authToken !== undefined) {
@@ -502,11 +497,9 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
         stderr: "inherit",
         env,
         extendEnv: false,
-        // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+        // Windows needs shell mode to resolve .cmd shims
         shell: process.platform === "win32",
-        // Keep turbo in the same process group so terminal signals (Ctrl+C)
-        // reach it directly. Effect defaults to detached: true on non-Windows,
-        // which would put turbo in a new group and require manual forwarding.
+        // same process group so Ctrl+C reaches turbo directly; Effect defaults to detached on non-Windows
         detached: false,
         forceKillAfter: "1500 millis",
       },

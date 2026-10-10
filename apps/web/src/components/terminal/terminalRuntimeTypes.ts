@@ -1,7 +1,3 @@
-// FILE: terminalRuntimeTypes.ts
-// Purpose: Shared types and stable identity helpers for persistent terminal runtimes.
-// Layer: Terminal runtime infrastructure
-
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";

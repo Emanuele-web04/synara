@@ -1,8 +1,3 @@
-// FILE: AutomationScheduler.test.ts
-// Purpose: Verifies scheduler loop timing behavior around automation definition changes.
-// Layer: Automation service test
-// Depends on: AutomationSchedulerLive with fake AutomationService and AutomationRepository layers.
-
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,

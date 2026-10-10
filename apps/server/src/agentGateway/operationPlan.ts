@@ -90,9 +90,7 @@ export function parseRecoverableCreationPlan(
       worktreeRef: typeof value.worktreeRef === "string" ? value.worktreeRef : null,
       newBranch: value.newBranch,
       plannedWorktreePath: value.plannedWorktreePath,
-      // Older in-progress rows predate explicit ownership proof. They remain
-      // decodable, but recovery never treats their preflight as proof that a
-      // currently registered resource belongs to the operation.
+      // older in-progress rows predate explicit ownership proof — still decodable, but recovery never treats their preflight as proof
       ownershipPreflightPassed: value.ownershipPreflightPassed === true,
       worktreeOwnership,
       ids: {

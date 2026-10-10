@@ -1,6 +1,3 @@
-// FILE: chatProjects.test.ts
-// Purpose: Verifies home chat-container project recognition across new and legacy roots.
-
 import { ProjectId, type OrchestrationShellSnapshot } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,7 +36,7 @@ function makeShellSnapshot(
 }
 
 beforeEach(() => {
-  // ensureHomeChatProject waits for the first shell snapshot before deciding to create.
+  // ensureHomeChatProject waits for the first shell snapshot before deciding to create
   useStore.setState({ threadsHydrated: true });
 });
 

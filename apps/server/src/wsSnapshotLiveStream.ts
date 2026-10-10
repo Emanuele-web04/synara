@@ -30,37 +30,13 @@ export interface ResnapshotReport {
   readonly replayLimit: number;
 }
 
-/**
- * Detects a resnapshot demand that restarting the stream cannot satisfy.
- *
- * A healthy resnapshot cycle strictly advances the snapshot fence: the client
- * restarts, the server serves a fresh snapshot at (or near) the journal head,
- * and the gap closes. When the snapshot fence is frozen — a stalled or missing
- * projector — every restart re-reads the same fence and re-demands the same
- * resnapshot forever. Track the fence of the last demand per stream key; a
- * repeat demand at a non-advancing fence is escalated to a non-retryable
- * failure so clients stop tearing the transport down and surface the fault.
- *
- * Callers must key the tracker per subscriber (client id + stream name), not
- * per stream name alone: two clients demanding the same stale stream
- * concurrently are two first offenses, not one restart cycle — a shared key
- * would hand the second client a non-retryable verdict before either had
- * actually restarted. The fence itself is shared database state, so each
- * subscriber's chain still converges on the same evidence; per-subscriber
- * keying only ensures the "did not advance" comparison spans one
- * subscription's own retries. State is cleared the moment that subscriber's
- * stream start succeeds.
- */
+/** a healthy resnapshot strictly advances the snapshot fence; a frozen fence (stalled/missing projector) re-reads the same fence and re-demands forever — a repeat demand at a non-advancing fence escalates to non-retryable so clients stop tearing down the transport; callers must key per subscriber (client id + stream name) since concurrent demands are independent first offenses */
 export function makeResnapshotEscalationTracker(): {
   readonly shouldEscalate: (streamKey: string, report: ResnapshotReport) => boolean;
   readonly recordHealthyStart: (streamKey: string) => void;
 } {
   const lastDemandedFenceByStreamKey = new Map<string, number>();
-  // Entries for subscribers that disconnect mid-failure are never cleared by a
-  // healthy start, so bound the map: evict the oldest insertions once the
-  // ceiling is reached. Losing an old entry merely re-grants one retryable
-  // demand to that subscriber — safe, since escalation is a loop guard, not a
-  // correctness fence.
+  // entries for subscribers disconnecting mid-failure are never cleared by a healthy start — bound the map; losing an old entry merely re-grants one retryable demand (escalation is a loop guard, not correctness)
   const MAX_TRACKED_STREAM_KEYS = 4_096;
   return {
     shouldEscalate: (streamKey, report) => {
@@ -116,11 +92,6 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
    */
   readonly resumeSubjectExists?: Effect.Effect<boolean, E>;
   readonly onResnapshotRequired?: (report: ResnapshotReport) => Effect.Effect<void, never>;
-  /**
-   * Loop guard: pairs a stable stream key with a process-wide tracker so a
-   * resnapshot demand whose fence did not advance since the previous demand
-   * fails non-retryable instead of prompting another identical restart.
-   */
   readonly resnapshotEscalation?: {
     readonly streamKey: string;
     readonly tracker: ReturnType<typeof makeResnapshotEscalationTracker>;
@@ -172,21 +143,11 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
       );
       if (input.resumeFromSequence !== undefined) {
-        // The head is read after the live attach, so replay through the head
-        // plus live-after-fence covers every event exactly once — the same
-        // fence discipline as the snapshot path, with the cursor standing in
-        // for the snapshot sequence.
+        // the head is read after the live attach — replay-through-head plus live-after-fence covers every event exactly once, same discipline as the snapshot path with the cursor standing in for the snapshot sequence
         const resumeFromSequence = input.resumeFromSequence;
         const highWaterSequence = yield* duringLive(input.getHighWaterSequence);
         const resumeGap = highWaterSequence - resumeFromSequence;
-        // The `resumeGap >= 0` guard is load-bearing, not defensive: hard
-        // deletes remove rows from `orchestration_events` (see the thread purge
-        // in profileStatsArchive.ts), which can lower the journal-wide
-        // MAX(sequence) below a cursor a client legitimately held. Such a
-        // cursor must never be trusted for a gap replay — fall through to the
-        // full snapshot instead. Sequences themselves are never reused
-        // (`sequence INTEGER PRIMARY KEY AUTOINCREMENT`), so a non-negative
-        // gap cannot silently alias deleted history onto new events.
+        // the `resumeGap >= 0` guard is load-bearing: hard deletes remove rows from orchestration_events which can lower MAX(sequence) below a legitimately held cursor — such a cursor must never be trusted for gap replay; AUTOINCREMENT means sequences are never reused so a non-negative gap can't alias deleted history onto new events
         const subjectExists =
           input.resumeSubjectExists === undefined
             ? true

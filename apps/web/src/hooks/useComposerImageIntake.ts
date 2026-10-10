@@ -1,7 +1,3 @@
-// FILE: useComposerImageIntake.ts
-// Purpose: Serializes image preparation, exposes pending UI state, and cancels stale draft work.
-// Layer: Web composer hook
-
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS, type ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 

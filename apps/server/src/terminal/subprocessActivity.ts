@@ -1,7 +1,3 @@
-// FILE: subprocessActivity.ts
-// Purpose: Detects subprocess and coding-provider activity below terminal PTY processes.
-// Layer: Terminal infrastructure
-
 import path from "node:path";
 
 import {
@@ -92,11 +88,7 @@ function includeChildActivity(
   };
 }
 
-/**
- * Walk the process tree below `parentPid` using a pre-captured children map.
- * Pure and synchronous, so a single captured snapshot can be reused across many
- * polled terminals without re-scanning the system per terminal.
- */
+/** pure + synchronous so one captured snapshot can be reused across many polled terminals */
 export function inspectSubprocessActivity(
   parentPid: number,
   childrenByParentPid: ProcessChildrenMap,
@@ -110,12 +102,7 @@ export function inspectSubprocessActivity(
   return activity;
 }
 
-/**
- * Capture the whole-system process tree as a children-by-ppid map with a single
- * `ps` invocation. Returns null when `ps` is unavailable or fails. Sharing one
- * snapshot across all polled terminals turns an O(running-terminals) burst of
- * full-system scans per poll cycle into a single scan.
- */
+/** one `ps` for the whole system, shared across all terminals — turns O(terminals) scans per cycle into one */
 export async function captureProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
   try {
     const psResult = await runProcess("ps", ["-eo", "pid=,ppid=,command="], {
@@ -171,8 +158,7 @@ async function checkPosixSubprocessActivityByTreeWalk(
 ): Promise<TerminalSubprocessActivity> {
   let visited = 0;
 
-  // Fallback for hosts where `ps -eo` was unavailable/truncated. It is slower,
-  // but bounded and only used when the shared snapshot cannot be trusted.
+  // fallback for hosts where `ps -eo` is unavailable/truncated — slower but bounded
   const inspectPid = async (parentPid: number): Promise<TerminalSubprocessActivity> => {
     if (visited >= POSIX_SUBPROCESS_TREE_WALK_MAX_VISITED) {
       return {
@@ -202,7 +188,7 @@ async function checkPosixSubprocessActivityByTreeWalk(
 async function checkPosixSubprocessActivity(
   terminalPid: number,
 ): Promise<TerminalSubprocessActivity> {
-  // Cheap fast path: skip the full process scan when the shell has no children.
+  // fast path: skip the process scan when the shell has no children
   try {
     const pgrepResult = await runProcess("pgrep", ["-P", String(terminalPid)], {
       timeoutMs: 1_000,
@@ -215,7 +201,7 @@ async function checkPosixSubprocessActivity(
       return emptySubprocessActivity();
     }
   } catch {
-    // Fall back to ps when pgrep is unavailable.
+    // fall back to ps when pgrep is unavailable
   }
 
   const childrenByParentPid = await captureProcessChildrenMap();

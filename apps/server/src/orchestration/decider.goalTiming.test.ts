@@ -1,8 +1,3 @@
-// FILE: decider.goalTiming.test.ts
-// Purpose: Covers goal pursuit timing: the decider stamps goalStartedAt when a
-//          goal first becomes active, freezes/rebases it across pause/resume,
-//          and clears both timestamps when the goal is cleared.
-
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -200,8 +195,7 @@ describe("decider thread goal timing", () => {
     const rebasedStartedAt = resumeEvent.payload.goalStartedAt;
     expect(typeof rebasedStartedAt).toBe("string");
     if (typeof rebasedStartedAt !== "string") return;
-    // Elapsed-at-pause must equal elapsed-at-resume: resume shifts the start
-    // forward by exactly the paused span.
+    // elapsed-at-pause must equal elapsed-at-resume — resume shifts start forward by exactly the paused span
     const elapsedAtPause = Date.parse(pauseEvent.occurredAt) - Date.parse(setEvent.occurredAt);
     const elapsedAtResume = Date.parse(resumeEvent.occurredAt) - Date.parse(rebasedStartedAt);
     expect(elapsedAtResume).toBe(elapsedAtPause);
@@ -226,7 +220,7 @@ describe("decider thread goal timing", () => {
   it("resumes with a valid clock even when a legacy goal has no recorded start", async () => {
     const now = new Date().toISOString();
     let readModel = await createThreadReadModel(now);
-    // Legacy shape: goal set before timing existed — paused but with no start stamp.
+    // legacy shape — goal set before timing existed: paused with no start stamp
     readModel = await applyEvent(
       readModel,
       {

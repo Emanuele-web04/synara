@@ -1,7 +1,3 @@
-// FILE: useTranscriptAssistantSelectionAction.ts
-// Purpose: Own the assistant highlight -> floating action -> composer insertion flow for transcript selections.
-// Layer: Chat transcript interaction controller
-
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import {
   useEffect,
@@ -78,9 +74,7 @@ export function useTranscriptAssistantSelectionAction(
     onMessagesTouchMoveBase,
     onMessagesTouchEndBase,
   } = options;
-  // Pending action keyed to its thread: a thread switch or disable derives
-  // straight back to null with no state-resetting effects. The setter reads
-  // the current thread from a ref so empty-deps callbacks never go stale.
+  // pending action keyed to its thread: a switch or disable derives back to null with no state-resetting effects; the setter reads the thread from a ref so empty-deps callbacks never go stale
   const [pendingActionState, setPendingActionState] = useState<{
     threadId: typeof threadId;
     action: PendingTranscriptSelectionAction;
@@ -246,8 +240,7 @@ export function useTranscriptAssistantSelectionAction(
       setPendingTranscriptSelectionAction(null);
     };
     const handleSelectionChange = () => {
-      // The browser can deliver the release's selectionchange after the toolbar mounts.
-      // Keep it open while that event still describes the quote we just captured.
+      // the browser can deliver the release's selectionchange after the toolbar mounts — keep it open while that event still describes the captured quote
       const current = readTranscriptAssistantSelection({ container: document.body });
       if (
         current?.selection.assistantMessageId !==

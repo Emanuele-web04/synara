@@ -1,9 +1,3 @@
-// FILE: icon-button.tsx
-// Purpose: Centralizes labeled icon-only button behavior on top of the shadcn Button primitive.
-// Layer: Shared UI primitive
-// Exports: IconButton
-// Depends on: Button variants and tooltip primitives.
-
 import { forwardRef, type ComponentProps, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";

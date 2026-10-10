@@ -26,10 +26,6 @@ export default async function Navbar() {
           <span className="hidden sm:inline">Synara</span>
         </Link>
 
-        {/*
-          Middle nav: mobile prioritizes Docs + Changelog alongside the primary
-          actions. X and Install are revealed at sm+.
-        */}
         <div className="hidden min-w-0 flex-1 items-center justify-center gap-3 text-[13px] text-[var(--text-tertiary)] sm:flex sm:gap-6">
           <a
             href="https://x.com/trySynara"

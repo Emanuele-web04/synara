@@ -190,8 +190,7 @@ describe("providerModelsQueryOptions", () => {
       const releaseAbandoned = prioritizeProviderModelDiscovery(abandoned.queryKey);
       const releaseSharedA = prioritizeProviderModelDiscovery(shared.queryKey);
       const releaseSharedB = prioritizeProviderModelDiscovery(shared.queryKey);
-      // Ownership predates enqueue: a prefetch for the shared key still belongs
-      // to the active pane even if its fetch options say background.
+      // Ownership predates enqueue: a prefetch for the shared key still belongs to the active pane even if its fetch options say background.
       const requests = [
         active,
         client.fetchQuery(abandoned),

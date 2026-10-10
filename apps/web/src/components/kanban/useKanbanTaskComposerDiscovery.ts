@@ -1,8 +1,3 @@
-// FILE: useKanbanTaskComposerDiscovery.ts
-// Purpose: Builds kanban task composer autocomplete items from provider/workspace discovery.
-// Layer: Kanban UI hook
-// Exports: useKanbanTaskComposerDiscovery
-
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,

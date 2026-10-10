@@ -1,9 +1,3 @@
-// FILE: EditProfileDialog.tsx
-// Purpose: "Edit profile" modal — edits the local display name, @handle, avatar photo, and
-// accent color. The photo is compressed on-device before it's handed back. Drafts are held
-// locally and only committed on Save.
-// Layer: web profile feature (all changes persist to localStorage via the parent hooks).
-
 import { type ReactNode, useRef, useState } from "react";
 import { Dialog, DialogClose, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
@@ -20,9 +14,7 @@ import { PROFILE_AVATAR_COLORS } from "./useProfileAvatarColor";
 import { AvatarImageError, compressAvatarImage } from "./avatarImage";
 import { ProfileAvatar } from "./ProfileAvatar";
 
-// Inputs and footer buttons share one fixed height + radius so every control in
-// the dialog reads as the same size. The visible border keeps the fields legible
-// even when unfocused (the default --input border is ~6% and reads as "no box").
+// inputs and footer share one fixed height + radius; the visible border keeps fields legible unfocused (default --input border ~6% reads as "no box")
 const fieldControlClassName = "h-9 rounded-xl border-foreground/12";
 const dialogButtonClassName = "h-11 rounded-lg px-4";
 
@@ -120,7 +112,6 @@ function EditProfileDialogContent({
       <DialogTitle className="px-4 pt-4 text-lg">Edit profile</DialogTitle>
 
       <div className="flex flex-col gap-4 px-4 pt-3">
-        {/* Avatar */}
         <div className="flex flex-col items-center gap-3">
           <div className="relative">
             <ProfileAvatar
@@ -214,7 +205,6 @@ function EditProfileDialogContent({
           {error && <p className="text-center text-ui leading-snug text-destructive">{error}</p>}
         </div>
 
-        {/* Fields */}
         <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
           <Field label="Display name">
             <InputGroup className={fieldControlClassName}>

@@ -1,7 +1,3 @@
-// FILE: backendNodeOptions.test.ts
-// Purpose: Verifies desktop backend Node args preserve user-provided Node options.
-// Layer: Desktop startup tests
-
 import { describe, expect, it } from "vitest";
 
 import {

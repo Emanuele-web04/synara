@@ -1,7 +1,3 @@
-// FILE: MessagesTimeline.toolDetails.browser.tsx
-// Purpose: Browser regressions for inline tool-call detail expand/collapse motion.
-// Layer: Vitest browser tests
-
 import "../../index.css";
 
 import { MessageId, TurnId } from "@synara/contracts";

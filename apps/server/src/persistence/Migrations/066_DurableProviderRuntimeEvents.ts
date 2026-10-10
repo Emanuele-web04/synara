@@ -3,9 +3,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PROVIDER_RUNTIME_INGESTION_CONSUMER } from "../Services/ProviderRuntimeEvents.ts";
 
-// Provider output is journaled before live publication. The consumer cursor is
-// intentionally independent from orchestration event sequences: it advances
-// only after ProviderRuntimeIngestion accepts the exact journal row.
+// the consumer cursor is intentionally independent of orchestration sequences — it advances only after ingestion accepts the exact journal row
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const migratedAt = new Date().toISOString();

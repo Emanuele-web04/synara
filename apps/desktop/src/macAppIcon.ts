@@ -1,7 +1,3 @@
-// FILE: macAppIcon.ts
-// Purpose: Persist a Finder/Dock custom icon after the application quits.
-// Layer: Desktop-native preference utility
-
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs/promises";
 import * as Path from "node:path";

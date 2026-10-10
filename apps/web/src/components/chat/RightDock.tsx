@@ -1,8 +1,3 @@
-// FILE: RightDock.tsx
-// Purpose: Tabbed multi-pane right sidebar shell (browser, diff, terminal, sidechat, git).
-// Layer: Chat right-dock UI
-// Depends on: ui/sidebar primitive, right-dock pane metadata, and a caller-provided pane renderer.
-
 import {
   type CSSProperties,
   type ReactNode,
@@ -69,8 +64,7 @@ interface RightDockProps {
   openWidthFraction?: number;
   shouldAcceptWidth: (context: { nextWidth: number; wrapper: HTMLElement }) => boolean;
   paneLabelOverrides?: Record<string, string | undefined>;
-  // Per-pane tab glyph overrides (same shape as label overrides) — e.g. a pull request pane
-  // swapping the generic kind icon for its live state glyph.
+  // Per-pane tab glyph overrides (same shape as label overrides) — e.g. a pull request pane swapping the generic kind icon for its live state glyph.
   paneIconOverrides?: Record<string, ReactNode | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
   launcherItems?: readonly RightDockLauncherItem[];
@@ -169,8 +163,7 @@ export function RightDock(props: RightDockProps) {
   const onSelectPane = props.onSelectPane;
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
   const browserRuntimeMode = props.browserRuntimeMode ?? "live";
-  // The dock is the right-most surface when open, so its header sits under the
-  // fixed Windows caption cluster — reserve the same gutter the chat header uses.
+  // The dock is the right-most surface when open, so its header sits under the fixed Windows caption cluster — reserve the same gutter the chat header uses.
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
 
@@ -211,8 +204,7 @@ export function RightDock(props: RightDockProps) {
     }));
     siblings.forEach((element) => {
       element.inert = true;
-      // Electron drag regions can intercept clicks through an overlapping panel.
-      // Hide the covered surface as well as removing it from keyboard navigation.
+      // Electron drag regions can intercept clicks through an overlapping panel. Hide the covered surface as well as removing it from keyboard navigation.
       element.style.visibility = "hidden";
     });
     return () => {
@@ -238,9 +230,7 @@ export function RightDock(props: RightDockProps) {
     if (!wrapper || !shell) {
       return;
     }
-    // A phone-shaped pane has a natural width: half the shell leaves the device
-    // stranded in empty space, so kinds that render a fixed-aspect object open
-    // at their own comfortable size instead of the even split.
+    // A phone-shaped pane has a natural width: half the shell leaves the device stranded in empty space, so kinds that render a fixed-aspect object open at their own comfortable size instead of the even split.
     const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
     const openWidth =
       preferredWidth ?? Math.round(shell.getBoundingClientRect().width * openWidthFraction);
@@ -273,10 +263,7 @@ export function RightDock(props: RightDockProps) {
     return () => window.cancelAnimationFrame(frameId);
   }, [props.motionKey, shouldSuppressChromeMotion]);
 
-  // Smooth drawer-style easing for the open/close slide. `ease-linear` (the
-  // sidebar default) reads as stepped/janky on the wide dock; this curve front-
-  // loads motion and settles softly. Applied to both the width gap and the
-  // sliding container so they stay in lockstep.
+  // smooth drawer easing — ease-linear reads stepped on the wide dock; applied to both width gap and sliding container so they stay in lockstep
   const chromeMotionClass = shouldSuppressChromeMotion
     ? SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS
     : SIDEBAR_OFFCANVAS_MOTION_CLASS;
@@ -409,9 +396,7 @@ export function RightDock(props: RightDockProps) {
             {renderedPanes.map((pane) => {
               const isActive = pane.id === activePane?.id;
               const isVisible = isActive && props.state.open;
-              // Keep-mounted panes that are not the active tab are already
-              // hydrated; browser panes may use an explicit runtime mode so a
-              // floating browser can own the live guest while the dock stays preview-only.
+              // Keep-mounted panes that are not the active tab are already hydrated; browser panes may use an explicit runtime mode so a floating browser can own the live guest while the dock stays preview-only.
               const runtimeMode: DockPaneRuntimeMode =
                 pane.kind === "browser"
                   ? browserRuntimeMode

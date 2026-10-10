@@ -1,7 +1,3 @@
-// FILE: PdfResourceLifecycle.browser.tsx
-// Purpose: Browser regressions for A -> B -> A PDF/image resources and PDF page drafts.
-// Layer: Focused component lifecycle tests
-
 import "../index.css";
 
 import { useState } from "react";

@@ -24,8 +24,6 @@ import {
   useEffectiveComposerModelState,
 } from "../../composerDraftStore";
 
-// ── Claude TraitsPicker tests ─────────────────────────────────────────
-
 const CLAUDE_THREAD_ID = ThreadId.makeUnsafe("thread-claude-traits");
 
 function ClaudeTraitsPickerHarness(props: {
@@ -294,16 +292,13 @@ describe("TraitsPicker (Claude)", () => {
     await page.getByRole("button").click();
     await page.getByRole("menuitemradio", { name: "1M" }).click();
 
-    // A 1M thread can grow far beyond the normal compaction point: keep the explicit
-    // thread choice, but never leak it into sticky defaults for future threads.
+    // A 1M thread can grow far beyond the normal compaction point: keep the explicit thread choice, but never leak it into sticky defaults for future threads.
     const sticky = useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent;
     expect(sticky?.provider === "claudeAgent" ? sticky.options?.autoCompactWindow : undefined).toBe(
       undefined,
     );
   });
 });
-
-// ── Codex TraitsPicker tests ──────────────────────────────────────────
 
 async function mountCodexPicker(props: { model?: string; options?: CodexModelOptions }) {
   const threadId = ThreadId.makeUnsafe("thread-codex-traits");
@@ -423,16 +418,12 @@ describe("TraitsPicker (Codex)", () => {
       options: { fastMode: true },
     });
 
-    // The toggle flips in place: the menu stays open. (This harness passes
-    // `modelOptions` as a static prop, so the pressed state itself only
-    // re-renders in store-backed mounts like the Claude harness above.)
+    // The toggle flips in place: the menu stays open. (This harness passes `modelOptions` as a static prop, so the pressed state itself only re-renders in store-backed mounts like the Claude harness above.)
     await vi.waitFor(() => {
       expect(document.body.textContent ?? "").toContain("Effort");
     });
   });
 });
-
-// ── Cursor TraitsPicker tests ─────────────────────────────────────────
 
 async function mountCursorPicker(props: {
   runtimeModel: ProviderModelDescriptor;
@@ -542,8 +533,6 @@ describe("TraitsPicker (Cursor)", () => {
     });
   });
 });
-
-// ── OpenCode TraitsPicker tests ───────────────────────────────────────
 
 const OPENCODE_THREAD_ID = ThreadId.makeUnsafe("thread-opencode-traits");
 const OPENCODE_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {

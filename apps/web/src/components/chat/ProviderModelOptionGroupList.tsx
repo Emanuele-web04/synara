@@ -1,8 +1,3 @@
-// FILE: ProviderModelOptionGroupList.tsx
-// Purpose: Renders grouped provider model radio items with optional collapsible sections.
-// Layer: Chat composer presentation
-// Depends on: menu radio primitives, collapsible UI, and provider model grouping helpers.
-
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";

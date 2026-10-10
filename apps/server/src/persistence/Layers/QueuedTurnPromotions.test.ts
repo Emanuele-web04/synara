@@ -107,9 +107,7 @@ layer("QueuedTurnPromotionRepository", (it) => {
           laterSteerSequence,
         );
 
-        // `laterSteerSequence` is currently claimed ('promoting'). cancelThread now
-        // widens to cancel BOTH 'queued' and 'promoting' rows, so the in-flight
-        // claim is cancelled immediately -> nothing pending.
+        // cancelThread widens to cancel both 'queued' and 'promoting' rows — the in-flight claim is cancelled immediately
         yield* repository.cancelThread({
           threadId: "thread-queued-promotion",
           updatedAt: now,
@@ -121,9 +119,7 @@ layer("QueuedTurnPromotionRepository", (it) => {
           }),
         );
 
-        // The drain's error path releasing the (now cancelled) claim must NOT
-        // resurrect it: releaseClaim only matches state='promoting', which the
-        // cancelled row no longer is, so it reports no-op and the row stays dead.
+        // the drain's error path must not resurrect it — releaseClaim only matches state='promoting', which the cancelled row no longer is
         const released = yield* repository.releaseClaim({
           queuedEventSequence: laterSteerSequence,
           claimOwner: "owner-later-generation",

@@ -1,18 +1,9 @@
-// FILE: composerDropPaths.ts
-// Purpose: Resolve absolute paths for OS-dropped files on desktop and decide
-//          when a drop should become a path mention instead of a byte attachment.
-// Layer: Web composer utility (desktop-aware)
-
 export interface ComposerDroppedFileItem {
   readonly kind: string;
   readonly getAsFile: () => File | null;
   readonly webkitGetAsEntry?: (() => { readonly isDirectory?: boolean } | null) | undefined;
 }
 
-/**
- * Best-effort absolute path for a File from a drag/drop or file picker.
- * On Electron, uses `webUtils.getPathForFile` via the desktop bridge.
- */
 export function resolveDroppedFileAbsolutePath(file: File): string | null {
   const bridge = typeof window !== "undefined" ? window.desktopBridge : undefined;
   const getPath = bridge?.getPathForFile;
@@ -30,7 +21,7 @@ export function resolveDroppedFileAbsolutePath(file: File): string | null {
   }
 }
 
-/** Chromium exposes directory identity on the drag item, not reliably on File. */
+// Chromium exposes directory identity on the drag item, not reliably on File
 export function isDroppedComposerDirectory(item: ComposerDroppedFileItem | undefined): boolean {
   if (!item || item.kind !== "file" || typeof item.webkitGetAsEntry !== "function") {
     return false;

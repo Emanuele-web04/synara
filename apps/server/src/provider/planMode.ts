@@ -1,10 +1,4 @@
-/**
- * Shared plan-mode helpers for provider adapters.
- *
- * Adapters use this prompt shim when their native plan mode does not emit a
- * first-class proposed-plan event. The extraction helpers keep the UI path
- * provider-agnostic by converting tagged markdown into canonical runtime events.
- */
+// prompt shim for adapters whose native plan mode emits no first-class proposed-plan event — converts tagged markdown into canonical runtime events
 
 import type { ProviderInteractionMode } from "@synara/contracts";
 

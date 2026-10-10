@@ -1,6 +1,3 @@
-// Runs the actual inline theme initializer in isolated Chromium documents.
-// node apps/marketing/scripts/theme-smoke.mjs [ThemeScript.tsx] [report.json]
-// SYNARA_PERF=1 records an older baseline without asserting idle behavior.
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { chromium } from "@playwright/test";

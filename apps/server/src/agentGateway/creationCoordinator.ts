@@ -193,13 +193,7 @@ interface CreationOperationStore {
   ) => Effect.Effect<void, Error>;
 }
 
-/**
- * Build the durable, exactly-once thread-creation coordinator.
- *
- * The coordinator owns its per-caller-turn locks and all git/orchestration
- * compensation state. Keeping that state beside the saga prevents the MCP
- * transport and unrelated tools from becoming accidental recovery owners.
- */
+/** owns per-caller-turn locks and git/orchestration compensation beside the saga — keeps transport and unrelated tools from becoming recovery owners */
 export const makeCreateThreadsHandler = Effect.fn(function* (
   dependencies: CreationCoordinatorDependencies,
 ) {
@@ -617,9 +611,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               );
             }
             const requestedRef = spec.baseRef ?? spec.baseBranch ?? "HEAD";
-            // Named refs are shared across linked worktrees, while HEAD is checkout-local.
-            // Always resolve same-project requests from the caller's selected checkout so
-            // an explicit baseRef:"HEAD" cannot silently jump back to the primary checkout.
+            // named refs are shared across linked worktrees while HEAD is checkout-local — resolve from the caller's selected checkout so baseRef:"HEAD" can't jump to the primary
             const sourceCwd =
               caller?.projectId === projectId
                 ? (caller.worktreePath ?? project.workspaceRoot)
@@ -702,9 +694,8 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             projectScripts: project.scripts,
             worktreeRef,
             copyChangesFrom,
-            // Deterministic like the planned path: an exact-plan retry must
-            // resolve to the same branch, and recovery reclaims it by name.
-            // The 8-hex-digit token keeps it a temporary synara/* branch.
+            // an exact-plan retry must resolve to the same branch — recovery reclaims it by name
+            // the 8-hex token keeps it a temporary synara/* branch
             newBranch:
               environment === "worktree"
                 ? `${WORKTREE_BRANCH_PREFIX}/${stableGatewayDigest({ operationId, index, resource: "worktree-branch" }, 8)}`
@@ -794,22 +785,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                         .removeWorktree({
                           cwd: worktree.cwd,
                           path: worktree.path,
-                          // Ownership was never recorded for this path: creation failed
-                          // right after the worktree appeared, or the interruptible setup
-                          // script failed or was interrupted. Copied baseline changes and
-                          // partial setup output make a non-forced removal fail by
-                          // construction.
+                          // ownership never recorded — creation failed after the worktree appeared or the setup script failed; copied baseline changes make a non-forced removal fail by construction
                           force: true,
                         })
                         .pipe(
                           Effect.flatMap(() =>
                             worktree.branch === null
                               ? Effect.void
-                              : // The branch is this operation's own deterministic
-                                // synara/* name and its worktree was just force-removed.
-                                // A non-forced delete would fail whenever the pinned
-                                // ref is not merged into the root HEAD (e.g. PR heads),
-                                // stranding the name and blocking exact-plan retries.
+                              : // own deterministic synara/* name; a non-forced delete fails when the ref isn't merged into root HEAD (e.g. PR heads), stranding retries
                                 git.deleteBranch({
                                   cwd: worktree.cwd,
                                   branch: worktree.branch,
@@ -864,10 +847,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 ),
             { discard: true },
           );
-          // Do not make a task terminal before cleanup has been attempted. The
-          // durable capacity view treats planned/created tasks and non-terminal
-          // failed compensation as active, so projector lag and restart cannot
-          // briefly admit a replacement while this task may still be running.
+          // don't mark the task terminal before cleanup is attempted — the durable capacity view treats non-terminal failed compensation as active
           yield* operationStore.markTaskStatus(operationId, "failed").pipe(
             Effect.catch((error) =>
               Effect.logWarning("agent gateway could not mark external task failed", {
@@ -955,9 +935,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       let claimedByThisFiber = false;
       const outcome = yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          // Reservation and claim form one uninterruptible handshake. Once the
-          // durable reservation exists, this fiber either claims it while the
-          // compensation boundary is already installed or returns a replay.
+          // reservation+claim form one uninterruptible handshake — once the reservation exists this fiber either claims it or returns a replay
           const reservation = yield* operationStore
             .reserve({
               operationId,
@@ -1100,9 +1078,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                         return { created, trackedWorktree };
                       }),
                     );
-                    // The setup script can run for minutes, so it must stay
-                    // interruptible: the abort signal kills the child process and
-                    // the tracked, still-ownerless worktree is compensated away.
+                    // the setup script can run for minutes — stays interruptible so abort kills the child and compensates the ownerless worktree
                     yield* Effect.tryPromise({
                       try: (signal) =>
                         runWorktreeSetupScript(entry.projectScripts, trackedWorktree.path, signal),
@@ -1229,9 +1205,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       : {}),
                     createdAt: gatewayIsoNow(),
                   });
-                  // The dispatch can outlive the caller turn. Recheck after it returns so
-                  // a child started in that final race window is compensated as part of
-                  // the same durable operation instead of being left detached.
+                  // the dispatch can outlive the caller turn — recheck so a last-window child is compensated in the same operation
                   yield* context.assertAuthority();
 
                   yield* operationStore.markTaskStatus(operationId, "created");

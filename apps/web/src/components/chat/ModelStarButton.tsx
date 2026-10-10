@@ -1,14 +1,8 @@
-// FILE: ModelStarButton.tsx
-// Purpose: Star toggle embedded in a model menu row (favourites / starred presets).
-// Layer: Chat composer presentation
-// Depends on: star icons and the picker option radius token.
-
 import { StarFilledIcon, StarIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { COMPOSER_PICKER_RADIUS_CLASS_NAME } from "./composerPickerStyles";
 
-// Lives inside a menu item, so every event that would also activate the row
-// (click, pointer down, Enter/Space) stops here.
+// Lives inside a menu item, so every event that would also activate the row (click, pointer down, Enter/Space) stops here.
 export function ModelStarButton(props: {
   starred: boolean;
   label: string;

@@ -1,8 +1,3 @@
-// FILE: env-bool.test.ts
-// Purpose: Verifies permissive boolean env parsing for release scripts.
-// Layer: Release/build tests
-// Depends on: scripts/lib/env-bool.ts.
-
 import { assert, describe, it } from "@effect/vitest";
 
 import { parseBooleanEnvValue, parseOptionalBooleanEnvValue } from "./lib/env-bool.ts";

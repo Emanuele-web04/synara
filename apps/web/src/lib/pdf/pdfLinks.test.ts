@@ -3,8 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "./pdfEngine";
 import { extractPageLinks } from "./pdfLinks";
 
-// Identity viewport: returns the rect unchanged so the test asserts the
-// min/width/height math without depending on pdf.js matrix internals.
 const viewport = {
   convertToViewportRectangle: (rect: number[]) => rect,
 } as unknown as PageViewport;
@@ -27,9 +25,9 @@ describe("extractPageLinks", () => {
     const page = makePage([
       { subtype: "Link", rect: [0, 0, 10, 20], url: "https://example.com" },
       { subtype: "Link", rect: [0, 30, 10, 50], dest: "chapter1" },
-      { subtype: "Link", rect: [0, 60, 10, 70] }, // inert: no url, no dest
-      { subtype: "Widget", rect: [0, 80, 10, 90] }, // not a link
-      { subtype: "Link", rect: [0, 90] }, // malformed rect
+      { subtype: "Link", rect: [0, 60, 10, 70] },
+      { subtype: "Widget", rect: [0, 80, 10, 90] },
+      { subtype: "Link", rect: [0, 90] },
     ]);
 
     const links = await extractPageLinks({ doc, page, viewport });

@@ -1,7 +1,3 @@
-// FILE: ChatMarkdown.fileContextMenu.browser.tsx
-// Purpose: Verifies assistant file links replace the browser menu with Synara's file actions.
-// Layer: Web chat browser tests
-
 import type { NativeApi } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "vitest-browser-react";

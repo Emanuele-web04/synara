@@ -2,7 +2,6 @@ import type { Session } from "electron";
 
 export interface BetterwrightNetworkGuardLease {
   readonly closed: boolean;
-  /** The caller must drain its old transports before replacing the worker proxy. */
   replace(proxyUrl: string, signal?: AbortSignal): Promise<void>;
   release(): Promise<void>;
 }
@@ -25,8 +24,6 @@ export class BetterwrightNetworkGuard {
     const turn = new Promise<void>((resolve) => {
       finishTurn = resolve;
     });
-    // A cancelled waiter may finish its turn early, but cannot let later
-    // waiters overtake the current owner. The session stays FIFO.
     this.nextTurn = previous.then(() => turn);
     try {
       await waitForTurn(previous, signal);
@@ -39,8 +36,6 @@ export class BetterwrightNetworkGuard {
         replace: (proxyUrl, signal) => lease.replace(proxyUrl, signal),
         release: () => {
           const restoring = lease.release();
-          // A failed restore keeps ownership reserved. The next turn must
-          // recover it before changing proxies or vending a transport.
           void restoring.then(finishTurn, finishTurn);
           return restoring;
         },
@@ -56,8 +51,6 @@ export class BetterwrightNetworkGuard {
     signal?: AbortSignal,
   ): Promise<BetterwrightNetworkGuardLease> {
     if (this.owner?.failed) {
-      // A failed setup has no lease to release. Recover the session before
-      // admitting another run; failed recovery must keep ownership reserved.
       await this.restore(this.owner);
     }
     signal?.throwIfAborted();
@@ -115,8 +108,6 @@ export class BetterwrightNetworkGuard {
       await this.browserSession.closeAllConnections();
       signal?.throwIfAborted();
     } catch (error) {
-      // Even a rejected setProxy may have partially changed Chromium state.
-      // Do not expose a free session until both rollback and draining succeed.
       try {
         await this.restore(owner);
       } catch (rollbackError) {
@@ -130,13 +121,9 @@ export class BetterwrightNetworkGuard {
   }
 
   private restore(owner: ProxyOwnership): Promise<void> {
-    // Identity, rather than the URL, makes stale releases harmless even when
-    // a later worker reuses the same proxy port.
     if (this.owner !== owner) return Promise.resolve();
     owner.restoring ??= (async () => {
       try {
-        // Synara's dedicated browser session otherwise uses the system proxy;
-        // all temporary proxy configuration is owned by this guard.
         await this.browserSession.setProxy({ mode: "system" });
         await this.browserSession.closeAllConnections();
         this.owner = undefined;

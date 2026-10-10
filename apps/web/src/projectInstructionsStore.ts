@@ -1,8 +1,3 @@
-// FILE: projectInstructionsStore.ts
-// Purpose: Persist per-project instructions and merge them into thread notes when requested.
-// Layer: Web UI state store
-// Exports: useProjectInstructionsStore, mergeProjectInstructionsIntoThreadNotes
-
 import type { ProjectId } from "@synara/contracts";
 import { clampThreadNotes } from "@synara/shared/pinnedMessages";
 import { create } from "zustand";
@@ -27,11 +22,8 @@ function threadNotesContainInstructionBlock(threadNotes: string, instructions: s
 }
 
 interface ProjectInstructionsStore {
-  /** Freeform instructions keyed by orchestration project id. */
   instructionsByProjectId: Record<string, string>;
-  /** Set or replace a project's instructions; empty strings clear persisted clutter. */
   setInstructions: (projectId: ProjectId, instructions: string) => void;
-  /** Clear a project's instructions. */
   clearInstructions: (projectId: ProjectId) => void;
 }
 

@@ -1,17 +1,6 @@
-/**
- * ProviderRuntimeIngestionService - Provider runtime ingestion service interface.
- *
- * Owns background workers that consume provider runtime streams and emit
- * orchestration commands/events.
- *
- * @module ProviderRuntimeIngestionService
- */
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
-/**
- * ProviderRuntimeIngestionShape - Service API for runtime ingestion lifecycle.
- */
 export interface ProviderRuntimeIngestionShape {
   /**
    * Start ingesting provider runtime events into orchestration commands.
@@ -30,10 +19,7 @@ export interface ProviderRuntimeIngestionShape {
    */
   readonly start: Effect.Effect<void, never, Scope.Scope>;
 
-  /**
-   * Drops replay-ledger rows whose durable turn projection is already terminal.
-   * Startup reconciliation calls this after it closes process-orphaned turns.
-   */
+  /** drops replay-ledger rows whose durable turn is already terminal — called after startup closes process-orphaned turns */
   readonly reconcileSettledOpenTurns: Effect.Effect<void>;
 
   /**
@@ -44,9 +30,6 @@ export interface ProviderRuntimeIngestionShape {
   readonly drain: Effect.Effect<void>;
 }
 
-/**
- * ProviderRuntimeIngestionService - Service tag for runtime ingestion workers.
- */
 export class ProviderRuntimeIngestionService extends ServiceMap.Service<
   ProviderRuntimeIngestionService,
   ProviderRuntimeIngestionShape

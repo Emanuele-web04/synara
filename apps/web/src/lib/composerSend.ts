@@ -1,8 +1,3 @@
-// FILE: composerSend.ts
-// Purpose: Shared composer send helpers for attachment intake, prompt formatting, and upload payloads.
-// Layer: Web composer utility
-// Depends on: provider/model contracts plus composer draft attachment shapes.
-
 import {
   type ChatFileAttachment,
   type ChatImageAttachment,
@@ -70,7 +65,6 @@ function composerImageAttachmentFromFile(file: File): ComposerImageAttachment {
   };
 }
 
-// Centralizes the shared file/count/size guard while each attachment type maps its own draft shape.
 function collectComposerAttachmentFiles(input: {
   files: readonly File[];
   existingAttachmentCount: number;
@@ -104,11 +98,7 @@ function collectComposerAttachmentFiles(input: {
   return { files, error };
 }
 
-/**
- * Asynchronous image intake for every user-facing composer entry point. Count
- * checks happen before decoding, and accepted files are optimized one at a time
- * to avoid concurrent full-resolution canvas allocations.
- */
+// count checks before decoding; accepted files optimized one at a time to avoid concurrent full-resolution canvas allocations
 export async function prepareComposerImageAttachmentsFromFiles(input: {
   files: readonly File[];
   existingAttachmentCount: number;
@@ -138,7 +128,6 @@ export async function prepareComposerImageAttachmentsFromFiles(input: {
   return { images, error };
 }
 
-// Converts non-image File objects into in-memory file attachment drafts.
 export function buildComposerFileAttachmentsFromFiles(input: {
   files: readonly File[];
   existingAttachmentCount: number;
@@ -163,8 +152,7 @@ export function buildComposerFileAttachmentsFromFiles(input: {
   return { files, error: result.error };
 }
 
-// Draft persistence and previews still need a local data URL. Network sends use
-// the bounded binary upload path below and never place this value on RPC.
+// draft persistence/previews need a local data URL; network sends use the bounded binary upload path and never place this on RPC
 export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -194,8 +182,7 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-// Provider-specific prompt massaging. Claude prompt-injected efforts must be
-// applied before filtering skill/mention references and before dispatch.
+// Claude prompt-injected efforts must apply before filtering skill/mention references and before dispatch
 export function formatOutgoingComposerPrompt(params: {
   provider: ProviderKind;
   model: string | null;
@@ -247,11 +234,8 @@ export function resolvePromptEffortFromModelSelection(
 
 export interface StagedComposerAttachments {
   readonly attachments: UploadChatAttachment[];
-  /** Marks an accepted dispatch as authoritative. Cleanup becomes a no-op. */
   readonly commit: () => void;
-  /** Best-effort compensation for a rejected/abandoned dispatch. Never rejects. */
   readonly cleanup: () => Promise<void>;
-  /** Runs dispatch with commit-on-success and cleanup-on-failure semantics. */
   readonly runWithDispatch: <A>(
     dispatch: (attachments: UploadChatAttachment[]) => Promise<A>,
   ) => Promise<A>;
@@ -283,8 +267,7 @@ async function cancelManagedAttachments(attachmentIds: readonly string[]): Promi
           body,
         });
       } catch {
-        // Staged attachments also have a server-owned expiry. Compensation is
-        // deliberately best-effort and must never replace the dispatch/upload error.
+        // staged attachments have a server-owned expiry; compensation is best-effort and must never replace the dispatch/upload error
       }
     }
   };
@@ -308,8 +291,7 @@ export async function stageUploadComposerAttachments(input: {
     text: selection.text,
   }));
 
-  // Upload sequentially so selecting several maximum-size files never creates a
-  // burst of concurrent body buffers. The RPC turn then carries only short ids.
+  // upload sequentially so several max-size files never create a burst of concurrent body buffers; the RPC turn then carries only short ids
   const managedAttachmentIds: string[] = [];
   try {
     for (const attachment of [...input.images, ...(input.files ?? [])]) {

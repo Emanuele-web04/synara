@@ -1,6 +1,3 @@
-// FILE: chatGptVoiceTranscription.test.ts
-// Purpose: Verifies the voice transport warms the provider connection safely.
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {

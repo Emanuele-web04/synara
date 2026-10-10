@@ -86,17 +86,14 @@ const PlanSidebar = function PlanSidebar({
         closeLabel="Close plan sidebar"
       />
 
-      {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3 space-y-4">
-          {/* Explanation */}
           {activeTaskList?.explanation ? (
             <p className="text-ui-lg leading-relaxed text-muted-foreground/80">
               {activeTaskList.explanation}
             </p>
           ) : null}
 
-          {/* Tasks */}
           {activeTaskList && activeTaskList.tasks.length > 0 ? (
             <div className="space-y-1">
               <p className="mb-2 text-ui-xs font-semibold text-muted-foreground/40">Steps</p>
@@ -129,7 +126,6 @@ const PlanSidebar = function PlanSidebar({
             </div>
           ) : null}
 
-          {/* Proposed Plan Markdown */}
           {planMarkdown ? (
             <div className="space-y-2">
               <button
@@ -159,7 +155,6 @@ const PlanSidebar = function PlanSidebar({
             </div>
           ) : null}
 
-          {/* Empty state */}
           {!activeTaskList && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-ui-lg text-muted-foreground/40">No active plan yet.</p>

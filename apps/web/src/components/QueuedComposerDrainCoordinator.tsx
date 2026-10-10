@@ -1,8 +1,3 @@
-// FILE: QueuedComposerDrainCoordinator.tsx
-// Purpose: Keep the headless queued-composer drain running for the app session
-//          so backgrounded threads dispatch when their live turn settles.
-// Layer: Web app shell
-
 import { useEffect } from "react";
 
 import { resolveAssistantDeliveryMode, useAppSettings } from "../appSettings";

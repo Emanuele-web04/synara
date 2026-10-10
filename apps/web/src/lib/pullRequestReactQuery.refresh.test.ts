@@ -171,8 +171,7 @@ describe("pullRequestsForceRefreshMutationOptions", () => {
       throw new Error("Mutation hooks are missing.");
     }
 
-    // Regression order: pin starts, refresh starts, pin succeeds/settles, then the refresh's
-    // older response arrives. The refresh may update other fields but cannot undo the pin.
+    // Regression order: pin starts, refresh starts, pin succeeds/settles, then the refresh's older response arrives. The refresh may update other fields but cannot undo the pin.
     const pinContext = await Reflect.apply(pinOptions.onMutate, undefined, [pinInput, undefined]);
     const refreshContext = await Reflect.apply(refreshOptions.onMutate, undefined, [
       input,
@@ -377,7 +376,6 @@ describe("pullRequestsForceRefreshMutationOptions", () => {
     const pinContext = await Reflect.apply(pinOptions.onMutate, undefined, [pin, undefined]);
     await Reflect.apply(pinOptions.onSuccess, undefined, [pin, pin, pinContext, undefined]);
     await Reflect.apply(pinOptions.onSettled, undefined, [pin, null, pin, pinContext, undefined]);
-    // Simulate the pin mutation's targeted reconciliation recovering a row omitted by the cap.
     queryClient.setQueryData(refreshedKey, {
       items: [{ ...identity, title: "recovered", isPinned: true }],
     });

@@ -58,7 +58,5 @@ export function saveConfirmedCustomBinaryPaths(
   }
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
-  } catch {
-    // Best-effort persistence; ignore quota/availability errors.
-  }
+  } catch {}
 }

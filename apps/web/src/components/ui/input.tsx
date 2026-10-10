@@ -9,8 +9,7 @@ import { BUTTON_GROUP_SURFACE_CLASS_NAME } from "./button-group";
 
 type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> & {
   size?: "sm" | "default" | "lg" | number;
-  // "soft" gives the field a faint filled background instead of the default
-  // surface-matching fill, so it reads as an input even on a flush card.
+  // "soft" gives a faint filled background so it reads as an input even on a flush card
   variant?: "default" | "soft";
   // "capsule" rounds the field into a pill, to sit beside capsule button groups.
   shape?: "default" | "capsule";

@@ -13,9 +13,7 @@ export function resolveVisibleDiffFilePath(surface: HTMLElement): string | null 
   if (anchors.length === 0) {
     return null;
   }
-  // Anchors stack vertically in DOM order, so the file under the viewport top
-  // is found by binary search with O(log n) layout reads per scroll frame
-  // instead of measuring every file.
+  // anchors stack in DOM order — binary search finds the file under the viewport top in O(log n) layout reads per scroll frame
   const surfaceTop = surface.getBoundingClientRect().top - surface.scrollTop;
   const threshold = surface.scrollTop + VISIBLE_DIFF_FILE_TOLERANCE_PX;
   const index = findLastIndexAtOrBelow(

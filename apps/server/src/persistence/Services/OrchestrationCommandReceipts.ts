@@ -1,11 +1,3 @@
-/**
- * OrchestrationCommandReceiptRepository - Repository interface for command receipts.
- *
- * Owns persistence operations for deduplication and status tracking of
- * orchestration command handling.
- *
- * @module OrchestrationCommandReceiptRepository
- */
 import {
   CommandId,
   IsoDateTime,
@@ -53,23 +45,12 @@ export const GetByCommandIdInput = Schema.Struct({
 });
 export type GetByCommandIdInput = typeof GetByCommandIdInput.Type;
 
-/**
- * OrchestrationCommandReceiptRepositoryShape - Service API for command receipts.
- */
 export interface OrchestrationCommandReceiptRepositoryShape {
-  /**
-   * Insert a command receipt without replacing an existing command identity.
-   *
-   * Returns `false` when `commandId` already exists; callers must compare the stored
-   * fingerprint and must never overwrite its original result.
-   */
+  /** returns false when the commandId exists — callers compare the stored fingerprint and must never overwrite the original result */
   readonly insert: (
     receipt: NewOrchestrationCommandReceipt,
   ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
 
-  /**
-   * Read a command receipt by command id.
-   */
   readonly getByCommandId: (
     input: GetByCommandIdInput,
   ) => Effect.Effect<
@@ -78,9 +59,6 @@ export interface OrchestrationCommandReceiptRepositoryShape {
   >;
 }
 
-/**
- * OrchestrationCommandReceiptRepository - Service tag for command receipt persistence.
- */
 export class OrchestrationCommandReceiptRepository extends ServiceMap.Service<
   OrchestrationCommandReceiptRepository,
   OrchestrationCommandReceiptRepositoryShape

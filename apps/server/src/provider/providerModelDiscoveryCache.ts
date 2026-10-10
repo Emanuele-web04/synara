@@ -1,14 +1,3 @@
-// FILE: providerModelDiscoveryCache.ts
-// Purpose: Provider-agnostic model catalog cache shared by every adapter's
-//          listModels dispatch. Serves fresh entries instantly, serves stale
-//          entries immediately while revalidating in the background, single-
-//          flights concurrent discovery per key, applies a hard timeout ceiling,
-//          and short-circuits repeated failures so UI retries cannot fan out
-//          into CLI/ACP spawn storms.
-// Layer: Server provider runtime
-// Exports: makeProviderModelDiscoveryCache, ProviderModelDiscoveryCache,
-//          providerModelDiscoveryCacheKey, PROVIDER_MODEL_DISCOVERY_* defaults
-
 import type { ProviderListModelsInput, ProviderListModelsResult } from "@synara/contracts";
 import { Deferred, Effect, Exit, Option } from "effect";
 
@@ -23,17 +12,9 @@ const MANUAL_REFRESH_MIN_INTERVAL_MS = 60_000;
  * this are dropped so a long-uninstalled CLI does not haunt the picker forever.
  */
 export const PROVIDER_MODEL_DISCOVERY_STALE_TTL_MS = 24 * 60 * 60_000;
-/**
- * A failed or empty discovery is replayed for this long instead of re-spawning
- * the provider. This turns "retry 3 times with backoff" from four process
- * spawns into one.
- */
+// failed/empty discovery replays for this long — turns "retry 3x with backoff" from four process spawns into one
 export const PROVIDER_MODEL_DISCOVERY_FAILURE_TTL_MS = 30_000;
-/**
- * Hard ceiling on a single discovery run. Some adapters (Pi, OpenCode CLI) have
- * no internal timeout; this keeps every provider under the 60s WebSocket RPC
- * timeout so the client sees a real error instead of a transport timeout.
- */
+// hard ceiling: some adapters have no internal timeout — keeps every provider under the 60s RPC timeout so the client sees a real error
 export const PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS = 45_000;
 export const PROVIDER_MODEL_DISCOVERY_CACHE_MAX_ENTRIES = 64;
 
@@ -78,19 +59,13 @@ function environmentFingerprint(
 }
 
 export interface ProviderModelDiscoveryCache<E> {
-  /**
-   * Resolve a model catalog for `key`, running `discover` only when the cache
-   * cannot answer. `discover` always runs detached from the caller so a
-   * disconnecting client never aborts a discovery other callers wait on.
-   */
+  // discover always runs detached — a disconnecting client never aborts a discovery other callers wait on
   readonly lookup: (
     key: ProviderModelDiscoveryCacheKey,
     discover: Effect.Effect<ProviderListModelsResult, E>,
     refresh?: ProviderListModelsInput["refresh"],
   ) => Effect.Effect<ProviderListModelsResult, E | ProviderAdapterRequestError>;
-  /** Forget every entry (settings changes, tests). */
   readonly clear: () => void;
-  /** Number of catalog entries currently retained (tests/diagnostics). */
   readonly size: () => number;
 }
 
@@ -152,12 +127,7 @@ export const serializeProviderModelDiscoveryCacheKey = (
     ...(key.runtimeVersion !== undefined ? [key.runtimeVersion] : []),
   ]);
 
-/**
- * Only a non-empty, error-free catalog is worth remembering as "good". Static
- * fallbacks that carry `error` (e.g. `devin.static`) and empty lists are
- * replayed briefly as failures so the next real attempt is not delayed by the
- * fresh window.
- */
+// only a non-empty error-free catalog is worth caching as good — erroring fallbacks and empty lists replay briefly so the next real attempt isn't delayed
 const isUsableCatalog = (result: ProviderListModelsResult): boolean =>
   result.models.length > 0 && result.error === undefined;
 
@@ -289,11 +259,7 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
     storeFailure(serialized, exit, at);
   };
 
-  /**
-   * Start (or join) the single in-flight discovery for `serialized`. The work
-   * runs on a detached fiber so it outlives the requesting RPC and so every
-   * concurrent caller observes the same exit.
-   */
+  // the discovery runs on a detached fiber so it outlives the requesting RPC and every concurrent caller sees the same exit
   const startDiscovery = (
     key: ProviderModelDiscoveryCacheKey,
     serialized: string,

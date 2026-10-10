@@ -1,8 +1,3 @@
-// FILE: diffPanelSelectors.ts
-// Purpose: Lightweight Zustand selectors for the diff panel — avoid subscribing to the
-//          full thread (messages/activities) when only catalog or live-refresh signals change.
-// Layer: Diff panel data
-
 import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
 
 import type { AppState } from "../storeState";

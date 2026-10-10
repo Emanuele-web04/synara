@@ -11,19 +11,7 @@ export function shouldUseCompactComposerFooter(
   return width !== null && width < breakpoint;
 }
 
-// Progressive degradation for the footer's picker cluster.
-// Degradation order (first thing to go first): context-window meter ->
-// traits/effort label (gear icon stays) -> model name (provider icon stays) ->
-// relocate the leading controls (extras "+" menu, access-rules indicator) into
-// the row below the input, next to the branch toolbar.
-//
-// Visibility is driven by MEASURED overflow, not estimated widths: label
-// lengths vary per provider/model and the app supports UI font scaling, so any
-// static pixel estimate eventually lies. Instead the footer renders a tier,
-// the caller re-measures, and the tier is demoted one step while the footer
-// still overflows (converging in <= COMPOSER_FOOTER_MAX_TIER synchronous
-// layout passes). The width at each demotion is remembered so widening the
-// pane promotes back with hysteresis instead of flickering at the boundary.
+// progressive degradation driven by MEASURED overflow (label lengths vary, UI font scaling lies to static estimates); demotion widths are remembered so widening promotes back with hysteresis
 export interface ComposerFooterControlsPlan {
   showContextMeter: boolean;
   showModelLabel: boolean;
@@ -31,11 +19,9 @@ export interface ComposerFooterControlsPlan {
   relocateLeadingControls: boolean;
 }
 
-// Tier 0 = everything visible ... tier 3 = icons only, tier 4 = leading
-// controls move below the input.
+// tier 0 = everything visible ... tier 3 = icons only, tier 4 = leading controls move below the input
 export const COMPOSER_FOOTER_MAX_TIER = 4;
-// Extra width (px) required beyond the recorded overflow point before stepping
-// back to a richer tier, so a 1px resize cannot oscillate between tiers.
+// extra width required beyond the recorded overflow point before promoting, so a 1px resize can't oscillate
 export const COMPOSER_FOOTER_TIER_PROMOTION_SLACK_PX = 32;
 
 export function composerFooterPlanForTier(
@@ -52,26 +38,21 @@ export function composerFooterPlanForTier(
 
 export interface ComposerFooterTierStep {
   tier: number;
-  // Index i holds the footer clientWidth at which tier i last overflowed
-  // (i.e. the width that forced the demotion from tier i to i + 1).
+  // index i holds the clientWidth at which tier i last overflowed
   demotionWidths: ReadonlyArray<number | undefined>;
 }
 
 export function resolveNextComposerFooterTier(input: {
   currentTier: number;
   clientWidth: number;
-  // Whether the rendered footer content currently overflows. Callers must
-  // also account for clusters that CLIP (overflow-hidden) rather than grow
-  // the row's scrollWidth — e.g. the leading "+"/access-rules cluster.
+  // callers must also account for clusters that CLIP (overflow-hidden) rather than grow scrollWidth — e.g. the leading "+"/access-rules cluster
   isOverflowing: boolean;
   demotionWidths: ReadonlyArray<number | undefined>;
 }): ComposerFooterTierStep {
   const demotionWidths = [...input.demotionWidths];
   let tier = Math.max(0, Math.min(input.currentTier, COMPOSER_FOOTER_MAX_TIER));
 
-  // Promote toward richer tiers while the footer is comfortably wider than the
-  // width at which the richer tier last overflowed. An unknown demotion width
-  // means that tier never overflowed, so promotion is always allowed.
+  // promote while comfortably wider than the tier's last overflow width; unknown demotion width = never overflowed, always allowed
   while (tier > 0) {
     const richerTierOverflowedAt = demotionWidths[tier - 1];
     if (
@@ -83,8 +64,7 @@ export function resolveNextComposerFooterTier(input: {
     tier -= 1;
   }
 
-  // Demote one step when the rendered content overflows; the caller re-renders
-  // and re-measures, stepping again until the footer fits or tiers run out.
+  // demote one step on overflow; the caller re-renders and re-measures until it fits or tiers run out
   if (input.isOverflowing && tier < COMPOSER_FOOTER_MAX_TIER) {
     demotionWidths[tier] = input.clientWidth;
     tier += 1;

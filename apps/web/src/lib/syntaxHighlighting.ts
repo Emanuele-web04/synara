@@ -1,8 +1,3 @@
-// FILE: syntaxHighlighting.ts
-// Purpose: Shared syntax-highlighting cache and Shiki helpers for read-only code surfaces.
-// Layer: Web UI utility
-// Depends on: @pierre/diffs shared highlighter and diff theme utilities.
-
 import {
   getFiletypeFromFileName,
   getSharedHighlighter,

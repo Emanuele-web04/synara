@@ -1,7 +1,3 @@
-// FILE: RelocateProjectDialog.tsx
-// Purpose: Reconnects an imported project to a restored/moved folder without recreating chats.
-// Layer: Sidebar UI
-
 import { useState } from "react";
 import type { ProjectId } from "@synara/contracts";
 import { useQueryClient } from "@tanstack/react-query";

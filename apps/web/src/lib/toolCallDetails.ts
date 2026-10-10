@@ -1,9 +1,3 @@
-// FILE: toolCallDetails.ts
-// Purpose: Extract bounded command/edit details from provider tool lifecycle payloads.
-// Layer: Web transcript data utility
-// Exports: deriveWorkLogToolDetails, mergeWorkLogToolDetails
-// Depends on: provider runtime item metadata already truncated by server ingestion
-
 import type { ToolLifecycleItemType } from "@synara/contracts";
 import { stripTrailingToolExitCode as stripTrailingExitCode } from "@synara/shared/toolOutputSummary";
 

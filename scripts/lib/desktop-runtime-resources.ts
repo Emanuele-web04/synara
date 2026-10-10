@@ -21,7 +21,7 @@ export const stageDesktopRuntimeResources = Effect.fn("stageDesktopRuntimeResour
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  // electron-builder excludes build resources from the app; mirror only runtime assets.
+  // electron-builder excludes build resources; mirror only runtime assets
   const entries = yield* fs.readDirectory(buildResourcesDir);
   yield* fs.makeDirectory(runtimeResourcesDir, { recursive: true });
   for (const entry of entries) {

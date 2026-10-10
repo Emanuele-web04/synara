@@ -114,8 +114,7 @@ describe("teardownProviderProcessTree", () => {
   );
 
   it("does not certify an empty PPID snapshot collected after root exit", async () => {
-    // An orphan can still run under init even though PPID traversal from the
-    // former provider root returns an empty, complete snapshot.
+    // An orphan can still run under init even though PPID traversal from the former provider root returns an empty, complete snapshot.
     const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
     const result = await teardownProviderProcessTree(
       { rootPid: 91, rootExited: Promise.resolve() },
@@ -261,8 +260,7 @@ describe("teardownProviderProcessTree", () => {
           captureProcessTree: async () => tree,
           inspectProcessTree: async () => ({
             verified: true,
-            // The child PID was reused during the grace period; only the
-            // original grandchild still matches its CIM creation identity.
+            // The child PID was reused during the grace period; only the original grandchild still matches its CIM creation identity.
             survivors: descendantsRunning ? [grandchild] : [],
           }),
           ...clock,
@@ -361,9 +359,7 @@ describe("teardownProviderProcessTree", () => {
   });
 
   it("does not scan descendants before the root proves exit", async () => {
-    // Descendant identity cannot end the wait until the root has exited, so
-    // scanning beforehand only blocks the event loop. Failure details can use
-    // the already captured descendants without another process-table read.
+    // Descendant identity cannot end the wait until the root has exited, so scanning beforehand only blocks the event loop. Failure details can use the already captured descendants without another process-table read.
     const tree: CapturedProcessTree = {
       descendants: [{ pid: 602, command: "stuck-provider" }],
       captureComplete: true,

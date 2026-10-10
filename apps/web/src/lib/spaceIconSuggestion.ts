@@ -1,19 +1,6 @@
-// FILE: spaceIconSuggestion.ts
-// Purpose: Picks a Space icon from the name the user is typing, so creation is one field.
-// Layer: Web presentation utility
-// Why: The icon grid made "make a space" a two-decision dialog. The name already says
-//      what the space is about; matching it to the curated set (with a stable fallback
-//      so the same name always lands on the same icon) removes the second decision
-//      while the grid stays available as a manual override.
-
 import { SPACE_ICON_NAMES, type SpaceIconName } from "@synara/contracts";
 
-/**
- * Keyword sets per icon, matched by substring against the lowercased name. Order is the
- * tie-break: earlier entries win when a name matches several sets. English plus the
- * Italian words a bilingual user reaches for first — this is a convenience map, not a
- * translation table, so near-misses just fall through to the stable fallback.
- */
+// keyword sets matched by substring; order is the tie-break — English plus the Italian words a bilingual user reaches for first; a convenience map not a translation table, near-misses fall through to the stable fallback
 const ICON_KEYWORDS: ReadonlyArray<readonly [SpaceIconName, ReadonlyArray<string>]> = [
   ["code-brackets", ["code", "dev", "engineer", "program", "software", "codice", "sviluppo"]],
   ["bag", ["work", "job", "office", "business", "client", "lavoro", "ufficio", "azienda"]],

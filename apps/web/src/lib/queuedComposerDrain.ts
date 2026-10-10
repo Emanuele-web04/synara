@@ -1,10 +1,3 @@
-// FILE: queuedComposerDrain.ts
-// Purpose: Auto-dispatch composer queued turns for every thread, including ones
-//          whose ChatView is unmounted, using the same gates as the open chat.
-// Layer: Web subscription utility
-// Exports: drain gates, bounded retry state, exclusive per-thread send lock,
-//          locked-dispatch helper, steer-gate sharing, ChatView claim/release, watcher start
-
 import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
 import {
@@ -74,9 +67,7 @@ interface QueuedComposerRetryState {
   readonly retryAt: number | null;
 }
 
-// Three delayed retries cover transient RPC failures without turning a
-// persistent failure into an endless timer loop. Once exhausted, a queue-head
-// or relevant thread-state change gives the item a fresh budget.
+// three delayed retries cover transient RPC failures without an endless timer loop; a queue-head or thread-state change gives the item a fresh budget
 const QUEUED_COMPOSER_RETRY_DELAYS_MS = [1_000, 5_000, 15_000] as const;
 const retryStateByThreadId = new Map<ThreadId, QueuedComposerRetryState>();
 
@@ -123,8 +114,7 @@ export function endQueuedComposerAutoDispatch(threadId: ThreadId): void {
   requestQueuedComposerDrainPass();
 }
 
-// Module-scope try/finally: ChatView is a hot-path compiler target and cannot
-// lower TryStatement without a catch. Callers must already hold the lock.
+// module-scope try/finally — ChatView is a hot-path compiler target and can't lower TryStatement without a catch; callers must hold the lock
 export async function runLockedQueuedComposerAutoDispatch(input: {
   threadId: ThreadId;
   run: () => Promise<void>;
@@ -335,10 +325,7 @@ function hasRelevantThreadStateChanged(current: AppState, previous: AppState): b
 
 function resetRetriesForRelevantThreadChanges(current: AppState, previous: AppState): void {
   for (const threadId of retryStateByThreadId.keys()) {
-    // ChatView owns relevant state transitions while claimed. Let it consume
-    // the same bounded retry budget instead of treating its own error reset as
-    // a fresh background-drain attempt. Cache review transitions release a held
-    // queue rather than retrying a failed send, so they reset the budget either way.
+    // ChatView owns state transitions while claimed — it consumes the same bounded retry budget rather than treating its own error reset as a fresh attempt; cache review transitions release a held queue instead of retrying
     if (
       claimedThreadIds.has(threadId) &&
       (getThreadFromState(current, threadId)?.claudeCacheReview != null) ===

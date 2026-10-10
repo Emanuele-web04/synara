@@ -63,7 +63,7 @@ export function waitForSuccessfulPtyExit({
         try {
           terminal.kill();
         } catch {
-          // The timeout remains the actionable failure when cleanup cannot kill the PTY.
+          // the timeout remains the actionable failure when cleanup cannot kill the PTY
         }
         fail("Timed out waiting for node-pty output.");
         return;

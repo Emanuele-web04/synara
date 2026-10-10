@@ -1,6 +1,4 @@
-// Isolated macOS status-animation probe: node apps/web/perf/status-animation-runner.mjs <artifacts>.
-// Expects baseline-dist and status-dist production perf builds inside <artifacts>.
-// Uses synthetic content and its own Electron profile; never connects to Synara or a provider.
+// isolated macOS status-animation probe: node apps/web/perf/status-animation-runner.mjs <artifacts>; expects baseline-dist + status-dist builds inside <artifacts>; synthetic content + own Electron profile, never connects to Synara or a provider
 import { createRequire } from "node:module";
 import { writeFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";

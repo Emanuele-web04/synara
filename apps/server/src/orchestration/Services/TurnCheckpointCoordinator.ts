@@ -1,11 +1,4 @@
-/**
- * Serializes provider turn activation and checkpoint reverts for one thread.
- *
- * Revert admission and provider state checks cannot make a destructive restore
- * safe on their own: a provider turn may activate after the final check. Both
- * side-effect reactors therefore hold this shared lease while crossing their
- * respective mutation boundaries.
- */
+/** serializes provider turn activation and checkpoint reverts per thread — a turn may activate after the final state check, so both reactors hold this lease across their mutation boundaries */
 import type { ThreadId } from "@synara/contracts";
 import { ServiceMap, type Effect } from "effect";
 

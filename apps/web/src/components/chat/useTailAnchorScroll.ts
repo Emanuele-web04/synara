@@ -1,24 +1,4 @@
-// FILE: useTailAnchorScroll.ts
-// Purpose: Slide a just-sent user message to the top of the transcript viewport
-//          and own the scroll until that slide settles.
-// Layer: Chat transcript behavior hook
-// Why: The space that lets the message anchor at the top while the response
-//      streams below it is reserved natively by LegendList's `anchoredEndSpace`
-//      (configured in MessagesTimeline), which keeps the reserve in sync with
-//      measured row sizes inside the list's own layout pass. This hook performs
-//      the one visible motion — moving the sent message to its anchored
-//      coordinate — as a single frame loop that re-reads that coordinate every
-//      frame. Re-targeting is what keeps the motion glitch-free: the anchor's
-//      position moves while the slide is in flight (the end-space reserve grows,
-//      rows above settle from estimated to measured heights, pre-turn status rows
-//      land), and a fixed-target native smooth scroll would land wrong and then
-//      need a visible correction. The motion is eased in the message's own
-//      visible offset rather than in scrollTop, so it stays on schedule while the
-//      transcript's scroll geometry changes underneath it. While the loop runs,
-//      the shared flag pauses ChatView's auto-follow re-snaps so the motion has a
-//      single scroll owner. After the anchor first lands, corrections snap
-//      instead of easing, so the message is rigidly held rather than drifting
-//      back into place.
+// the end-space is reserved by LegendList's anchoredEndSpace; this hook only animates the message to its anchored coordinate, re-reading the moving target every frame so the slide lands right while geometry shifts under it
 
 import { type MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
@@ -26,32 +6,19 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
 
 import { ANCHOR_SLIDE_DURATION_MS, anchorSlideOffsetPx } from "./transcriptScroll";
 
-// Absolute bound on the slide plus its hold, so a transcript that never stops
-// moving can never hold the auto-follow pause open.
+// Absolute bound on the slide plus its hold, so a transcript that never stops moving can never hold the auto-follow pause open.
 const ANCHOR_SLIDE_MAX_MS = 3_000;
-// After the anchor lands, ownership is kept until the transcript stops moving it
-// for this long. Releasing on "landed" alone is not enough: rows above the
-// anchor keep settling to their measured height for a few hundred milliseconds
-// after a send, and each one would shove the message off its coordinate.
+// ownership is kept until the transcript stops moving the anchor — rows above keep settling to measured height for a few hundred ms after a send and would shove it off its coordinate
 const ANCHOR_HOLD_QUIET_MS = 450;
-// Steering an already-streaming turn keeps holding the coordinate for a beat:
-// the previous assistant row can still receive late chunks above the new anchor.
+// steering a streaming turn keeps holding the coordinate a beat: the previous assistant row can still receive late chunks above the new anchor
 const STEER_ANCHOR_MIN_SETTLE_MS = 500;
-// A freshly appended anchor row can take a few frames to be committed. Until it
-// exists there is nothing to measure, so the loop waits rather than giving up.
+// a freshly appended anchor row can take frames to commit; until it exists there's nothing to measure, so the loop waits
 const ANCHOR_MOUNT_MAX_WAIT_MS = 1_000;
-// Consecutive frames the response has to overflow the reserve before the hold
-// hands off to follow-the-tail, so a one-frame reserve recompute in the middle
-// of a stream cannot end the hold early.
+// consecutive overflow frames required before the hold hands off to follow-the-tail, so a one-frame reserve recompute can't end it early
 const ANCHOR_OVERFLOW_HANDOFF_FRAMES = 3;
-// How far past the viewport bottom the transcript may sit while the anchor is
-// held before that counts as overflow. While the reserve is doing its job the
-// tail sits exactly at the viewport bottom, so this only has to cover
-// reserve-recompute rounding.
+// while the reserve does its job the tail sits exactly at the viewport bottom — this only has to cover reserve-recompute rounding
 const ANCHOR_OVERFLOW_SLACK_PX = 8;
-// A freshly committed row can report a transient position for one frame before
-// the list assigns its real offset. The first move of the slide waits for the
-// row's content position to repeat, but no longer than this.
+// a fresh row can report a transient position for one frame; the slide's first move waits for a repeated content position, no longer than this
 const ANCHOR_POSITION_CONFIRM_MAX_MS = 150;
 
 type ScrollableListRef = RefObject<Pick<LegendListRef, "getScrollableNode"> | null>;
@@ -135,8 +102,7 @@ export function useTailAnchorScroll({
   const lastContentChangeAtRef = useRef(0);
   const animateAnchorSlideRef = useRef(animateAnchorSlide);
 
-  // Capture the mode selected for each new anchor without restarting an active
-  // steering settle when `followLiveOutput` later flips to false.
+  // capture the mode for each new anchor without restarting an active steering settle when followLiveOutput flips
   useLayoutEffect(() => {
     animateAnchorSlideRef.current = animateAnchorSlide;
   }, [anchorMessageId, animateAnchorSlide]);
@@ -150,8 +116,7 @@ export function useTailAnchorScroll({
     }
 
     const anchorId = anchorMessageId;
-    // Steering (and reduced motion) skips the eased approach: the coordinate is
-    // taken immediately and then held.
+    // steering (and reduced motion) skips the eased approach: the coordinate is taken immediately and held
     const easeToAnchor = animateAnchorSlideRef.current && !prefersReducedMotion();
     if (anchorScrollInFlightRef) {
       anchorScrollInFlightRef.current = true;
@@ -160,29 +125,19 @@ export function useTailAnchorScroll({
     let disposed = false;
     let frameId: number | null = null;
     let layoutObserver: MutationObserver | null = null;
-    // The transcript's top padding is fixed for the life of a slide, so the
-    // (layout-forcing) computed-style read is done once instead of every frame.
+    // the top padding is fixed for the life of a slide — the layout-forcing computed-style read happens once
     let topInsetPx: number | null = null;
     const startedAt = performance.now();
-    // Flips once the anchor first reaches its coordinate — which requires the
-    // reserve below it to exist, so this stays false while the message is still
-    // parked at the bottom. From then on the hold is rigid (corrections snap
-    // instead of easing), so late layout shifts move the message by at most one
-    // frame instead of drifting it back into place.
+    // flips once the anchor first reaches its coordinate (requires the reserve to exist); from then on corrections snap instead of easing so late layout shifts move it at most one frame
     let hasLanded = false;
     let lastCorrectionAt = startedAt;
     let overflowFrames = 0;
-    // Last observed content position of the anchor, used to confirm the row has
-    // really been laid out before the slide commits to a coordinate.
+    // last observed content position, used to confirm the row is really laid out before the slide commits
     let confirmedDesired: number | null = null;
-    // Set on the first frame the anchor row can be measured, together with the
-    // offset the glide starts from. Both are re-seeded if an early frame shows
-    // the row was still mid-layout when they were taken.
+    // set on the first measurable frame; re-seeded if an early frame shows the row was still mid-layout
     let glideStartedAt: number | null = null;
     let glideFromOffsetPx = 0;
-    // Once the reserve has been deep enough to lift the anchor even once, a
-    // later shortfall means the response outgrew it — the hand-off below, not a
-    // reserve that has yet to appear.
+    // once the reserve has been deep enough to lift the anchor even once, a later shortfall means the response outgrew it
     let hasBeenReachable = false;
 
     function stopFrameLoop(): void {
@@ -195,8 +150,7 @@ export function useTailAnchorScroll({
       layoutObserver = null;
     }
 
-    // The slide is over (or was never possible): hand scroll ownership back to
-    // ChatView's auto-follow machinery.
+    // slide over (or impossible): hand scroll ownership back to ChatView's auto-follow
     function finishAnchorSlide(): void {
       stopFrameLoop();
       if (anchorScrollInFlightRef) {
@@ -218,8 +172,7 @@ export function useTailAnchorScroll({
       if (disposed) {
         return true;
       }
-      // A pointer/wheel/touch gesture clears the shared flag in ChatView. Do not
-      // pull the transcript back after the user takes over the scroll.
+      // a pointer/wheel/touch gesture clears the shared flag in ChatView — don't pull the transcript back after the user takes over
       if (anchorScrollInFlightRef && !anchorScrollInFlightRef.current) {
         finishAnchorSlide();
         return true;
@@ -234,8 +187,7 @@ export function useTailAnchorScroll({
         ? anchoredScrollTargetPx(container, findAnchorElement(), topInsetPx ?? 0)
         : null;
       if (!container || target === null) {
-        // The row has not been committed yet: keep waiting instead of finishing
-        // at whatever offset the transcript happens to sit at.
+        // the row hasn't committed yet — keep waiting instead of finishing at whatever offset the transcript happens to sit at
         if (elapsedMs < ANCHOR_MOUNT_MAX_WAIT_MS) {
           return false;
         }
@@ -243,13 +195,7 @@ export function useTailAnchorScroll({
         return true;
       }
 
-      // `desired` is the anchor's own position in the content, so it does not
-      // change just because the transcript scrolls. Before the first move, a
-      // value that does not repeat means the row was measured mid-layout —
-      // acting on it would snap the transcript to a coordinate the message
-      // never had, and the correction back is the visible jump. Only the
-      // snapping path needs this: the glide below re-seeds instead of waiting,
-      // because the frames spent waiting are the frames it has to animate in.
+      // a non-repeating first measurement means the row was read mid-layout — acting on it would snap to a coordinate the message never had (visible jump); only the snap path waits, the glide re-seeds
       if (!easeToAnchor && !hasLanded && elapsedMs < ANCHOR_POSITION_CONFIRM_MAX_MS) {
         const settled =
           confirmedDesired !== null && Math.abs(target.desired - confirmedDesired) <= 1;
@@ -259,23 +205,14 @@ export function useTailAnchorScroll({
         }
       }
 
-      // The coordinate is only reachable once the native end-space reserve is
-      // large enough to lift the anchor to the top; until then the message is
-      // still parked at the bottom and has not landed, however close scrollTop
-      // is to the (clamped) target.
+      // the coordinate is reachable only once the end-space reserve is large enough to lift the anchor; until then it's still parked at the bottom
       const reachable = target.desired <= target.clamped + 1;
       hasBeenReachable = hasBeenReachable || reachable;
-      // The mirror image: holding the anchor at the top leaves the live tail
-      // below the viewport bottom, so the response has outgrown its reserve.
-      // That is the hand-off to the list's own follow-the-tail — from here the
-      // anchor is meant to scroll up and out of view.
+      // mirror image: holding the anchor at top leaves the live tail below the viewport — the response outgrew its reserve, hand off to follow-the-tail
       if (hasLanded && target.maxScrollTopPx - target.desired > ANCHOR_OVERFLOW_SLACK_PX) {
         overflowFrames += 1;
         if (overflowFrames >= ANCHOR_OVERFLOW_HANDOFF_FRAMES) {
-          // Complete the motion the hand-off implies rather than releasing at
-          // the held coordinate: the tail is what the reader is following now,
-          // and the list only re-sticks on its next content change, so leaving
-          // it here would strand the transcript short of the live edge.
+          // complete the implied motion rather than releasing at the held coordinate — the list only re-sticks on its next content change, so leaving it would strand the transcript short of the live edge
           container.scrollTop = target.maxScrollTopPx;
           finishAnchorSlide();
           return true;
@@ -284,13 +221,7 @@ export function useTailAnchorScroll({
         overflowFrames = 0;
       }
 
-      // The glide is expressed in the anchor's own visible offset, so it starts
-      // from wherever the message is actually painted on the first frame it can
-      // be measured — not from the reserve being ready. Waiting for that would
-      // hand the opening frames to the list, which puts the anchor at the top by
-      // itself, leaving the glide nothing to travel and the reader a jump.
-      // Capped at one viewport so a send from far up the transcript still glides
-      // a readable distance instead of blurring across thousands of pixels.
+      // the glide starts from wherever the message is painted on the first measurable frame — waiting for the reserve would hand the opening frames to the list, which puts the anchor at top itself leaving a jump
       const restOffsetPx = topInsetPx ?? 0;
       if (easeToAnchor && !hasLanded) {
         const scheduledOffsetPx =
@@ -301,13 +232,7 @@ export function useTailAnchorScroll({
                 toPx: restOffsetPx,
                 elapsedMs: now - glideStartedAt,
               });
-        // Finding the message below where the glide expects it means the glide
-        // never actually moved it. Two causes, both answered by restarting the
-        // schedule from where the message really is rather than yanking it up:
-        // the reserve is not yet deep enough to lift the anchor at all (the
-        // motion has not started, so its clock should not be running either), or
-        // the seed was taken from a row still mid-layout, which can report a
-        // transient position for a frame after being committed.
+        // finding the message below where the glide expects means it never moved: the reserve isn't deep enough yet (clock shouldn't run) or the seed was taken mid-layout — restart the schedule from the real position
         const belowSchedule = target.offsetFromViewportTop > scheduledOffsetPx + 1;
         if (
           glideStartedAt === null ||
@@ -321,18 +246,11 @@ export function useTailAnchorScroll({
         }
       }
 
-      // The glide is over the instant its schedule is spent, so the frame that
-      // would land it takes the absolute coordinate below instead. Relative
-      // placement accumulates the sub-pixel error of every rect it was measured
-      // against; the hold has to be exact, because from here it is compared
-      // against `target.clamped` to decide the anchor has arrived.
+      // the landing frame takes the absolute coordinate — relative placement accumulates sub-pixel error and the hold must be exact for the `target.clamped` comparison
       const glideElapsedMs = glideStartedAt === null ? 0 : now - glideStartedAt;
       const gliding =
         glideStartedAt !== null && !hasLanded && glideElapsedMs < ANCHOR_SLIDE_DURATION_MS;
-      // While it does run, positioning the anchor relative to where it was just
-      // measured keeps the motion on schedule even as the content above it
-      // resizes: the scroll coordinate that holds a given visible offset moves,
-      // the visible offset does not.
+      // positioning relative to where it was just measured keeps the motion on schedule as content above resizes: the scroll coordinate moves, the visible offset doesn't
       const nextScrollTopPx = gliding
         ? Math.min(
             target.maxScrollTopPx,
@@ -349,8 +267,7 @@ export function useTailAnchorScroll({
           )
         : target.clamped;
 
-      // Anything that moved the anchor off its coordinate since the last frame
-      // is a correction; while they keep arriving the hook keeps ownership.
+      // anything that moved the anchor off its coordinate since the last frame is a correction; while they arrive the hook keeps ownership
       if (Math.abs(nextScrollTopPx - container.scrollTop) > 0.5) {
         lastCorrectionAt = now;
         container.scrollTop = nextScrollTopPx;
@@ -385,12 +302,7 @@ export function useTailAnchorScroll({
       layoutObserver = new MutationObserver(() => {
         anchorSlideCorrectionRef.current?.();
       });
-      // LegendList repositions rows — and re-issues its own end-follow scroll —
-      // by mutating inline styles mid-frame, after this loop's rAF step has
-      // already run. Correcting from the mutation itself puts the anchor back on
-      // its coordinate before paint; waiting for the next rAF instead leaves the
-      // anchored message visibly displaced for that frame. The observer only
-      // lives for the duration of the slide and its hold.
+      // LegendList mutates inline styles mid-frame after this loop's rAF step; correcting from the mutation lands before paint — waiting a frame leaves the anchor visibly displaced
       layoutObserver.observe(timelineRoot, {
         attributes: true,
         attributeFilter: ["style"],
@@ -398,12 +310,7 @@ export function useTailAnchorScroll({
       });
     }
 
-    // Deliberately ignores the timestamp the frame callback is handed: it is the
-    // frame's projected presentation time, which does not share an origin with
-    // the `performance.now()` the mutation-driven corrections below read. Mixing
-    // the two makes the eased progress jump backwards between a frame and the
-    // correction that follows it, which the reader sees as the message dropping
-    // back down mid-glide. One clock for every step keeps the motion monotonic.
+    // frame-callback timestamps use a different clock origin than performance.now(); mixing them makes eased progress jump backwards mid-glide
     const step = () => {
       frameId = null;
       if (!advanceAnchorSlide(performance.now())) {
@@ -421,22 +328,12 @@ export function useTailAnchorScroll({
     };
   }, [anchorMessageId, anchorScrollInFlightRef, listRef, onAnchorSlideFinished, timelineRootRef]);
 
-  // Only real message changes should restart the quiet-period hold. Tool and
-  // work activity also update the full timeline, but they must not extend the
-  // live-output anchor past the message-stream settle window.
-  //
-  // This effect is declared before the geometry correction so that, when a new
-  // message and a content change land in the same commit, the timestamp updates
-  // before the correction runs. If the correction ran first it could observe
-  // the old timestamp, finish the hold, and stop the slide before the new
-  // message gets a chance to extend ownership.
+  // declared before the geometry correction so a same-commit message updates the timestamp first — otherwise the correction could finish the hold before the new message extends it
   useLayoutEffect(() => {
     lastContentChangeAtRef.current = performance.now();
   }, [messageChangeSignal]);
 
-  // React commits streamed text before paint. Re-apply the current slide
-  // coordinate in that layout window so a chunk landing above the anchor cannot
-  // push the anchored message for one visible frame.
+  // React commits streamed text before paint — re-apply the slide coordinate in that layout window so a chunk above the anchor can't push it for one visible frame
   useLayoutEffect(() => {
     anchorSlideCorrectionRef.current?.();
   }, [contentChangeSignal]);

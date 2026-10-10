@@ -1,7 +1,3 @@
-// FILE: windowsProcess.test.ts
-// Purpose: Verifies Windows process preparation avoids Node shell-mode deprecations.
-// Layer: Shared Node runtime utility tests
-
 import { spawnSync as spawnChildSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

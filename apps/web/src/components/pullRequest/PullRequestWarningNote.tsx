@@ -1,12 +1,3 @@
-// FILE: PullRequestWarningNote.tsx
-// Purpose: The amber "we couldn't show everything" callout the pull request surfaces reuse —
-//          truncated review comments, truncated diffs, and per-repository load failures. One
-//          warning skin so every bounded-data note reads identically, in the three shapes the
-//          app actually mounts it in; pick a shape rather than re-cutting the geometry at the
-//          call site.
-// Layer: Pull request presentation
-// Exports: PullRequestWarningNote, PullRequestWarningNoteShape
-
 import type { HTMLAttributes } from "react";
 
 import { cn } from "~/lib/utils";
@@ -36,10 +27,7 @@ export function PullRequestWarningNote({
       {...props}
       className={cn(
         PR_META_TEXT_CLASS_NAME,
-        // Amber carries the signal through the border and tint only; the copy stays on the
-        // readable card ink, exactly like the shared Alert recipe. `--warning-foreground` is
-        // the on-fill contrast ink (the runtime theme resolves it to the surface color), so
-        // painting text with it over a 4% tint renders it invisible.
+        // amber carries the signal through border and tint only — `--warning-foreground` is the on-fill contrast ink, so painting text with it over a 4% tint renders it invisible
         "border border-warning/32 bg-warning/4 text-card-foreground",
         SHAPE_CLASS_NAME[shape],
         className,

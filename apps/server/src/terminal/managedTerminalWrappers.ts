@@ -1,7 +1,3 @@
-// FILE: managedTerminalWrappers.ts
-// Purpose: Create Superset-style managed command wrappers so terminal agent identity is canonical
-// and survives zsh startup that rewrites PATH.
-
 import fs from "node:fs";
 import path from "node:path";
 
@@ -335,9 +331,7 @@ function writeFileIfChanged(filePath: string, content: string, mode: number): vo
   }
   try {
     fs.chmodSync(filePath, mode);
-  } catch {
-    // Best effort.
-  }
+  } catch {}
 }
 
 function readProviderProfileManifest(rootDir: string): string[] {

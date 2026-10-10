@@ -45,8 +45,6 @@ describe("editorActivityBarSelectionLeavesEditor", () => {
         centerFamily: "file",
       }),
     ).toBe(true);
-    // Same family with the sidebar hidden re-shows the sidebar and switches
-    // the edit pane back to the plain center mode.
     expect(
       editorActivityBarSelectionLeavesEditor({
         item: "file",

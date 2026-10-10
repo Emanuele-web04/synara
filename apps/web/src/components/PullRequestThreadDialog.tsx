@@ -41,8 +41,7 @@ export function PullRequestThreadDialog({
   onOpenChange,
   onPrepared,
 }: PullRequestThreadDialogProps) {
-  // Mirrors the content's prepare-in-flight state so the close guard can live
-  // up here while all form state resets by unmounting below DialogPopup.
+  // mirrors the content's prepare-in-flight state so the close guard lives up here while form state resets by unmounting below DialogPopup
   const [busy, setBusy] = useState(false);
   return (
     <Dialog
@@ -144,8 +143,7 @@ function PullRequestThreadDialogContent({
       statusTone = "text-muted-foreground";
   }
 
-  // Promise chain instead of async/try-finally: React Compiler does not yet
-  // support try/finally, and it would skip optimizing this whole component.
+  // Promise chain instead of async/try-finally: React Compiler does not yet support try/finally, and it would skip optimizing this whole component.
   const handleConfirm = (mode: "local" | "worktree") => {
     if (!parsedReference) {
       setReferenceDirty(true);

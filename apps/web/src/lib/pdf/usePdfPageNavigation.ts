@@ -1,16 +1,8 @@
-// FILE: usePdfPageNavigation.ts
-// Purpose: Own the PDF viewer's page<->scroll relationship: a registry of page
-//          elements, scroll-to / jump-to helpers, and the rAF-throttled tracker
-//          that reports the page the reader is currently on.
-// Layer: Web PDF rendering hook
-// Exports: usePdfPageNavigation, PdfPageNavigation
-
 import { useEffect, useRef, useState } from "react";
 
 import { PDF_PAGE_MARGIN_PX } from "./pdfZoom";
 
-// The current page is the last one whose top has scrolled above this fraction
-// of the viewport height (a line 25% down from the top of the scroll area).
+// The current page is the last one whose top has scrolled above this fraction of the viewport height (a line 25% down from the top of the scroll area).
 const CURRENT_PAGE_PROBE_RATIO = 0.25;
 
 export interface PdfPageNavigation {
@@ -65,9 +57,7 @@ export function usePdfPageNavigation(input: {
     if (!enabled) {
       return;
     }
-    // A new PDF should start at the top even when React reuses the same viewer
-    // pane, otherwise stale scroll state can survive across files. The page
-    // number itself derives from the resetKey guard above — no reset needed.
+    // a new PDF must start at top even when React reuses the viewer pane — stale scroll state can survive across files
     scrollRoot?.scrollTo({ top: 0, behavior: "auto" });
   }, [enabled, numPages, resetKey, scrollRoot]);
 
@@ -77,10 +67,7 @@ export function usePdfPageNavigation(input: {
     scrollToPage(clamped, "smooth");
   };
 
-  // Track the page the reader is on from scroll position (rAF-throttled). Pages
-  // stack top-to-bottom, so their tops are monotonic in page order: we scan
-  // ascending and stop at the first page below the probe line, making each
-  // frame O(currentPage) rather than O(numPages).
+  // page tops are monotonic in page order — scan ascending, stop at first page below the probe line: O(currentPage) per frame not O(numPages)
   useEffect(() => {
     const container = scrollRoot;
     if (!container || !enabled) {

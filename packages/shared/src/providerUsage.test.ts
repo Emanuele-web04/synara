@@ -1,7 +1,3 @@
-// FILE: providerUsage.test.ts
-// Purpose: Locks usage-provider metadata and the settings-panel visibility rule
-// that hides unsigned providers once any connected snapshot exists.
-
 import { describe, expect, it } from "vitest";
 
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";

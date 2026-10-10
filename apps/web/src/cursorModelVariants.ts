@@ -79,9 +79,7 @@ function defaultEffortForGroup(
   if (baseSlug.includes("gpt") || baseSlug.includes("codex")) {
     return efforts.includes("medium") ? "medium" : efforts[0];
   }
-  // Claude and Grok (and most other Cursor chat models) default to high.
-  // Collapsed CLI lists are ordered low → high, so taking efforts[0] would
-  // make Grok look like a low-default model in the picker.
+  // Claude/Grok default to high — collapsed CLI lists order low→high, so efforts[0] would misread Grok as a low-default model
   if (efforts.includes("high")) {
     return "high";
   }
@@ -174,8 +172,7 @@ export function collapseCursorModelVariants(
         baseSlug,
         efforts.map((effort) => effort.value),
       );
-    // The flat `cursor-agent models` fallback names only 1M variants for some
-    // families; synthesize the missing default context when ACP metadata is absent.
+    // the flat `cursor-agent models` fallback names only 1M variants for some families — synthesize the missing default context when ACP metadata is absent
     const fallbackContextWindowOptions = fallbackContextWindowOptionsForCursorBase(
       baseSlug,
       variants,

@@ -1,8 +1,3 @@
-// FILE: useSidebarProjectRunController.ts
-// Purpose: Owns Sidebar project-run discovery, server attribution, dialog state, and lifecycle actions.
-// Layer: Web Sidebar controller hook
-// Exports: useSidebarProjectRunController
-
 import {
   type ProjectDiscoveredScriptTarget,
   type ProjectId,

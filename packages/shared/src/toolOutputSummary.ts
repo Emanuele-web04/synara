@@ -1,8 +1,3 @@
-// FILE: toolOutputSummary.ts
-// Purpose: Produces compact display summaries from provider tool rawOutput payloads.
-// Layer: Shared runtime utility
-// Exports: summarizeToolRawOutput, countTextLines, stripTrailingToolExitCode
-
 import { pluralize } from "./text";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -19,8 +14,7 @@ export function stripTrailingToolExitCode(value: string): {
   output: string | null;
   exitCode?: number;
 } {
-  // Match only the final marker. Searching from every whitespace position in
-  // the output makes a missing suffix quadratic on whitespace-heavy results.
+  // match only the final marker — searching from every whitespace position is quadratic on whitespace-heavy output
   const markerIndex = value.lastIndexOf("<");
   const match =
     markerIndex < 0 ? null : /^<exited with exit code (\d+)>\s*$/i.exec(value.slice(markerIndex));

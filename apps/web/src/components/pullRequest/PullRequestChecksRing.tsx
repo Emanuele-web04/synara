@@ -1,11 +1,3 @@
-// FILE: PullRequestChecksRing.tsx
-// Purpose: Segmented stroke-circle summarizing a PR's check outcomes at a glance — arc length
-//          proportional to each bucket (green passed, red failed/cancelled, amber running,
-//          muted skipped/neutral), with small gaps between segments like the reference
-//          design's checks donut. Replaces a static glyph in the Checks meta row.
-// Layer: Pull request presentation
-// Exports: PullRequestChecksRing
-
 import type { PullRequestCheck, PullRequestCheckStatus } from "@synara/contracts";
 
 import { cn } from "~/lib/utils";
@@ -14,8 +6,7 @@ type RingBucket = "success" | "failure" | "pending" | "neutral";
 
 const BUCKET_ORDER: readonly RingBucket[] = ["success", "failure", "pending", "neutral"];
 
-// Shared with the per-check glyphs: `--status-*` is the role color in light and a lighter tint
-// of it in dark, so the ring and the rows below it stay the same green and red.
+// `--status-*` is the role color in light and a lighter tint in dark — ring and rows stay the same green/red
 const BUCKET_COLOR_CLASS: Record<RingBucket, string> = {
   success: "text-status-success",
   failure: "text-status-failure",

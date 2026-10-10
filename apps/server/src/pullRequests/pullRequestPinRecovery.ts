@@ -47,8 +47,7 @@ export function recoverPinnedInboxItems<C extends PinRecoveryContext>(input: {
   recoveryContexts: ReadonlyArray<C>;
   repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   projectById: ReadonlyMap<ProjectId, OrchestrationProject>;
-  // Deliberately boolean, not a type predicate: callers check values already typed
-  // GitHubCliError, and a predicate would narrow the false branch to `never`.
+  // boolean, not a type predicate — callers check values already typed GitHubCliError
   isGlobalError: (error: unknown) => boolean;
   loadItems: (
     context: C,

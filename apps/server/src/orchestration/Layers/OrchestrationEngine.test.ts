@@ -49,10 +49,7 @@ const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshot
   Layer.provide(ServerSettingsService.layerTest()),
 );
 
-/**
- * Command ids whose fingerprinting throws synchronously, standing in for any
- * synchronous defect raised while the worker builds a command's pipeline.
- */
+/** command ids whose fingerprinting throws — stands in for any synchronous defect while the worker builds a pipeline */
 const fingerprintPoison = vi.hoisted(() => new Set<string>());
 
 vi.mock("@synara/shared/KeyedDrainableWorker", async (importOriginal) => {
@@ -1608,8 +1605,7 @@ describe("OrchestrationEngine", () => {
           createdAt,
         }),
       );
-      // Each delta fits the journal budget, but their combined text exceeds
-      // 512 KiB. Later output includes a surrogate pair split across deltas.
+      // each delta fits the budget but combined text exceeds 512 KiB; later output includes a surrogate pair split across deltas
       const chunks = [
         "é漢😀".repeat(30_000),
         `${"é漢😀".repeat(30_000)}\nSecond segment \ud83d`,
@@ -1723,10 +1719,7 @@ describe("OrchestrationEngine", () => {
       reason: "stopped",
     });
 
-    // A turn start takes the priority `user` lane, but priority is not
-    // admissibility: the WebSocket keeps serving while the engine quiesces, and
-    // starting a provider turn here would spawn a session the shutdown fences
-    // moments later, orphaning the turn.
+    // priority is not admissibility — the WebSocket keeps serving while the engine quiesces, and a turn started here would be fenced moments later, orphaning it
     await expect(
       system.run(
         system.engine.dispatch({
@@ -3443,8 +3436,7 @@ describe("OrchestrationEngine", () => {
       }),
     );
 
-    // Adding the Studio container's folder as a regular project must not create a second
-    // active project on that root (the empty container would otherwise be silently retired).
+    // adding the Studio container's folder as a project must not create a second active project on that root
     await expect(
       system.run(
         engine.dispatch({
@@ -3460,7 +3452,7 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("already uses workspace root");
 
-    // Creating a Studio container on a root an existing regular project owns must fail too.
+    // creating a Studio container on an owned root must fail too
     await expect(
       system.run(
         engine.dispatch({
@@ -3476,7 +3468,6 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("already uses workspace root");
 
-    // Root moves are covered by the same cross-kind ownership rule.
     await expect(
       system.run(
         engine.dispatch({
@@ -3488,7 +3479,7 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("already uses workspace root");
 
-    // A kind-only update must not carry an existing pin onto a kind that can never be pinned.
+    // a kind-only update must not carry an existing pin onto a kind that can never be pinned
     await system.run(
       engine.dispatch({
         type: "project.meta.update",
@@ -3509,8 +3500,7 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("Only projects can be pinned.");
 
-    // A kind-only update must not bypass ownership either: a chat project sitting on an owned
-    // root cannot become a workspace-owning kind without the root check running.
+    // a kind-only update must not bypass ownership — a chat project on an owned root can't become workspace-owning without the check
     await system.run(
       engine.dispatch({
         type: "project.create",
@@ -3665,8 +3655,7 @@ describe("OrchestrationEngine", () => {
         ).pipe(Effect.timeoutOption("5 seconds")),
       );
 
-      // The defect fails this command immediately instead of leaving the caller to
-      // wait out the dispatch timeout.
+      // the defect fails the command immediately instead of the caller waiting out the dispatch timeout
       expect(Option.isSome(poisonedOutcome)).toBe(true);
       const outcome = Option.getOrThrow(poisonedOutcome);
       expect(outcome._tag).toBe("Failure");
@@ -3674,7 +3663,7 @@ describe("OrchestrationEngine", () => {
         expect(outcome.failure).toMatchObject({ _tag: "OrchestrationCommandInternalError" });
       }
 
-      // The worker survived: the next command still runs.
+      // the worker survived — the next command still runs
       await expect(
         system.run(
           system.engine.dispatch({
@@ -3689,7 +3678,7 @@ describe("OrchestrationEngine", () => {
         ),
       ).resolves.toMatchObject({ sequence: expect.any(Number) });
 
-      // The poisoned envelope was still finished, so `outstanding` did not leak.
+      // the poisoned envelope was still finished — `outstanding` didn't leak
       const drained = await system.run(
         Effect.timeoutOption(system.engine.drain, "5 seconds").pipe(Effect.map(Option.isSome)),
       );

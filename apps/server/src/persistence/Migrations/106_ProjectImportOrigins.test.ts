@@ -40,7 +40,7 @@ it.layer(NodeSqliteClient.layerMemory())("project import origins", (it) => {
         createdAt: "2026-09-17T00:00:00.000Z",
       };
       assert.deepEqual(yield* repository.reserve(replacement, origin.threadId), replacement);
-      // A stale recovery attempt must not overwrite the replacement reservation.
+      // a stale recovery attempt must not overwrite the replacement reservation
       assert.equal(yield* repository.reserve(origin, origin.threadId), undefined);
       assert.deepEqual(yield* repository.find("origin"), replacement);
       yield* repository.complete("origin");

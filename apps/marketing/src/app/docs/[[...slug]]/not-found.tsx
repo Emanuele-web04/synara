@@ -1,13 +1,4 @@
-// FILE: src/app/docs/[[...slug]]/not-found.tsx
-// Purpose: Docs-flavored 404 for unknown docs slugs (e.g. /docs/nope).
-//          The docs catch-all page calls notFound(); without a segment-level
-//          boundary Next serves its `__next_error__` fallback document, whose
-//          hydration rewrites the <html> class from the RSC tree. Dark mode is
-//          preserved by the root ThemeScript, which re-asserts the stored
-//          synara-theme class after any hydration class rewrite (debounced
-//          MutationObserver) — in every document, including the error-fallback
-//          shell. This boundary only supplies the docs-chromed 404 UI.
-// Layer: App Router segment not-found (server component).
+// without this segment boundary Next serves its __next_error__ fallback whose hydration rewrites the <html> class; the root ThemeScript re-asserts dark mode — this boundary only supplies the docs-chromed 404
 
 import Link from "next/link";
 

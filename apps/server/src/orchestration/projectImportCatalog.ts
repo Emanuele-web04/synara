@@ -1,4 +1,4 @@
-// Merge native provider metadata by local workspace identity, retaining each thread's source cwd.
+// merge native provider metadata by local workspace identity, retaining each thread's source cwd
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 
@@ -135,7 +135,7 @@ export async function buildProjectImportCatalog(
     const git = await gitWorkspace(cwd);
     const existing = mostSpecificRoot(inferenceRoots, cwd);
     if (!git) return existing ?? cwd;
-    // Saved Synara and explicitly declared Codex subprojects both outrank Git's root.
+    // saved Synara and explicitly declared Codex subprojects both outrank Git's root
     if (existing && contains(git.worktree ?? git.root, existing)) return existing;
     if (git.worktree) {
       const originalCwd = path.join(git.root, path.relative(git.worktree, cwd));

@@ -1,8 +1,3 @@
-// FILE: providerDiscovery.ts
-// Purpose: Shares provider-discovery helpers across chat and browser surfaces.
-// Layer: Web lib
-// Exports: cwd resolution, search normalization, and provider skill/plugin display helpers.
-
 import { resolveThreadBranchSourceCwd } from "@synara/shared/threadEnvironment";
 import type {
   ProviderNativeCommandDescriptor,
@@ -10,7 +5,6 @@ import type {
   ProviderSkillDescriptor,
 } from "@synara/contracts";
 
-// Prefer the most specific workspace context so discovery reflects the active thread first.
 export function resolveProviderDiscoveryCwd(options: {
   activeThreadWorktreePath: string | null;
   activeProjectCwd: string | null;
@@ -47,8 +41,7 @@ interface RankedProviderDiscoveryItem<T> {
 const PROVIDER_DISCOVERY_SECONDARY_FIELD_WEIGHT = 200;
 const PROVIDER_DISCOVERY_TERTIARY_FIELD_WEIGHT = 400;
 
-// Lower scores mean stronger intent: title/name hits beat descriptions, and
-// fuzzy matching is reserved for primary fields to avoid noisy long-copy wins.
+// title/name hits beat descriptions; fuzzy matching reserved for primary fields to avoid noisy long-copy wins
 function compactNormalizedText(value: string): string {
   return value.replace(/\s+/g, "");
 }
@@ -76,8 +69,7 @@ function scoreSubsequenceMatch(value: string, query: string): number | null {
     previousMatchIndex = valueIndex;
     queryIndex += 1;
     if (queryIndex === query.length) {
-      // The matched span beyond the query length always equals gapPenalty, so
-      // fold the former span weighting into a single gap coefficient.
+      // The matched span beyond the query length always equals gapPenalty, so fold the former span weighting into a single gap coefficient.
       const lengthPenalty = Math.min(64, value.length - query.length);
       return firstMatchIndex * 2 + gapPenalty * 4 + lengthPenalty;
     }

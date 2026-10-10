@@ -204,7 +204,6 @@ describe("commandInvariants", () => {
       threadId: ThreadId.makeUnsafe("thread-archived"),
     };
 
-    // Should succeed for archived thread
     const thread = await Effect.runPromise(
       requireThreadArchived({
         readModel,
@@ -214,7 +213,6 @@ describe("commandInvariants", () => {
     );
     expect(thread.id).toBe(ThreadId.makeUnsafe("thread-archived"));
 
-    // Should fail for non-archived thread
     await expect(
       Effect.runPromise(
         requireThreadArchived({
@@ -233,7 +231,6 @@ describe("commandInvariants", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
     };
 
-    // Should succeed for non-archived thread
     const thread = await Effect.runPromise(
       requireThreadNotArchived({
         readModel,
@@ -243,7 +240,6 @@ describe("commandInvariants", () => {
     );
     expect(thread.id).toBe(ThreadId.makeUnsafe("thread-1"));
 
-    // Should fail for already archived thread
     await expect(
       Effect.runPromise(
         requireThreadNotArchived({

@@ -1,7 +1,4 @@
-// FILE: localHtmlPreviewProtocol.ts
-// Purpose: Maps explicit local-file navigations onto a scoped custom protocol so HTML previews
-//   can load relative assets without granting file:// pages unrestricted filesystem access.
-// Layer: Desktop browser infrastructure
+// scoped custom protocol lets HTML previews load relative assets without granting file:// pages unrestricted filesystem access
 
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs/promises";

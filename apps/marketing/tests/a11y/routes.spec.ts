@@ -8,11 +8,7 @@ for (const pathname of ["/", "/install", "/docs"]) {
       await prepareRoute(page, pathname, theme);
       let builder = new AxeBuilder({ page });
       if (pathname === "/") {
-        // The hero description + installer-count line are rendered in the LIVE
-        // site's exact colors (Kartik: hero must match production pixel-for-pixel;
-        // see HERO-REVERT.md REVIEW-FIX WAVE item 2). Those design-mandated colors
-        // measure 4.36:1 / 2.72:1 on the page background — under the 4.5:1 AA
-        // threshold — so ONLY those two elements are excluded from the scan.
+        // the hero description + installer-count line render in the live site's mandated colors (4.36:1 / 2.72:1, under the 4.5:1 AA threshold) — ONLY those two elements are excluded
         builder = builder.exclude('[data-live-hero-color="true"]');
       }
       const results = await builder.analyze();

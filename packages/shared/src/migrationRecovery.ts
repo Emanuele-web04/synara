@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-// The desktop preflight and server recovery guard must agree on the durable marker name.
+// the desktop preflight and server recovery guard must agree on the marker name
 export function migrationRecoveryMarkerPath(dbPath: string): string {
   return `${dbPath}.migration-recovery.json`;
 }
@@ -13,18 +13,7 @@ export function migrationBackupProvenancePath(dbPath: string): string {
   return `${dbPath}.migration-backup.json`;
 }
 
-/**
- * How many times startup may re-run an interrupted migration before it stops
- * trying and demands the explicit operator restore.
- *
- * The marker is written *ahead* of the first migration statement, so its
- * presence proves an attempt started — not that the database is half-written.
- * Re-running is safe because the resume path never takes a second backup and
- * never rewrites the marker's backup pointer: if the retry fails, the original
- * snapshot and the manual restore command are still exactly where they were.
- * The bound is what keeps a deterministic failure from re-running migrations on
- * every process restart.
- */
+/** the marker is written *ahead* of the first statement so it proves an attempt started, not a half-written DB; the bound keeps a deterministic failure from re-running on every restart */
 export const MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS = 2;
 
 export interface MigrationRecoveryResumeState {
@@ -32,18 +21,7 @@ export interface MigrationRecoveryResumeState {
   readonly exhausted: boolean;
 }
 
-/**
- * Reads the resume budget out of a marker's raw JSON.
- *
- * Returns `null` when the marker cannot be trusted (unreadable JSON, or a
- * counter that is not a non-negative integer). Callers must treat `null` as
- * "recovery required" — an unparseable marker is exactly the case where
- * guessing is unsafe.
- *
- * A marker with no counter at all was written by a build that predates the
- * resume path; it gets the full budget, which is what lets an already-wedged
- * install heal itself after an upgrade.
- */
+/** null = untrusted marker = "recovery required"; a counter-less marker predates the resume path and gets the full budget — what lets a wedged install self-heal after upgrade */
 export function parseMigrationRecoveryResumeState(
   markerText: string,
 ): MigrationRecoveryResumeState | null {
@@ -221,15 +199,11 @@ function parsePrefixedJsonLine<A>(
     try {
       const parsed: unknown = JSON.parse(payload);
       if (isValid(parsed)) {
-        // The server emits its authoritative machine record after the human
-        // error text. Migration names come from the database and may contain
-        // an earlier lookalike prefix, so only the final valid record is safe
-        // to present to the user.
+        // migration names come from the database and may contain an earlier lookalike prefix — only the final machine record is safe to present
         authoritativeRecord = parsed;
       }
     } catch {
-      // Continue to a later machine-readable line if untrusted error text
-      // happened to contain the prefix first.
+      // continue to a later machine-readable line if untrusted error text contained the prefix first
     }
     searchFrom = payloadStart;
   }

@@ -1,11 +1,3 @@
-// FILE: ComposerGoalHeader.tsx
-// Purpose: Persistent thread-goal strip stacked flush onto the top of the composer,
-// mirroring the live file-changes/queued headers. Collapsed it shows a one-line
-// preview that fades out at the end plus the live pursuit timer; the chevron
-// expands the full objective. Edit / pause-resume / delete act on the persisted goal.
-// Layer: Chat composer UI
-// Exports: ComposerGoalHeader, goalElapsedMs
-
 import { useState } from "react";
 
 import { useNowMs } from "~/hooks/useNowMs";
@@ -56,8 +48,7 @@ interface ComposerGoalHeaderProps {
   onSetPaused: (paused: boolean) => void | Promise<void>;
   onClear: () => void | Promise<void>;
   attachedToPrevious?: boolean;
-  // False while the goal is only staged on a draft thread: pursuit has not
-  // started, so pausing has nothing to act on and the control is hidden.
+  // False while the goal is only staged on a draft thread: pursuit has not started, so pausing has nothing to act on and the control is hidden.
   canPause?: boolean;
 }
 
@@ -91,8 +82,7 @@ export function ComposerGoalHeader({
           {open ? null : (
             <span
               data-testid="composer-goal-preview"
-              // Fade-out instead of an ellipsis so the preview reads as a peek
-              // into the full objective behind the chevron.
+              // Fade-out instead of an ellipsis so the preview reads as a peek into the full objective behind the chevron.
               className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-muted-foreground/80 [mask-image:linear-gradient(to_right,black_calc(100%-2.5rem),transparent)]"
             >
               {goal}

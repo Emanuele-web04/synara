@@ -1,7 +1,3 @@
-// FILE: FloatingBrowserPanel.browser.tsx
-// Purpose: Verify the floating browser shell's real DOM geometry and pointer interactions.
-// Layer: Browser UI test
-
 import "../../index.css";
 
 import { ThreadId } from "@synara/contracts";

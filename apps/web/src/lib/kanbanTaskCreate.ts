@@ -1,9 +1,3 @@
-// FILE: kanbanTaskCreate.ts
-// Purpose: Creates a standalone draft thread from the kanban new-task dialog — the
-//          draft lands in the board's Draft column and dispatches like any other card.
-// Layer: Web orchestration helper
-// Exports: createKanbanDraftTask, createAndSendKanbanTask, KanbanDraftTaskInput
-
 import type {
   AssistantDeliveryMode,
   ProviderKind,

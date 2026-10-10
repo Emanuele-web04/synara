@@ -129,8 +129,6 @@ import {
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 import { isAudioLevelAvailable } from "../lib/audioLevel";
 
-// ── Settings taxonomy ──────────────────────────────────────────────────────
-
 const UI_DENSITY_OPTIONS = [
   {
     value: "compact",
@@ -324,8 +322,6 @@ function isProviderSelectOption(value: string): value is ProviderKind {
 type BooleanSettingKey = {
   [Key in keyof AppSettings]-?: AppSettings[Key] extends boolean ? Key : never;
 }[keyof AppSettings];
-
-// ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
@@ -603,10 +599,6 @@ function SettingsRouteView() {
     setResetEpoch((current) => current + 1);
   }
 
-  // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
-  // key, with the standard "reset to default" affordance shown only when changed.
-  // Rows with bespoke controls (e.g. the desktop-notifications Test button) keep
-  // their own markup instead of using this helper.
   const renderBooleanSettingRow = (config: {
     settingKey: BooleanSettingKey;
     title: string;

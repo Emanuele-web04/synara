@@ -1,7 +1,3 @@
-// FILE: profileFormatting.ts
-// Purpose: Pure display formatters shared by the Profile page and the shareable card.
-// Layer: web profile feature (no I/O, safe to use during html-to-image render).
-
 import type { ProviderKind } from "@synara/contracts";
 
 // Compact token/count formatting matching the reference card ("17bn", "538m", "1.2k").

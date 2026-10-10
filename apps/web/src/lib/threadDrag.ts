@@ -1,8 +1,3 @@
-// FILE: threadDrag.ts
-// Purpose: Shared native drag contract for dragging a thread row (sidebar, activity view) onto chat surfaces.
-// Layer: Web UI helpers
-// Exports: THREAD_DRAG_MIME, ThreadDragPayload, beginThreadDrag, endThreadDrag, getActiveThreadDragId, isThreadDragTransfer, readThreadDragPayload, THREAD_MENTION_DROPZONE_ATTRIBUTE, isWithinThreadMentionDropzone
-
 import { type ThreadId } from "@synara/contracts";
 
 // Custom MIME so external file drops on the composer (which listen for `Files`) cannot trigger us.
@@ -15,8 +10,7 @@ export interface ThreadDragPayload {
   threadId: ThreadId;
 }
 
-// Browsers hide drag data until `drop`, so hover feedback that depends on which
-// thread is being dragged reads it from here instead.
+// browsers hide drag data until drop — hover feedback that depends on which thread reads it from here
 let activeThreadDragId: ThreadId | null = null;
 
 export function getActiveThreadDragId(): ThreadId | null {

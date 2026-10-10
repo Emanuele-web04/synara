@@ -31,7 +31,6 @@ interface PageOrigin {
   isDestroyed(): boolean;
 }
 
-/** Owner metadata stays in desktop IPC; only the scoped adapter reaches a worker. */
 export class BrowserVault {
   private readonly vault: LocalCredentialVault;
   private readonly ready: Promise<void>;
@@ -64,7 +63,6 @@ export class BrowserVault {
 
   private get keys(): VaultKeyProtection {
     if (this.disposed) throw new Error("Vault closed.");
-    // Opening an empty app must not prompt for Keychain access before saving is enabled.
     return (this.keyProtection ??= new VaultKeyProtection(join(this.home, "vault"), this.keyStore));
   }
 
@@ -106,9 +104,7 @@ export class BrowserVault {
     for (const listener of this.listeners) {
       try {
         listener();
-      } catch {
-        /* A closed renderer cannot block vault writes. */
-      }
+      } catch {}
     }
   }
 
@@ -225,9 +221,6 @@ export class BrowserVault {
       try {
         await this.persist();
       } catch (error) {
-        // The password is already durably saved. Removing it is not rollback:
-        // an upsert may have replaced an existing login. Retain the password
-        // and in-memory provenance so a later successful write can persist it.
         this.changed();
         throw error;
       }
@@ -259,8 +252,6 @@ export class BrowserVault {
       handleRequest: async (action, payload, origin) => {
         await this.ready;
         assertOrigin(origin);
-        // Agent code can read and transform anything filled into its page, even
-        // across worker restarts. Never give this adapter a secret-bearing action.
         if (action !== "list" && action !== "list-pending") {
           throw new Error(BrowserAutomationErrorMessages.BrowserCredentialUseUnavailable);
         }
@@ -269,7 +260,6 @@ export class BrowserVault {
         return result;
       },
       redact: (value) => this.vault.redact(value),
-      // Deliberately no resetRedactionSecrets: the user-owned page outlives workers.
     };
   }
 

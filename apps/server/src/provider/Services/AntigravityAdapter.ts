@@ -1,4 +1,3 @@
-/** Antigravity CLI implementation of the generic provider adapter contract. */
 import { ServiceMap } from "effect";
 
 import type { ProviderAdapterError } from "../Errors.ts";

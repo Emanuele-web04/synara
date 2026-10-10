@@ -1,8 +1,3 @@
-// FILE: 047_AutomationCompletionPolicyVersion.ts
-// Purpose: Adds a durable stop-policy version so in-flight heartbeat runs cannot inherit edits.
-// Layer: Server persistence migration
-// Depends on: automation_definitions and schemaHelpers.columnExists.
-
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

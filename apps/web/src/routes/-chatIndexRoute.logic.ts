@@ -59,9 +59,7 @@ export function resolveChatIndexRestoreRoute(input: {
 
   const availableThreadIds = new Set<string>();
   for (const threadId of [...input.threadIds, ...draftProjectIdByThreadId.keys()]) {
-    // Fail closed: a thread we can't classify is not restorable from "/". Summaries are built
-    // from the same snapshot as threadIds, so this only ever excludes a thread if that invariant
-    // breaks — and then a fresh draft beats restoring into the wrong segment.
+    // fail closed: an unclassifiable thread is not restorable from "/" — a fresh draft beats restoring into the wrong segment
     const threadSummary = sidebarThreadSummaryById[threadId];
     if (threadSummary && isSidechatThread(threadSummary)) continue;
     const projectId = threadSummary?.projectId ?? draftProjectIdByThreadId.get(threadId);

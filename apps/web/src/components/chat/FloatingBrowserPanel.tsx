@@ -1,8 +1,3 @@
-// FILE: FloatingBrowserPanel.tsx
-// Purpose: Draggable, resizable browser host that overlays one chat surface.
-// Layer: Chat surface UI
-// Depends on: the shared browser panel and panel-resize pointer overlay.
-
 import {
   type PointerEvent as ReactPointerEvent,
   Suspense,

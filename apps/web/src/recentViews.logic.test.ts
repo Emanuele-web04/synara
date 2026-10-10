@@ -1,7 +1,3 @@
-// FILE: recentViews.logic.test.ts
-// Purpose: Verifies Ctrl+Tab recent-view MRU behavior without rendering React.
-// Layer: UI state logic test
-
 import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 import type { ResolvedTerminalVisualIdentity } from "@synara/shared/terminalThreads";

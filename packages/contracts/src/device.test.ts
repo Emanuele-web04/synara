@@ -30,7 +30,7 @@ const BASE_DEVICE = {
   bootSource: "synara",
 } as const;
 
-/** iPhone 17 Pro: the geometry that exposed the pixel-vs-point tap bug. */
+/** iPhone 17 Pro: the geometry that exposed the pixel-vs-point tap bug */
 const GEOMETRY = { pointWidth: 402, pointHeight: 874, scale: 3 } as const;
 
 describe("DeviceDescriptor geometry", () => {

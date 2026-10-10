@@ -34,8 +34,7 @@ export type OrchestrationCommandLane = "control" | "user" | "normal";
 export function usesReservedCommandAdmission(type: OrchestrationCommand["type"]): boolean {
   switch (type) {
     case "thread.turn.interrupt":
-    // Task stop/background are user control-plane actions like interrupt:
-    // they must stay admissible when the queue is saturated with data traffic.
+    // task stop/background are user control-plane actions like interrupt — must stay admissible when the queue is saturated with data traffic
     case "thread.task.stop":
     case "thread.task.background":
     case "thread.approval.respond":
@@ -54,8 +53,7 @@ export function usesReservedCommandAdmission(type: OrchestrationCommand["type"])
 }
 
 export function isQuiescingCommandAdmissible(type: OrchestrationCommand["type"]): boolean {
-  // Settlement diagnostics must survive quiesce, but remain in the normal lane
-  // so activity traffic cannot consume the capacity reserved for stopping work.
+  // settlement diagnostics must survive quiesce but stay in the normal lane — activity traffic can't consume capacity reserved for stopping work
   return usesReservedCommandAdmission(type) || type === "thread.activity.append";
 }
 

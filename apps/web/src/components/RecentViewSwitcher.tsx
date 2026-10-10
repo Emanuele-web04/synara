@@ -1,8 +1,3 @@
-// FILE: RecentViewSwitcher.tsx
-// Purpose: Render the transient Ctrl+Tab recent-view overlay.
-// Layer: UI component
-// Exports: RecentViewSwitcher plus item shape used by the chat route shell.
-
 import type { KeybindingShortcut } from "@synara/contracts";
 
 import { formatShortcutLabel } from "../keybindings";
@@ -20,9 +15,7 @@ import TerminalIdentityIcon from "./terminal/TerminalIdentityIcon";
 import { ShortcutKbd } from "./ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-// Keycap hints rendered in the switcher footer. These mirror the real bindings:
-// the switcher cycles on literal Ctrl+Tab / Ctrl+Shift+Tab (see keybindings.ts —
-// literal Ctrl on macOS too, matching Arc/Helium), commits on Enter, cancels on Esc.
+// these mirror the real bindings: literal Ctrl+Tab / Ctrl+Shift+Tab on macOS too (matching Arc/Helium), Enter commits, Esc cancels
 const NO_MODIFIERS = {
   metaKey: false,
   ctrlKey: false,
@@ -38,12 +31,7 @@ const SWITCHER_FOOTER_SHORTCUTS: ReadonlyArray<KeybindingShortcut> = [
   { ...NO_MODIFIERS, key: "escape" },
 ];
 
-// Swap the spelled-out non-modifier keys for their universal keycap glyphs (the
-// tab "arrow to bar" and the return arrow). Modifiers stay as whatever
-// `formatShortcutLabel` produced so they remain platform-correct: ⌃/⇧ on macOS,
-// "Ctrl"/"Shift" text on Windows/Linux. Each shortcut renders as a SINGLE keycap
-// (e.g. ⌃⇥, ⌃⇧⇥) — never split into separate modifier chips, which would repeat
-// ⌃/⇥ across the Tab chords and read as duplicates.
+// spell out non-modifier keys as keycap glyphs; each shortcut renders as ONE keycap (⌃⇥, ⌃⇧⇥) — never split into modifier chips which would repeat ⌃/⇥ across the Tab chords
 const FOOTER_KEY_GLYPHS: Readonly<Record<string, string>> = {
   Tab: "⇥",
   Enter: "↵",
@@ -57,9 +45,7 @@ function footerKeyLabel(shortcut: KeybindingShortcut): string {
   return label;
 }
 
-// Plain-text explanation shown on hover. The keycap shows platform glyphs (⌃⇥);
-// this spells the chord out in words ("Ctrl + Tab") so the glyphs are never
-// ambiguous. Force the non-mac text form so it reads as words on every platform.
+// the keycap shows platform glyphs; this spells the chord in words ("Ctrl + Tab") — forced non-mac form so it reads as words on every platform
 function footerTooltipLabel(shortcut: KeybindingShortcut): string {
   return formatShortcutLabel(shortcut, "Win32").split("+").join(" + ");
 }

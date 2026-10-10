@@ -1,8 +1,3 @@
-// FILE: mediaPermissions.test.ts
-// Purpose: Verifies the desktop microphone permission guard stays tolerant of optional Electron fields.
-// Layer: Desktop unit test
-// Depends on: mediaPermissions helper.
-
 import { describe, expect, it } from "vitest";
 
 import {

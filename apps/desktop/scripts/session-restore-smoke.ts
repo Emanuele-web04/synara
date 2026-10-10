@@ -74,8 +74,6 @@ void (async () => {
     console.log(JSON.stringify({ count: cookies.length, fields: Object.keys(cookies[0] ?? {}) }));
     stage = "initialize";
     const keyStore = {
-      // Mirror production's backend gate: on Linux the basic_text backend is
-      // not secure, so this smoke must not report a secure-restore pass there.
       available: async () =>
         safeStorage.isEncryptionAvailable() &&
         (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"),

@@ -72,8 +72,7 @@ describe("buildAutomationRunEnvelope", () => {
   });
 
   it("offers self-cancellation to standalone runs too", () => {
-    // Standalone runs are the ones that most need it: their per-run thread owns nothing,
-    // so run-scoped authorization is their only way to retire the automation.
+    // standalone runs need run-scoped authorization — their per-run thread owns nothing else
     const envelope = buildAutomationRunEnvelope({
       definition: definition({ mode: "standalone" }),
       run: run(),
@@ -108,7 +107,7 @@ describe("buildAutomationRunEnvelope", () => {
     expect(dedicated).toContain(
       "this thread belongs to this automation and is reused by every run",
     );
-    // A dedicated run reports like a heartbeat: its work stays visible in the thread.
+    // a dedicated run reports like a heartbeat — its work stays visible in the thread
     expect(dedicated).toContain('decision "silent"');
     expect(heartbeat).toContain("it may also carry the user's own turns");
     expect(standalone).not.toContain("Thread scope:");

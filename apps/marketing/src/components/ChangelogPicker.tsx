@@ -1,10 +1,3 @@
-// FILE: ChangelogPicker.tsx
-// Purpose: Compact release picker shown in the header on small screens (where the
-//          right-rail doesn't fit). A native <select> — so phones get the OS
-//          wheel/list picker — that jumps to the chosen release and reflects the
-//          one currently in view. Hidden at md+ (the rail takes over).
-// Layer: Client component; shares scroll-spy with the rail via useActiveAnchor.
-
 "use client";
 
 import { LuChevronDown } from "react-icons/lu";

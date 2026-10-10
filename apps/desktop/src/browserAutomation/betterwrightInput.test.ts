@@ -17,8 +17,6 @@ describe("Betterwright input provenance", () => {
   });
 
   it("registers the takeover signal for every accepted key representation", () => {
-    // Multi-character keys must be lower-cased so the browser manager's
-    // normalizeAutomationKey matches the expected signal.
     expect(
       betterwrightExpectedInputs("Input.dispatchKeyEvent", {
         type: "rawKeyDown",
@@ -28,7 +26,6 @@ describe("Betterwright input provenance", () => {
     ).toEqual([
       { kind: "key", key: "arrowleft", alt: false, control: false, meta: false, shift: false },
     ]);
-    // The space key must match Electron's KeyboardEvent.key value (" ").
     for (const space of [" ", "Space", "Spacebar"]) {
       expect(
         betterwrightExpectedInputs("Input.dispatchKeyEvent", {

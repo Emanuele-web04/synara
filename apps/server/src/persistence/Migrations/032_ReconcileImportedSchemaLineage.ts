@@ -1,22 +1,4 @@
-/**
- * Reconciles schema after importing a database from a predecessor lineage whose
- * `effect_sql_migrations` tracker already records IDs 17-31 under unrelated
- * names. Because the migrator skips by ID, Synara migrations 17-31 never run
- * on those imports, leaving columns like
- * `env_mode` missing and crashing the server on first query.
- *
- * Migration #023 previously held this self-healing logic, but predecessor DBs
- * also have a row for ID 23 belonging to an unrelated migration,
- * so the migrator skipped it too. This migration was renumbered past the
- * Synara migrations known at the time, but predecessor trackers eventually
- * outran it as well (SYN-99). `reconcileMigrationLineage` in Migrations.ts
- * now repairs foreign trackers before the migrator runs, so this migration
- * is guaranteed to execute on legacy imports regardless of the imported
- * tracker's high-water mark.
- *
- * Idempotent and a no-op for fresh Synara installs (every column already
- * exists from the in-order runs of 17-31).
- */
+/** predecessor trackers record 17-31 under unrelated names so those migrations never run on imports, leaving env_mode missing; renumbered self-heals (#023, #032) lose the race whenever the foreign lineage ships more; reconcileMigrationLineage now repairs trackers before the migrator so this runs regardless; idempotent, no-op on fresh installs */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
 

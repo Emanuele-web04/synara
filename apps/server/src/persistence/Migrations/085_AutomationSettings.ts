@@ -1,6 +1,3 @@
-// FILE: 085_AutomationSettings.ts
-// Purpose: Adds the smallest durable KV store needed for the installation jitter salt.
-
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

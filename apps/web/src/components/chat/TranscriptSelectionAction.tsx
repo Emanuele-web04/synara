@@ -1,7 +1,3 @@
-// FILE: TranscriptSelectionAction.tsx
-// Purpose: Renders the floating toolbar for assistant transcript selections.
-// Layer: Chat transcript interaction UI
-
 import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { TRANSCRIPT_SELECTION_ACTION_WIDTH_PX } from "./chatSelectionActions";

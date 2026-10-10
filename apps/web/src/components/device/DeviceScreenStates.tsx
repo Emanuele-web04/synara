@@ -1,11 +1,4 @@
-// FILE: DeviceScreenStates.tsx
-// Purpose: The non-video states that render on the simulated phone screen.
-// Layer: Device pane presentation
-// Exports: DeviceSetupScreen, DeviceEmptyScreen, DeviceBootingScreen
-//
-// These sit inside the bezel, so they are styled against the phone's near-black
-// screen rather than the app surface: fixed light-on-dark values, not theme
-// tokens, because a phone screen does not change with the app's theme.
+// styled against the phone's near-black screen with fixed light-on-dark values, not theme tokens — a phone screen doesn't change with the app's theme
 
 import type { DeviceSetupStep } from "@synara/contracts";
 
@@ -40,8 +33,7 @@ export function DeviceSetupScreen(props: {
   footnote?: string | null;
   action?: { readonly label: string; readonly onClick: () => void } | null;
 }) {
-  // The first unfinished step is the only actionable one; everything after it is
-  // blocked on it, which is what the dimming communicates.
+  // the first unfinished step is the only actionable one; everything after is blocked on it — that's what the dimming communicates
   const activeIndex = props.steps.findIndex((step) => !step.done);
 
   return (

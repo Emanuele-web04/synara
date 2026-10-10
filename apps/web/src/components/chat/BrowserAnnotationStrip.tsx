@@ -1,7 +1,3 @@
-// FILE: BrowserAnnotationStrip.tsx
-// Purpose: Keep browser annotations to one compact row, with overflow available on demand.
-// Layer: Chat attachment presentation
-
 import { pluralize } from "@synara/shared/text";
 
 import type { BrowserAnnotationDraft } from "~/lib/browserAnnotations";

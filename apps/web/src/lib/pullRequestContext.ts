@@ -31,11 +31,8 @@ export interface PullRequestContextDraft {
   /** The item's number and URL (named for pull requests, which came first). */
   prNumber: number;
   prUrl: string;
-  /** Card headline, e.g. "1 failing check". */
   title: string;
-  /** Card detail line, e.g. "Test, lint, build, and smoke". */
   subtitle: string;
-  /** Full prompt handed to the provider; never shown inline. */
   text: string;
 }
 
@@ -83,8 +80,7 @@ export function isPullRequestContextScope(value: unknown): value is PullRequestC
   );
 }
 
-// Null when the card has nothing to send: an empty prompt would attach a bubble that
-// contributes nothing to the message.
+// null when the card has nothing to send — an empty prompt would attach a bubble contributing nothing
 export function normalizePullRequestContext(
   draft: PullRequestContextDraft,
 ): PullRequestContextDraft | null {
@@ -156,8 +152,6 @@ export function formatPullRequestContextTitleSeed(
   return contexts.length === 1 ? `${first.title} on ${itemLabel}` : itemLabel;
 }
 
-// --- Send-time serialization (cards -> trailing block)
-
 export function buildPullRequestContextBlock(
   contexts: ReadonlyArray<PullRequestContextDraft>,
 ): string {
@@ -200,8 +194,6 @@ export function appendPullRequestContextsToPrompt(
   }
   return trimmed.length > 0 ? `${trimmed}\n\n${block}` : block;
 }
-
-// --- Display-time extraction (trailing block -> cards)
 
 function parseEntries(block: string): ParsedPullRequestContextEntry[] {
   try {

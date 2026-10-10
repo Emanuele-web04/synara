@@ -82,7 +82,7 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
     `,
   });
 
-  // Read only response failures for candidate callbacks, never whole transcripts.
+  // read only response failures for candidate callbacks, never whole transcripts
   const failureActivities = SqlSchema.findAll({
     Request: Schema.Struct({ threadId: Schema.optionalKey(Schema.String) }),
     Result: Schema.Struct({

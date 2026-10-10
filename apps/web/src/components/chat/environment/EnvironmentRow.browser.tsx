@@ -1,7 +1,3 @@
-// FILE: EnvironmentRow.browser.tsx
-// Purpose: Browser-level regression tests for Environment panel disclosure behavior.
-// Layer: Vitest browser tests
-
 import "../../../index.css";
 
 import { page } from "vitest/browser";

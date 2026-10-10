@@ -1,13 +1,4 @@
-// FILE: sidebarHoverCardAnchors.ts
-// Purpose: Virtual anchors and display helpers for sidebar thread/project hover cards.
-// Layer: Sidebar UI utility
-// Exports: createThreadHoverCardAnchor, createProjectHoverCardAnchor,
-//          abbreviateHomePath
-// Depends on: DOM geometry available in the browser
-
-// Anchors a sidebar hover card flush against the sidebar's right edge at the
-// hovered row's vertical position. Rows are inset inside the sidebar, so the
-// virtual rect combines the sidebar shell edge with the row's top and height.
+// anchors flush against the sidebar's right edge at the hovered row's vertical position; rows are inset so the rect combines shell edge + row top/height
 function createSidebarEdgeRowAnchor(rowSelector: string) {
   return {
     getBoundingClientRect: () => {

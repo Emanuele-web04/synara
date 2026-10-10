@@ -48,12 +48,7 @@ export interface ProviderModelCatalog {
   modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
   /** Providers whose runtime model discovery is still pending (no usable list yet). */
   loadingModelProviders: Partial<Record<ProviderKind, boolean>>;
-  /**
-   * Runtime-discovered model descriptors per provider. Composer-style trait
-   * controls (effort, fast mode, thinking, context window) are sourced from
-   * these for cursor/codex/etc., so any surface that wants the effort picker
-   * must feed them through (see {@link selectedRuntimeModel}).
-   */
+  // trait controls (effort, fast mode, thinking, context window) come from runtime descriptors for cursor/codex/etc — effort-picker surfaces must feed them through
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
   /** Account-local runtime descriptors; known accounts are empty until discovery resolves. */
   runtimeModelsByProviderInstance: Partial<
@@ -61,13 +56,9 @@ export interface ProviderModelCatalog {
   >;
   /** The runtime descriptor matching `selectedProvider` + its selected-model hint. */
   selectedRuntimeModel: ProviderModelDescriptor | undefined;
-  /** Runtime-discovered agents/modes for the selected provider (opencode/claude/codex). */
   selectedRuntimeAgents: ReadonlyArray<ProviderAgentDescriptor>;
-  /** Loading state used by the selected provider's bootstrap skeleton. */
   selectedProviderModelsLoading: boolean;
-  /** Whether the selected provider requires and is still waiting on runtime models. */
   selectedProviderRuntimeModelDiscoveryPending: boolean;
-  /** Discovery failure detail per provider (268 passthrough). */
   discoveryErrorsByProvider: Partial<Record<ProviderKind, string | undefined>>;
 }
 
@@ -147,9 +138,7 @@ export function useProviderModelCatalog(input: {
    * are warm by the time the user browses them.
    */
   discoveryEnabled: boolean;
-  /** Effective cwd for providers whose model catalog can be extended by project resources. */
   cwd?: string | null;
-  /** Per-provider selected-model hints so an unknown selection still lists itself. */
   modelHintByProvider?: Partial<Record<ProviderKind, string | null>>;
   /**
    * Restrict background discovery to the providers used by a non-picker surface.
@@ -255,12 +244,7 @@ export function useProviderModelCatalog(input: {
     provider: ProviderKind,
     prefetchRequested = discoveryEnabled,
   ): boolean => {
-    // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
-    // undefined while the settings query is in flight and stays undefined if it
-    // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
-    // that as "disabled" would silence discovery for every provider, including the
-    // selected one, which is precisely the "my model disappeared" symptom. Mirrors
-    // the server-side fallback in ProviderDiscoveryService.listModels.
+    // the enabled flag is a short-circuit, not a precondition: serverSettings stays undefined on failure and never refetches — treating that as disabled would silence all discovery ("my model disappeared"); mirrors the server-side fallback
     if (serverSettings?.providers[provider]?.enabled === false) {
       return false;
     }
@@ -278,7 +262,6 @@ export function useProviderModelCatalog(input: {
   const cursorModelDiscoveryEnabled = shouldDiscoverProvider("cursor");
   const antigravityModelDiscoveryEnabled = shouldDiscoverProvider("antigravity");
   const grokModelDiscoveryEnabled = shouldDiscoverProvider("grok");
-  // ponytail: explicit prefetch only; picker surfaces stay cold (see droid query comment below).
   const droidPrefetchRequested = discoveryEnabled && (prefetchProviderSet?.has("droid") ?? false);
   const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", droidPrefetchRequested);
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
@@ -372,14 +355,12 @@ export function useProviderModelCatalog(input: {
 
   const selectedProviderModelsEnabled = modelQueryOptionsByProvider[selectedProvider].enabled;
 
-  // Keep foreground ownership out of queryFn options: retries can outlive
-  // the selection that started them. The effect owns the current priority.
+  // keep foreground ownership out of queryFn options — retries can outlive the selection that started them
   useEffect(() => {
     if (!selectedProviderModelsEnabled) return;
     return prioritizeProviderModelDiscovery(selectedProviderModelsQueryKey);
   }, [selectedProviderModelsQueryKey, selectedProviderModelsEnabled]);
 
-  // Agent/mode discovery (opencode "Agent" picker, claude/codex subagents).
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "claudeAgent",
@@ -445,9 +426,7 @@ export function useProviderModelCatalog(input: {
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
   const hasResolvedDevinModelDiscovery =
     (devinDynamicModelsQuery.data?.source === "devin-cli" ||
-      // Static fallback descriptors are a valid resolved catalog: the adapter
-      // serves its built-in matrix when CLI discovery is unavailable, so the
-      // picker must render them instead of spinning (or banner-ing) forever.
+      // static fallback descriptors are a valid resolved catalog — the adapter serves its built-in matrix when CLI discovery is unavailable, so render them instead of spinning forever
       devinDynamicModelsQuery.data?.source === "devin.static") &&
     (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
   const devinModelDiscoveryPending =
@@ -706,8 +685,6 @@ export function useProviderModelCatalog(input: {
     [selectedDynamicAgents],
   );
 
-  // Discovery failures per provider, surfaced as a subtle inline note by the
-  // model pickers.
   const discoveryErrorsByProvider = useMemo(
     () => ({
       claudeAgent: claudeDynamicModelsQuery.data?.error,

@@ -67,9 +67,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         const eventStore = yield* OrchestrationEventStore;
         const projectionPipeline = yield* OrchestrationProjectionPipeline;
 
-        // Run all migrations before this one, simulating an installation that
-        // already has migration 98 applied and a projection.threads cursor at
-        // the journal head.
+        // run all migrations before this one, simulating an install that already has 98 and a cursor at the journal head
         yield* runMigrations({ toMigrationInclusive: 98 });
         // Current projector readers require later additive schemas.
         // Install them without changing the migration-99 tracker state under test.
@@ -230,8 +228,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
           },
         });
 
-        // The current projector sets updated_at to completion; regress it to the
-        // turn-start time to simulate a database upgraded from the buggy version.
+        // regress updated_at to turn-start to simulate a db upgraded from the buggy version
         const [before] = yield* sql<{ readonly updatedAt: string }>`
           SELECT updated_at AS "updatedAt"
           FROM projection_threads
@@ -252,8 +249,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         `;
         assert.strictEqual(cursorBefore!.lastAppliedSequence, 5);
 
-        // Apply migration 99. This must delete the projection.threads cursor so
-        // the next bootstrap will replay with the updated event filter.
+        // must delete the projection.threads cursor so bootstrap replays with the updated filter
         yield* runMigrations({ toMigrationInclusive: 99 });
 
         const [cursorAfter] = yield* sql<{ readonly count: number }>`
@@ -263,7 +259,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         `;
         assert.strictEqual(cursorAfter!.count, 0);
 
-        // Rerunning the migration with the cursor already absent must stay safe.
+        // rerunning with the cursor already absent must stay safe
         yield* runMigrations({ toMigrationInclusive: 99 });
 
         const [cursorRerun] = yield* sql<{ readonly count: number }>`
@@ -273,7 +269,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         `;
         assert.strictEqual(cursorRerun!.count, 0);
 
-        // First startup after upgrade: the bootstrap replay heals the stale row.
+        // first startup after upgrade — the bootstrap replay heals the stale row
         yield* projectionPipeline.bootstrap;
 
         const [after] = yield* sql<{ readonly updatedAt: string }>`

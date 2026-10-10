@@ -121,8 +121,7 @@ export interface BranchToolbarProps {
   handoffBusy?: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
-  // `toolbar` renders the compact composer-footer row; `panel` stacks the env and branch
-  // pickers as full-width Environment panel rows that open downward.
+  // `toolbar` renders the compact composer-footer row; `panel` stacks the pickers as full-width Environment rows opening downward
   variant?: BranchSelectorVariant;
   // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
   showBranchSelector?: boolean;
@@ -145,9 +144,7 @@ export interface RuntimeUsageControlsProps {
   activeContextWindowLabel?: string | null | undefined;
   pendingContextWindowLabel?: string | null | undefined;
   className?: string | undefined;
-  // Force icon-only rendering regardless of container width. Used when the
-  // control is relocated outside the composer footer (which provides the
-  // @container the responsive sr-only fallback depends on).
+  // force icon-only regardless of container width — used when the control is relocated outside the composer footer (which provides the @container the sr-only fallback depends on)
   hideLabel?: boolean | undefined;
 }
 

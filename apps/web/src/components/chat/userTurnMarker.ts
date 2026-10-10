@@ -1,11 +1,4 @@
-// FILE: userTurnMarker.ts
-// Purpose: Single predicate for the marker chip above a sent user message
-// ("Sent via Automation" / "Sent by agent" / "Steering conversation").
-// Layer: web chat feature (pure logic, no I/O).
-
-// Server-dispatched turns (automation runs, agent gateway tools) take
-// precedence over the steer marker so the origin stays visible even for
-// steered dispatches.
+// server-dispatched turns (automation, agent gateway) take precedence over the steer marker so the origin stays visible
 export type UserTurnMarkerKind = "automation" | "agent" | "steer";
 
 export function resolveUserTurnMarker(message: {
@@ -34,8 +27,7 @@ export interface UserTurnMediaCounts {
   readonly pullRequestContextCount: number;
 }
 
-// The marker chip sits directly above any leading media row, and its bottom
-// margin is larger when media follows.
+// the chip sits directly above any leading media row; bottom margin is larger when media follows
 export function hasLeadingUserMedia(counts: UserTurnMediaCounts): boolean {
   return (
     counts.imageCount > 0 ||

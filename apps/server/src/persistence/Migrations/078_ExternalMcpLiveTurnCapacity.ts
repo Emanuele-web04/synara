@@ -4,9 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // A session error can belong to a later provider startup while the latest
-  // projected turn is still live. Live turn state is therefore authoritative
-  // for capacity; session terminal state is only a fallback.
+  // a session error can belong to a later startup while the latest projected turn is still live — live turn state is authoritative; session terminal state only a fallback
   yield* sql`DROP VIEW IF EXISTS external_mcp_active_capacity_claims`;
   yield* sql`
     CREATE VIEW external_mcp_active_capacity_claims AS

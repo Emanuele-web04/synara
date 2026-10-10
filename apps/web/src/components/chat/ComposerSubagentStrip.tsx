@@ -1,10 +1,3 @@
-// FILE: ComposerSubagentStrip.tsx
-// Purpose: Compact subagent rows stacked above the composer input (status dot,
-// nickname, role/model, live status); clicking a row switches to that subagent's
-// thread. Wraps the shared stacked-header frame like the active task list.
-// Layer: Chat composer UI
-// Exports: ComposerSubagentStrip
-
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 

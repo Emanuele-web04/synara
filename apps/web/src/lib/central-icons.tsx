@@ -1,16 +1,6 @@
-// FILE: central-icons.tsx
-// Purpose: Resolve and render Central icon SVGs shipped as static web assets.
-// Layer: web UI utility
-// Exports: CentralIcon, getCentralIconUrl, createCentralIconElement, createCentralIconComponent
-// Depends on: Vite public asset serving and app className merging utilities.
-
 import { forwardRef, type CSSProperties, type HTMLAttributes, type ReactElement } from "react";
 import { cn } from "./utils";
 
-// Central icons ship in two visual sets served as static assets: the default
-// "reversed" outline set and a solid "fill" set. The variant only selects the
-// source folder — rendering (CSS mask + bg-current) is identical for both, so a
-// fill asset paints as a solid glyph and an outline asset as a stroked one.
 const CENTRAL_ICON_BASE_PATHS = {
   reversed: "/central-icons-reversed",
   fill: "/central-icons-fill",
@@ -26,14 +16,12 @@ export type CentralIconProps = Omit<HTMLAttributes<HTMLSpanElement>, "children">
   variant?: CentralIconVariant | undefined;
 };
 
-// Builds a public asset URL from the icon basename without allowing path traversal.
+// build a public asset URL from the basename without allowing path traversal
 export function getCentralIconUrl(
   name: string,
   variant: CentralIconVariant = DEFAULT_CENTRAL_ICON_VARIANT,
 ): string | null {
-  // Defensive: a non-string name (stale HMR module state, or a dynamic call site handing
-  // through bad data) must degrade to "no icon" with a loud diagnostic instead of taking
-  // down the whole tree with `name.endsWith is not a function`.
+  // a non-string name (stale HMR state, bad dynamic call site) must degrade to no-icon + loud diagnostic instead of crashing the tree
   if (typeof name !== "string") {
     console.error("[central-icons] non-string icon name:", name, new Error("caller").stack);
     return null;
@@ -47,17 +35,14 @@ export function getCentralIconUrl(
   return `${CENTRAL_ICON_BASE_PATHS[variant]}/${encodeURIComponent(normalizedName)}${SVG_SUFFIX}`;
 }
 
-// Shared base classes so the React component and the imperative DOM helper stay
-// pixel-identical (single uniform fill tinted to the current text color).
+// shared base classes so the React component and imperative DOM helper stay pixel-identical
 const CENTRAL_ICON_BASE_CLASS = "inline-block size-4 shrink-0 bg-current";
 export const CENTRAL_ICON_SLOT = "central-icon";
 
-// CSS-mask shorthand value that paints the icon as a solid `bg-current` fill.
 function centralIconMaskValue(iconUrl: string): string {
   return `url("${iconUrl}") center / contain no-repeat`;
 }
 
-/** Mirror Button/Toggle `[&_svg:*]` child rules for masked Central icons. */
 export function extendButtonIconChildSelectors(className: string): string {
   let result = className;
 
@@ -114,9 +99,7 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
   );
 });
 
-// Adapts a Central icon name to the `ComponentType<{ className?: string }>` shape
-// expected by icon-prop APIs (SidebarIconButton, menu action descriptors, …) so
-// Central glyphs can drop in wherever a react-icons/lucide component was used.
+// adapt a Central icon name to ComponentType so Central glyphs drop in wherever a react-icons/lucide component was expected
 export function createCentralIconComponent(
   name: string,
   variant?: CentralIconVariant,
@@ -128,9 +111,7 @@ export function createCentralIconComponent(
   return CentralIconGlyph;
 }
 
-// Imperative twin of `CentralIcon` for non-React surfaces such as the Lexical
-// composer chips that build their DOM by hand. Returns null when the name is
-// invalid so callers can fall back to a static glyph.
+// imperative twin of CentralIcon for non-React surfaces (Lexical composer chips build DOM by hand); null on invalid name
 export function createCentralIconElement(
   name: string,
   className?: string,

@@ -1,6 +1,3 @@
-// FILE: chatFirstSend.test.ts
-// Purpose: Verifies first-send project routing for general chats and folder mentions.
-
 import { DEFAULT_MODEL_BY_PROVIDER, type ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

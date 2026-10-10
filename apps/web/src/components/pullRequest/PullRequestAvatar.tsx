@@ -1,10 +1,3 @@
-// FILE: PullRequestAvatar.tsx
-// Purpose: Small circular author avatar shared by the pull request list rows, detail header,
-//          reviewers row, and comment cards — an image when GitHub gives us one, otherwise an
-//          initials fallback so every actor still reads as a person rather than a blank slot.
-// Layer: Pull request presentation
-// Exports: PullRequestAvatar
-
 import { useState } from "react";
 
 import type { PullRequestActor } from "@synara/contracts";
@@ -34,9 +27,7 @@ export function PullRequestAvatar({
   const size = sizeProp ?? "sm";
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const sizeClassName = SIZE_CLASS_NAME[size];
-  // Only render an image URL that GitHub explicitly attached to this actor. `login` can also
-  // carry a team slug, and deriving avatars.githubusercontent.com/<slug> on the client can
-  // display an unrelated user who happens to own that login.
+  // only render an image URL GitHub explicitly attached — `login` can be a team slug and deriving avatars.githubusercontent.com/<slug> can display an unrelated user
   const src = actor?.avatarUrl;
   if (src && src !== failedSrc) {
     return (

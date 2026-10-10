@@ -1,8 +1,3 @@
-// FILE: elementInspection.ts
-// Purpose: Turns computed DOM styles into the compact readout shown by the annotation inspector card.
-// Layer: Desktop browser annotation guest
-// Depends on: nothing — pure formatting shared by the guest preload and its unit tests.
-
 export interface ElementStyleSnapshot {
   readonly color: string;
   readonly backgroundColor: string;
@@ -10,10 +5,8 @@ export interface ElementStyleSnapshot {
   readonly fontSize: string;
   readonly lineHeight: string;
   readonly fontFamily: string;
-  /** Top, right, bottom, left computed lengths. */
   readonly padding: readonly [string, string, string, string];
   readonly margin: readonly [string, string, string, string];
-  /** Top-left, top-right, bottom-right, bottom-left computed radii. */
   readonly radius: readonly [string, string, string, string];
 }
 
@@ -73,16 +66,11 @@ function splitCssComponents(value: string): readonly string[] {
   return components;
 }
 
-/**
- * Renders a computed color as the short hex form designers recognise, keeping
- * alpha as an explicit percentage so translucent surfaces stay readable.
- */
 export function formatCssColor(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
   const match = /^rgba?\(([^)]*)\)$/i.exec(trimmed);
   if (!match?.[1]) return trimmed;
-  // Channels are percentages of 255, alpha is a fraction of 1.
   const parts = match[1]
     .split(/[\s,/]+/)
     .filter((part) => part.length > 0)
@@ -100,21 +88,12 @@ export function formatCssColor(value: string): string | null {
   return opacity >= 1 ? hex : `${hex} ${Math.round(opacity * 100)}%`;
 }
 
-/**
- * Collapses four computed edge lengths into CSS shorthand, or `null` when the
- * box contributes nothing worth showing.
- */
 export function formatCssBox(values: readonly [string, string, string, string]): string | null {
   const shorthand = collapseCssSides(values);
   return shorthand === "0" ? null : shorthand;
 }
 
-/**
- * Rebuilds a valid border-radius shorthand from the four computed longhands.
- * Computed elliptical corners contain two lengths and require a slash between
- * the horizontal and vertical groups; concatenating the longhands directly is
- * invalid CSS for those values.
- */
+// elliptical corners carry two lengths and need a slash between horizontal/vertical groups — concatenating longhands directly is invalid CSS
 export function formatCssBorderRadius(values: readonly [string, string, string, string]): string {
   const corners = values.map((value) => {
     const [horizontal = "0", vertical = horizontal] = splitCssComponents(value);
@@ -138,7 +117,6 @@ export function formatCssBorderRadius(values: readonly [string, string, string, 
   return horizontal === vertical ? horizontal : `${horizontal} / ${vertical}`;
 }
 
-/** Renders the computed font the way a CSS `font` shorthand reads. */
 export function formatCssFont(snapshot: ElementStyleSnapshot): string {
   const weight =
     snapshot.fontWeight === "400" || snapshot.fontWeight === "normal"
@@ -152,15 +130,10 @@ export function formatCssFont(snapshot: ElementStyleSnapshot): string {
   return family.length > 0 ? `${weight}${metrics} ${family}` : `${weight}${metrics}`;
 }
 
-/** Element box size, rounded the way design tools report it. */
 export function formatElementSize(width: number, height: number): string {
   return `${Math.round(width)}×${Math.round(height)}`;
 }
 
-/**
- * Builds the hover readout: identity and size in the header, then only the
- * properties that actually carry information for the hovered element.
- */
 export function inspectorCardFor(input: {
   readonly tagName: string;
   readonly width: number;

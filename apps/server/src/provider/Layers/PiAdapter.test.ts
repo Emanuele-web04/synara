@@ -1,8 +1,3 @@
-// FILE: PiAdapter.test.ts
-// Purpose: Verifies Pi adapter model discovery respects auth and SDK-supported thinking levels.
-// Layer: Provider adapter tests
-// Depends on: PiAdapter discovery helpers and Pi model metadata shapes.
-
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";

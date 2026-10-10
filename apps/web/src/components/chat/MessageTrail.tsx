@@ -61,28 +61,21 @@ interface MessageTrailProps {
 const RAIL_CONTENT_CLEARANCE_PX = 16;
 // Fixed rail box. Ticks grow rightward inside it (left-aligned, like the Dock).
 const RAIL_WIDTH_PX = 56;
-// Cap the scrollable tick viewport a bit below the full pane height so the rail
-// reads as a centered band with breathing room; long histories scroll inside it
-// (with top/bottom scroll-fade) instead of compressing to a tall solid block.
+// Cap the scrollable tick viewport a bit below the full pane height so the rail reads as a centered band with breathing room; long histories scroll inside it (with top/bottom scroll-fade) instead of compressing to a tall solid block.
 const RAIL_MAX_HEIGHT_RATIO = 0.8;
 // Inset the ticks off the window edge so the rail isn't glued to the far left.
 const TICK_LEFT_PAD_PX = 14;
 const TICK_HEIGHT_PX = 2;
-// Short at rest, long when magnified — a wide base→max gap is what reads as a
-// real Dock magnification (left 14 + max 30 = 44px, clears the 56px rail).
+// Short at rest, long when magnified — a wide base→max gap is what reads as a real Dock magnification (left 14 + max 30 = 44px, clears the 56px rail).
 const TICK_BASE_W = 6;
 const TICK_MAX_W = 30;
-// Vertical centre-to-centre gap — kept tight so the ticks read as one close
-// stack at rest. The magnified width is independent of this gap (ticks grow
-// sideways, not into each other), so tight spacing keeps full magnification.
+// Vertical centre-to-centre gap — kept tight so the ticks read as one close stack at rest. The magnified width is independent of this gap (ticks grow sideways, not into each other), so tight spacing keeps full magnification.
 const TICK_SPACING_PX = 10;
-// Resting ticks stay faint; the reading-anchor tick is darker. Opacity is a fixed
-// per-state colour — it never follows the cursor as a gradient.
+// Resting ticks stay faint; the reading-anchor tick is darker. Opacity is a fixed per-state colour — it never follows the cursor as a gradient.
 const TICK_REST_OPACITY = 0.2;
 const TICK_VISIBLE_OPACITY = 0.52;
 const TICK_ANCHOR_OPACITY = 0.9;
-// Only the single tick directly under the pointer/keyboard focus goes full black —
-// its neighbours just grow in size, they don't darken (no opacity falloff).
+// Only the single tick directly under the pointer/keyboard focus goes full black — its neighbours just grow in size, they don't darken (no opacity falloff).
 const TICK_FOCUS_OPACITY = 1;
 // Audio wave: each tick lags its inner neighbour by this many frames, and the
 // envelope keeps this much of its height per frame once the sound drops.
@@ -112,8 +105,7 @@ export function MessageTrail({
   const [hasGutter, setHasGutter] = useState(false);
   const [rovingIndex, setRovingIndex] = useState(0);
 
-  // Reading-position highlights — fed by the timeline via a stable store so only
-  // this rail re-renders when they change.
+  // Reading-position highlights — fed by the timeline via a stable store so only this rail re-renders when they change.
   const trailSnapshot = useSyncExternalStore(
     activeStore.subscribe,
     activeStore.get,
@@ -131,15 +123,11 @@ export function MessageTrail({
 
   const visible = hasGutter && items.length > 1;
 
-  // Tick layout depends only on the message count (fixed spacing, natural content
-  // height) — never on the measured viewport — so the capped/scrolling viewport
-  // can't feed its height back into the layout (no ResizeObserver loop).
+  // tick layout depends only on message count, never the measured viewport — the capped/scrolling viewport can't feed its height back into layout (no ResizeObserver loop)
   const geometry = computeTrailGeometry({ count: items.length, spacingPx: TICK_SPACING_PX });
 
-  // --- Hot-path refs (read inside rAF; never trigger renders) ---------------
   const rafIdRef = useRef<number | null>(null);
-  // Raw viewport-relative pointer Y at the last move; content Y is derived per
-  // frame by adding the live scrollTop, so magnification follows rail scrolling.
+  // Raw viewport-relative pointer Y at the last move; content Y is derived per frame by adding the live scrollTop, so magnification follows rail scrolling.
   const latestPointerClientYRef = useRef<number | null>(null);
   const focusOverrideIndexRef = useRef<number | null>(null);
   const geometryRef = useRef<TrailGeometry | null>(geometry);
@@ -167,15 +155,12 @@ export function MessageTrail({
     visibleIndexesRef.current = visibleIndexes;
     onSelectRef.current = onSelect;
     visibleRef.current = visible;
-    // Keep the tick-ref array sized to the message count. Truncate only —
-    // growth happens via the JSX ref callbacks, which run before this effect,
-    // and a full refill here would wipe the elements they just attached.
+    // truncate only — growth happens via JSX ref callbacks which run before this effect; a full refill would wipe the elements they just attached
     if (tickRefs.current.length > items.length) {
       tickRefs.current.length = items.length;
     }
   }, [geometry, items, anchorIndex, visibleIndexes, onSelect, visible]);
 
-  // --- Imperative writers ----------------------------------------------------
   const writeStyles = (styles: readonly TickStyle[]) => {
     const refs = tickRefs.current;
     for (let i = 0; i < styles.length; i += 1) {
@@ -215,9 +200,7 @@ export function MessageTrail({
         responseEl.style.display = item.responsePreview ? "" : "none";
       }
     }
-    // Ticks live in scrolling content space; the tooltip is a non-scrolling sibling,
-    // so map the tick's centre into the viewport (minus scrollTop) and offset by where
-    // the centred viewport sits inside the full-height rail (viewport.offsetTop).
+    // Ticks live in scrolling content space; the tooltip is a non-scrolling sibling, so map the tick's centre into the viewport (minus scrollTop) and offset by where the centred viewport sits inside the full-height rail (viewport.offsetTop).
     const viewport = viewportRef.current;
     const viewportHeight = viewport?.clientHeight ?? 0;
     const tooltipHeight = tip.offsetHeight || TOOLTIP_ESTIMATED_H_PX;
@@ -341,7 +324,6 @@ export function MessageTrail({
     }
   };
 
-  // --- The magnification frame (single coalesced rAF) ------------------------
   const renderFrame = () => {
     rafIdRef.current = null;
     const geometry = geometryRef.current;
@@ -352,8 +334,7 @@ export function MessageTrail({
     if (count === 0) {
       return;
     }
-    // Pointer wins over keyboard focus when both are present. The stored pointer Y
-    // is viewport-relative; add the live scrollTop to land in tick content space.
+    // Pointer wins over keyboard focus when both are present. The stored pointer Y is viewport-relative; add the live scrollTop to land in tick content space.
     let activeY: number | null = null;
     const rawPointerY = latestPointerClientYRef.current;
     if (rawPointerY !== null) {
@@ -370,8 +351,7 @@ export function MessageTrail({
 
     let styles: TickStyle[];
     if (geometry.spacing === 0 || reducedMotionRef.current) {
-      // Degenerate rail or reduced motion: the focused tick jumps to max width with
-      // no continuous morphing (its colour is set below, same as the Gaussian branch).
+      // Degenerate rail or reduced motion: the focused tick jumps to max width with no continuous morphing (its colour is set below, same as the Gaussian branch).
       styles = computeRestStyles(
         count,
         anchor,
@@ -384,9 +364,7 @@ export function MessageTrail({
         focusedStyle.width = TICK_MAX_W;
       }
     } else {
-      // Width grows horizontally while ticks stack vertically (2px tall each), so
-      // the focal tick reaches the full TICK_MAX_W regardless of how tight the
-      // vertical spacing is — it never overlaps its neighbours.
+      // width grows horizontally while ticks stack vertically (2px each) — the focal tick reaches full TICK_MAX_W regardless of vertical spacing without overlapping neighbours
       const sigma = computeSigma(geometry.spacing);
       const weights = computeGaussianWeights(geometry.centerYs, activeY, sigma);
       styles = computeTickStyles(
@@ -421,9 +399,7 @@ export function MessageTrail({
     }
   };
 
-  // --- Gutter visibility: rail only shows when the pane is wide enough --------
-  // Width-only ResizeObserver; the tick layout is count-driven (see `geometry`),
-  // so observing size never feeds back into the layout.
+  // width-only ResizeObserver: the tick layout is count-driven, so observing size never feeds back into it
   useEffect(() => {
     const root = rootRef.current;
     if (!root || typeof ResizeObserver === "undefined") {
@@ -516,11 +492,9 @@ export function MessageTrail({
     }
   }, [visible, cancelFrame, hideTooltip]);
 
-  // Unmount: MessageTrail outlives thread switches (the timeline is keyed), so a
-  // stray in-flight frame must be cancelled.
+  // Unmount: MessageTrail outlives thread switches (the timeline is keyed), so a stray in-flight frame must be cancelled.
   useEffect(() => cancelFrame, [cancelFrame]);
 
-  // --- Pointer handlers (mouse / pen only; touch must not hijack scroll) -----
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch" || !visibleRef.current) {
       return;
@@ -555,8 +529,7 @@ export function MessageTrail({
     }
   };
 
-  // Rail scrolling under a stationary pointer changes which tick is focused, so
-  // keep the magnification + tooltip in sync while the pointer/keyboard is engaged.
+  // Rail scrolling under a stationary pointer changes which tick is focused, so keep the magnification + tooltip in sync while the pointer/keyboard is engaged.
   const handleScroll = () => {
     if (latestPointerClientYRef.current !== null || focusOverrideIndexRef.current !== null) {
       scheduleFrame();
@@ -578,7 +551,6 @@ export function MessageTrail({
     }
   };
 
-  // --- Keyboard: one tab stop (roving), arrows move, Enter jumps -------------
   const focusTick = (index: number) => {
     setRovingIndex(index);
     tickRefs.current[index]?.focus();

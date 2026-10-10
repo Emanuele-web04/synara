@@ -29,15 +29,7 @@ interface RegisteredRequest extends AgentGatewayInFlightRequestRegistration {
   readonly token: symbol;
 }
 
-/**
- * Process-local cancellation ownership for MCP calls.
- *
- * MCP clients are allowed to omit `notifications/cancelled` when their parent
- * operation is interrupted. The provider adapter therefore cancels the turn
- * directly through this registry. Interrupted turn ids are retained for the
- * lifetime of the provider session so a request racing with Stop is cancelled
- * at registration instead of escaping the first cancellation sweep.
- */
+/** process-local cancellation ownership — clients may omit notifications/cancelled; interrupted turn ids live for the session so a request racing Stop is cancelled at registration */
 export function makeAgentGatewayInFlightRequestRegistry(): AgentGatewayInFlightRequestRegistry {
   const requests = new Map<symbol, RegisteredRequest>();
   const cancelledTurns = new Map<string, Set<string>>();
@@ -54,9 +46,7 @@ export function makeAgentGatewayInFlightRequestRegistry(): AgentGatewayInFlightR
       try {
         return request.cancel();
       } catch {
-        // Cancellation is best-effort at this synchronous boundary. Each
-        // request still owns its cleanup/finalizers and the caller must never
-        // be prevented from interrupting the provider turn itself.
+        // best-effort at this sync boundary — the caller must never be prevented from interrupting the provider turn
         return Promise.resolve();
       }
     });

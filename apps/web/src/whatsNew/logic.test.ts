@@ -100,9 +100,7 @@ describe("resolveWhatsNewState", () => {
     }
     expect(state.currentEntry.version).toBe("0.0.29");
     expect(state.nextLastSeenVersion).toBe("0.0.29");
-    // Accordion view shows everything we know about, newest first — including
-    // releases that come *after* the installed build so users can see what's
-    // coming next if the team chose to preview it.
+    // Accordion view shows everything we know about, newest first — including releases that come *after* the installed build so users can see what's coming next if the team chose to preview it.
     expect(state.allEntries.map((e) => e.version)).toEqual(["0.1.0", "0.0.29", "0.0.28", "0.0.27"]);
   });
 

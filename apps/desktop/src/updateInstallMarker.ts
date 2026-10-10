@@ -1,7 +1,3 @@
-// FILE: updateInstallMarker.ts
-// Purpose: Persists and resolves durable desktop update install attempts across app restarts.
-// Layer: Desktop update utility
-
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as Path from "node:path";

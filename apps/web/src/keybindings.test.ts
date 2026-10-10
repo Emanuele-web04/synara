@@ -212,9 +212,7 @@ function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): Keybinding
   return { type: "or", left, right };
 }
 
-// Mirrors the production `whenModChordAllowed` guard: app-level mod chords fire outside the
-// terminal everywhere, and also from the terminal on macOS (where Cmd-chords never reach
-// the shell). `isMac` is derived from the platform inside resolveContext.
+// mirrors the production guard: mod chords fire from the terminal on macOS (Cmd never reaches the shell), everywhere outside it
 const whenModChordAllowed = whenOr(
   whenNot(whenIdentifier("terminalFocus")),
   whenIdentifier("isMac"),
@@ -234,7 +232,6 @@ function compile(bindings: TestBinding[]): ResolvedKeybindingsConfig {
   }));
 }
 
-// Mirror the server defaults here so frontend shortcut resolution stays aligned.
 const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("b"),

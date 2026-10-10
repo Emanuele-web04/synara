@@ -1,16 +1,8 @@
-// FILE: avatarImage.ts
-// Purpose: Compress a user-picked profile photo entirely on-device into a tiny, square
-// data URL so it can be persisted in localStorage without consuming much space. No I/O
-// leaves the device.
-// Layer: web profile feature.
-
-// Square output edge in CSS px. 160 covers the largest avatar (size-20 / share card) at 2x
-// without storing anything close to the original photo.
+// 160 covers the largest avatar (size-20 / share card) at 2x without storing anything close to the original photo
 const AVATAR_MAX_EDGE = 160;
 const AVATAR_QUALITY = 0.82;
 
-// Hard cap on the encoded string so a pathological image can never blow the localStorage
-// budget. Comfortable for a 160px square (~5–12 KB typical).
+// hard cap on the encoded string so a pathological image can't blow the localStorage budget
 export const AVATAR_MAX_DATA_URL_LENGTH = 200_000;
 
 export class AvatarImageError extends Error {}

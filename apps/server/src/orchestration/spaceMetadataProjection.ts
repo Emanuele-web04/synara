@@ -54,8 +54,7 @@ export const applySpaceMetadataProjection = (input: {
           rows,
           (row) => {
             const sortOrder = orderBySpaceId.get(row.spaceId);
-            // Unmoved rows are skipped so a reorder writes only the rows that changed and
-            // stays in lockstep with the in-memory read model's identity-preserving update.
+            // unmoved rows are skipped so a reorder writes only changed rows, in lockstep with the in-memory model's identity-preserving update
             return sortOrder === undefined || sortOrder === row.sortOrder
               ? Effect.void
               : input.projectionSpaceRepository.upsert({

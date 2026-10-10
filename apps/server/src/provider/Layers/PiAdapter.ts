@@ -155,11 +155,7 @@ const PI_ANTHROPIC_ENSURED_MODEL_IDS = [
 ] as const;
 type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 
-/**
- * Metadata used when an OAuth/extension Anthropic catalog replaced Pi's built-ins
- * and omitted Fable 5.1 / Fable 5 / Opus 4.8. Values mirror `@earendil-works/pi-ai`
- * Anthropic models; Fable 5.1 follows Anthropic's published pricing until pi-ai ships it.
- */
+// metadata for when an OAuth/extension Anthropic catalog replaced Pi's built-ins and omitted Fable 5.1/5/Opus 4.8 — mirrors pi-ai; Fable 5.1 follows Anthropic's published pricing
 const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
   PiAnthropicEnsuredModelId,
   {
@@ -389,9 +385,7 @@ export function makePiBashProcessSupervisor(
   };
 }
 
-// Loads the Pi SDK only when the Pi provider is actually used. The SDK brings in
-// a native clipboard module, so importing it during Synara startup can bloat the
-// desktop backend before any Pi session exists.
+// load the Pi SDK only when Pi is actually used — it pulls in a native clipboard module that bloats the backend on startup
 const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
   () => import("@earendil-works/pi-coding-agent"),
 );
@@ -429,15 +423,10 @@ interface PiSessionContext {
   session: ProviderSession;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
-  // The turn whose prompt() has been dispatched but has not committed a run
-  // yet — the SDK's isStreaming flag only flips deep inside prompt()'s async
-  // preflight, so a concurrent send must treat this as still-live rather than
-  // settled.
+  // the dispatched-but-uncommitted turn: isStreaming flips deep inside prompt()'s async preflight, so a concurrent send must read the gap as live, not settled
   promptCommitting: TurnId | undefined;
   promptCommit: Promise<void> | undefined;
-  // Set when an interrupt lands while the turn's prompt() is still in async
-  // preflight — nothing exists for abort() to reach yet. Fired on the next
-  // agent_start once the run commits; cleared when the turn completes.
+  // an interrupt during prompt() preflight has nothing for abort() to reach — fire it on agent_start once the run commits
   pendingAbortTurnId: TurnId | undefined;
   activeTurnErrorMessage?: string;
   activeAssistantItemId: RuntimeItemId | undefined;
@@ -751,11 +740,7 @@ export function getPiSupportedThinkingOptions(
   return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
 }
 
-/**
- * When Anthropic is already authenticated, ensure Fable 5.1, Fable 5, and Opus 4.8
- * appear even if an older pi-anthropic-oauth extension replaced the built-in
- * Anthropic catalog.
- */
+// ensure Fable 5.1/5/Opus 4.8 exist when an older pi-anthropic-oauth extension replaced the built-in catalog
 export function ensurePiAnthropicCatalogModels(
   available: ReadonlyArray<Model<Api>>,
   all: ReadonlyArray<Model<Api>> = available,
@@ -801,11 +786,7 @@ export function getPiDiscoverableModels(
   return ensurePiAnthropicCatalogModels(registry.getAvailable(), registry.getAll());
 }
 
-/**
- * Pi extensions own their provider catalogs, so normalize their display metadata
- * before it crosses Synara's trimmed-string RPC contract. A single malformed
- * extension model must not make the complete Pi catalog unavailable.
- */
+// extensions own their catalogs — normalize display metadata at the boundary so one malformed model can't take the whole catalog down
 export function toPiProviderModelDescriptor(
   model: Model<Api>,
   getProviderDisplayName: (provider: string) => string,
@@ -1810,8 +1791,7 @@ function isolatePiModelRuntimeFromAmbientEnvironment(
   }) as ModelRuntime["getAuth"];
 }
 
-// Keep session runtimes isolated so project extension provider registrations
-// cannot leak between threads that share an agent directory.
+// keep session runtimes isolated so project extension registrations can't leak between threads sharing an agent directory
 export async function createPiModelRuntime(
   agentDir: string,
   piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
@@ -1870,11 +1850,9 @@ export async function refreshPiOpenRouterModels(
   const base = openrouterProvider();
   const models = new Map(base.getModels().map((model) => [model.id, model]));
   for (const model of live) models.set(model.id, model);
-  // Native providers remain below models.json, preserving user model overrides.
   runtime.registerNativeProvider({
     ...base,
     getModels: () => [...models.values()],
-    // Reuse the SDK store so a later session keeps discovered capacities offline.
     refreshModels: async ({ publish }) => {
       await publish({
         persist: { models: live, lastModified: Date.now(), checkedAt: Date.now() },
@@ -2209,8 +2187,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
     };
 
-    // Bridges the common Pi extension UI primitives onto Synara's existing
-    // pending user-input flow; terminal/TUI-only APIs remain no-op by design.
+    // bridge Pi extension UI primitives onto the pending user-input flow; terminal-only APIs stay no-op by design
     const makePiExtensionUIContext = (context: PiSessionContext): ExtensionUIContext => {
       const unsupportedWarnings = new Set<string>();
       const warnUnsupported = (method: string) => {
@@ -2298,9 +2275,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           warnUnsupported("onTerminalInput");
           return () => undefined;
         },
-        // Pi extensions use status and working-message callbacks for terminal
-        // chrome. Synara has its own working header; neither belongs in the
-        // transcript as a fake tool call.
+        // status/working-message callbacks are terminal chrome — Synara has its own header; neither belongs in the transcript as a fake tool call
         setStatus() {},
         setWorkingMessage() {},
         setWorkingVisible() {},
@@ -2315,8 +2290,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         setHeader() {
           warnUnsupported("setHeader");
         },
-        // The browser owns document/thread chrome; do not turn terminal title
-        // changes into transcript rows.
+        // The browser owns document/thread chrome; do not turn terminal title changes into transcript rows.
         setTitle() {},
         async custom() {
           warnUnsupported("custom");
@@ -2653,9 +2627,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       images: ImageContent[],
     ) => {
       delete context.activeTurnErrorMessage;
-      // Marks the prompt as dispatched-but-not-yet-streaming: the SDK's
-      // isStreaming flag only flips deep inside prompt()'s async preflight, so
-      // a concurrent sendTurn/steerTurn must not read the gap as "settled".
       context.promptCommitting = turnId;
       let resolveCommit!: () => void;
       const committed = new Promise<void>((resolve) => {
@@ -2670,14 +2641,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         if (context.promptCommit === committed) context.promptCommit = undefined;
         resolveCommit();
       };
-      // A prompt owns all SDK retries, compaction and queued continuations.
-      // agent_end is per attempt; agent_settled also fires before a rejection.
+      // a prompt owns all SDK retries/compaction/queued continuations — agent_end is per attempt; agent_settled also fires before rejection
       void context.runtime.session
         .prompt(text, {
           ...(images.length > 0 ? { images } : {}),
-          // Release a waiting dispatch once prompt() either commits its own
-          // run or handles the input without a run. A rejected preflight is
-          // released by the promise rejection path below.
           preflightResult: (success) => {
             if (success) settled();
           },
@@ -2701,10 +2668,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         : Effect.promise(() => pending).pipe(Effect.uninterruptible);
     };
 
-    // A turn whose run fully settled but whose completion is still queued on
-    // the prompt() promise is stale — close it out so the next dispatch starts
-    // clean instead of joining a dead turn. A still-committing prompt
-    // (isStreaming has not flipped yet) is live, not stale.
+    // a run settled but still queued on the prompt() promise is stale — close it so the next dispatch starts clean; a still-committing prompt is live, not stale
     const closeSettledActiveTurn = (context: PiSessionContext) => {
       const turnId = context.activeTurnId;
       if (
@@ -2889,9 +2853,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return context.runtime.session.abort();
     };
 
-    // prompt()'s async preflight leaves no run for abort() to reach — an
-    // interrupt in that window would no-op and the turn would start anyway.
-    // Defer it: agent_start fires the abort once the run actually commits.
     const interruptActiveTurn = (context: PiSessionContext) => {
       const turnId = context.activeTurnId;
       if (
@@ -2900,8 +2861,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         !context.runtime.session.isStreaming
       ) {
         context.pendingAbortTurnId = turnId;
-        // There is no agent run to abort yet, but prompt preflight may be
-        // compacting. Abort that work now and keep the deferred run abort.
+        // no run to abort yet, but preflight may be compacting — abort that work now and keep the deferred run abort
         return abortSessionTurn(context);
       }
       return abortSessionTurn(context);
@@ -2909,7 +2869,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const disposeSessionContext = async (context: PiSessionContext) => {
       try {
-        // Stop retry and queued continuation before waiting for gateway drainage.
         context.runtime.session.clearQueue();
         context.runtime.session.abortRetry();
         await Effect.runPromise(
@@ -3016,8 +2975,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             context.pendingAbortTurnId !== undefined &&
             context.pendingAbortTurnId === context.activeTurnId
           ) {
-            // The committing prompt just started its run — land the interrupt
-            // that was deferred because abort() had nothing to reach yet.
             void abortSessionTurn(context).catch((cause) => {
               offerRuntimeError(context, {
                 message: toMessage(cause, "Failed to interrupt Pi turn."),
@@ -3215,8 +3172,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           return;
         }
         case "agent_end": {
-          // Capture this run's outcome without settling its retries/continuations.
-          // A handled extension command may resolve without running the agent.
           const errorMessage = context.runtime.session.agent.state.errorMessage;
           if (errorMessage) context.activeTurnErrorMessage = errorMessage;
           else delete context.activeTurnErrorMessage;
@@ -3233,8 +3188,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           return;
         }
         case "auto_retry_end": {
-          // Cancelling backoff resolves prompt() without another agent_end,
-          // while agent.state.errorMessage still contains the provider error.
+          // cancelling backoff resolves prompt() without another agent_end while agent.state.errorMessage still holds the provider error
           if (!event.success && event.finalError === "Retry cancelled") {
             context.activeTurnErrorMessage = event.finalError;
           }
@@ -3738,9 +3692,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           closeSettledActiveTurn(context);
           const liveTurnId = context.activeTurnId;
           if (liveTurnId !== undefined) {
-            // A turn is active: route the send through the SDK's follow-up
-            // queue instead of prompt(), which would throw the raw "Agent is
-            // already processing" error mid-run.
+            // with a turn active, route through the SDK follow-up queue — prompt() would throw "Agent is already processing" mid-run
             if (context.pendingAbortTurnId === liveTurnId || isPiReloadPayload(payload)) {
               return yield* sendTurnBusyError();
             }
@@ -3748,7 +3700,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             return dispatchResult(context, liveTurnId);
           }
           if (context.runtime.session.isStreaming) {
-            // A run Synara did not dispatch is active (e.g. extension-triggered).
             return yield* sendTurnBusyError();
           }
           const turnId = TurnId.makeUnsafe(crypto.randomUUID());

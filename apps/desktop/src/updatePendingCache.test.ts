@@ -1,7 +1,3 @@
-// FILE: updatePendingCache.test.ts
-// Purpose: Verifies pending update cache cleanup is deferred until updater downloads settle.
-// Layer: Desktop update tests
-
 import { describe, expect, it, vi } from "vitest";
 
 import {

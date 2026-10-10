@@ -1,9 +1,3 @@
-// FILE: cursorSkillsDiscovery.test.ts
-// Purpose: Verifies Cursor filesystem skill discovery without starting Cursor ACP.
-// Layer: Server provider tests
-// Exports: Vitest cases for cursorSkillsDiscovery (frontmatter parsing is covered
-// in skillsCatalog.test.ts where the parser now lives).
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as os from "node:os";

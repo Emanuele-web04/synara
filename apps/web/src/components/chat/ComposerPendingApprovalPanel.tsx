@@ -1,12 +1,3 @@
-// FILE: ComposerPendingApprovalPanel.tsx
-// Purpose: Detached card, floating just above the composer, that surfaces a pending
-// tool approval — the command / file context plus approve / decline / cancel actions
-// rendered as list-style choice rows. Mirrors ComposerPendingUserInputPanel (same
-// surface, spacing, chips, and scoped keyboard shortcuts) so approvals and AskUserQuestion
-// prompts read as one coherent decision surface instead of the old fused-banner look.
-// Layer: Chat composer UI
-// Exports: ComposerPendingApprovalPanel
-
 import { type ApprovalRequestId, type ProviderApprovalDecision } from "@synara/contracts";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import { type KeyboardEvent, useRef } from "react";
@@ -190,8 +181,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     });
   };
 
-  // Digit shortcuts bubble from focused controls inside this card only; a bare
-  // number key elsewhere in the app must never approve a tool request.
+  // digit shortcuts bubble from focused controls inside this card only — a bare number key elsewhere must never approve a tool request
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (isResponding || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target;

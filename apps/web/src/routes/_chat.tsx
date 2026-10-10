@@ -73,9 +73,7 @@ const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 
-// Single source of truth for the thread sidebar resize behavior. Shared by <Sidebar>
-// and the detached content-seam <SidebarRail> (via SidebarInstanceProvider) so the
-// drag handle keeps working even though the rail lives outside <Sidebar> (above the card).
+// resize config shared by <Sidebar> and the detached seam <SidebarRail> via SidebarInstanceProvider so the drag handle keeps working outside <Sidebar>
 const THREAD_SIDEBAR_RESIZABLE: SidebarResizableOptions = {
   minWidth: THREAD_SIDEBAR_MIN_WIDTH,
   shouldAcceptWidth: ({ nextWidth, wrapper }) =>
@@ -283,8 +281,7 @@ function ChatRouteGlobalShortcuts() {
     activeSpaceProjects,
     activeProject?.id ?? null,
   );
-  // The remembered project is global, so it is unusable the moment you switch Space. Fall
-  // back to this Space's most recently touched project rather than to nothing.
+  // The remembered project is global, so it is unusable the moment you switch Space. Fall back to this Space's most recently touched project rather than to nothing.
   const latestUsableProjectId = useMemo(
     () =>
       resolveLatestProjectTargetIdWithFallback(
@@ -294,8 +291,7 @@ function ChatRouteGlobalShortcuts() {
       ),
     [activeSpaceProjects, latestProjectId, projectLastActivityAt],
   );
-  // Deliberately unscoped: the persisted id is only cleared once the project is gone from
-  // the app entirely, not merely absent from the Space you happen to be in.
+  // Deliberately unscoped: the persisted id is only cleared once the project is gone from the app entirely, not merely absent from the Space you happen to be in.
   const persistedLatestProjectStillExists = resolveLatestProjectTargetId(projects, latestProjectId);
   // A bare "new chat" on the Groups surface lands in the active (or first) group; with
   // no groups at all there is no implicit container — the /hubs empty state shows.
@@ -478,8 +474,6 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command !== "chat.new") return;
-      // Fall back to the most recent project when none is focused and let the
-      // shared bootstrap apply that project's preferred environment.
       const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
       if (!target) return;
       event.preventDefault();
@@ -604,12 +598,7 @@ function ChatRouteLayout() {
     </Sidebar>
   );
 
-  // Chat column shell. The content-seam rail is the resize hit-area for the seam —
-  // the visible straight divider + depth shadow live on the route surface (see
-  // `.chat-content-card` in index.css). It sits OUTSIDE <Sidebar> so it stacks above
-  // the card, so SidebarInstanceProvider re-supplies the same resize config/side it
-  // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
-  // `data-sidebar-side` on the provider selects the seam geometry.
+  // the seam rail is the resize hit-area and sits OUTSIDE <Sidebar> to stack above the card — SidebarInstanceProvider re-supplies the same resize config so dragging still works; data-sidebar-side selects the seam geometry
   const mainContentShell = (
     <div ref={setRouteColumn} className="relative flex h-svh min-h-0 min-w-0 flex-1">
       <div aria-hidden className="app-rail-header-divider" />

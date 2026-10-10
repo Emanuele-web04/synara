@@ -1,14 +1,8 @@
-// FILE: indexedDb.ts
-// Purpose: Shared promise wrappers for the IndexedDB-backed browser storage adapters.
-// Layer: Browser storage adapter support
-
-/** Opens (creating/upgrading if needed) a single-store IndexedDB database. */
 export function openIndexedDbDatabase(input: {
   name: string;
   version: number;
   storeName: string;
   keyPath: string;
-  /** Lower-case noun used in error copy, e.g. "AppSnap icon cache". */
   label: string;
 }): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") {
@@ -32,7 +26,6 @@ export function openIndexedDbDatabase(input: {
   });
 }
 
-/** Resolves when the transaction commits; rejects on abort or error. */
 export function waitForIdbTransaction(transaction: IDBTransaction, label: string): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.addEventListener("complete", () => resolve());
@@ -45,7 +38,6 @@ export function waitForIdbTransaction(transaction: IDBTransaction, label: string
   });
 }
 
-/** Resolves with the request result; rejects with the request error (or the fallback message). */
 export function awaitIdbRequest<Result>(
   request: IDBRequest<Result>,
   errorMessage: string,

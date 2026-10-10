@@ -1,7 +1,3 @@
-// FILE: terminalContextComposerRegistry.ts
-// Purpose: Connect terminal selection actions to the composer that owns draft insertion.
-// Layer: Chat capability registry
-
 import type { TerminalContextSelection } from "./terminalContext";
 
 export type TerminalContextComposerTarget = (selection: TerminalContextSelection) => void;

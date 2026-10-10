@@ -1,6 +1,5 @@
 import type { BrowserUploadTarget } from "@synara/contracts";
 
-/** Only schema-validated values enter generated host snippets. */
 export function betterwrightLocator(target: BrowserUploadTarget): string {
   if ("selector" in target) return `page.locator(${JSON.stringify(target.selector)})`;
   const locator = target.locator;

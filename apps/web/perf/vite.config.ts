@@ -7,8 +7,7 @@ import appConfig from "../vite.config";
 export default mergeConfig(appConfig, {
   resolve: {
     alias: {
-      // Production-mode React with the Profiler enabled, so harness runs can report
-      // real commit counts/durations without dev-build overhead skewing timings.
+      // Production-mode React with the Profiler enabled, so harness runs can report real commit counts/durations without dev-build overhead skewing timings.
       "react-dom/client": "react-dom/profiling",
     },
   },

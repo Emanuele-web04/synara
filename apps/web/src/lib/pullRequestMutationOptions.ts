@@ -132,9 +132,7 @@ function invalidatePullRequestActionDetails(
       exact: true,
     });
   }
-  // A stacked merge changes every PR through the selected stack position. The action payload is
-  // intentionally small, so invalidate all cached details for this repository; standalone merges
-  // pay the same bounded invalidation and avoid a second pre-merge stack lookup.
+  // a stacked merge changes every PR through the selected stack position; the payload is small so invalidate all cached details for the repo — standalone merges pay the same bounded invalidation and skip a second stack lookup
   return queryClient.invalidateQueries({
     predicate: (query) => {
       const key = query.queryKey;
@@ -204,8 +202,7 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
       }
     },
     onError: async (_error, input, context) => {
-      // Failed intent must stop winning query-result overlays before rollback/refetch restores
-      // the last cache value and then converges on remote truth. finish is idempotent in settled.
+      // failed intent must stop winning overlays before rollback/refetch converges on remote truth; finish is idempotent in settled
       if (context) finishPullRequestActionProtection(queryClient, context.protection, "failed");
       const patch = optimisticPullRequestActionPatch(input.action);
       if (patch && context) {
@@ -229,8 +226,7 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
           rollback: context.gitRollbackByQuery,
         });
       }
-      // The command may have reached GitHub even when transport failed. Mark the rollback
-      // provisional so reconnect/refetch converges on server truth instead of assuming failure.
+      // the command may have reached GitHub even when transport failed — mark rollback provisional so reconnect/refetch converges on server truth instead of assuming failure
       await Promise.all([
         context
           ? invalidatePullRequestListScopes(queryClient, context.affectedScopes)
@@ -240,9 +236,7 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
       ]);
     },
     onSuccess: async (result, input, context) => {
-      // GitHub already accepted the action. Cache reconciliation is best-effort and must not
-      // reject this callback, because TanStack would route that callback error through onError
-      // and roll back an action that actually succeeded remotely.
+      // GitHub already accepted the action — reconciliation must not reject or TanStack routes it through onError and rolls back an action that succeeded remotely
       await Promise.allSettled([
         invalidatePullRequestListScopes(queryClient, context.affectedScopes),
         invalidatePullRequestActionDetails(queryClient, input),
@@ -298,8 +292,7 @@ function rollbackPullRequestPinInListCaches(
 export function pullRequestSetPinnedMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationKey: pullRequestMutationKeys.setPinned,
-    // Pins no longer block refreshes or unrelated PRs. The coordinator serializes only writes
-    // for the same identity, while the epochs below keep optimistic callbacks field-safe.
+    // pins no longer block refreshes — the coordinator serializes only same-identity writes while epochs keep optimistic callbacks field-safe
     networkMode: "always",
     mutationFn: (input: PullRequestSetPinnedInput) =>
       runPinMutationInIdentityOrder(queryClient, input, () =>
@@ -338,8 +331,7 @@ export function pullRequestSetPinnedMutationOptions(queryClient: QueryClient) {
       const reconcileMembership = isFinalActivePinMutation(queryClient, context);
       const affectedScopes = context.affectedScopes;
       finishPinMutation(queryClient, context);
-      // A row may exist only in an exact truncated query. Revalidate the All/exact siblings
-      // once the rapid-toggle chain settles so pin membership is added or removed correctly.
+      // A row may exist only in an exact truncated query. Revalidate the All/exact siblings once the rapid-toggle chain settles so pin membership is added or removed correctly.
       if (reconcileMembership) {
         await invalidatePullRequestListScopes(queryClient, affectedScopes);
       }
@@ -375,8 +367,7 @@ export function pullRequestCommentMutationOptions(queryClient: QueryClient) {
 export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationKey: pullRequestMutationKeys.forceRefresh,
-    // State-changing actions and snapshots are serialized; pins remain concurrent and are
-    // merged field-by-field through the retained identity protection below.
+    // State-changing actions and snapshots are serialized; pins remain concurrent and are merged field-by-field through the retained identity protection below.
     scope: { id: PULL_REQUEST_ACTION_REFRESH_SCOPE_ID },
     networkMode: "always",
     mutationFn: (input: { state: GitHubInboxState; sort?: GitHubInboxSort }) =>

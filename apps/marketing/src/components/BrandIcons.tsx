@@ -1,9 +1,3 @@
-// FILE: BrandIcons.tsx
-// Purpose: Holds small brand glyph components used across marketing sections.
-// Layer: UI component helpers
-// Exports: WorktreeIcon and shared provider brand marks
-// Depends on: react-icons marks and inline SVGs
-
 import { SiClaude } from "react-icons/si";
 import { LuSplit } from "react-icons/lu";
 
@@ -11,11 +5,7 @@ export { AntigravityIcon } from "@/components/AntigravityIcon";
 
 type IconProps = { className?: string };
 
-/**
- * Default worktrees glyph: Lucide's "split" icon, rotated 90° so the trunk
- * points up and the two branches diverge horizontally — reads as a worktree
- * fork rather than a left-to-right path split.
- */
+// Lucide's "split" rotated 90° so the trunk points up and branches diverge horizontally — reads as a worktree fork, not a left-to-right split
 export function WorktreeIcon({ className }: IconProps) {
   return (
     <span className={`inline-flex rotate-90 ${className ?? ""}`}>
@@ -24,7 +14,6 @@ export function WorktreeIcon({ className }: IconProps) {
   );
 }
 
-/** Claude mark normalized through currentColor for theme support. */
 export function ClaudeIcon({ className }: IconProps) {
   return <SiClaude className={className} aria-hidden="true" />;
 }
@@ -54,7 +43,6 @@ export function CursorIcon({ className }: IconProps) {
   );
 }
 
-/** Grok mark — solid xAI glyph normalized to currentColor for theme support. */
 export function GrokIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 1024 1024" className={className} aria-hidden="true">
@@ -70,7 +58,6 @@ export function GrokIcon({ className }: IconProps) {
   );
 }
 
-/** Pi block-letter mark — stylized "Pi" composed of square modules. */
 export function PiIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 800 800" className={className} aria-hidden="true">
@@ -84,7 +71,6 @@ export function PiIcon({ className }: IconProps) {
   );
 }
 
-/** Devin mark supplied with Synara's provider icon set. */
 export function DevinIcon({ className }: IconProps) {
   return (
     <span className={`relative inline-block shrink-0 ${className ?? ""}`} aria-hidden="true">
@@ -106,7 +92,6 @@ export function DevinIcon({ className }: IconProps) {
   );
 }
 
-/** Droid mark supplied by Factory, rendered as a currentColor mask. */
 export function DroidIcon({ className }: IconProps) {
   return (
     <span

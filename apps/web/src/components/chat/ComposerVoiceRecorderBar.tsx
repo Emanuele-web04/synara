@@ -1,8 +1,3 @@
-// FILE: ComposerVoiceRecorderBar.tsx
-// Purpose: Renders the expanded WhatsApp-style voice recorder UI inside the chat composer.
-// Layer: Chat composer presentation
-// Depends on: live waveform samples and caller-owned record/cancel/send actions.
-
 import { useEffect, useRef, useState } from "react";
 
 import { Loader2Icon, XIcon } from "~/lib/icons";

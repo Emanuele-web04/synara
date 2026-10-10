@@ -1,8 +1,3 @@
-// FILE: stagedDraftNavigation.ts
-// Purpose: Serializes draft-route creation per project slot and finalizes staged drafts only
-//          after their destination route actually commits.
-// Layer: Web navigation orchestration
-
 const inFlightDraftNavigationBySlot = new Map<string, Promise<unknown>>();
 
 export function draftNavigationSlotKey(projectId: string, entryPoint: string): string {

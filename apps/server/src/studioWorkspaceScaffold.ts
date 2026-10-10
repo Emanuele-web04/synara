@@ -1,16 +1,6 @@
-// FILE: studioWorkspaceScaffold.ts
-// Purpose: Owns the managed Studio workspace layout — the scaffolded subdirectory set and
-//          the agent-facing instruction files (AGENTS.md/CLAUDE.md) that teach providers
-//          where deliverables belong. Instructions are only written when missing so user
-//          edits are never clobbered.
-// Layer: Server workspace helper
-// Exports: STUDIO_WORKSPACE_SUBDIRECTORIES, ensureStudioWorkspaceInstructionsFiles
-
 import { Effect, FileSystem, Path } from "effect";
 
-// Relative subdirectories scaffolded under a freshly created Studio workspace root,
-// mirroring the Claude `~/Documents/Claude` Outbox layout so generated content lands in
-// predictable folders. `tmp` is scratch space the outputs listing ignores.
+// mirrors the Claude ~/Documents/Claude Outbox layout so generated content lands predictably; `tmp` is scratch the outputs listing ignores
 export const STUDIO_WORKSPACE_SUBDIRECTORIES = [
   "Inbox",
   "Context",
@@ -25,8 +15,7 @@ export const STUDIO_WORKSPACE_SUBDIRECTORIES = [
   "Outbox/YouTube",
 ] as const;
 
-// One source of truth for the instruction text; AGENTS.md is the cross-provider standard
-// (Codex, Cursor, ...), CLAUDE.md is what Claude Code actually loads.
+// AGENTS.md is the cross-provider standard; CLAUDE.md is what Claude Code actually loads
 const STUDIO_WORKSPACE_INSTRUCTIONS = `# Studio Workspace
 
 This folder is the shared workspace for Synara Studio chats. Keep it organized so the
@@ -52,11 +41,7 @@ app can attribute and surface what you produce.
 
 const INSTRUCTION_FILE_NAMES = ["AGENTS.md", "CLAUDE.md"] as const;
 
-/**
- * Writes the Studio instruction files into the workspace root, skipping any that already
- * exist. Callers treat failures as non-fatal: instructions improve agent behavior but must
- * never block creating or using the Studio container.
- */
+/** skips files that already exist — instructions improve agent behavior but must never block or clobber user edits */
 export const ensureStudioWorkspaceInstructionsFiles = Effect.fnUntraced(function* (
   workspaceRoot: string,
 ) {

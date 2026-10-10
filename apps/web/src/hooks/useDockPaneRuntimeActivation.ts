@@ -1,8 +1,3 @@
-// FILE: useDockPaneRuntimeActivation.ts
-// Purpose: React lifecycle wrapper for right-dock runtime hydration (preview vs live).
-// Layer: Web UI hook
-// Depends on: dockPaneActivation pure policy and rightDockStore pane metadata.
-
 import type { ThreadId } from "@synara/contracts";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -56,12 +51,7 @@ export function useDockPaneRuntimeActivation(input: {
         })
       : "live";
 
-  // The request callbacks read the committed active pane through a ref so their
-  // identity stays stable across pane switches. Handlers built on top of them
-  // (and the workspace file opener context value) would otherwise be recreated
-  // on every dock tab change, re-rendering every context subscriber in the
-  // chat transcript. Event handlers always fire after commit, so the ref is
-  // current by the time either callback runs.
+  // callbacks read the committed active pane through a ref so their identity stays stable — otherwise they'd be recreated per dock tab change and re-render every transcript context subscriber; handlers fire post-commit so the ref is current
   const activePaneRef = useRef<{ key: string | null; kind: RightDockPaneKind | null }>({
     key: null,
     kind: null,

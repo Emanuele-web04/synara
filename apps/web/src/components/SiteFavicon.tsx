@@ -1,11 +1,3 @@
-// FILE: SiteFavicon.tsx
-// Purpose: Render a website's favicon for a URL, falling back to the globe icon
-//          while loading and on failure (no layout shift). Probes with Image()
-//          so behavior matches the actual visible <img>, and shares a module-level
-//          status cache so a known host renders immediately on re-render.
-// Layer: Shared UI component
-// Used by: markdown source links (ChatMarkdown), InlineLinkChip (composer + user bubble).
-
 import { useEffect, useState } from "react";
 
 import { GlobeIcon } from "~/lib/icons";
@@ -29,9 +21,7 @@ export const SiteFavicon = function SiteFavicon({ url, size, className }: SiteFa
   const host = extractHostname(url) ?? (url.includes(".") ? url : null);
   const faviconSrc = host ? resolveSiteFaviconUrl(host) : null;
 
-  // Seed from the shared cache so a known host renders its icon immediately.
-  // Keyed by src: a host change derives back to the pending/fallback state in
-  // the same render, so the probe effect never sets state synchronously.
+  // Seed from the shared cache so a known host renders its icon immediately. Keyed by src: a host change derives back to the pending/fallback state in the same render, so the probe effect never sets state synchronously.
   const [probe, setProbe] = useState<{ src: string; status: "ok" | "fail" } | null>(() => {
     if (!faviconSrc) return null;
     const cached = siteFaviconStatusCache.get(faviconSrc);
@@ -43,8 +33,7 @@ export const SiteFavicon = function SiteFavicon({ url, size, className }: SiteFa
       ? probe.status
       : null;
 
-  // Probe with Image() (via the shared, de-duped helper) so Electron/file-origin
-  // behaves like the visible <img> and every consumer reuses one load per host.
+  // Probe with Image() (via the shared, de-duped helper) so Electron/file-origin behaves like the visible <img> and every consumer reuses one load per host.
   useEffect(() => {
     if (!faviconSrc) {
       return;

@@ -1,7 +1,3 @@
-// FILE: EnvironmentAutomationsSection.browser.tsx
-// Purpose: Browser-level regression tests for thread automation rows in the Environment panel.
-// Layer: Vitest browser tests
-
 import "../../../index.css";
 
 import { AutomationId, ProjectId, ThreadId, type AutomationDefinition } from "@synara/contracts";

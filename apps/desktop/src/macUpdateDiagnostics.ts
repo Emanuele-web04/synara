@@ -1,7 +1,3 @@
-// FILE: macUpdateDiagnostics.ts
-// Purpose: Collects bounded, best-effort Squirrel.Mac and launchd diagnostics after update failures.
-// Layer: Desktop update utility
-
 import * as ChildProcess from "node:child_process";
 import * as FS from "node:fs";
 import * as OS from "node:os";

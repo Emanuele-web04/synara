@@ -1,9 +1,3 @@
-// FILE: AttachmentSummaryChip.test.tsx
-// Purpose: Guards the shared count-pill chip (and its selection/comment wrappers)
-//   against label, dismiss, and tooltip regressions after consolidation.
-// Layer: Component rendering tests
-// Depends on: the summary chip wrappers and React server rendering.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

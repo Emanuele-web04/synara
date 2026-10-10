@@ -1,11 +1,3 @@
-// FILE: ToolCallGroupSummaryRow.tsx
-// Purpose: One-line disclosure for a run of tool calls. Settled runs read as a
-//          summary ("Ran 2 commands, Edited 2 files"); a live run wears its
-//          latest status or call instead. Both expand to the individual rows.
-// Layer: Web chat presentation component
-// Exports: ToolCallGroupSummaryRow
-// Depends on: DisclosureRegion/DisclosureChevron (shared disclosure motion)
-
 import { useEffect, useState, type ReactNode } from "react";
 
 import { DisclosureChevron } from "../ui/DisclosureChevron";
@@ -50,8 +42,7 @@ export function ToolCallGroupSummaryRow(props: {
 
   const shouldRenderChildren = open || keepChildrenMounted;
 
-  // The collapsed row wears its first entry's icon (favicon for web fetches),
-  // so folding a run of tool calls keeps the leading glyph of the row it hides.
+  // The collapsed row wears its first entry's icon (favicon for web fetches), so folding a run of tool calls keeps the leading glyph of the row it hides.
   const iconEntry = liveEntry ?? summary.iconEntry;
   const iconWebFetchUrl = extractWebFetchUrl(iconEntry);
 

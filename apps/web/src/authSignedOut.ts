@@ -1,6 +1,3 @@
-// FILE: authSignedOut.ts
-// Purpose: Replaces authenticated application state after the current browser session logs out.
-
 export const AUTH_SIGNED_OUT_PATH = "/signed-out";
 
 function renderSignedOutScreen(): void {

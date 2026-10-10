@@ -1,8 +1,3 @@
-// FILE: PrivacySection.tsx
-// Purpose: Homepage trust block describing the local workspace boundary and
-//          the provider boundary without implying that provider sessions stay local.
-// Layer: Marketing UI section
-
 import Link from "next/link";
 import {
   LuArrowRight,

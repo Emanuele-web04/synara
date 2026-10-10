@@ -1,7 +1,3 @@
-// FILE: CrossTaskOriginLabel.tsx
-// Purpose: Identify the source thread for conversations created by another Synara agent.
-// Layer: Chat transcript UI
-
 import { type ProviderKind, type ThreadId } from "@synara/contracts";
 import { memo, type ReactNode } from "react";
 

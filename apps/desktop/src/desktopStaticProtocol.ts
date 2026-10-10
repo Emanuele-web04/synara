@@ -1,7 +1,3 @@
-// FILE: desktopStaticProtocol.ts
-// Purpose: Resolves packaged desktop protocol requests within the prepared static root.
-// Layer: Desktop main-process policy
-
 import { existsSync } from "node:fs";
 import * as Path from "node:path";
 

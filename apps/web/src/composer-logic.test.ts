@@ -50,8 +50,7 @@ describe("detectComposerTrigger", () => {
   });
 
   it("detects a slash command mid-line after an existing chip token", () => {
-    // Claude skills render as `/skill` chips, so a second command typed after one
-    // must still open the picker even though the line no longer starts with `/`.
+    // Claude skills render as `/skill` chips, so a second command typed after one must still open the picker even though the line no longer starts with `/`.
     const text = "/refactor-code /ui";
     const trigger = detectComposerTrigger(text, text.length);
 
@@ -83,8 +82,6 @@ describe("detectComposerTrigger", () => {
   });
 
   it("does not treat a slash token containing a second slash as a slash command", () => {
-    // The slash sits after whitespace (so a token is detected), but command names
-    // are `[a-z-]+` — a query like "and/or" can never match one, so no empty picker.
     const text = "decide /and/or";
     const trigger = detectComposerTrigger(text, text.length);
 
@@ -111,7 +108,6 @@ describe("detectComposerTrigger", () => {
   });
 
   it("detects @mention trigger with query typed mid-text", () => {
-    // User typed @sr between "inspect " and "in this sentence"
     const text = "Please inspect @srin this sentence";
     const cursorAfterQuery = "Please inspect @sr".length;
 
@@ -181,7 +177,6 @@ describe("detectComposerTrigger", () => {
   });
 
   it("anchors the trigger to the last @ so adjacent mentions do not clobber each other", () => {
-    // User typed @bar directly after the @foo chip without a separating space.
     const text = "@foo@bar";
     const trigger = detectComposerTrigger(text, text.length);
 

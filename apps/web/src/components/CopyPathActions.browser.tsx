@@ -1,7 +1,3 @@
-// FILE: CopyPathActions.browser.tsx
-// Purpose: Verifies copy-path menus preserve path semantics and clipboard fallbacks.
-// Layer: Browser UI test
-
 import "../index.css";
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";

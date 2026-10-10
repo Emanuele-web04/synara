@@ -1,7 +1,3 @@
-// FILE: composerDraftModels.ts
-// Purpose: Normalizes provider-scoped model selections and resolves effective composer models.
-// Exports: Model state helpers used by persistence, actions, and the public facade.
-
 import {
   GROK_REASONING_EFFORT_OPTIONS,
   ProviderInstanceId,
@@ -772,7 +768,6 @@ export function legacyToModelSelectionByProvider(
       }
     }
   }
-  // Add/overwrite the active selection (it's authoritative for its provider)
   if (modelSelection) {
     result[modelSelectionStorageKey(modelSelection)] = modelSelection;
   }

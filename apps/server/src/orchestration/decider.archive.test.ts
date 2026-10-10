@@ -97,8 +97,7 @@ describe("decider thread archive cascade", () => {
 
     const events = result as Omit<OrchestrationEvent, "sequence">[];
     expect(events.every((event) => event.type === "thread.archived")).toBe(true);
-    // Descendants first; the commanded thread comes last so the command receipt
-    // records it as the aggregate.
+    // descendants first — the commanded thread last so the receipt records it as the aggregate
     expect(eventThreadIds(result)).toEqual([
       CHILD_THREAD_ID,
       GRANDCHILD_THREAD_ID,
@@ -143,7 +142,7 @@ describe("decider thread archive cascade", () => {
             parentThreadId: PARENT_THREAD_ID,
             archivedAt: NOW,
           }),
-          // Never archived alongside the parent, so restore leaves it untouched.
+          // never archived alongside the parent, so restore leaves it untouched
           makeThread({ id: GRANDCHILD_THREAD_ID, parentThreadId: CHILD_THREAD_ID }),
         ]),
       }),

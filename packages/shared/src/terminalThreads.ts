@@ -1,8 +1,3 @@
-// FILE: terminalThreads.ts
-// Purpose: Shared terminal identity helpers for naming, provider attribution, and run state.
-// Layer: Shared terminal metadata utilities
-// Exports: command parsing plus resolved terminal presentation metadata for web/server consumers.
-
 export const GENERIC_TERMINAL_THREAD_TITLE = "New terminal";
 export const DOCK_TERMINAL_SCOPE_PREFIX = "dock-terminal:";
 
@@ -288,7 +283,7 @@ export function terminalCliKindFromValue(value: string | null | undefined): Term
     : null;
 }
 
-// Prefer the actual spawned process name over shell aliases when attributing terminal providers.
+// prefer the actual spawned process name over shell aliases for provider attribution
 export function deriveTerminalProcessIdentity(
   command: string | null | undefined,
 ): TerminalCommandIdentity | null {
@@ -335,7 +330,6 @@ function inferCliKindFromTitle(title: string | null | undefined): TerminalCliKin
   );
 }
 
-// Convert a submitted shell command into a stable terminal identity for labels and icons.
 export function deriveTerminalCommandIdentity(command: string): TerminalCommandIdentity | null {
   const strippedCommand = command.trim();
   if (strippedCommand.length === 0) {
@@ -383,12 +377,12 @@ export function deriveTerminalCommandIdentity(command: string): TerminalCommandI
     : null;
 }
 
-// Keep the legacy string-only helper for thread-title renames and narrow call sites.
+// legacy string-only helper kept for thread-title renames and narrow call sites
 export function deriveTerminalTitleFromCommand(command: string): string | null {
   return deriveTerminalCommandIdentity(command)?.title ?? null;
 }
 
-// Consume terminal input incrementally and emit terminal identity only when Enter submits a command.
+// emit identity only when Enter submits a command
 export function consumeTerminalIdentityInput(
   buffer: string,
   data: string,
@@ -428,7 +422,7 @@ export function consumeTerminalIdentityInput(
   };
 }
 
-// Preserve the older title-only input API for server thread-title tracking.
+// preserve the older title-only API for server thread-title tracking
 export function consumeTerminalTitleInput(
   buffer: string,
   data: string,
@@ -440,7 +434,6 @@ export function consumeTerminalTitleInput(
   };
 }
 
-// Resolve terminal label, icon, and activity state from persisted metadata plus runtime status.
 export function resolveTerminalVisualIdentity(input: {
   cliKind?: TerminalCliKind | null | undefined;
   fallbackTitle: string;

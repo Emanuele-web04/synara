@@ -1,7 +1,3 @@
-// FILE: pinning.logic.test.ts
-// Purpose: Verifies shared sidebar pin normalization, limits, and ordering.
-// Layer: UI state logic test
-
 import { describe, expect, it } from "vitest";
 import {
   derivePinnedIds,

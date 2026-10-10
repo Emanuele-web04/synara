@@ -1,9 +1,3 @@
-// FILE: useThrottledStreamingValue.browser.tsx
-// Purpose: Hook-level regressions for the streaming value throttle — first change passes
-//          through, intermediate changes coalesce to the trailing edge, and deactivating
-//          snaps to the live value.
-// Layer: Web browser tests
-
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "vitest-browser-react";
 

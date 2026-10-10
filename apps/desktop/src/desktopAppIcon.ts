@@ -24,8 +24,7 @@ const APP_ICON_RESOURCE_NAMES = {
     dark: "dock-icon-dark.png",
     beta: "dock-icon-beta.png",
   },
-  // Windows and Linux have no dark artwork yet, so the dark preference falls
-  // back to the same default icon those platforms always used.
+  // Windows and Linux have no dark artwork yet, so the dark preference falls back to the same default icon those platforms always used.
   linux: {
     default: "icon.png",
     icon: "app-icon-linux.png",

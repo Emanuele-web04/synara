@@ -662,7 +662,6 @@ describe("composerDraftStore pull request context cards", () => {
 
     store.removePullRequestContext(threadId, "pr-card-2");
     store.removePullRequestContext(threadId, "pr-card-3");
-    // Removing the last card leaves no empty draft behind.
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 
@@ -934,8 +933,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
       attachmentFor(secondImage),
     ]);
 
-    // Staging is synchronous even while an earlier sync is still verifying, so
-    // a reload in that window cannot lose the newer attachment metadata.
+    // Staging is synchronous even while an earlier sync is still verifying, so a reload in that window cannot lose the newer attachment metadata.
     expect(
       useComposerDraftStore
         .getState()
@@ -972,12 +970,10 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     const firstSync = store.syncPersistedAttachments(threadId, [attachment]);
     const secondSync = store.syncPersistedAttachments(threadId, [attachment]);
 
-    // Overlapping syncs share one (slot, thread) key, so only one entry is tracked at a time.
     expect(pendingComposerAttachmentSyncGenerationCount()).toBe(before + 1);
 
     await Promise.all([firstSync, secondSync]);
 
-    // Nothing is left to invalidate once the newest sync settled, so the key must be released.
     expect(pendingComposerAttachmentSyncGenerationCount()).toBe(before);
     expect(
       useComposerDraftStore

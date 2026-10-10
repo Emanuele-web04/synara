@@ -16,13 +16,11 @@ import { ComposerSnoozeNotice } from "./ComposerSnoozeNotice";
 import { COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME } from "./composerPickerStyles";
 
 interface ComposerInputBannersProps {
-  // Drop the rounded top when rows are stacked above the composer so the banner sits
-  // flush under them.
+  // Drop the rounded top when rows are stacked above the composer so the banner sits flush under them.
   roundedTopReset: boolean;
   // `id` keys the banner so it remounts when the proposed plan changes.
   planFollowUp: { id: string; title: string | null } | null;
-  // Setup-mode control while gathering an automation's task/schedule (the exchange
-  // itself renders as bubbles in the transcript).
+  // Setup-mode control while gathering an automation's task/schedule (the exchange itself renders as bubbles in the transcript).
   automationSetup: { onCancel: () => void } | null;
   // A snoozed chat stays reachable; this strip explains what sending does.
   snooze: ComponentProps<typeof ComposerSnoozeNotice> | null;

@@ -1,8 +1,3 @@
-// FILE: appSnapIntake.ts
-// Purpose: Turns a desktop AppSnap capture into a persisted composer image attachment.
-// Layer: Web composer domain
-// Depends on: composer draft store, composer image intake, and AppSnap icon cache.
-
 import type { DesktopAppSnapCapture, ThreadId } from "@synara/contracts";
 
 import { persistAppSnapIcon, readAppSnapIcon } from "./lib/appSnapIconStore";
@@ -102,9 +97,7 @@ export async function insertAppSnapCaptureIntoDraft(
       );
       throw new Error("The AppSnap was captured, but its draft metadata was rejected.");
     }
-    // Clear recalled prompt-history state only after the new attachment has
-    // survived persistence verification. A rejected mutation must leave the
-    // user's prior draft snapshot intact.
+    // clear recalled prompt-history only after the new attachment survives persistence verification — a rejected mutation must leave the prior draft intact
     draftStore.setPromptHistorySavedDraft(threadId, null);
     persistenceResult = result;
   } catch (error) {

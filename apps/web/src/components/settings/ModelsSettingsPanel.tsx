@@ -1,7 +1,3 @@
-// FILE: ModelsSettingsPanel.tsx
-// Purpose: Own model-setting discovery, selection, and custom-model editing workflows.
-// Layer: Settings panel
-
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   GIT_TEXT_GENERATION_PROVIDERS,

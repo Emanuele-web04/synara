@@ -28,10 +28,7 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
   originalRef.current = props.original;
   const modifiedRef = useRef(props.modified);
   modifiedRef.current = props.modified;
-  // A layout switch remounts FileDiff (below), and the remount must start from
-  // the buffer as it is now, not from the snapshot parsed at the last load or
-  // reload. Bump a parse generation whenever the layout changes so the memo
-  // re-reads the current contents for the new instance.
+  // a layout switch remounts FileDiff and the remount must start from the buffer as it is now — bump a parse generation so the memo re-reads current contents
   const layout = props.renderSideBySide ? "split" : "unified";
   const [parseGeneration, setParseGeneration] = useState({ layout, version: 0 });
   if (parseGeneration.layout !== layout) {

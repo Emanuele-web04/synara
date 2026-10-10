@@ -4,9 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Deliberately no projection_projects foreign key: project projections are rebuildable,
-  // while user-selected pull request pins must survive projection repair. The persistence service
-  // caps each project at 20 pins; this trigger keeps that invariant durable for any future caller.
+  // deliberately no projection_projects FK — projections are rebuildable while user pins must survive repair; the trigger keeps the 20-pin cap durable for any caller
   yield* sql`
     CREATE TABLE IF NOT EXISTS project_pull_request_pins (
       project_id TEXT NOT NULL,

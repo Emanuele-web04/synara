@@ -1,8 +1,3 @@
-// FILE: RunningChatsQuitCoordinator.tsx
-// Purpose: Answers Electron quit requests with the running-chats confirmation.
-// Layer: Root web coordinator
-// Depends on: Desktop bridge quit IPC, the orchestration store, and the quit-resume RPC.
-
 import { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -21,8 +16,7 @@ import { RunningChatsQuitDialog, type RunningChatsQuitDecision } from "./Running
 
 export function RunningChatsQuitCoordinator() {
   const [chats, setChats] = useState<ReadonlyArray<RunningChatQuitSummary> | null>(null);
-  // True while the resume record is being written: the dialog stays up (inert) so the
-  // user does not see a bare window for the bounded wait before the desktop hides it.
+  // True while the resume record is being written: the dialog stays up (inert) so the user does not see a bare window for the bounded wait before the desktop hides it.
   const [quitting, setQuitting] = useState(false);
   const pendingRequestIdRef = useRef<string | null>(null);
 
@@ -85,8 +79,7 @@ export function RunningChatsQuitCoordinator() {
       });
 
       if (decision.resume) {
-        // The resume record must be durable before the desktop is allowed to stop the
-        // backend; the wait is bounded so quit stays snappy even if the server is slow.
+        // the resume record must be durable before the desktop may stop the backend; the wait is bounded so quit stays snappy even if the server is slow
         setQuitting(true);
         void stopped.finally(() => {
           reply(true);

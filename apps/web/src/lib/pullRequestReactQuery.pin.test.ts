@@ -268,8 +268,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     const pinContext = await Reflect.apply(options.onMutate, undefined, [pin, undefined]);
     const unpinContext = await Reflect.apply(options.onMutate, undefined, [unpin, undefined]);
     await Reflect.apply(options.onSuccess, undefined, [pin, pin, pinContext, undefined]);
-    // The earlier acknowledgement advances server truth without repainting over the newer
-    // optimistic unpin.
+    // The earlier acknowledgement advances server truth without repainting over the newer optimistic unpin.
     expect(queryClient.getQueryData(listKey)).toEqual({
       items: [{ ...identity, isPinned: false }],
     });
@@ -309,8 +308,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     }
 
     const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
-    // Simulate a cache source replacing the owned field before this mutation fails. Because
-    // the current value is no longer this mutation's optimistic value, it must be left alone.
+    // Simulate a cache source replacing the owned field before this mutation fails. Because the current value is no longer this mutation's optimistic value, it must be left alone.
     queryClient.setQueryData(listKey, {
       items: [{ ...identity, isPinned: false }],
     });

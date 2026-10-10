@@ -1,7 +1,3 @@
-// FILE: TranscriptSelectionActionLayer.tsx
-// Purpose: Renders the transcript selection floating action from controller state.
-// Layer: Chat transcript interaction UI
-
 import type { ThreadEnvironmentMode } from "@synara/contracts";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";

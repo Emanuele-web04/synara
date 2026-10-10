@@ -31,7 +31,7 @@ describe("threadSelectionStore", () => {
       const store = useThreadSelectionStore.getState();
       store.toggleThread(THREAD_A);
       store.toggleThread(THREAD_B);
-      store.toggleThread(THREAD_A); // deselect A, anchor should stay B
+      store.toggleThread(THREAD_A);
 
       expect(useThreadSelectionStore.getState().anchorThreadId).toBe(THREAD_B);
     });
@@ -48,8 +48,8 @@ describe("threadSelectionStore", () => {
 
     it("enables range select from a plain-click anchor", () => {
       const store = useThreadSelectionStore.getState();
-      store.setAnchor(THREAD_B); // simulate plain-click navigate to B
-      store.rangeSelectTo(THREAD_D, ORDERED); // shift-click D
+      store.setAnchor(THREAD_B);
+      store.rangeSelectTo(THREAD_D, ORDERED);
 
       const state = useThreadSelectionStore.getState();
       expect(state.selectedThreadIds.has(THREAD_B)).toBe(true);
@@ -65,7 +65,6 @@ describe("threadSelectionStore", () => {
       store.setAnchor(THREAD_B);
       const stateAfter = useThreadSelectionStore.getState();
 
-      // Should be referentially the same (no unnecessary re-render)
       expect(stateAfter).toBe(stateBefore);
     });
   });
@@ -82,7 +81,7 @@ describe("threadSelectionStore", () => {
 
     it("selects range from anchor to target (backward)", () => {
       const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_D); // sets anchor to D
+      store.toggleThread(THREAD_D);
       store.rangeSelectTo(THREAD_B, ORDERED);
 
       const state = useThreadSelectionStore.getState();
@@ -94,9 +93,9 @@ describe("threadSelectionStore", () => {
 
     it("keeps anchor stable across multiple range selects", () => {
       const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_B); // anchor = B
-      store.rangeSelectTo(THREAD_D, ORDERED); // selects B-D
-      store.rangeSelectTo(THREAD_E, ORDERED); // extends B-E (anchor stays B)
+      store.toggleThread(THREAD_B);
+      store.rangeSelectTo(THREAD_D, ORDERED);
+      store.rangeSelectTo(THREAD_E, ORDERED);
 
       const state = useThreadSelectionStore.getState();
       expect(state.anchorThreadId).toBe(THREAD_B);
@@ -108,22 +107,19 @@ describe("threadSelectionStore", () => {
 
     it("falls back to toggle when anchor is not in the ordered list", () => {
       const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_A); // anchor = A
-      // Range-select with a list that does NOT contain the anchor
+      store.toggleThread(THREAD_A);
       store.rangeSelectTo(THREAD_C, [THREAD_B, THREAD_C, THREAD_D]);
 
       const state = useThreadSelectionStore.getState();
-      // Should have added C and reset anchor to C
       expect(state.selectedThreadIds.has(THREAD_C)).toBe(true);
       expect(state.anchorThreadId).toBe(THREAD_C);
     });
 
     it("preserves previously selected threads outside the range", () => {
       const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_A); // select A, anchor = A
-      store.toggleThread(THREAD_B); // select B, anchor = B
+      store.toggleThread(THREAD_A);
+      store.toggleThread(THREAD_B);
 
-      // Now shift-select from B (anchor) to D — should add B, C, D but keep A
       store.rangeSelectTo(THREAD_D, ORDERED);
 
       const state = useThreadSelectionStore.getState();
@@ -152,7 +148,6 @@ describe("threadSelectionStore", () => {
       stateBefore.clearSelection();
       const stateAfter = useThreadSelectionStore.getState();
 
-      // Should be referentially the same (no unnecessary re-render)
       expect(stateAfter.selectedThreadIds).toBe(stateBefore.selectedThreadIds);
     });
   });
@@ -173,7 +168,7 @@ describe("threadSelectionStore", () => {
     it("clears anchor when the anchor thread is removed", () => {
       const store = useThreadSelectionStore.getState();
       store.toggleThread(THREAD_A);
-      store.toggleThread(THREAD_B); // anchor = B
+      store.toggleThread(THREAD_B);
       store.removeFromSelection([THREAD_B]);
 
       expect(useThreadSelectionStore.getState().anchorThreadId).toBeNull();
@@ -182,7 +177,7 @@ describe("threadSelectionStore", () => {
     it("preserves anchor when the anchor thread is not removed", () => {
       const store = useThreadSelectionStore.getState();
       store.toggleThread(THREAD_A);
-      store.toggleThread(THREAD_B); // anchor = B
+      store.toggleThread(THREAD_B);
       store.removeFromSelection([THREAD_A]);
 
       expect(useThreadSelectionStore.getState().anchorThreadId).toBe(THREAD_B);

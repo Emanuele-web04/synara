@@ -1,8 +1,3 @@
-// FILE: workspaceFileChanges.ts
-// Purpose: Stream bounded change notifications for one workspace file without
-//          recursively watching the workspace.
-// Layer: Server filesystem utility
-
 import { watch as watchNodeFileSystem } from "node:fs";
 import * as NodeFileSystem from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -66,8 +61,7 @@ function watchTargetDirectory(targetPath: string): Stream.Stream<void, Workspace
           watcher.on("error", onError);
           watcher.on("close", onClose);
 
-          // Establish the watcher before emitting the initial state. The client
-          // revalidates once after this event, closing the read-before-watch race.
+          // establish the watcher before emitting initial state — the client revalidates once after this event, closing the read-before-watch race
           Queue.offerUnsafe(queue, undefined);
           return { watcher, onError, onClose };
         },

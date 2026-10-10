@@ -10,7 +10,7 @@ describe("makeRuntimeJournalPoisonGate", () => {
 
     expect(gate.noteBlockedDrain(7, START_MS)).toBe(false);
     expect(gate.noteBlockedDrain(7, START_MS + 400)).toBe(false);
-    // Attempt limit reached, but not enough wall-clock time with zero progress.
+    // attempt limit reached but not enough wall-clock time with zero progress
     expect(gate.noteBlockedDrain(7, START_MS + 800)).toBe(false);
     expect(gate.noteBlockedDrain(7, START_MS + 1_000)).toBe(true);
   });
@@ -28,7 +28,7 @@ describe("makeRuntimeJournalPoisonGate", () => {
     const gate = makeRuntimeJournalPoisonGate({ attemptLimit: 2, minBlockedMs: 1_000 });
 
     expect(gate.noteBlockedDrain(7, START_MS)).toBe(false);
-    // The cursor moved: whatever blocked before was not this row's fault.
+    // the cursor moved — whatever blocked before wasn't this row's fault
     expect(gate.noteBlockedDrain(8, START_MS + 5_000)).toBe(false);
     expect(gate.noteBlockedDrain(8, START_MS + 5_500)).toBe(false);
     expect(gate.noteBlockedDrain(8, START_MS + 6_000)).toBe(true);

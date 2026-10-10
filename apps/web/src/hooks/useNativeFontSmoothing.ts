@@ -1,8 +1,3 @@
-// FILE: useNativeFontSmoothing.ts
-// Purpose: Applies the optional platform font-smoothing preference to the app root.
-// Layer: Web appearance override hook
-// Exports: useNativeFontSmoothing
-
 import { useEffect } from "react";
 import { useAppSettings } from "../appSettings";
 import { isMacNavigatorPlatform } from "../lib/utils";

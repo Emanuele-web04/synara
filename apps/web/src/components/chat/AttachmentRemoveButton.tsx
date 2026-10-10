@@ -1,15 +1,9 @@
-// FILE: AttachmentRemoveButton.tsx
-// Purpose: Shared circular "remove" affordance for composer attachments. One primitive
-//   keeps dismiss behavior consistent while each attachment shape chooses placement.
-// Layer: Chat composer presentation
-
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 export type AttachmentRemoveButtonSize = "sm" | "md";
 export type AttachmentRemoveButtonPlacement = "corner" | "center-right";
-// `solid` is the high-contrast badge on image/file attachment tiles; `ghost` is
-// the subtle dismiss tucked inside compact count pills (selections, comments).
+// `solid` is the high-contrast badge on image/file attachment tiles; `ghost` is the subtle dismiss tucked inside compact count pills (selections, comments).
 export type AttachmentRemoveButtonTone = "solid" | "ghost";
 
 const ATTACHMENT_REMOVE_BUTTON_SIZE_STYLES: Record<

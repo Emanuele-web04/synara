@@ -1,7 +1,3 @@
-// FILE: providerStatusCache.test.ts
-// Purpose: Verifies cache helpers for provider readiness snapshots.
-// Exports: Vitest coverage for tolerant cache reads and atomic cache writes.
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import fs from "node:fs";
 import { Effect, FileSystem, Path } from "effect";

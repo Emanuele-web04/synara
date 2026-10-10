@@ -1,7 +1,3 @@
-// FILE: rateLimits.ts
-// Purpose: Centralizes rate-limit parsing, normalization, formatting, and row derivation
-// for provider runtime events so UI components can stay presentation-only.
-
 import type { OrchestrationThread } from "@synara/contracts";
 import { providerUsageLearnMoreHref } from "@synara/shared/providerUsage";
 
@@ -32,8 +28,6 @@ export interface VisibleRateLimitRow {
   windowDurationMins?: number;
 }
 
-/** Activity kinds that carry account rate-limit payloads. Shared with the store selector
- *  that narrows usage subscribers to these activities, so the two stay in sync. */
 export const ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
   "account.rate-limits.updated",
   "account.rate-limited",
@@ -105,14 +99,11 @@ export function normalizeRateLimitLabel(
     .trim()
     .toLowerCase()
     .replace(/[_\s-]+/g, "_");
-  // Named pools can share the same duration as standard limits. Keep the pool prefix so
-  // `Core 5h` and `5h` render as separate meters instead of collapsing into one row.
+  // named pools can share a duration with standard limits — keep the pool prefix so `Core 5h` and `5h` render as separate meters
   if (normalized.startsWith("core_")) {
     return humanizeLabel(label);
   }
-  // Claude Code calls `seven_day_overage_included` the Fable limit. It is a model
-  // sublimit, distinct from both the account's weekly limit and paid usage credits.
-  // Resolve named buckets before duration so all weekly models keep their identity.
+  // Claude Code calls seven_day_overage_included the Fable limit — a model sublimit distinct from the weekly limit and paid credits; resolve named buckets before duration so weekly models keep identity
   if (
     normalized === "seven_day_fable" ||
     normalized === "weekly_fable" ||
@@ -402,7 +393,6 @@ export function formatRateLimitRemainingPercent(remainingPercent: number | undef
   return `${Math.round(Math.min(100, Math.max(0, remainingPercent)))}%`;
 }
 
-/** Relative reset countdown, e.g. "Resets in 2h 16m" / "Resets in 5d 11h". */
 export function formatRateLimitResetCountdown(resetsAt: string): string {
   const resetMs = Date.parse(resetsAt);
   if (Number.isNaN(resetMs)) {

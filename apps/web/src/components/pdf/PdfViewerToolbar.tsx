@@ -1,10 +1,3 @@
-// FILE: PdfViewerToolbar.tsx
-// Purpose: Top chrome bar for the in-app PDF viewer. Mirrors the reference UI:
-//          file name + "PDF" label on the left, centered page navigation, and
-//          zoom controls + the shared "Open in editor" split button on the right.
-// Layer: Web PDF viewer chrome
-// Exports: PdfViewerToolbar
-
 import { useState } from "react";
 
 import {
@@ -59,8 +52,7 @@ export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolba
   return (
     <div
       className={cn(
-        // Match the breadcrumb file-preview header height (h-10) so swapping
-        // between a PDF and a text file in the same pane doesn't jump the chrome.
+        // match the breadcrumb file-preview header height (h-10) so swapping between PDF and text in the same pane doesn't jump the chrome
         "flex h-10 shrink-0 items-center gap-2 px-3",
         CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
       )}
@@ -172,8 +164,7 @@ function PdfPageIndicator({
   numPages: number;
   onJumpToPage: (pageNumber: number) => void;
 }) {
-  // The caller keys this editor by currentPage, so every navigation gets a new
-  // draft even when the page sequence returns A -> B -> A.
+  // the caller keys this editor by currentPage, so every navigation gets a new draft even when the sequence returns A → B → A
   const [draft, setDraft] = useState(String(currentPage));
 
   const commit = () => {
@@ -181,8 +172,7 @@ function PdfPageIndicator({
     if (Number.isFinite(parsed)) {
       const clamped = Math.min(Math.max(parsed, 1), Math.max(numPages, 1));
       onJumpToPage(clamped);
-      // Canonicalize in place for jumps that clamp to the current page: the
-      // keyed remount only resets the draft when the page actually changes.
+      // canonicalize in place for jumps that clamp to the current page — the keyed remount only resets the draft when the page actually changes
       setDraft(String(clamped));
     } else {
       setDraft(String(currentPage));

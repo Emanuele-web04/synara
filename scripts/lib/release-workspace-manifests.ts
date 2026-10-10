@@ -1,7 +1,3 @@
-// FILE: release-workspace-manifests.ts
-// Purpose: Single source for workspace importers copied into release verification/staging roots.
-// Layer: Release/build helper
-
 export const RELEASE_WORKSPACE_MANIFEST_PATHS = [
   "package.json",
   "apps/server/package.json",

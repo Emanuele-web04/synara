@@ -59,16 +59,7 @@ export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_
  */
 export const CHAT_SURFACE_HEADER_PADDING_X_CLASS = "px-3 sm:px-5";
 
-/**
- * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace
- * header, dock pane + tab strip headers, diff panel header).
- * Implemented as the `.chat-surface-divider` component class (a 1px background gradient,
- * see index.css) rather than a CSS border: it reads from the SAME `--app-surface-divider`
- * token as the vertical sidebar↔chat seam, and — because it's a gradient — the seam corner
- * retracts it 1px so the horizontal hairline butts against the vertical seam instead of
- * crossing it (overlapping 1px lines double their alpha into a brighter dot). Apply
- * alongside {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} so heights and dividers line up.
- */
+// a 1px background gradient (not border): reads the same --app-surface-divider token as the sidebar seam, and the seam corner retracts it 1px so the hairline butts against the vertical seam instead of crossing (overlapping 1px lines double alpha into a brighter dot)
 export const CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME = "chat-surface-divider";
 
 /**
@@ -127,12 +118,7 @@ export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 );
 
-/**
- * Geometry shared by every chip glyph, muting excluded. Status glyphs (a pull
- * request's state, say) carry meaning in their color and want this one: fading
- * them washes the signal out, which is exactly what a chrome icon wants and a
- * status icon never does.
- */
+// status glyphs (PR state) carry meaning in their color — the chrome-icon fade would wash the signal out, which is what chrome wants and status never does
 export const CHAT_SURFACE_CHIP_GLYPH_CLASS_NAME = "size-3.5 shrink-0";
 
 /**

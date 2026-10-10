@@ -1,8 +1,3 @@
-// FILE: voiceRecorderEncoding.ts
-// Purpose: Converts chunked browser microphone samples directly into normalized mono WAV bytes.
-// Layer: Client audio utility
-// Exports: encodeVoiceRecordingWav
-
 export interface EncodedVoiceRecordingWav {
   readonly bytes: ArrayBuffer;
   readonly durationMs: number;
@@ -81,8 +76,7 @@ export function encodeVoiceRecordingWav(
           leftIndex >= inputSampleCount - 1
             ? leftValue
             : (chunk?.[localIndex + 1] ?? chunks[chunkIndex + 1]?.[0] ?? leftValue);
-        // The legacy pipeline materialized interpolation into Float32Array before
-        // PCM conversion. Preserve that rounding so clips stay byte-for-byte identical.
+        // The legacy pipeline materialized interpolation into Float32Array before PCM conversion. Preserve that rounding so clips stay byte-for-byte identical.
         sample = Math.fround(leftValue + (rightValue - leftValue) * (sourceIndex - leftIndex));
       }
       const clamped = Math.max(-1, Math.min(1, sample));

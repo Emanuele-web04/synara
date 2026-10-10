@@ -1,26 +1,14 @@
-// FILE: sqliteMemoryBudget.ts
-// Purpose: Sizes SQLite's page cache and mmap window to the host's physical memory.
-// Layer: Persistence tuning (pure; no runtime dependencies).
-
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
 
 export interface SqliteMemoryBudget {
-  /** `PRAGMA cache_size` value: negative KiB, i.e. `-(bytes / 1024)`. */
+  /** negative KiB, i.e. `-(bytes / 1024)` */
   readonly cacheSizePragma: number;
-  /** `PRAGMA mmap_size` value in bytes. */
+  /** `PRAGMA mmap_size` in bytes */
   readonly mmapSizeBytes: number;
 }
 
-/**
- * The event log alone can exceed a gigabyte, so the 2 MB SQLite default page
- * cache thrashes during projector replay and large snapshot reads. Big hosts
- * get a 256 MB cache plus a 1 GiB mmap window. Both are on-demand ceilings, but
- * mmap'd pages and the heap cache still compete with the renderer and provider
- * CLIs for physical memory: on an 8 GB laptop the same ceilings push the
- * machine into swap during startup, which is far slower than SQLite re-reading
- * a page from disk. Scale the budget with what the host actually has.
- */
+/** the event log can exceed a GB so the 2MB default cache thrashes during replay — but mmap pages and heap cache compete with the renderer and provider CLIs: on an 8GB laptop the same ceilings push the machine into swap during startup; scale with what the host has */
 export function resolveSqliteMemoryBudget(totalMemoryBytes: number): SqliteMemoryBudget {
   const total = Number.isFinite(totalMemoryBytes) && totalMemoryBytes > 0 ? totalMemoryBytes : 0;
   if (total >= 24 * GIB) {

@@ -1,7 +1,4 @@
-/**
- * Adds a durable archived_at marker so legacy thread.archived/thread.unarchived
- * events can keep their semantics during replay instead of being normalized away.
- */
+/** durable archived_at so legacy archived/unarchived events keep their semantics during replay */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
 

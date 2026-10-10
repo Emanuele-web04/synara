@@ -1,10 +1,3 @@
-/**
- * Provider event logger helper.
- *
- * Best-effort writer for observability logs. Each record is formatted as a
- * single effect-style text line in a thread-scoped file. Failures are
- * downgraded to warnings so provider runtime behavior is unaffected.
- */
 import path from "node:path";
 
 import type { ThreadId } from "@synara/contracts";

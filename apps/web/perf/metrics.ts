@@ -1,8 +1,3 @@
-// FILE: perf/metrics.ts
-// Purpose: Shared measurement helpers for the transcript performance harnesses.
-// Exports: FrameReport, DurationStats, percentile, frameReport, durationStats, nextFrame,
-//          createFrameCollector, sleep, installCostToggleStyles
-
 export type FrameReport = {
   count: number;
   droppedFrames: number;
@@ -145,8 +140,7 @@ export function installCostToggleStyles(): void {
       }
     `;
   }
-  // Composer glass: `glass=off` drops the backdrop blur; any other value is used verbatim
-  // as the filter (e.g. `glass=blur(20px)`), so paired runs can cost alternative radii.
+  // Composer glass: `glass=off` drops the backdrop blur; any other value is used verbatim as the filter (e.g. `glass=blur(20px)`), so paired runs can cost alternative radii.
   const glass = params.get("glass");
   if (glass !== null) {
     style.textContent += `

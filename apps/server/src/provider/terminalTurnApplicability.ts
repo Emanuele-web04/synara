@@ -10,9 +10,7 @@ export type TerminalTurnApplicability =
       readonly reason: "matches-active-turn" | "implicit-active-turn" | "no-active-turn";
     };
 
-// A started event may confirm the current turn, but it must never transfer
-// lifecycle ownership from one active turn to another. Missing identity stays
-// applicable for providers that do not expose a turn id on every event.
+// a started event may confirm the current turn but must never transfer lifecycle ownership between active turns; missing identity stays applicable for providers without per-event turn ids
 export function isStartedTurnApplicable(input: {
   readonly activeTurnId: string | null | undefined;
   readonly eventTurnId: string | null | undefined;
@@ -22,9 +20,7 @@ export function isStartedTurnApplicable(input: {
   return activeTurnId === undefined || eventTurnId === undefined || activeTurnId === eventTurnId;
 }
 
-// Terminal events can arrive after a newer turn has become active. Keep the
-// event's own turn id for per-turn cleanup, but only let the current turn (or
-// an intentionally unscoped terminal event) mutate thread lifecycle state.
+// terminal events can arrive after a newer turn is active — keep the event's own turn id for per-turn cleanup but only the current turn (or unscoped terminal) mutates lifecycle
 export function classifyTerminalTurnApplicability(input: {
   readonly activeTurnId: string | null | undefined;
   readonly eventTurnId: string | null | undefined;

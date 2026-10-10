@@ -357,12 +357,7 @@ export function useChatTurnSubmission({
         queuedChatTurn?.images ??
         useComposerDraftStore.getState().draftsByThreadId[activeThread.id]?.images ??
         composerImages;
-      // AppSnap captures persist as IndexedDB blobs and hydrate into `images`
-      // asynchronously (see AppSnapCoordinator). Right after a reload the user can
-      // hit send before that hydration finishes; without this, the not-yet-hydrated
-      // capture would be silently dropped from the message and then have its blob
-      // deleted when the composer clears after send. Live sends only: a queued turn
-      // already captured a fully-resolved image snapshot when it was queued.
+      // AppSnap captures hydrate from IndexedDB asynchronously; without this a send right after reload would silently drop the capture and delete its blob
       if (queuedChatTurn === null) {
         const pendingBlobAttachments = findPendingBlobComposerAttachments({
           persistedAttachments:
@@ -444,8 +439,7 @@ export function useChatTurnSubmission({
         composerFileCommentsForSend.length > 0 ||
         sendableComposerTerminalContexts.length > 0 ||
         sendableComposerPastedTexts.length > 0;
-      // Queued chat turns already captured their intended mode. Live plan follow-ups
-      // with attachments must use the normal send path so references are preserved.
+      // queued turns already captured their intended mode; live plan follow-ups with attachments use the normal send path so references are preserved
       if (isLivePlanFollowUpSubmission) {
         const followUp = resolvePlanFollowUpSubmission({
           draftText: trimmed,
@@ -497,8 +491,7 @@ export function useChatTurnSubmission({
         const handledSlashCommand =
           await lateSendHandlers.handleStandaloneSlashCommand(trimmedPromptForSend);
         if (handledSlashCommand) {
-          // A slash command (e.g. /clear) consumes the composer, so abandon any in-progress
-          // automation setup rather than leaving a stale banner/request behind.
+          // a slash command consumes the composer — abandon in-progress automation setup rather than leaving a stale banner
           pendingAutomationConversationRef.current = null;
           setPendingAutomationConversation(null);
           return true;
@@ -773,10 +766,7 @@ export function useChatTurnSubmission({
       const composerPullRequestContextsSnapshot = [...sendableComposerPullRequestContexts];
       const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
       const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
-      // Trailing blocks are appended innermost-to-outermost: assistant selections,
-      // terminal contexts, file comments, pasted text, pull request contexts, then
-      // browser annotations (outermost). The display extractors unwrap them in the
-      // reverse order.
+      // trailing blocks append innermost-to-outermost (selections, terminal, file comments, pasted text, PR contexts, browser annotations); extractors unwrap in reverse
       const messageTextForSend = appendBrowserAnnotationsToPrompt(
         appendPullRequestContextsToPrompt(
           appendPastedTextsToPrompt(
@@ -840,9 +830,7 @@ export function useChatTurnSubmission({
           sizeBytes: file.sizeBytes,
         })),
       ];
-      // Sending the first message flips the centered empty landing into a normal
-      // transcript. Clear session-only landing overrides when default-open is enabled;
-      // otherwise keep the transition closed.
+      // sending the first message flips the centered empty landing into a normal transcript; clear session-only landing overrides when default-open is enabled
       if (isCenteredEmptyLanding) {
         setEnvironmentPanelPreferenceOpen(
           resolveEnvironmentPanelPreferenceAfterFirstSend({
@@ -892,8 +880,7 @@ export function useChatTurnSubmission({
           description: toastCopy.description,
         });
       }
-      // Queued turns are dispatched from their captured snapshot, so this send path
-      // must not clear a separate live draft the user may already be editing.
+      // queued turns dispatch from their captured snapshot — this path must not clear a separate live draft the user may be editing
       if (queuedChatTurn === null) {
         promptHistoryNavigationRef.current = null;
         applyingPromptHistoryNavigationRef.current = false;
@@ -906,8 +893,7 @@ export function useChatTurnSubmission({
         setComposerHighlightedItemId(null);
         setComposerCursor(0);
         setComposerTrigger(null);
-        // A clicked submit button steals focus; return it after the controlled
-        // draft reset so rapid follow-up typing lands in the composer.
+        // a clicked submit steals focus; return it after the controlled draft reset so rapid typing lands in the composer
         scheduleComposerFocus();
       }
 

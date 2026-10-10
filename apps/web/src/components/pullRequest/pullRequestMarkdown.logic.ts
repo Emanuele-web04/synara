@@ -1,18 +1,7 @@
-// FILE: pullRequestMarkdown.logic.ts
-// Purpose: Pure GitHub-flavored preprocessing for PR descriptions and comments. Bot and
-//          template bodies lean on raw HTML that the chat renderer escapes into visible tags:
-//          `<details>/<summary>` blocks become structured sections a component can render as
-//          native collapsibles, and standalone `<br>` tags become newlines. Both passes are
-//          fence-aware so code samples survive verbatim.
-// Layer: Web domain helpers (no React)
-// Exports: PullRequestMarkdownSection, stripHtmlComments, preparePullRequestMarkdown,
-//          splitPullRequestMarkdownSections, pullRequestMarkdownPreview
-
 const FENCE_PATTERN = /```[\s\S]*?```|~~~[\s\S]*?~~~/g;
 const FENCED_CODE_SPLIT_PATTERN = /(```[\s\S]*?```|~~~[\s\S]*?~~~)/;
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
-// Inline formatting wrappers GitHub renders invisibly; the chat renderer would show them as
-// literal tags (bot badges love <sub> nesting).
+// inline formatting wrappers GitHub renders invisibly; the chat renderer would show them as literal tags
 const FORMATTING_TAG_PATTERN = /<\/?(?:sub|sup|ins|kbd|samp)>/gi;
 const HTML_LINE_BREAK_PATTERN = /<br\s*\/?>/gi;
 const DETAILS_PATTERN =

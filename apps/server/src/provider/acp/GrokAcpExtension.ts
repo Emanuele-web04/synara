@@ -71,11 +71,7 @@ export function makeGrokQuestionResponse(
     : { outcome: "accepted", answers: acceptedAnswers, annotations: {} };
 }
 
-/**
- * Grok Build's reverse ACP request for handing a completed native plan to the
- * client. Grok currently prefixes xAI extension methods with `_` on the wire,
- * while older builds used the bare method name, so the adapter accepts both.
- */
+// Grok prefixes xAI extension methods with `_` on the wire; older builds used the bare name — accept both
 export const GROK_EXIT_PLAN_MODE_METHODS = ["_x.ai/exit_plan_mode", "x.ai/exit_plan_mode"] as const;
 
 export const GrokExitPlanModeRequest = Schema.Struct({
@@ -94,11 +90,7 @@ export function extractGrokExitPlanMarkdown(
   return planMarkdown && planMarkdown.length > 0 ? planMarkdown : undefined;
 }
 
-/**
- * Synara owns the approval step after the planning turn settles. Returning a
- * semantic cancellation keeps Grok's native plan-mode write gate active and
- * avoids both auto-implementation and Grok's misleading client-disconnect path.
- */
+// Synara owns approval after the planning turn — a semantic cancellation keeps Grok's native plan-mode write gate active and avoids auto-implement plus the misleading client-disconnect path
 export function makeGrokExitPlanModeCapturedResponse(): {
   readonly outcome: "cancelled";
   readonly feedback: string;

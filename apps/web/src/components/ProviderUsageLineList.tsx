@@ -1,7 +1,3 @@
-// FILE: ProviderUsageLineList.tsx
-// Purpose: Shared provider-usage line renderer for settings cards and compact popovers.
-// Keeps label/value/subtitle semantics consistent while allowing each surface its own density.
-
 import type { OpenUsageUsageLine } from "~/lib/openUsageRateLimits";
 import { cn } from "~/lib/utils";
 

@@ -1,11 +1,3 @@
-// FILE: scratchWorkspaces.ts
-// Purpose: Per-thread scratch working directories for provider sessions that
-//          start before any project workspace exists (e.g. a chat's first
-//          turn). The root stays in the user's cache so it is outside project
-//          ancestry and outside temporary directories writable by agents.
-// Layer: Server filesystem utility
-// Exports: ensureIsolatedScratchWorkspace
-
 import { createHash } from "node:crypto";
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -136,8 +128,7 @@ function secureOwnedLegacyRoot(legacyWorkspaceRoot: string): boolean {
     const writableByOtherUsers = (openedStat.mode & 0o022) !== 0;
     const hasStickyBit = (openedStat.mode & 0o1000) !== 0;
     if (writableByOtherUsers && !hasStickyBit) {
-      // Keep legacy multi-user access, but prevent other users from replacing
-      // an owned workspace entry between validation and provider startup.
+      // keep legacy multi-user access but prevent other users from replacing an owned workspace entry between validation and provider startup
       fchmodSync(descriptor, (openedStat.mode & 0o7777) | 0o1000);
     }
     const currentStat = lstatSync(legacyWorkspaceRoot);

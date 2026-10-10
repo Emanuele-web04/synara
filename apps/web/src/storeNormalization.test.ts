@@ -268,8 +268,7 @@ function expectEquivalent(previous: Thread["activities"], batch: readonly Thread
   expect(accumulated.result.map((activity) => activity.id)).toEqual(
     oracle.result.map((activity) => activity.id),
   );
-  // Reference-identity contract: both must fall back to `previous` when nothing changed, because
-  // the reducer uses `next === thread.activities` to decide whether to write the thread at all.
+  // reference-identity contract: both must fall back to `previous` when nothing changed — the reducer uses `next === thread.activities` to decide whether to write at all
   expect(accumulated.result === previous).toBe(oracle.result === previous);
 }
 
@@ -306,7 +305,6 @@ describe("createThreadActivityAccumulator", () => {
     const previous = [makeActivity({ id: "activity-seed", sequence: 0 }), existing];
     const batch: ThreadActivity[] = [
       makeActivity({ id: "activity-new", sequence: 2 }),
-      // Poorer re-delivery of an existing id: must merge in place and report "unchanged".
       makeActivity({
         id: "activity-command",
         kind: existing.kind,
@@ -315,9 +313,7 @@ describe("createThreadActivityAccumulator", () => {
         payload: { title: "Ran command" },
         sequence: 1,
       }),
-      // Byte-identical re-delivery: must report "unchanged".
       { ...existing },
-      // Richer re-delivery of a plain activity: must replace in place at its original index.
       makeActivity({ id: "activity-seed", payload: richPayload, sequence: 0 }),
       makeActivity({ id: "activity-last", sequence: 3 }),
     ];
@@ -362,7 +358,6 @@ describe("createThreadActivityAccumulator", () => {
     expectEquivalent(previous, batch);
 
     const accumulated = foldWithAccumulator(previous, batch).result;
-    // The still-pending approval survives the cap; the resolved one is dropped with the rest.
     expect(accumulated.some((activity) => activity.id === pendingApproval.id)).toBe(true);
     expect(accumulated.some((activity) => activity.id === resolvedApproval.id)).toBe(false);
   });

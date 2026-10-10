@@ -1,14 +1,3 @@
-/**
- * HTTP route for the Synara agent gateway MCP endpoint.
- *
- * Registers `POST /mcp` (streamable-HTTP MCP, stateless JSON responses) plus
- * spec-mandated method handling for GET/DELETE. Authentication is a
- * per-session bearer token minted by AgentGatewayCredentials and injected into
- * provider sessions; the global server auth stack is deliberately not used
- * here because provider child processes have no session cookies.
- *
- * @module agentGateway/httpRoute
- */
 import { Effect, Layer, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -144,9 +133,7 @@ const stdioBootstrapRouteLayer = HttpRouter.add(
   }),
 );
 
-// The streamable-HTTP transport allows servers to reject GET (no
-// server-initiated stream) with 405; DELETE is session teardown, and this
-// server is stateless, so both are explicit non-endpoints.
+// streamable-HTTP allows rejecting GET with 405; DELETE is session teardown and this server is stateless — both explicit non-endpoints
 const getRouteLayer = HttpRouter.add(
   "GET",
   AGENT_GATEWAY_MCP_PATH,

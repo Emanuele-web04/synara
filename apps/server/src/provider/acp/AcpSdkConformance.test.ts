@@ -1,5 +1,3 @@
-// Verifies the current Synara ACP boundary against an official-SDK subprocess.
-
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as os from "node:os";

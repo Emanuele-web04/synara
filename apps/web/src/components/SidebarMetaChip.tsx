@@ -1,8 +1,3 @@
-// FILE: SidebarMetaChip.tsx
-// Purpose: Tooltip-backed meta badges shown on thread rows (handoff, fork, temporary, etc.).
-// Layer: Sidebar UI primitive
-// Exports: SidebarMetaChip, SidebarMetaChipStack, SidebarMetaChipPlaceholder
-
 import type { ReactNode } from "react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 

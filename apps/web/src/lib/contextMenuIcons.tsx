@@ -1,9 +1,4 @@
-// FILE: contextMenuIcons.tsx
-// Purpose: Icons for imperative context menus, matching the glyphs the same actions use in React UI.
-// Layer: web UI utility
-// Exports: THREAD_CONTEXT_MENU_ICONS
-// Why: Native menus cannot render React components, so Central glyphs are passed by basename and
-//      other icon sets are rendered to SVG markup from the same components the app shows.
+// native menus can't render React — Central glyphs pass by basename, other sets are rendered to SVG markup from the same components the app shows
 
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -43,6 +38,5 @@ export const THREAD_CONTEXT_MENU_ICONS = {
   openInTerminal: renderToStaticMarkup(<TerminalIcon />),
   // Same glyph as the thread row's hover archive button.
   archive: renderToStaticMarkup(<THREAD_ARCHIVE_ICON size={24} />),
-  // Same glyph as the delete rows in the sidebar project and space menus.
   delete: renderToStaticMarkup(<Trash2 />),
 } as const;

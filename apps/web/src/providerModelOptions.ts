@@ -57,16 +57,10 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
-// Normalize known families to their canonical casing, keeping the provider's
-// variant wording. Unknown or freeform names pass through unchanged.
 function normalizeCatalogModelName(name: string): string {
   return normalizeModelDisplayName(name);
 }
 
-/**
- * Returns the provider provenance shown when a model is detached from its
- * normal upstream-provider group (for example, inside Favourites).
- */
 export function providerModelOptionProvenanceLabel(input: {
   provider: ProviderKind;
   option: ProviderModelOption;
@@ -188,7 +182,6 @@ export function mergeDynamicModelOptions(input: {
     upstreamProviderName?: string | null | undefined;
   }>;
 }): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  // Custom and selected-model placeholders have generated names, not curated metadata.
   const staticNameBySlug = new Map(
     input.staticOptions.filter((model) => !model.isCustom).map((model) => [model.slug, model.name]),
   );
@@ -374,7 +367,6 @@ export function groupProviderModelOptionsWithFavorites(input: {
   ];
 }
 
-/** Long grouped model lists collapse provider sections to keep submenus scannable. */
 export const COLLAPSIBLE_MODEL_GROUP_THRESHOLD = 3;
 
 export function shouldUseCollapsibleModelGroups(groupCount: number, isSearching: boolean): boolean {

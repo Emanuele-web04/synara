@@ -23,8 +23,7 @@ export function startVisibleInterval(onTick: () => void, intervalMs: number): ()
     if (intervalId !== null) {
       return;
     }
-    // Keep the initial refresh asynchronous for React Compiler, as useNowMs did.
-    // The same refresh makes elapsed labels current immediately after resuming.
+    // Keep the initial refresh asynchronous for React Compiler, as useNowMs did. The same refresh makes elapsed labels current immediately after resuming.
     refreshId = window.setTimeout(() => {
       refreshId = null;
       onTick();

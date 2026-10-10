@@ -1,8 +1,3 @@
-// FILE: promptAttachments.test.ts
-// Purpose: Locks provider prompt attachment filtering so UI-only context chips do not reach native providers.
-// Layer: Provider adapter utility tests
-// Depends on: promptAttachments helper and shared chat attachment contracts.
-
 import { MessageId, type ChatAttachment } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

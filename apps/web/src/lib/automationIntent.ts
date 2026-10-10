@@ -1,9 +1,3 @@
-// FILE: automationIntent.ts
-// Purpose: Detects when a normal chat prompt is actually asking Synara to create an automation.
-// Layer: Web composer helper
-// Exports: automation intent parsers, resolver, and cadence/name formatters.
-// Depends on: AutomationSchedule contract shared with the automation API.
-
 import type {
   AutomationCompletionPolicy,
   AutomationMode,
@@ -139,7 +133,7 @@ function normalizeSearchText(value: string): string {
     .toLowerCase();
 }
 
-// Plain composer text is intentionally conservative so questions keep reaching the model.
+// plain composer text is intentionally conservative so questions keep reaching the model
 function isLikelyPlainAutomationQuestion(value: string): boolean {
   const text = normalizeInlineText(value);
   if (!text) {
@@ -160,7 +154,6 @@ function isLikelyAutomationQuestionCandidate(value: string): boolean {
   );
 }
 
-// Allows natural requests like "could you remind me every day" without reopening broad questions.
 function stripPlainAutomationPoliteRequest(value: string): string | null {
   const normalized = normalizeInlineText(value);
   const match = PLAIN_INVOCATION_POLITE_REQUEST_PATTERN.exec(normalized);
@@ -189,7 +182,6 @@ function isLikelyPlainAutomationAction(value: string, politeRequest: boolean): b
   );
 }
 
-// Clear creation phrasing may need AI fallback even when local schedule parsing is incomplete.
 export function extractPlainChatAutomationCreationInvocation(value: string): string | null {
   const normalizedInvocation = normalizeInlineText(value);
   if (!normalizedInvocation) {
@@ -207,9 +199,7 @@ export function extractPlainChatAutomationCreationInvocation(value: string): str
   return PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(candidate) ? candidate : null;
 }
 
-// Keeps a clarification carry-forward parseable as an automation across turns. Explicit
-// /automation markers and cadence-only remainders lose their trigger once stripped, so we
-// re-seed a canonical creation scaffold when none survives; the parser strips it back out.
+// keep a clarification carry-forward parseable across turns: markers and cadence-only remainders lose their trigger once stripped, so re-seed a canonical scaffold the parser strips back out
 export function ensureAutomationConversationScaffold(message: string): string {
   const normalized = normalizeInlineText(message);
   if (!normalized) {
@@ -229,7 +219,7 @@ function removeMatchedText(value: string, match: RegExpExecArray): string {
     .replace(/^(?:and|then|to|e|poi|che|di|per)\s+/i, "");
 }
 
-// Composer automations are thread-bound by default; these phrases intentionally opt out.
+// composer automations are thread-bound by default; these phrases intentionally opt out
 function extractExecutionScope(value: string): ParsedExecutionScope | null {
   const patterns: ReadonlyArray<{
     readonly executionScope: ChatAutomationExecutionScope;
@@ -316,7 +306,7 @@ function extractStopClause(value: string): ParsedStopClause | null {
   return null;
 }
 
-// Pulls bounded-loop language out of the saved prompt so the scheduler can stop itself.
+// pull bounded-loop language out of the saved prompt so the scheduler can stop itself
 function extractIterationLimit(value: string): ParsedIterationLimit | null {
   const patterns: readonly RegExp[] = [
     /\bfor\s+(\d{1,4})\s+(?:times?|runs?|iterations?|turns?)(?:\s+(?:in\s+)?total)?\b/i,
@@ -1010,16 +1000,14 @@ function executionScopeForGeneratedMode(
   if (mode === null) {
     return fallback;
   }
-  // Only heartbeat runs inside the thread the user is looking at; the other modes open a
-  // thread of their own, which is the same execution scope choice standalone always had.
+  // only heartbeat runs inside the thread the user is looking at; the other modes open their own thread — the same scope choice standalone always had
   if (automationRequiresTargetThread(mode)) {
     return "thread";
   }
   return fallback === "worktree" ? "worktree" : "standalone";
 }
 
-// Outside the current thread, keep the generator's choice between one reused thread
-// (dedicated) and a fresh thread per run (standalone) instead of flattening both.
+// outside the current thread keep the generator's choice between one reused thread (dedicated) and fresh-per-run (standalone) instead of flattening both
 function modeForExecutionScope(input: {
   readonly executionScope: ChatAutomationExecutionScope;
   readonly defaultMode: AutomationMode;
@@ -1042,8 +1030,7 @@ export function resolveChatAutomationIntent(input: {
       input.deterministicIntent.executionScope === "thread"
         ? executionScopeForGeneratedMode(input.generatedIntent?.mode ?? null, input.executionScope)
         : input.deterministicIntent.executionScope;
-    // A stop clause no longer forces heartbeat: completion policies apply to both modes,
-    // so the requested execution scope is honoured as asked.
+    // a stop clause no longer forces heartbeat — completion policies apply to both modes, so honour the requested scope as asked
     const mode = modeForExecutionScope({
       executionScope: resolvedExecutionScope,
       defaultMode: input.defaultMode,
@@ -1069,11 +1056,7 @@ export function resolveChatAutomationIntent(input: {
       mode,
       source: "deterministic",
       requiresReview:
-        // Any LLM-influenced draft requires human review before creating: when the prompt
-        // is terse the generator rewrites name/prompt/maxIterations even though the schedule
-        // parsed deterministically (enrichment !== null), so the confirmation must not be
-        // skipped. Purely local parses keep their finer gating, including the deliberate
-        // bounded-fast-loop auto-submit (which skips generation, so enrichment stays null).
+        // any LLM-influenced draft requires human review: the generator rewrites name/prompt/maxIterations even when the schedule parsed deterministically, so confirmation must not be skipped; deterministic parses keep finer gating incl. the deliberate bounded-fast-loop auto-submit (which skips generation, so enrichment stays null)
         enrichment !== null || resolvedExecutionScope !== "thread",
       generatedConfidence: enrichment ? (input.generatedIntent?.confidence ?? null) : null,
       generatedNeedsConfirmation: enrichmentNeedsConfirmation,
@@ -1102,12 +1085,6 @@ export function resolveChatAutomationIntent(input: {
     intent: generatedIntent,
     mode,
     source: "generated",
-    // Generated (LLM-interpreted) intents always require a human confirmation step: a
-    // misread message must never silently create a recurring background automation, no
-    // matter how confident the model is. Deterministic explicit intents keep their
-    // finer-grained gating above, including the intentional bounded-fast-loop
-    // auto-submit, which never reaches this branch because generation is skipped for it
-    // in resolveComposerAutomationRequest.
     requiresReview: true,
     generatedConfidence: input.generatedIntent?.confidence ?? null,
     generatedNeedsConfirmation:

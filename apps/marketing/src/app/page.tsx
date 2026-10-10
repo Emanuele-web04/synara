@@ -1,7 +1,3 @@
-// FILE: page.tsx
-// Purpose: Public marketing homepage for Synara.
-// Layer: App Router page (server component)
-
 import { SiGithub, SiOpenai } from "react-icons/si";
 import Navbar from "@/components/Navbar";
 import DownloadButton from "@/components/DownloadButton";
@@ -85,10 +81,7 @@ export default async function Home() {
             >
               {PRODUCT_HERO_TITLE}
             </h1>
-            {/* data-live-hero-color: rendered in the LIVE site's exact colors
-                (Kartik: hero matches production pixel-for-pixel). Those mandated
-                colors are under the 4.5:1 AA threshold on the page background, so
-                the a11y suite excludes these two elements from color-contrast. */}
+            {/* the hero renders in the live site's mandated colors, which measure under the 4.5:1 AA threshold — the a11y suite excludes only these two elements */}
             <p
               data-live-hero-color="true"
               className="mt-5 text-[13px] leading-[1.6] text-[color-mix(in_oklab,var(--text-primary)_58%,transparent)] dark:text-[color-mix(in_oklab,var(--text-primary)_55%,transparent)] sm:text-[14px]"

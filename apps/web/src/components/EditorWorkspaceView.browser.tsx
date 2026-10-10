@@ -1,7 +1,3 @@
-// FILE: EditorWorkspaceView.browser.tsx
-// Purpose: Preserve explicit Markdown view choices across editor navigation.
-// Layer: Component browser regressions
-
 import "../index.css";
 
 import type { NativeApi } from "@synara/contracts";

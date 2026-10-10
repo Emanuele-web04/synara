@@ -1,5 +1,4 @@
-// Opt-in CPU probe; no provider, database, network, or browser is needed.
-// SYNARA_PERF=1 SYNARA_PERF_OUT=/tmp/tool-output.json bun run --cwd apps/web test perf/toolOutput.perf.test.ts
+// opt-in CPU probe, no provider/db/network/browser; SYNARA_PERF=1 SYNARA_PERF_OUT=/tmp/tool-output.json bun run --cwd apps/web test perf/toolOutput.perf.test.ts
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import os from "node:os";

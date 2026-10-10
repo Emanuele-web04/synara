@@ -1,7 +1,3 @@
-// FILE: projectRelocationPaths.ts
-// Purpose: Pure, platform-aware path decisions for reconnecting a moved project.
-// Layer: Server orchestration
-
 import { posix, win32 } from "node:path";
 import {
   normalizeWorkspaceRootForComparison,
@@ -33,7 +29,7 @@ export function providerWorkspaceChanged(
   requestedCwd: string | undefined,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  // ProviderSession.cwd is optional; missing metadata is not proof of a move.
+  // ProviderSession.cwd is optional — missing metadata isn't proof of a move
   if (requestedCwd === undefined || currentCwd === undefined) return false;
   return !workspaceRootsEqual(currentCwd, requestedCwd, { platform });
 }

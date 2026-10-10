@@ -1,5 +1,4 @@
-// Adapted to Synara's shared browser from BetterWright's full-stack-e2e-review
-// workflow: https://github.com/BetterWright/betterwright/tree/main/skills/full-stack-e2e-review
+// adapted from BetterWright's full-stack-e2e-review: https://github.com/BetterWright/betterwright/tree/main/skills/full-stack-e2e-review
 export const SYNARA_E2E_REVIEW_GUIDANCE = `
 When the user explicitly requests an E2E/end-to-end test or review, follow this workflow. A discussion about E2E testing is not a request to run it.
 1. Read repository instructions; identify the exact feature, running target, test fixtures and allowed side effects. Build a short journey matrix with passed, failed, blocked or not-applicable outcomes. Do not seed/reset production or shared data.

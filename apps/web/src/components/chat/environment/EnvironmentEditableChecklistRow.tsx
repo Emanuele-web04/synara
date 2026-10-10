@@ -1,7 +1,3 @@
-// FILE: EnvironmentEditableChecklistRow.tsx
-// Purpose: Shared editable checklist-row interaction for pinned messages.
-// Layer: Environment panel UI primitive
-
 import {
   useEffect,
   useRef,

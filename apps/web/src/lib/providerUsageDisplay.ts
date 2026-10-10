@@ -1,7 +1,3 @@
-// FILE: providerUsageDisplay.ts
-// Purpose: Single source of truth for provider usage rows shown in Settings,
-// the chat header usage chip, and compact environment/Local popovers.
-
 import {
   deriveVisibleRateLimitRows,
   formatRateLimitRemainingPercent,

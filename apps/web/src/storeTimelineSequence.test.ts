@@ -118,9 +118,7 @@ describe("snapshot and live activity sequence parity", () => {
   it.each(["batched", "sequential"] as const)(
     "keeps historical tools and compaction in their original response after %s live events",
     (mode) => {
-      // Runtime journal and orchestration log counters are both durable but
-      // not interchangeable. History arrived in a snapshot; only the new
-      // printf calls go through the live event reducer.
+      // Runtime journal and orchestration log counters are both durable but not interchangeable. History arrived in a snapshot; only the new printf calls go through the live event reducer.
       const historical = [
         makeActivity({
           id: "old-tool",

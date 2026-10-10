@@ -1,8 +1,3 @@
-// FILE: FileAttachmentChip.test.tsx
-// Purpose: Guards composer file attachment chrome against warning and label regressions.
-// Layer: Component rendering tests
-// Depends on: FileAttachmentChip and React server rendering.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

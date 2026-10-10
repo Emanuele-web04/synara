@@ -1,14 +1,3 @@
-// FILE: InlineMentionChip.tsx
-// Purpose: Shared inline file/folder/plugin mention chip (icon + label) used by
-//          the timeline user-message echo, the assistant markdown view, and
-//          openable file links, so a referenced path reads identically to a
-//          composer mention. Supports a static (span) and an interactive
-//          (anchor) variant so the same UI can stay clickable. File-like chips
-//          without an explicit handler become openable automatically when a
-//          surface provides a workspace file opener (right-dock file pane).
-// Layer: UI shared component
-// Exports: InlineMentionChip
-
 import { type MouseEvent, type ReactNode } from "react";
 import type { ProviderMentionReference } from "@synara/contracts";
 import { basenameOfPath, pathLooksLikeKnownFile } from "~/file-icons";
@@ -58,9 +47,7 @@ export function InlineMentionChip(props: InlineMentionChipProps) {
     />
   );
 
-  // A plain file chip (no explicit href/handler) still opens in the in-app
-  // viewer when the hosting surface provides one, so every file reference in
-  // the chat stays clickable. Plugin chips and non-file paths stay static.
+  // A plain file chip (no explicit href/handler) still opens in the in-app viewer when the hosting surface provides one, so every file reference in the chat stays clickable. Plugin chips and non-file paths stay static.
   const contextOpenable =
     props.href === undefined &&
     props.onActivate === undefined &&

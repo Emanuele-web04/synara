@@ -92,8 +92,7 @@ export function useCopyToClipboard<TContext = void>({
   const onErrorRef = React.useRef(onError);
   const timeoutRef = React.useRef(timeout);
 
-  // Mirrored in an effect (not during render) so the hook stays eligible for
-  // React Compiler; copyToClipboard only runs from post-commit user events.
+  // mirrored in an effect (not render) so the hook stays Compiler-eligible; copyToClipboard only runs from post-commit user events
   React.useEffect(() => {
     onCopyRef.current = onCopy;
     onErrorRef.current = onError;
@@ -127,7 +126,6 @@ export function useCopyToClipboard<TContext = void>({
     );
   }, []);
 
-  // Cleanup timeout on unmount
   React.useEffect(() => {
     return (): void => {
       if (timeoutIdRef.current) {
@@ -141,15 +139,10 @@ export function useCopyToClipboard<TContext = void>({
 
 interface CopyToastLabels {
   successTitle: string;
-  /** Shown under the success title — usually the thing that was copied. */
   successDescription: string;
   errorTitle: string;
 }
 
-/**
- * Shared "copy + toast" plumbing behind every copy-X convenience hook below:
- * one success/error toast shape, one place to change it.
- */
 function useCopyWithToasts(): (value: string, labels: CopyToastLabels) => void {
   const { copyToClipboard } = useCopyToClipboard<CopyToastLabels>({
     onCopy: (labels) =>
@@ -168,10 +161,6 @@ function useCopyWithToasts(): (value: string, labels: CopyToastLabels) => void {
   return copyToClipboard;
 }
 
-/**
- * Copy a filesystem path and surface the shared success/error toast. Single source
- * of truth for the "Path copied" affordance used by the sidebar and the kanban board.
- */
 export function useCopyPathToClipboard(): (path: string) => void {
   const copy = useCopyWithToasts();
   return (path: string) =>
@@ -182,14 +171,7 @@ export function useCopyPathToClipboard(): (path: string) => void {
     });
 }
 
-/**
- * Copy a previewed file's text contents and surface the shared success/error
- * toast. Single source of truth for the "Copy contents" affordance in the
- * file-preview header's overflow menu. Empty files get an informational toast
- * instead of a copy (the clipboard helper never writes empty strings), and
- * `partial: true` (large files whose preview holds a truncated read) is called
- * out so the success toast never claims more than what was copied.
- */
+// `partial: true` (truncated preview read) is called out so the success toast never claims more than copied; empty files get an info toast — the helper never writes empty strings
 export function useCopyFileContentsToClipboard(): (
   contents: string,
   fileName: string,
@@ -218,7 +200,6 @@ export function useCopyFileContentsToClipboard(): (
   };
 }
 
-/** Copy a thread id and surface the shared "Thread ID copied" toast. */
 export function useCopyThreadIdToClipboard(): (threadId: string) => void {
   const copy = useCopyWithToasts();
   return (threadId: string) =>

@@ -63,10 +63,7 @@ describe("SQLite persistence", () => {
         expect(lockingMode?.locking_mode).toBe("exclusive");
         expect(journalMode?.journal_mode).toBe("wal");
 
-        // Large-database tuning must actually take effect, not silently
-        // no-op: a reverted or ignored cache_size reintroduces multi-minute
-        // startups on multi-GB event logs. mmap_size may be capped by the
-        // runtime build, so only require that mapping is enabled at all.
+        // tuning must actually take effect — a reverted/ignored cache_size reintroduces multi-minute startups on multi-GB logs; mmap may be capped by the runtime build so only require mapping enabled
         const [cacheSize] = yield* sql<{ readonly cache_size: number }>`
           PRAGMA cache_size;
         `;

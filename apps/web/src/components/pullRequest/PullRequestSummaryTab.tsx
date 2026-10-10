@@ -270,10 +270,7 @@ export function PullRequestSummaryTab({
                 onClick={() => check.url && void ensureNativeApi().shell.openExternal(check.url)}
                 className={cn(
                   PR_META_TEXT_CLASS_NAME,
-                  // The row bleeds past the panel padding and pays the same amount back as
-                  // its own padding, so the hover surface keeps a halo while the glyph and
-                  // the status label still sit on the section title's verticals. The width
-                  // is explicit because a button sizes to fit-content, not to its parent.
+                  // the row bleeds past the panel padding and pays it back as its own padding; width explicit because a button sizes to fit-content
                   "-mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted/50 disabled:hover:bg-transparent",
                 )}
               >

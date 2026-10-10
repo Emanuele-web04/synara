@@ -1,10 +1,4 @@
-// FILE: sponsors/page.tsx
-// Purpose: The sponsor wall — a public thank-you listing everyone funding
-//          Synara, grouped by tier. The pitch and the tiers live at /sponsor.
-// Layer: App Router page (static)
-// Depends on: Navbar, SiteFooter, SectionEyebrow, SponsorRow, data/sponsors, lib/sponsors
-// Note: Only public GitHub sponsors belong in data/sponsors.ts — see the note
-//       there before adding anyone.
+// only sponsors who are public on GitHub belong in data/sponsors.ts
 
 import Link from "next/link";
 import { LuArrowUpRight, LuHeart } from "react-icons/lu";
@@ -57,9 +51,6 @@ export default function SponsorsPage() {
       />
       <Navbar />
 
-      {/* Same container as the landing page, Navbar, and SiteFooter, so the
-          heading starts flush under the logo. The sponsor list itself stays
-          narrow inside it — a short list of names shouldn't stretch to 6xl. */}
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-10 pb-20 sm:px-6 sm:pt-14">
         <header>
           <SectionEyebrow as="p">Sponsors</SectionEyebrow>

@@ -1,8 +1,3 @@
-// FILE: DiffPanelPatchViewport.tsx
-// Purpose: Memoized diff body for the review panel — only re-renders when the active
-//          patch or display settings change, not on unrelated chat activity.
-// Layer: Diff panel UI
-
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { memo } from "react";
 import { cn } from "~/lib/utils";

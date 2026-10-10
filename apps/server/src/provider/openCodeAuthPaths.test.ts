@@ -1,7 +1,3 @@
-// FILE: openCodeAuthPaths.test.ts
-// Purpose: Locks OpenCode auth.json discovery so Windows does not prefer %APPDATA%
-// over the XDG path OpenCode actually uses, and so Linux/macOS never consult AppData.
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";

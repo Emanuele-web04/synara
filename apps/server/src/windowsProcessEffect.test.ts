@@ -1,7 +1,3 @@
-// FILE: windowsProcessEffect.test.ts
-// Purpose: Verifies Effect forwards verbatim Windows command lines to Node spawn.
-// Layer: Server process integration test
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

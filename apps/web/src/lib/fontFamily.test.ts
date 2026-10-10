@@ -1,8 +1,3 @@
-// FILE: fontFamily.test.ts
-// Purpose: Verifies CSS-safe font-family normalization for user and theme settings.
-// Layer: Web appearance utility tests
-// Exports: Vitest coverage for fontFamily helpers.
-
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MONOSPACE_FONT_FAMILY_STACK,

@@ -53,8 +53,6 @@ async function smoke() {
     if (keyboard.value !== "synthetic-native-clipboard-smokea")
       throw new Error("Shared clipboard or modifier cleanup failed.");
   } finally {
-    // The smoke runs against the user's real clipboard session; never leave a
-    // synthetic value behind.
     clipboard.writeText(previousClipboard);
   }
   await contents.executeJavaScript("document.querySelector('input').focus()");

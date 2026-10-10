@@ -1,8 +1,3 @@
-// FILE: tsdown.config.ts
-// Purpose: Builds the Synara server CLI and controls diagnostic source maps.
-// Layer: Server build config
-// Depends on: tsdown.
-
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -25,8 +20,7 @@ export default defineConfig({
   entry: ["src/index.ts", "src/restoreMigrationBackup.ts", "src/runtimeDependencySmoke.ts"],
   format: ["esm"],
   outDir: "dist",
-  // Bun builtins only resolve at runtime under Bun; MigrationBackup.ts guards
-  // the import behind a `process.versions.bun` check.
+  // Bun builtins resolve only at runtime under Bun; MigrationBackup.ts guards the import behind process.versions.bun
   external: [/^bun:/u],
   sourcemap: buildSourcemap,
   define: {

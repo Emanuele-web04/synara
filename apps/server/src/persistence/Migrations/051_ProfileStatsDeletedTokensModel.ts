@@ -1,9 +1,4 @@
-/**
- * Adds `model` to the profile_stats_deleted_tokens archive so token deltas of
- * purged threads keep their per-model attribution and can feed the token-based
- * model-usage ranking. Nullable: legacy snapshots without a model count as
- * "unknown" in that ranking.
- */
+/** keeps per-model attribution for purged threads' token deltas; NULL = "unknown" in ranking */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

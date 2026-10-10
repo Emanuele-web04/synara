@@ -1,7 +1,3 @@
-// FILE: syncShellEnvironment.ts
-// Purpose: Hydrates Electron's inherited env with values from the user's login shell.
-// Exports: syncShellEnvironment for desktop startup.
-
 import {
   isPathName,
   listLoginShellCandidates,
@@ -20,21 +16,12 @@ function logShellEnvironmentWarning(message: string, error?: unknown): void {
   console.warn(`[desktop] ${message}`, error instanceof Error ? error.message : (error ?? ""));
 }
 
-/**
- * Outcome of a hydration pass.
- *
- * `pathHydrated` is true only when PATH came from the user's real environment (login
- * shell, launchctl, or the Windows registry). Merging the inherited PATH with nothing
- * does not count: child processes use this flag to decide whether they may skip their
- * own probe, so a failed probe here must let them run theirs.
- */
+// pathHydrated is true only when PATH came from the user's real environment — merging the inherited PATH with nothing doesn't count; children use this flag to decide whether to skip their own probe, so a failed probe must let them run theirs
 export interface ShellEnvironmentSyncResult {
   readonly pathHydrated: boolean;
 }
 
-// Windows GUI processes inherit a (possibly stale) environment block instead of a login
-// shell. Hydrate PATH and any missing variables from the persisted registry environment so
-// CLI providers resolve the same config the user's terminal sees (e.g. CLAUDE_CONFIG_DIR).
+// Windows GUI processes inherit a possibly-stale env block instead of a login shell — hydrate PATH and missing vars from the persisted registry env so CLI providers resolve the user's real config
 function syncWindowsEnvironment(
   env: NodeJS.ProcessEnv,
   readWindowsEnvironment: WindowsEnvironmentReader,
@@ -86,9 +73,7 @@ export function syncShellEnvironment(
 
   if (platform !== "darwin" && platform !== "linux") return { pathHydrated: false };
 
-  // Cached by default. The probe is the single most expensive thing on the desktop's
-  // pre-`whenReady()` path, and its answer only changes when the shell, the user, or one
-  // of its startup files does — so it is read from disk instead of recomputed per launch.
+  // cached by default — the probe is the most expensive thing on the pre-whenReady path and its answer only changes when the shell, user, or startup files do
   const readEnvironment =
     options.readEnvironment ?? createCachedLoginShellEnvironmentReader({ env, platform });
   const shellEnvironment: Partial<Record<string, string>> = {};

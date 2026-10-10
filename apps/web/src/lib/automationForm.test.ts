@@ -1,8 +1,3 @@
-// FILE: automationForm.test.ts
-// Purpose: Locks down the inline schedule-field validators — the structural cron check and
-// the IANA timezone check that gate commit-on-blur edits on the automation detail page.
-// Layer: Web lib test
-
 import { describe, expect, it } from "vitest";
 
 import { automationCronExpressionError, automationTimezoneError } from "./automationForm";

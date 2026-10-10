@@ -1,7 +1,3 @@
-// FILE: terminalVisualIdentity.test.ts
-// Purpose: Verifies shared terminal visual identity rules used by chrome and recent views.
-// Layer: UI state logic test
-
 import { describe, expect, it } from "vitest";
 
 import {

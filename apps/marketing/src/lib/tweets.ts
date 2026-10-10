@@ -1,10 +1,4 @@
-// FILE: lib/tweets.ts
-// Purpose: Resolve testimonial tweets into render-ready cards.
-// Layer: Server utility
-// Notes: Mirrors the link-manager tweet pipeline — react-tweet's `fetchTweet`
-//        wrapped in `unstable_cache` (TTL via TWEET_CACHE_TTL_SECONDS) — so the
-//        homepage can show the real author, avatar, full text, likes and media
-//        for every post. Falls back to the seed data if a fetch fails.
+// react-tweet's fetchTweet wrapped in unstable_cache so the homepage shows real author/avatar/text/likes — falls back to seed data on fetch failure
 
 import { unstable_cache } from "next/cache";
 import { fetchTweet, type Tweet } from "react-tweet/api";
@@ -23,11 +17,8 @@ export interface TestimonialCard {
   likes: number | null;
   verified: boolean;
   image: { src: string; alt: string } | null;
-  /** English translation to surface in place of a non-English original. */
   translation: string | null;
-  /** Source language of the translated original (e.g. "zh"), for the label. */
   translationLang: string | null;
-  /** true when the live tweet resolved; false when we fell back to seed data. */
   live: boolean;
 }
 
@@ -43,8 +34,6 @@ function getTweetCacheTtlSeconds(envValue = process.env.TWEET_CACHE_TTL_SECONDS)
   return Math.floor(parsed);
 }
 
-// Cache the upstream fetch so a dynamic homepage doesn't hammer the syndication
-// API on every request — same approach as link-manager's /api/tweet/[id] route.
 const fetchCachedTweet = unstable_cache(
   async (tweetId: string) => fetchTweet(tweetId),
   ["synara-testimonial-tweet"],

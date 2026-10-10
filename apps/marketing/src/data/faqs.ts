@@ -1,7 +1,3 @@
-// FILE: data/faqs.ts
-// Purpose: Shared FAQ copy used by the homepage UI and FAQPage JSON-LD.
-// Layer: static content (server/client importable).
-
 import { PRODUCT_DESCRIPTION } from "@/data/product";
 
 export const FAQ_ITEMS = [

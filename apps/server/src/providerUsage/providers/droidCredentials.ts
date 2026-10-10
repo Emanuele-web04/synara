@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/droidCredentials.ts
-// Purpose: Read Factory CLI v2 credentials without modifying or refreshing them. Modern Droid
-// stores an AES-256-GCM encrypted credential file whose key lives in the OS credential store
-// (read through bounded OS utility processes), or beside it in keyfile mode.
-
 import { createDecipheriv } from "node:crypto";
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
@@ -50,7 +45,7 @@ function decodeEncryptionKey(value: string): Buffer | null {
 }
 
 async function readCredentialFile(path: string): Promise<string | null> {
-  // Reject pipes/devices and bound reads before allocating/decrypting untrusted local data.
+  // reject pipes/devices and bound reads before allocating/decrypting untrusted local data
   const handle = await fs.open(
     path,
     constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0),
@@ -66,7 +61,7 @@ async function readCredentialFile(path: string): Promise<string | null> {
   }
 }
 
-/** Factory's encrypted format is `base64(iv):base64(authTag):base64(ciphertext)`. */
+/** Factory's format: `base64(iv):base64(authTag):base64(ciphertext)` */
 export function decryptDroidCredentialFile(contents: string, key: Buffer): unknown | null {
   if (key.length !== 32 || contents.length > 64 * 1024) {
     return null;
@@ -135,7 +130,7 @@ export async function resolveDroidLocalCredential(
   ] as const;
   for (const layout of layouts) {
     const path = nodePath.join(factoryHome, layout.name);
-    // A present but unreadable newer store must not select an older account's leftover file.
+    // a present-but-unreadable newer store must not select an older account's leftover file
     try {
       if (!(await fileExists(path))) continue;
       const contents = await readCredentialFile(path);

@@ -1,8 +1,3 @@
-// FILE: dockPaneActivation.ts
-// Purpose: Decide when a persisted right-dock pane should hydrate its expensive runtime.
-// Layer: Web UI lifecycle helper
-// Depends on: rightDockStore pane kind taxonomy
-
 import type { ThreadId } from "@synara/contracts";
 
 import type { RightDockPaneKind } from "~/rightDockStore.logic";
@@ -25,11 +20,6 @@ export interface DeferredDockPaneHydrationScheduler {
   readonly clearTimer: (timerId: number) => void;
 }
 
-/**
- * Promotes a restored heavy pane after the requested number of paint frames,
- * with a bounded timeout for Electron/Chromium states where rAF is paused.
- * Completion and cancellation are both exactly-once.
- */
 export function scheduleDeferredDockPaneHydration(input: {
   readonly onHydrate: () => void;
   readonly scheduler: DeferredDockPaneHydrationScheduler;
@@ -86,8 +76,7 @@ export function scheduleDeferredDockPaneHydration(input: {
   };
 }
 
-// The device pane holds a WebCodecs decoder and a frame socket, so a restored
-// tab must stay in preview until the user actually looks at it.
+// the device pane holds a WebCodecs decoder + frame socket — a restored tab must stay in preview until the user actually looks at it
 const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "browser",
   "device",
@@ -131,10 +120,7 @@ function isKeepMountedPaneKind(kind: RightDockPaneKind): boolean {
 
 export const EMPTY_PANE_ID_SET: ReadonlySet<string> = new Set<string>();
 
-// Compute the next set of pane ids that must stay mounted in the dock: every
-// previously kept-mounted pane that still exists, plus the active pane when it is
-// a keep-mounted kind. Pure (no React) so the keep-mount policy is unit-testable
-// and the caller can persist the result across renders via a ref.
+// next keep-mounted set: previously kept panes that still exist, plus the active pane when it is a keep-mounted kind; pure so the policy is unit-testable and persistable via ref
 export function reconcileKeepMountedPaneIds(input: {
   previous: ReadonlySet<string>;
   panes: readonly { id: string; kind: RightDockPaneKind }[];

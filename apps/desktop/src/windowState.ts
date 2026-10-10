@@ -1,7 +1,3 @@
-// FILE: windowState.ts
-// Purpose: Persists and safely restores the desktop window's normal bounds.
-// Layer: Desktop main process
-
 import * as FS from "node:fs";
 import * as Path from "node:path";
 

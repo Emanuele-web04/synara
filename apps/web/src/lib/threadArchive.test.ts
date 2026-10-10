@@ -20,8 +20,7 @@ describe("threadArchive client helpers", () => {
     );
   });
   it("recognizes the already-unarchived invariant returned by the server", () => {
-    // Build the message from the shared marker so this stays coupled to the
-    // exact phrase the server embeds (see commandInvariants.requireThreadArchived).
+    // Build the message from the shared marker so this stays coupled to the exact phrase the server embeds (see commandInvariants.requireThreadArchived).
     const error = new Error(
       `Orchestration command invariant failed (thread.unarchive): Thread '${THREAD_ID}' ${THREAD_NOT_ARCHIVED_INVARIANT_MARKER} 'thread.unarchive'.`,
     );

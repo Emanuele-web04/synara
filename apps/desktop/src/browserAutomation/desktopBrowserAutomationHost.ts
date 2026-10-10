@@ -67,7 +67,6 @@ export interface BrowserAutomationToolRequest {
   readonly threadId: ThreadId;
   readonly name: BrowserToolName;
   readonly arguments: unknown;
-  /** Authenticated server-resolved root, intentionally outside public tool arguments. */
   readonly workspaceRoot?: string;
   readonly signal?: AbortSignal;
 }
@@ -443,8 +442,6 @@ export class DesktopBrowserAutomationHost {
     };
     const idempotencyKey = typeof input.idempotencyKey === "string" ? input.idempotencyKey : null;
     const intentionArguments = { ...input };
-    // Deadlines are transport/runtime metadata, not part of the browser
-    // intention. Retries consume a smaller remaining budget by design.
     delete intentionArguments.timeoutMs;
     const fingerprint = stableJsonStringify({
       name: request.name,
@@ -499,9 +496,6 @@ export class DesktopBrowserAutomationHost {
           (error: unknown) => {
             entry.settled = true;
             entry.expiresAt = performance.now() + IDEMPOTENCY_TTL_MS;
-            // A confirmed pre-effect failure is safe to execute again with the
-            // same intention. Ambiguous/effecting failures remain cached so a
-            // retry cannot accidentally duplicate the action.
             if (
               error instanceof BrowserAutomationHostError &&
               !error.browserError.effectMayHaveCommitted &&
@@ -560,9 +554,6 @@ export class DesktopBrowserAutomationHost {
     }
     while (this.idempotency.size > MAX_IDEMPOTENCY_ENTRIES) {
       const settled = [...this.idempotency].find(([, entry]) => entry.settled);
-      // In-flight operations are operation identity, not a disposable cache.
-      // Allow a temporary overshoot until one settles rather than admitting a
-      // duplicate browser action under pressure.
       if (!settled) break;
       this.evictIdempotencyEntry(settled[0], settled[1], now);
     }
@@ -625,10 +616,6 @@ export class DesktopBrowserAutomationHost {
       threadId: request.threadId,
       tabId: null,
     };
-    // Session identities are random, backend-authenticated capabilities. Keep
-    // their provider/thread binding immutable for the desktop process lifetime:
-    // evicting a binding would let an old session id be rebound after enough
-    // unrelated sessions, violating the routing boundary.
     this.affinities.set(request.sessionId, affinity);
     return affinity;
   }
@@ -650,9 +637,6 @@ export class DesktopBrowserAutomationHost {
       if (signal && abortError) await raceWithAbort(previous, signal, abortError);
       else await previous;
       if (signal?.aborted && abortError) throw abortHostError(signal, abortError);
-      // Do not race the action here. executeTool already races the public result,
-      // while this internal promise must drain before releasing the lock so a
-      // late Electron/CDP completion can never overlap the next browser action.
       return await action();
     } finally {
       release();
@@ -729,9 +713,6 @@ export class DesktopBrowserAutomationHost {
     );
     try {
       const result = await action();
-      // CDP acknowledges native input before Electron necessarily emits the
-      // resulting session event. Keep the gesture lease through one main-loop
-      // turn so a download cannot escape between command completion and cleanup.
       await sleep(0, signal);
       throwIfAborted(signal);
       return result;
@@ -809,14 +790,9 @@ export class DesktopBrowserAutomationHost {
 
   private requestPanelReveal(threadId: ThreadId): void {
     if (!this.requestOpenPanel) return;
-    // Revealing is opportunistic UI feedback, not a prerequisite for browser
-    // execution. The renderer opens the panel only when this thread is already
-    // active; a slow/backgrounded UI must never stall the agent runtime.
     try {
       void Promise.resolve(this.requestOpenPanel(threadId)).catch(() => undefined);
-    } catch {
-      // The persistent native runtime remains usable when the shell cannot reveal it.
-    }
+    } catch {}
   }
 
   private observeWindowOpen(runtime: BrowserAutomationVisibleRuntime): WindowOpenObservation {
@@ -842,9 +818,6 @@ export class DesktopBrowserAutomationHost {
     return {
       reconcile: (timeoutMs, signal) => {
         if (observedEvent) return Promise.resolve(observedEvent);
-        // CDP announces link/window activation before Electron reconciles the
-        // denied child into Synara's visible tab model. Only that path waits;
-        // ordinary clicks return immediately with no fixed grace period.
         if (!pageAnnouncedWindowOpen) {
           return waitOneTurnForWindowOpenEvent(eventPromise, signal);
         }
@@ -1061,9 +1034,6 @@ export class DesktopBrowserAutomationHost {
         signal,
       );
     } finally {
-      // Releasing the correlation commits a reserved target=_blank tab. Keep
-      // the source guest alive until dialog handling has drained and restored
-      // every CDP shim used by this input action.
       windowOpen?.dispose();
     }
   }
@@ -1168,9 +1138,6 @@ export class DesktopBrowserAutomationHost {
     ) {
       return reconciledResult;
     }
-    // BrowserManager changes activeTabId without advancing the human epoch only
-    // for a new tab created inside the short-lived agent gesture lease. Adopt
-    // it after the human guard has successfully reconciled.
     affinity.tabId = openedTabId;
     return reconciledResult && typeof reconciledResult === "object"
       ? { ...reconciledResult, openedTabId: openedTabId as BrowserTabId }
@@ -1227,9 +1194,6 @@ export class DesktopBrowserAutomationHost {
       }
     }
     throwIfAborted(signal);
-    // A hidden open may only use the tab proven visible below, under both the
-    // per-tab lock and the human-control guard. Preparing browser state here
-    // would reopen, select, or create a renderer before that proof succeeds.
     const prepared = show
       ? await this.withVisibilityLock(affinity.threadId, signal, abortError, async () => {
           markActionStarted();
@@ -1254,9 +1218,6 @@ export class DesktopBrowserAutomationHost {
           async () => {
             throwIfAborted(signal);
             if (!show) {
-              // Keep the potentially slow diagnostics preflight outside the
-              // visibility lease. The state is revalidated under that lease
-              // immediately before any hidden mutation below.
               await this.resolveAutomationRuntime(affinity, selected, signal, false);
             }
             const executeOpen = async (): Promise<BrowserOpenOutput> => {
@@ -1276,9 +1237,6 @@ export class DesktopBrowserAutomationHost {
                   });
                 }
               } else if (!url) {
-                // prepareAutomationTab runs before the per-tab lease is known.
-                // Reassert its selection now that the thread visibility lease
-                // protects this open from every other provider session.
                 this.browserManager.selectAutomationTab({
                   threadId: affinity.threadId,
                   tabId: selected,
@@ -1399,8 +1357,6 @@ export class DesktopBrowserAutomationHost {
       return await tracker.wait(runtime, expected, timeoutMs, signal, mark);
     } catch (error) {
       if (signal.aborted) {
-        // The public call is already rejected by executeTool's abort race, but
-        // hold the tab lock until Chromium has acknowledged stopLoading.
         await stopBrowserNavigation(runtime);
         throw abortReason(signal);
       }

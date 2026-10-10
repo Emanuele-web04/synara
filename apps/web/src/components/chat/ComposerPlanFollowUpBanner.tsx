@@ -13,9 +13,6 @@ export const ComposerPlanFollowUpBanner = function ComposerPlanFollowUpBanner({
           </span>
         ) : null}
       </div>
-      {/* <div className="mt-2 text-xs text-muted-foreground">
-        Review the plan
-      </div> */}
     </div>
   );
 };

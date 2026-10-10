@@ -1,7 +1,3 @@
-// FILE: os-jank.ts
-// Purpose: Smooths over shell/path differences between packaged app launches and login shells.
-// Exports: PATH hydration plus base-dir helpers used by server startup.
-
 import { Effect } from "effect";
 import {
   isShellEnvironmentHydrated,
@@ -35,25 +31,17 @@ export function fixPath(
 
   const env = options.env ?? process.env;
 
-  // Startup blocks here: the server does not begin listening until the probe returns,
-  // and `-ilc` sources the user's whole interactive rc (~1s). When the desktop shell
-  // already ran it and handed us the resulting PATH, repeating it buys nothing and
-  // doubles cold start. The marker — not merely a populated PATH — is what proves it.
+  // startup blocks here and `-ilc` sources the whole interactive rc (~1s) — when the desktop shell already ran it and handed over the PATH, repeating doubles cold start; the marker, not merely a populated PATH, is what proves it
   if (isShellEnvironmentHydrated(env)) return;
 
   const logWarning = options.logWarning ?? logPathHydrationWarning;
 
   try {
-    // launchctl stays a last resort, never a fast path: `launchctl getenv PATH` is a
-    // launchd-session value that something published once (often a login-item plist with a
-    // hardcoded string), so it can be arbitrarily stale, while the login-shell probe is the
-    // PATH the user actually has in their terminal. With the probe cached below, preferring
-    // launchctl would trade a sub-millisecond file read for a wrong PATH — and a spawn.
+    // launchctl is a last resort never a fast path — its value can be arbitrarily stale while the login-shell probe is the PATH the user actually has; preferring launchctl trades a sub-ms file read for a wrong PATH and a spawn
     const readLaunchctlFallbackPath = (): string | undefined =>
       platform === "darwin" ? (options.readLaunchctlPath ?? readPathFromLaunchctl)() : undefined;
 
-    // Cached by default: the probe result is persisted under the Synara home and reused
-    // until the shell, the user, or any of its startup files changes.
+    // cached by default — persisted under the Synara home and reused until the shell, user, or startup files change
     const readPath = options.readPath ?? createCachedLoginShellPathReader({ env, platform });
 
     let shellPath: string | undefined;

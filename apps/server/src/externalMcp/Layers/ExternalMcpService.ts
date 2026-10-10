@@ -65,9 +65,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
       ),
     );
 
-  // Scope "all" resolves the allowed set from the live project projection on
-  // every verification, so projects added after the integration was created
-  // are granted automatically.
+  // scope "all" resolves the allowed set from the live projection on every verification — projects added later are granted automatically
   const toVerified = (
     integration: ExternalMcpIntegrationRecord,
   ): Effect.Effect<ExternalMcpVerifiedClient, ExternalMcpError> =>
@@ -442,9 +440,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
         toExternalMcpError("repository_error", "Could not verify task ownership.", 500, cause),
       ),
       Effect.flatMap((task) => {
-        // Ownership does not disappear merely because compensation marked the
-        // durable task failed. If cleanup is incomplete, the issuing integration
-        // must retain read/wait authority over its stranded thread.
+        // ownership survives a failed-marked task: if cleanup is incomplete, the integration keeps read/wait authority over the stranded thread
         if (task !== null) return Effect.void;
         if (client.capabilities.has("tasks:read-project")) {
           return snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(

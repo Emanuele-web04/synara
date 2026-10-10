@@ -1,8 +1,3 @@
-// FILE: voiceRecorder.browser.tsx
-// Purpose: Verifies microphone startup cancellation against real React/browser scheduling.
-// Layer: Web browser test
-// Depends on: vitest browser hooks and mocked browser media/Web Audio primitives.
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "vitest-browser-react";
 

@@ -94,8 +94,7 @@ describe("startFreshChatForActiveSurface", () => {
       });
 
       expect(handleNewChat).toHaveBeenCalledOnce();
-      // Home chat reuses the stored draft thread when one exists (so an in-progress
-      // draft survives switching threads) instead of forcing a fresh thread.
+      // Home chat reuses the stored draft thread when one exists (so an in-progress draft survives switching threads) instead of forcing a fresh thread.
       expect(handleNewChat).toHaveBeenCalledWith();
       expect(handleNewGroupChat).not.toHaveBeenCalled();
     }

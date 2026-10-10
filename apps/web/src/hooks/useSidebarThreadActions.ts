@@ -67,22 +67,10 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import type { Project, SidebarThreadSummary } from "../types";
 
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
-/**
- * How long a confirmed settle override may outlive its projection push. Well
- * past normal push latency: the expiry is a last resort against a lost or
- * reordered push, not part of the happy path, where reconciliation clears the
- * override as soon as the projection agrees.
- */
+// the expiry is a last resort against a lost or reordered push — reconciliation clears the override as soon as the projection agrees
 const SETTLE_OVERRIDE_MAX_LIFETIME_MS = 15_000;
 
-/**
- * Unarchives a thread, treating "it was already unarchived" as success.
- *
- * The undo toast can fire after the thread came back some other way (a second client, a replayed
- * command), and that race is not an error worth showing. Kept at module scope because React Compiler
- * cannot lower a `throw` inside a `try`/`catch`, and inlining this would cost the whole sidebar
- * actions hook its compilation.
- */
+// module scope because React Compiler cannot lower a `throw` inside try/catch — inlining would cost the whole hook its compilation; "already unarchived" is treated as success since the undo toast can fire after the thread came back another way
 async function unarchiveThreadIgnoringAlreadyRestored(threadId: ThreadId): Promise<void> {
   try {
     const api = readNativeApi();
@@ -424,8 +412,7 @@ export function useSidebarThreadActions(input: {
           });
         }
       } catch (error) {
-        // A newer toggle owns the override now; dropping it here would revert to
-        // a state the user has already moved on from.
+        // A newer toggle owns the override now; dropping it here would revert to a state the user has already moved on from.
         if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
         throw error;
       }
@@ -551,8 +538,7 @@ export function useSidebarThreadActions(input: {
     [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById],
   );
 
-  // Drop optimistic settle entries once the server-confirmed state agrees, so
-  // later pushes from other clients are no longer masked by a stale override.
+  // Drop optimistic settle entries once the server-confirmed state agrees, so later pushes from other clients are no longer masked by a stale override.
   useEffect(() => {
     if (optimisticSettledMutationByThreadId.size === 0) return;
     let settle: number | undefined;
@@ -1059,8 +1045,7 @@ export function useSidebarThreadActions(input: {
       }
 
       const deletedIds = new Set<ThreadId>(projectThreads.map((thread) => thread.id));
-      // Built once, outside the loop's `try`: React Compiler cannot lower a conditional spread
-      // inside a try block and would skip this hook entirely.
+      // built once outside the loop's try — React Compiler cannot lower a conditional spread inside a try block and would skip this hook entirely
       const worktreeCleanupOverride = options?.worktreeCleanupMode
         ? { worktreeCleanupMode: options.worktreeCleanupMode }
         : {};

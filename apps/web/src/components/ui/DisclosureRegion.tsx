@@ -1,9 +1,3 @@
-// FILE: DisclosureRegion.tsx
-// Purpose: Controlled expand/collapse region with the shared sidebar-style grid animation.
-// Layer: UI primitive
-// Exports: DisclosureRegion
-// Depends on: disclosureMotion helpers
-
 import type { ReactNode } from "react";
 
 import {

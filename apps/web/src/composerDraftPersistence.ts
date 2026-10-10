@@ -292,8 +292,6 @@ type PersistedComposerPromptHistorySavedDraft =
 const PersistedComposerThreadDraftState = Schema.Struct({
   pendingUserInputDrafts: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
   prompt: Schema.String,
-  // Set only while composer prompt-history browsing is active: the user's real
-  // draft snapshot, kept safe while `prompt` temporarily holds a recalled history entry.
   promptHistorySavedDraft: Schema.optionalKey(PersistedComposerPromptHistorySavedDraft),
   attachments: Schema.Array(PersistedComposerImageAttachment),
   assistantSelections: Schema.optionalKey(
@@ -1069,7 +1067,6 @@ function normalizePersistedDraftsByThreadId(
       promptCandidate,
       terminalContexts.length,
     );
-    // If the draft already has the v3 shape, use it directly
     const legacyDraftCandidate = draftValue as LegacyPersistedComposerThreadDraftState;
     let modelSelectionByProvider: ModelSelectionByProviderInstance = {};
     let activeProvider: ProviderInstanceId | null = null;
@@ -1078,7 +1075,6 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.modelSelectionByProvider &&
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
-      // v3 format
       modelSelectionByProvider = normalizePersistedModelSelectionMap(
         draftCandidate.modelSelectionByProvider,
       );
@@ -1087,7 +1083,6 @@ function normalizePersistedDraftsByThreadId(
         modelSelectionByProvider,
       );
     } else {
-      // v2 or legacy format: migrate
       const normalizedModelOptions =
         normalizeProviderModelOptions(
           legacyDraftCandidate.modelOptions,
@@ -1187,8 +1182,7 @@ function normalizePersistedDraftsByThreadId(
 export function migratePersistedComposerDraftStoreState(
   persistedState: unknown,
 ): PersistedComposerDraftStoreState {
-  // Version bumps should sanitize persisted data without forcing users back
-  // through the legacy sticky-model fields.
+  // version bumps sanitize persisted data without forcing users back through legacy sticky-model fields
   return normalizeCurrentPersistedComposerDraftStoreState(persistedState);
 }
 
@@ -1207,8 +1201,7 @@ export function partializeComposerDraftStoreState(
     > = [];
     for (const queuedTurn of draft.queuedTurns) {
       if (queuedTurn.kind === "chat") {
-        // File attachments are intentionally in-memory only; persisting the
-        // queued turn without them would make a later send incomplete.
+        // file attachments are intentionally in-memory only — persisting the queued turn without them would make a later send incomplete
         if (queuedTurn.files.length > 0) {
           continue;
         }
@@ -1555,7 +1548,6 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
       stickyModelSelectionByProvider,
     );
   } else {
-    // Legacy migration path
     const stickyModelOptions =
       normalizeProviderModelOptions(normalizedPersistedState.stickyModelOptions) ?? {};
     const normalizedStickyModelSelection = normalizeModelSelection(

@@ -1,7 +1,3 @@
-// FILE: canary.ts
-// Purpose: Maintains and launches an isolated, frozen Synara Canary checkout.
-// Layer: Local developer tooling
-
 import { spawn, spawnSync } from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
@@ -85,9 +81,7 @@ export function resolveCanaryRef(input: ParsedCanaryArgs, trackedRef: string | n
 }
 
 export function canaryCloneArgs(originUrl: string, source: string): ReadonlyArray<string> {
-  // The cleanliness guard runs immediately after cloning. A --no-checkout clone
-  // reports every tracked file as deleted, so it is indistinguishable from a
-  // user-modified managed checkout at that point.
+  // a --no-checkout clone reports every tracked file as deleted, so the cleanliness guard must run after cloning
   return ["clone", "--", originUrl, source];
 }
 

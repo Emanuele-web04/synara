@@ -4,8 +4,6 @@ import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import type { BrowserVault } from "./browserVault";
 import { BrowserVaultCapture } from "./browserVaultCapture";
 
-// Deliberately do not mock betterwright/capture. Changes to the installed
-// sensor's context, page, or CDP surface must exercise the Electron adapter.
 function fixture() {
   const saveCaptured = vi.fn(async () => {});
   const askSave = vi.fn(async () => "save" as const);

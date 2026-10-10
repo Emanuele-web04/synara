@@ -1,10 +1,3 @@
-// FILE: studioGeneratedImages.ts
-// Purpose: Copy Codex-generated images into a Studio workspace and persist direct
-//          thread attribution without moving the transcript's original image file.
-// Layer: Server Studio output helper
-// Exports: Studio image naming, validated atomic copy, and copy+attribution helpers
-// Depends on: node fs promises, Codex generated-image roots, Studio outputs payload shape
-
 import { constants as fileSystemConstants } from "node:fs";
 import { copyFile, link, mkdir, readFile, realpath, stat, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -26,12 +19,10 @@ import { studioOutputsCapturedActivityPayload } from "./studioOutputs.ts";
 
 const STUDIO_IMAGES_RELATIVE_DIRECTORY = ["Outbox", "Images"] as const;
 
-// Generated images are single digital pictures (screenshots would be far smaller); the
-// cap only refuses to duplicate something that clearly is not one of them.
+// generated images are single digital pictures — the cap only refuses to duplicate something clearly not one of them
 export const MAX_STUDIO_GENERATED_IMAGE_BYTES = 64 * 1024 * 1024;
 
 export interface StudioGeneratedImageCopyResult {
-  /** Workspace-root-relative POSIX path persisted in Studio output attribution. */
   readonly relativePath: string;
   readonly fullPath: string;
 }
@@ -43,7 +34,6 @@ function datePrefix(createdAt: string): string {
     : timestamp.toISOString().slice(0, "YYYY-MM-DD".length);
 }
 
-/** Builds a dated, readable name; collision 1 is the unsuffixed preferred name. */
 export function studioGeneratedImageFileName(input: {
   readonly sourcePath: string;
   readonly createdAt: string;
@@ -71,13 +61,7 @@ function isPathInside(candidate: string, root: string): boolean {
   );
 }
 
-/**
- * Validates that the copy source is a regular, reasonably sized image file whose real
- * path lives under one of the trusted Codex generated-image roots. Anything else (a
- * crafted path in a replayed payload, a symlink escaping the roots, a directory) is
- * rejected so provider payload data can never exfiltrate arbitrary local files into
- * the user-visible Studio folder.
- */
+/** the copy source must be a regular, reasonably-sized image whose real path lives under a trusted Codex generated-image root — anything else (crafted path, escaping symlink, directory) is rejected so provider payload data can never exfiltrate arbitrary local files into the user-visible Studio folder */
 async function resolveTrustedGeneratedImageSource(
   sourcePath: string,
   trustedSourceRoots?: readonly string[],
@@ -118,10 +102,7 @@ async function haveIdenticalContent(
   }
 }
 
-/**
- * Atomically claims `destinationPath` with the fully written temp copy via link(2),
- * which fails with EEXIST instead of overwriting. Returns false on collision.
- */
+/** atomically claims destinationPath via link(2) which fails EEXIST instead of overwriting; false on collision */
 async function claimDestinationExclusively(
   temporaryPath: string,
   destinationPath: string,
@@ -137,19 +118,12 @@ async function claimDestinationExclusively(
   }
 }
 
-/**
- * Copies one Codex-generated image into Outbox/Images without ever overwriting an
- * existing deliverable, and idempotently: a replayed event whose bytes already exist
- * under a candidate name reuses that file instead of minting -2/-3 duplicates. The
- * image is fully written to a hidden temp file first (output scans skip dotfiles),
- * then atomically linked into its final name, so a concurrent scan can never observe
- * a half-copied deliverable.
- */
+/** never overwrites an existing deliverable; a replayed event whose bytes already exist under a candidate name reuses that file instead of minting -2/-3 duplicates; fully written to a hidden temp then atomically linked so a concurrent scan never sees a half-copied file */
 export const copyGeneratedImageToStudioWorkspace = Effect.fnUntraced(function* (input: {
   readonly sourcePath: string;
   readonly workspaceRoot: string;
   readonly createdAt: string;
-  /** Test seam; production callers rely on the Codex generated-image roots. */
+  /** test seam — production callers rely on the Codex generated-image roots */
   readonly trustedSourceRoots?: readonly string[];
 }) {
   if (!isSupportedLocalImagePath(input.sourcePath)) {
@@ -174,8 +148,7 @@ export const copyGeneratedImageToStudioWorkspace = Effect.fnUntraced(function* (
   );
 
   const copyIntoWorkspace = Effect.tryPromise(async () => {
-    // A Studio folder is human-scale; this guard only prevents an externally managed
-    // directory with pathological collisions from spinning forever.
+    // a Studio folder is human-scale — this only prevents an externally managed dir with pathological collisions from spinning forever
     for (let collisionNumber = 1; collisionNumber <= 10_000; collisionNumber += 1) {
       const fileName = studioGeneratedImageFileName({
         sourcePath: source.realPath,
@@ -186,8 +159,7 @@ export const copyGeneratedImageToStudioWorkspace = Effect.fnUntraced(function* (
       if (await claimDestinationExclusively(temporaryPath, fullPath)) {
         return { fileName, fullPath };
       }
-      // Replay idempotency across restarts: identical bytes already delivered under
-      // this name means this is the same image again — reuse instead of duplicating.
+      // replay idempotency — identical bytes already delivered under this name means the same image again
       if (await haveIdenticalContent(source.realPath, source.sizeBytes, fullPath)) {
         return { fileName, fullPath };
       }
@@ -205,12 +177,7 @@ export const copyGeneratedImageToStudioWorkspace = Effect.fnUntraced(function* (
   } satisfies StudioGeneratedImageCopyResult;
 });
 
-/**
- * Copies first, then directly attributes the resulting workspace file. Direct
- * attribution is required even though the turn-end scan may also see the copy:
- * provider-runtime subscribers are independent, so terminal scan ordering cannot
- * be used as a correctness guarantee. The output listing deduplicates both paths.
- */
+/** copy first, then directly attribute — required even though the turn-end scan may also see the copy: runtime subscribers are independent so terminal scan ordering is no correctness guarantee; the listing deduplicates both paths */
 export const copyAndAttributeStudioGeneratedImage = Effect.fnUntraced(function* (input: {
   readonly orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch">;
   readonly sourcePath: string;

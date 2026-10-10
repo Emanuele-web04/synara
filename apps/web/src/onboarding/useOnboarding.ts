@@ -1,10 +1,3 @@
-// FILE: useOnboarding.ts
-// Purpose: Decide when the welcome tour opens (first run with no ordinary projects), keep that
-//          decision revisable until authoritative data lands, and persist completion to the
-//          server with an installation-scoped local fallback reconciled on later launches.
-// Layer: Web hook
-// Depends on: app settings, server settings/config queries, orchestration store, spaces rule.
-
 import { useQuery } from "@tanstack/react-query";
 import { Schema } from "effect";
 import { useEffect, useRef, useState } from "react";
@@ -40,7 +33,6 @@ const INITIAL_STORAGE: LocalOnboardingCompletion = { completedAt: null, installa
 
 export interface UseOnboardingResult {
   readonly isOpen: boolean;
-  /** Marks the tour finished (or skipped) and closes it. */
   readonly complete: () => void;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -60,15 +52,13 @@ export function useOnboarding(): UseOnboardingResult {
     useState<LocalOnboardingCompletion>(INITIAL_STORAGE);
   const { updateSettingsAndWait } = useAppSettings();
   const settingsQuery = useQuery(serverSettingsQueryOptions());
-  // The worktrees directory lives under the server's state directory, so it identifies
-  // the installation this browser is currently talking to.
+  // The worktrees directory lives under the server's state directory, so it identifies the installation this browser is currently talking to.
   const installationKeyQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.worktreesDir,
   });
   const installationKey = installationKeyQuery.data ?? null;
-  // A Settings replay can finish before config arrives. Keep that dismissal in memory,
-  // then bind it to the first known identity so another installation can still open its tour.
+  // A Settings replay can finish before config arrives. Keep that dismissal in memory, then bind it to the first known identity so another installation can still open its tour.
   useEffect(() => {
     if (
       installationKey !== null &&
@@ -123,10 +113,7 @@ export function useOnboarding(): UseOnboardingResult {
     localCompletedAt: localCompletedAt ?? sessionCompletedAt,
   });
 
-  // Open on the first "show"; revise a first-run open back to closed if authoritative data
-  // later proves the install is configured (desktop can hydrate from a transient empty
-  // startup snapshot, and an errored settings query can recover with a server marker), but
-  // only while the user is still reading the intro/tour and has made no setup choices.
+  // revise a first-run open back to closed if authoritative data later proves the install configured — only while the user is still reading the intro and has made no setup choices
   useEffect(() => {
     if (gate === "pending" || betaWelcomePending) return;
     markStartupGateSettled();
@@ -148,9 +135,7 @@ export function useOnboarding(): UseOnboardingResult {
     openStore,
   ]);
 
-  // Reconcile the server marker once per session: a completion whose write failed, or an
-  // installation that predates the tour. Failures leave the local marker in place so the
-  // next launch retries.
+  // Reconcile the server marker once per session: a completion whose write failed, or an installation that predates the tour. Failures leave the local marker in place so the next launch retries.
   const reconcileAttemptedRef = useRef(false);
   const completedAtToReconcile = resolveOnboardingCompletionToReconcile({
     threadsHydrated,
@@ -171,8 +156,7 @@ export function useOnboarding(): UseOnboardingResult {
   const complete = () => {
     const completedAt = new Date().toISOString();
     setSessionCompletion({ completedAt, installationKey });
-    // Keep the fallback scoped even when Settings manually opens the tour before config
-    // arrives. Only a known installation can safely retain a failed server write.
+    // Keep the fallback scoped even when Settings manually opens the tour before config arrives. Only a known installation can safely retain a failed server write.
     if (installationKey !== null) {
       setStorage({ completedAt, installationKey });
       // A new installation has just seen its welcome flow. Record this here, before

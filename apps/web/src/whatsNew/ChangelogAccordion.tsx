@@ -1,11 +1,3 @@
-// FILE: whatsNew/ChangelogAccordion.tsx
-// Purpose: Collapsible release-history accordion used by both the Settings
-// "Release history" surface and the `WhatsNewDialog` "Complete changelog"
-// secondary view. Each row summarises a release; expanding reveals the
-// FeatureSection cards for that version.
-// Layer: presentational — it assumes the caller has already sorted entries
-// newest-first (see `sortEntriesByVersionDesc`).
-
 import { useState } from "react";
 
 import { pluralize } from "@synara/shared/text";

@@ -1,8 +1,3 @@
-// FILE: PickerTriggerButton.tsx
-// Purpose: Shares the trigger shell used by chat picker-style menus in the header and composer.
-// Layer: Chat shell controls
-// Depends on: button primitives, shared picker text styles, and icon slots supplied by callers.
-
 import { type ComponentProps, type ReactNode } from "react";
 import { ChevronDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -14,11 +9,9 @@ export function PickerTriggerButton(
     icon: ReactNode;
     label: ReactNode;
     compact?: boolean;
-    // Icon-only mode for narrow composers; the label stays available to
-    // assistive tech and as a hover title.
+    // Icon-only mode for narrow composers; the label stays available to assistive tech and as a hover title.
     hideLabel?: boolean;
-    // Drop the trailing chevron so the trigger reads as a plain label (e.g. the
-    // folder picker) instead of an obvious dropdown.
+    // Drop the trailing chevron so the trigger reads as a plain label (e.g. the folder picker) instead of an obvious dropdown.
     hideChevron?: boolean;
   } & Omit<ComponentProps<typeof Button>, "children" | "size">,
 ) {

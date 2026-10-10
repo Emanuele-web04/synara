@@ -11,8 +11,6 @@ if (
   throw new Error("Use a fresh profile from synthetic-cookie-profile.mjs.");
 }
 
-// Initialize macOS encryption normally, then isolate native cookie discovery.
-// The compiled app and Betterwright reader are not mocked or replaced.
 app.once("ready", () => {
   if (safeStorage.isEncryptionAvailable()) safeStorage.encryptString("synthetic-launch-check");
   process.env.HOME = home;

@@ -1,7 +1,3 @@
-// FILE: install/page.tsx
-// Purpose: Dedicated download page for macOS, Windows, and Linux installers.
-// Layer: App Router page
-
 import Navbar from "@/components/Navbar";
 import SiteFooter from "@/components/SiteFooter";
 import InstallOptions from "@/components/InstallOptions";

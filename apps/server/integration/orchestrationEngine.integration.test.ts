@@ -76,11 +76,7 @@ function waitForSync<A>(
   });
 }
 
-/**
- * Stale checkpoint refs are pruned only after `thread.revert.complete` commits,
- * so the projection can already show the trimmed thread while the refs are still
- * on disk. Poll instead of asserting straight after `thread.reverted`.
- */
+/** stale checkpoint refs prune only after thread.revert.complete commits — the projection can show the trimmed thread while refs sit on disk; poll */
 function waitForGitRefMissing(cwd: string, ref: string) {
   return waitForSync(
     () => gitRefExists(cwd, ref),
@@ -913,9 +909,7 @@ it.live(
           (activity) => activity.kind === "checkpoint.revert.failed",
         );
         assert.equal(failureActivity !== undefined, true);
-        // A revert dispatched without a live provider session is no longer rejected up
-        // front: it resolves the checkpoint cwd on its own and fails only when the
-        // requested turn has no filesystem checkpoint.
+        // a revert without a live session resolves the checkpoint cwd itself; it fails only when the turn has no filesystem checkpoint
         assert.equal(
           String((failureActivity?.payload as { readonly detail?: string } | undefined)?.detail),
           "Filesystem checkpoint is unavailable for turn 0.",

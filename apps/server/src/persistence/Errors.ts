@@ -1,9 +1,5 @@
 import { Schema, SchemaIssue } from "effect";
 
-// ===============================
-// Core Persistence Errors
-// ===============================
-
 export class PersistenceSqlError extends Schema.TaggedErrorClass<PersistenceSqlError>()(
   "PersistenceSqlError",
   {
@@ -79,14 +75,7 @@ export function toPersistenceDecodeCauseError(operation: string) {
     });
 }
 
-/**
- * The projection cursor table is non-empty but a projector the snapshot
- * sequence depends on has no cursor row. The snapshot fence is unknowable in
- * this state: reporting any number would either serve stale data as fresh or
- * demand an unsatisfiable resnapshot forever. Reachable only through an
- * interrupted projection rebuild (repair/restore), so it names the missing
- * cursors and points at the recovery path instead of guessing.
- */
+/** the cursor table is non-empty but a projector the snapshot depends on has no cursor row — the snapshot fence is unknowable; reachable only through an interrupted rebuild, so it names the missing cursors and points at recovery */
 export class ProjectionStateIncompleteError extends Schema.TaggedErrorClass<ProjectionStateIncompleteError>()(
   "ProjectionStateIncompleteError",
   {
@@ -141,10 +130,6 @@ export class MigrationSchemaTooNewError extends Schema.TaggedErrorClass<Migratio
     );
   }
 }
-
-// ===============================
-// Provider Session Repository Errors
-// ===============================
 
 export class ProviderSessionRepositoryValidationError extends Schema.TaggedErrorClass<ProviderSessionRepositoryValidationError>()(
   "ProviderSessionRepositoryValidationError",

@@ -1,10 +1,3 @@
-// FILE: EnvironmentRow.tsx
-// Purpose: Shared full-width menu-style row for the Environment panel — one leading
-//          glyph, a truncating label, and an optional right-aligned trailing slot
-//          (diff stats, a picker caret, or a value). Every panel entry and every
-//          relocated picker trigger reuses this skin so the rows line up on one grid.
-// Layer: Environment panel UI primitive
-
 import { useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";

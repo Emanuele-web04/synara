@@ -89,9 +89,7 @@ const pipeServer = new BrowserUsePipeServer(browserManager, {
   capability,
   requestOpenPanel: (requestedThreadId) => {
     if (requestedThreadId !== threadId) throw new Error("Unexpected E2E thread scope.");
-    // Exercise React development's setup/cleanup/setup sequence against the
-    // real desktop human-control boundary. The remount must cancel the passive
-    // cleanup before it can masquerade as a user takeover.
+    // exercises dev-mode remount against the real human-control boundary — the remount must cancel passive cleanup before it masquerades as a takeover
     rendererLifecycleHide.schedule(threadId, () => browserManager.hide({ threadId }));
     rendererLifecycleHide.cancel(threadId);
     if (panelRevealEnabled) setPanelVisible(true);

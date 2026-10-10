@@ -1,12 +1,3 @@
-// FILE: LocalImagePreview.tsx
-// Purpose: Shared local-image loading state and error card, plus the panel
-//          preview surface used by editor file and diff views.
-// Layer: Web UI primitive
-// Exports: useLocalImagePreview, LocalImageErrorCard, LocalImagePreview
-// Notes: Pure UI; image URL building lives in `~/lib/localImageUrls`. The chat
-//        markdown variant (`GeneratedMarkdownImage`) composes the same hook and
-//        error card with its own inline frame/overlay rendering.
-
 import { type ImgHTMLAttributes, type MouseEvent, useState } from "react";
 
 import { downloadUrlAsBlob } from "~/lib/browserDownload";
@@ -55,9 +46,7 @@ export function useLocalImagePreview(input: {
     grant: previewGrant,
   });
   const fileName = localImageFileName(src);
-  // A generation distinguishes separate visits to the same URL. This keeps an
-  // A -> B -> A transition from reviving A's old error branch (which contains
-  // no <img> and therefore cannot retry), and rejects stale image events.
+  // A generation distinguishes separate visits to the same URL. This keeps an A -> B -> A transition from reviving A's old error branch (which contains no <img> and therefore cannot retry), and rejects stale image events.
   const [storedLoad, setStoredLoad] = useState<{
     url: string;
     generation: number;
@@ -104,8 +93,7 @@ export function useLocalImagePreview(input: {
   };
 }
 
-// Handles local-image downloads imperatively so failed API responses surface as
-// toasts instead of replacing the whole desktop window with a 404 page.
+// Handles local-image downloads imperatively so failed API responses surface as toasts instead of replacing the whole desktop window with a 404 page.
 export function useLocalImageDownloadClick(input: {
   downloadUrl: string;
   downloadName: string;
@@ -134,7 +122,6 @@ export function useLocalImageDownloadClick(input: {
 // Span-only markup so the card stays valid inside markdown paragraphs.
 export function LocalImageErrorCard(props: {
   downloadUrl: string;
-  /** `downloadName` from useLocalImagePreview. */
   downloadName: string;
   className?: string | undefined;
   downloadAriaLabel?: string;

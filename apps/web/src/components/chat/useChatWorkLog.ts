@@ -33,11 +33,8 @@ export function useChatWorkLog({
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
   const activeLatestTurnCompletedAt = activeLatestTurn?.completedAt ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
-  // User messages intentionally have no turn id; assistant messages are the stable
-  // bridge for deciding which historical work can fold into visible replies.
-  // Memoized on purpose: an inline Set would change identity every render and cascade
-  // through the memoized work-log/timeline chain into the virtualized list, which resets
-  // in a loop on unstable data.
+  // user messages intentionally have no turn id; assistant messages are the stable bridge for folding historical work into visible replies
+  // memoized on purpose: an inline Set would change identity every render and cascade into the virtualized list, which resets in a loop on unstable data
   const workLogVisibleTurnIds = useMemo(() => {
     const turnIds = new Set<TurnId>();
     for (const message of activeThread?.messages ?? []) {
@@ -95,16 +92,12 @@ export function useChatWorkLog({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
-  // Subagents are presented by the composer strip (and their own threads); the
-  // transcript drops the routed fan-out rows entirely. The enriched list above is
-  // still what feeds the strip-adjacent derivations that need receiver metadata.
+  // subagents are presented by the composer strip; the transcript drops the routed fan-out rows while the enriched list still feeds strip derivations
   const workLogEntries = useMemo(
     () => omitRoutedSubagentWorkEntries(enrichedWorkLogEntries),
     [enrichedWorkLogEntries],
   );
-  // The strip's liveness (running/settled) reads the child thread's own session and
-  // tail activities, so retain a detail subscription while a subagent runs; settled
-  // subagents stay on whatever the store already holds.
+  // the strip's liveness reads the child thread's own session and tail activities — retain a detail subscription while a subagent runs
   const liveSubagentThreadIdsKey = useMemo(() => {
     if (!hasWorkLogSubagents) {
       return "";
@@ -132,15 +125,12 @@ export function useChatWorkLog({
       }
     };
   }, [liveSubagentThreadIdsKey]);
-  // Native-CLI parity: while a subagent thread is open, the strip derives from the
-  // PARENT thread's activities so all sibling subagents (plus a way back to the
-  // main thread) stay visible, with the open subagent marked as viewed.
+  // native-CLI parity: while a subagent thread is open, the strip derives from the PARENT's activities so siblings and a way back stay visible
   const stripParentThreadId = activeThread?.parentThreadId ?? null;
   const stripParentThread = useStore(
     useMemo(() => createThreadSelector(stripParentThreadId), [stripParentThreadId]),
   );
-  // Deep links can land on a subagent thread before the parent has a detail
-  // subscription; retain one so the parent's activities hydrate for the strip.
+  // deep links can land on a subagent thread before the parent has a detail subscription — retain one so the parent's activities hydrate
   useEffect(() => {
     if (!stripParentThreadId) {
       return;
@@ -183,10 +173,7 @@ export function useChatWorkLog({
     : latestTurnSettled
       ? null
       : (activeLatestTurn?.turnId ?? null);
-  // Composer-strip source: the strip needs the routed subagent entries the
-  // transcript drops. A top-level thread has already derived that exact source
-  // above; reuse it so every live activity does not scan and normalize the full
-  // history twice. Subagent views still derive from their distinct parent source.
+  // reuse the top-level thread's already-derived source so every live activity doesn't scan the full history twice; subagent views derive from their distinct parent source
   const stripRawWorkLogEntries = useMemo(
     () =>
       resolveComposerStripWorkLogEntries({
@@ -245,8 +232,7 @@ export function useChatWorkLog({
     ],
   );
 
-  // Task tool_use_ids the provider confirmed as backgrounded via task_updated
-  // patches (last patch wins, so re-foregrounded tasks drop back out).
+  // tool_use_ids the provider confirmed as backgrounded via task_updated patches (last patch wins)
   const backgroundedSubagentToolUseIds = useMemo(() => {
     const toolUseIds = new Set<string>();
     for (const activity of stripSourceActivities) {
@@ -288,8 +274,7 @@ export function useChatWorkLog({
       stripWorkLogEntries,
     ],
   );
-  // Links workflow agent rows to their subagent child threads (and models) when the
-  // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
+  // links workflow agent rows to their subagent child threads when the Task tool_use_id produced one
   const workflowSubagentThreadsByToolUseId = useMemo(() => {
     const refs = new Map<string, WorkflowSubagentThreadRef>();
     for (const entry of enrichedWorkLogEntries) {
@@ -306,10 +291,7 @@ export function useChatWorkLog({
     }
     return refs;
   }, [enrichedWorkLogEntries]);
-  // Persisted (per-thread) workflow run flags: pausedByUser tells the settled
-  // card apart from a plain stop; dismissed retires a settled card the run's
-  // activities would otherwise keep visible. Survive reloads via
-  // workflowRunUiStore instead of living in component state.
+  // persisted per-thread workflow flags (pausedByUser, dismissed) survive reloads via workflowRunUiStore instead of component state
   const workflowRunUiThreadState = useWorkflowRunUiThreadState(activeThreadId);
   const pausedWorkflowTaskIds = useMemo(
     () => new Set(workflowRunUiThreadState.pausedByUser),

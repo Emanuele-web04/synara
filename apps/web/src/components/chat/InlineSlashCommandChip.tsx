@@ -1,10 +1,3 @@
-// FILE: InlineSlashCommandChip.tsx
-// Purpose: Inline chip for app-level slash commands (`/goal`, `/automation`), so a
-//          sent message echoes the exact token the composer showed while typing.
-//          Mirrors InlineSkillChip, swapping the skill cube for the command glyph.
-// Layer: Shared UI component
-// Exports: InlineSlashCommandChip
-
 import type { ComposerSlashCommand } from "~/composerSlashCommands";
 import { MessageCircleIcon } from "~/lib/icons";
 import { slashCommandIcon } from "~/lib/slashCommandIcons";

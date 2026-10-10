@@ -1,13 +1,6 @@
-// FILE: fileComments.ts
-// Purpose: Normalize, serialize, and parse inline "Local comment" requests that
-//          the file viewer attaches to a thread's composer draft and prompt.
-// Layer: Chat composer and transcript helpers
-
 import { randomUUID } from "./utils";
 
-// Inline comments authored against a file/line range in the editor gutter. They
-// live on the composer draft like terminal contexts (not wire attachments) and
-// are serialized into a trailing <file_comments> prompt block on send.
+// gutter comments live on the composer draft like terminal contexts (not wire attachments) and serialize into a trailing <file_comments> block on send
 export const FILE_COMMENT_TEXT_MAX_CHARS = 4_000;
 
 const TRAILING_FILE_COMMENTS_PATTERN = /\n*<file_comments>\n([\s\S]*?)\n<\/file_comments>\s*$/;

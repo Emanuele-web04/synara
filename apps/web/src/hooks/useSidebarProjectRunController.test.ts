@@ -1,7 +1,3 @@
-// FILE: useSidebarProjectRunController.test.ts
-// Purpose: Characterizes Sidebar project-run lifecycle, attribution, and dialog behavior.
-// Layer: Web hook tests
-
 import { ProjectId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

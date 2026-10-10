@@ -1,7 +1,3 @@
-// FILE: AntigravityIcon.tsx
-// Purpose: Renders the official compact Antigravity mark used across provider surfaces.
-// Layer: Shared web UI icon
-
 import { useId, type SVGProps } from "react";
 
 export function AntigravityBrandIcon(props: SVGProps<SVGSVGElement>) {

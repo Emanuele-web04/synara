@@ -17,19 +17,9 @@
  */
 export const SOFT_SURFACE_FILL_CLASS_NAME = "bg-foreground/2";
 
-/**
- * Hover treatment for anything that raises off its surface on pointer-over: menu
- * items, picker triggers, row affordances, icon buttons, chips. One policy so every
- * hoverable surface in the app lights up with the same color and timing.
- */
 export const ELEVATED_HOVER_SURFACE_CLASS_NAME =
   "transition-colors hover:bg-[var(--color-background-elevated-secondary)]";
 
-/**
- * {@link ELEVATED_HOVER_SURFACE_CLASS_NAME} plus the text raise, for controls that rest
- * in a muted tone and come up to full foreground on hover (drag handles, link chips,
- * toolbar icon buttons).
- */
 export const ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME = `${ELEVATED_HOVER_SURFACE_CLASS_NAME} hover:text-foreground`;
 
 /**
@@ -49,11 +39,6 @@ export const ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME = `${ELEVATED_HOVER_S
  */
 export const MUTED_LABEL_TEXT_CLASS_NAME = "text-muted-foreground";
 
-/**
- * {@link MUTED_LABEL_TEXT_CLASS_NAME} as a raw CSS color, for the few call sites that
- * must pass a `color` through an inline style (e.g. markdown previews rendered inside
- * a tool row) instead of a class.
- */
 export const MUTED_LABEL_TEXT_COLOR = "var(--muted-foreground)";
 
 /**

@@ -9,9 +9,7 @@ import { useCallback } from "react";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
 
-// Merges a trait patch into the thread's provider options and persists it as the
-// sticky choice for the model. Every trait surface (radio menu, slider card,
-// keyboard shortcuts) funnels through here so persistence semantics stay identical.
+// every trait surface funnels through here so persistence semantics stay identical
 export function useComposerTraitCommit(input: {
   threadId: ThreadId;
   provider: ProviderKind;

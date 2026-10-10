@@ -184,13 +184,7 @@ type RunningTurnSessionView = {
   activeTurnId?: TurnId | null | undefined;
 };
 
-/**
- * A session is actively running a turn: it reports the `running` status and still
- * has an in-flight `activeTurnId`. This is the single rule for "there is live work
- * on this session right now" during read-model reconciliation. Thread lifecycle
- * cleanup is server-owned and intentionally does not use this predicate as a UI
- * gate.
- */
+// running status + in-flight activeTurnId is the single "live work" rule for read-model reconciliation; lifecycle cleanup is server-owned and doesn't use it
 export function isSessionRunningTurn<T extends RunningTurnSessionView>(
   session: T | null | undefined,
 ): session is T & { activeTurnId: TurnId } {
@@ -254,9 +248,7 @@ export function deriveActiveTaskListState(
     return currentTurnTaskList.tasks.length > 0 ? currentTurnTaskList : null;
   }
 
-  // Task lists describe work state beyond the lifetime of one provider turn. Keep the
-  // latest unfinished list visible after completion, abort, reload, and follow-up turns
-  // until the provider completes every task or sends an explicit empty snapshot.
+  // keep the latest unfinished task list visible after completion/abort/reload/follow-ups until the provider completes every task or sends an explicit empty snapshot
   const latestPriorTaskList =
     allTaskListActivities.map(toActiveTaskListState).findLast((taskList) => taskList !== null) ??
     null;
@@ -321,8 +313,7 @@ function foldActiveTasks(
       continue;
     }
 
-    // Status patches can end a task (killed/completed/failed) without a
-    // task.completed notification following on the same turn.
+    // Status patches can end a task (killed/completed/failed) without a task.completed notification following on the same turn.
     if (activity.kind === "task.updated") {
       const status = payload && typeof payload.status === "string" ? payload.status : undefined;
       if (
@@ -478,14 +469,11 @@ export function hasLiveTurnTailWork(input: {
       message.role === "assistant" && message.turnId === latestTurnId && message.streaming,
   );
   if (hasStreamingAssistantText) {
-    // Once the turn is terminal, a stale `streaming` flag should not keep the
-    // stop button/timer alive indefinitely.
+    // Once the turn is terminal, a stale `streaming` flag should not keep the stop button/timer alive indefinitely.
     return input.latestTurn?.completedAt == null;
   }
 
-  // Some providers can leave task lifecycle bookkeeping behind after the turn
-  // has already closed. Once the session is no longer running, those stale
-  // task rows should not keep the whole chat in a live state.
+  // Some providers can leave task lifecycle bookkeeping behind after the turn has already closed. Once the session is no longer running, those stale task rows should not keep the whole chat in a live state.
   if (input.session?.orchestrationStatus !== "running") {
     return false;
   }

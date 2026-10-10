@@ -1,8 +1,3 @@
-// FILE: ProjectImportGlyph.tsx
-// Purpose: Claude Code + Codex → Synara tile illustration shared by the project import promos.
-// Layer: Web project-import UI
-// Exports: ProjectImportGlyph
-
 import type { ReactNode } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
@@ -36,13 +31,11 @@ const SIZE_CLASSES: Record<
 const CLAUDE_GLOW = "color-mix(in srgb, #d97757 60%, transparent)";
 const NEUTRAL_GLOW = "color-mix(in srgb, var(--foreground) 38%, transparent)";
 
-// Tile chrome: a 1px border that is brightest on the edge facing the connector dots and
-// fades out across the tile. The gradient is masked down to the ring so the tile stays
-// transparent and only the outline reads.
+// 1px tile border brightest on the connector-facing edge, masked to the ring so the tile stays transparent
 function IconTile(props: {
   children: ReactNode;
   size: GlyphSize;
-  // Edge that carries the highlight; the ring fades toward the opposite edge.
+  // the edge that carries the highlight; the ring fades toward the opposite edge
   glow: "left" | "right";
   glowColor: string;
   className?: string;

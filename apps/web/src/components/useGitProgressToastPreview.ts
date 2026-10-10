@@ -1,8 +1,3 @@
-// FILE: useGitProgressToastPreview.ts
-// Purpose: Keep looping toast previews visible for local toast styling work.
-// Layer: UI helpers
-// Exports: useGitProgressToastPreview
-
 import { useEffect, useRef } from "react";
 
 import { toastManager } from "./ui/toast";

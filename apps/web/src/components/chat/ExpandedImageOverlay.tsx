@@ -1,8 +1,3 @@
-// FILE: ExpandedImageOverlay.tsx
-// Purpose: Shared fullscreen image preview overlay.
-// Layer: Chat and composer UI component
-// Exports: ExpandedImageOverlay
-
 import { useLayoutEffect } from "react";
 
 import { Button } from "~/components/ui/button";

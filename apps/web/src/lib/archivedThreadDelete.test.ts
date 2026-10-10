@@ -1,7 +1,3 @@
-// FILE: archivedThreadDelete.test.ts
-// Purpose: Verifies archived-thread delete coordination without rendering settings UI.
-// Layer: Web orchestration helper tests
-
 import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 

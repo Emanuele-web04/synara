@@ -1,8 +1,3 @@
-// FILE: terminalRuntimeRegistry.ts
-// Purpose: Keep a stable runtime map and delegate terminal lifecycle work to terminalRuntime.ts.
-// Layer: Terminal runtime infrastructure
-// Depends on: terminalRuntime.ts for lifecycle, terminalRuntimeTypes.ts for stable ids and contracts.
-
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import { registerTerminalRuntimeCleanup } from "../../lib/terminalStateCleanup";
@@ -24,8 +19,6 @@ import type {
 import { buildTerminalRuntimeKey } from "./terminalRuntimeTypes";
 
 export { buildTerminalRuntimeKey, type TerminalRuntimeCallbacks } from "./terminalRuntimeTypes";
-
-// --- Registry orchestration -------------------------------------------------
 
 class TerminalRuntimeRegistry {
   private entries = new Map<string, TerminalRuntimeEntry>();

@@ -84,7 +84,7 @@ function summarize(requests: readonly Request[]) {
   return { requests: requests.length, tokens, missingCounters };
 }
 
-/** Reads metadata only; never retains or exports transcript text or tool payloads. */
+/** metadata only; never retains or exports transcript text or tool payloads */
 export async function analyzeClaudeCache(lines: Iterable<string> | AsyncIterable<string>) {
   const requests = new Map<string, Request>();
   const streams = new Map<string, { id: number; comparable: boolean; prompts: Prompt[] }>();
@@ -108,7 +108,7 @@ export async function analyzeClaudeCache(lines: Iterable<string> | AsyncIterable
     try {
       row = record(JSON.parse(source));
     } catch {
-      // JSON parser errors can quote private transcript content.
+      // JSON parser errors can quote private transcript content
       throw new Error(`Invalid JSON at line ${line}.`);
     }
     const session = text(row.sessionId) ?? text(row.session_id) ?? "";
@@ -182,7 +182,7 @@ export async function analyzeClaudeCache(lines: Iterable<string> | AsyncIterable
       };
       requests.set(key, request);
     }
-    // Mirrored blocks can reveal child ownership after the first appearance.
+    // mirrored blocks can reveal child ownership after the first appearance
     if (scope === "subagent" || request.scope === "unknown") {
       request.scope = scope;
       request.stream = stream.id;
@@ -190,7 +190,7 @@ export async function analyzeClaudeCache(lines: Iterable<string> | AsyncIterable
     request.lastLine = line;
     request.lastAssistantAt = at ?? request.lastAssistantAt;
     const current = usage(message.usage);
-    // Streaming blocks may carry partial counters; the last available value wins.
+    // streaming blocks may carry partial counters; the last available value wins
     for (const field of usageFields) {
       if (current[field] !== null) request.usage[field] = current[field];
     }

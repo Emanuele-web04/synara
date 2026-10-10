@@ -1,24 +1,12 @@
-// FILE: pdfLinks.ts
-// Purpose: Extract clickable link annotations from a pdf.js page and project them
-//          into viewport-space rectangles the link layer can position. Handles
-//          both external URLs (opened in the browser) and internal destinations
-//          (scroll to another page).
-// Layer: Web PDF rendering utility
-// Exports: PdfLink, extractPageLinks
-
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "./pdfEngine";
 
 export interface PdfLink {
-  /** Stable key for React lists. */
   id: string;
-  /** [left, top, width, height] in CSS px at the viewport's scale. */
   left: number;
   top: number;
   width: number;
   height: number;
-  /** External URL to open in the browser, when present. */
   url?: string;
-  /** 1-based page to scroll to for internal links, when resolvable. */
   targetPageNumber?: number;
 }
 
@@ -29,12 +17,7 @@ interface RawLinkAnnotation {
   dest?: unknown;
 }
 
-// Named destinations (string dests) repeat across pages — e.g. every "back to
-// contents" link resolves to the same target. Memoize per document so a
-// link-dense table of contents resolves each unique name once instead of once
-// per occurrence. We cache the in-flight promise (not just the result) so
-// concurrent lookups of the same name within one page share a single round-trip.
-// `resolveDestinationToPage` never rejects, so caching unresolved names is safe.
+// named dests repeat across pages — memoize per document (cache the in-flight promise so concurrent lookups share one round-trip); resolveDestinationToPage never rejects so caching unresolved names is safe
 const namedDestPageCache = new WeakMap<
   PDFDocumentProxy,
   Map<string, Promise<number | undefined>>
@@ -108,15 +91,6 @@ function sanitizeAnnotationUrl(url: string | undefined): string | undefined {
   }
 }
 
-/**
- * Returns the link annotations for `page`, with rectangles already converted to
- * the supplied viewport so the link layer can place absolutely-positioned anchors
- * over the canvas without re-deriving the transform.
- *
- * Internal destinations are resolved in parallel (and memoized per document):
- * a single page-load round-trip to the worker rather than one serialized hop per
- * link, which keeps link-dense pages (tables of contents) from blocking.
- */
 export async function extractPageLinks(options: {
   doc: PDFDocumentProxy;
   page: PDFPageProxy;
@@ -126,7 +100,6 @@ export async function extractPageLinks(options: {
     intent: "display",
   })) as RawLinkAnnotation[];
 
-  // First pass (sync): collect link candidates in annotation order.
   const candidates: LinkCandidate[] = [];
   for (const annotation of annotations) {
     if (annotation.subtype !== "Link") {
@@ -138,14 +111,12 @@ export async function extractPageLinks(options: {
     }
     candidates.push({
       rect,
-      // pdf.js exposes rejected protocols separately as unsafeUrl; ignore that
-      // field and keep only sanitized schemes that are safe to hand to the OS.
+      // pdf.js exposes rejected protocols as unsafeUrl — ignore it and keep only sanitized schemes safe to hand to the OS
       url: sanitizeAnnotationUrl(annotation.url),
       dest: annotation.dest,
     });
   }
 
-  // Second pass: resolve all internal destinations concurrently.
   const targetPageNumbers = await Promise.all(
     candidates.map((candidate) =>
       !candidate.url && candidate.dest != null
@@ -154,8 +125,7 @@ export async function extractPageLinks(options: {
     ),
   );
 
-  // Assemble in original order, dropping inert links (no URL, no resolvable
-  // page). `index` numbers only the kept links, matching the prior id scheme.
+  // Assemble in original order, dropping inert links (no URL, no resolvable page). `index` numbers only the kept links, matching the prior id scheme.
   const links: PdfLink[] = [];
   let index = 0;
   for (const [position, candidate] of candidates.entries()) {

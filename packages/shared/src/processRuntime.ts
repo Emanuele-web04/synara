@@ -1,7 +1,3 @@
-// FILE: processRuntime.ts
-// Purpose: Spawns Node child processes from platform-neutral launch requests.
-// Layer: Shared platform runtime
-
 import {
   execSync as nodeExecSync,
   execFile as nodeExecFile,
@@ -32,7 +28,7 @@ export { didProcessFailToSpawn } from "./processSpawnOutcome";
 type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "requireExecutable">;
 
 type ProcessGroupOptions = {
-  /** Own a POSIX process group while keeping Windows launches attached for tree control. */
+  /** own a POSIX process group while keeping Windows launches attached for tree control */
   readonly ownProcessGroup?: boolean;
   /** Opt-in for agent processes; internal request-path helpers keep their priority. */
   readonly lowerPriority?: boolean;
@@ -105,7 +101,6 @@ function runtimeOptions<T extends ProcessPlanningOptions & ProcessGroupOptions>(
   return nodeOptions;
 }
 
-/** Spawn a process without exposing platform-specific Node flags to callers. */
 export function spawnProcess(
   command: string,
   args: ReadonlyArray<string>,
@@ -125,7 +120,6 @@ export function spawnProcess(
   return spawnPlannedProcess(plan, options);
 }
 
-/** Spawn an already planned command. Used by infrastructure that logs the plan first. */
 export function spawnPlannedProcess(
   plan: ProcessLaunchPlan,
   options?: RuntimeSpawnOptions & { readonly stdio?: PipeStdio },
@@ -160,7 +154,7 @@ export function spawnPlannedProcess(
   return trackProcessSpawn(child);
 }
 
-/** Synchronous counterpart used by bounded discovery and compatibility probes. */
+/** sync counterpart used by bounded discovery and compatibility probes */
 export function spawnProcessSync(
   command: string,
   args: ReadonlyArray<string>,

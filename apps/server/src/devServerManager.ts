@@ -1,15 +1,3 @@
-/**
- * DevServerManager - Server-owned dev-server process orchestration.
- *
- * Dev servers are first-class background processes keyed by project id, fully
- * decoupled from chat threads. Each runs in a managed PTY (via TerminalManager)
- * under a synthetic `dev-server:<projectId>` thread so its lifetime survives
- * WebSocket reconnects and never clutters the thread list. The manager keeps an
- * in-memory registry, broadcasts changes over a PubSub for the
- * `project.devServerEvent` push channel, and reaps entries when their PTY exits.
- *
- * @module DevServerManager
- */
 import {
   DEFAULT_TERMINAL_ID,
   ProjectId,
@@ -27,8 +15,7 @@ import { Effect, Layer, PubSub, Ref, ServiceMap, Stream } from "effect";
 
 import { TerminalManager, type TerminalError } from "./terminal/Services/Manager";
 
-// Dev servers reuse the terminal infrastructure under a reserved synthetic
-// thread namespace so their PTYs never collide with real chat-thread terminals.
+// dev servers reuse terminal infrastructure under a reserved synthetic thread namespace so PTYs never collide with real chat terminals
 const DEV_SERVER_THREAD_PREFIX = "dev-server:";
 const DEV_SERVER_TERMINAL_COLS = 120;
 const DEV_SERVER_TERMINAL_ROWS = 30;
@@ -57,15 +44,11 @@ export function findProjectDevServerForLocalServer(input: {
 }
 
 export interface DevServerManagerShape {
-  /** Start (or restart) the dev server for a project and return its descriptor. */
   readonly run: (
     input: ProjectRunDevServerInput,
   ) => Effect.Effect<ProjectRunDevServerResult, TerminalError>;
-  /** Stop the dev server for a project. Resolves with whether one was running. */
   readonly stop: (input: ProjectStopDevServerInput) => Effect.Effect<ProjectStopDevServerResult>;
-  /** Snapshot of all currently tracked dev servers. */
   readonly list: Effect.Effect<ProjectListDevServersResult>;
-  /** Live stream of dev-server lifecycle events (excludes the initial snapshot). */
   readonly stream: Stream.Stream<ProjectDevServerEvent>;
 }
 
@@ -85,9 +68,7 @@ export const DevServerManagerLive = Layer.effect(
 
     const publish = (event: ProjectDevServerEvent) => PubSub.publish(pubsub, event);
 
-    // Reap a tracked dev server whose PTY exited or errored. Guarded so that a
-    // deliberate stop (which removes the entry first) cannot double-publish, and
-    // so a stale exit for an already-replaced project is ignored.
+    // guarded so a deliberate stop (which removes the entry first) can't double-publish, and a stale exit for an already-replaced project is ignored
     const reapExited = (projectId: ProjectId) =>
       Ref.modify(registry, (current) => {
         if (!current[projectId]) {
@@ -118,9 +99,7 @@ export const DevServerManagerLive = Layer.effect(
       Effect.gen(function* () {
         const threadId = devServerThreadId(input.projectId);
 
-        // If a dev server is already tracked for this project, tear its PTY down
-        // first so the command always lands in a fresh shell. A deliberate close
-        // emits no exit event, so the reaper stays quiet during the swap.
+        // tear down an existing tracked server's PTY first so the command lands in a fresh shell — a deliberate close emits no exit event so the reaper stays quiet
         const existing = (yield* Ref.get(registry))[input.projectId];
         if (existing) {
           yield* terminalManager
@@ -134,8 +113,7 @@ export const DevServerManagerLive = Layer.effect(
           cwd: input.cwd,
           cols: DEV_SERVER_TERMINAL_COLS,
           rows: DEV_SERVER_TERMINAL_ROWS,
-          // Dev servers are headless: drain + retain history, but never broadcast
-          // their continuous output to clients that have no terminal UI for them.
+          // dev servers are headless — drain + retain history but never broadcast output to clients with no terminal UI for them
           streamOutput: false,
           ...(input.env ? { env: input.env } : {}),
         });
@@ -161,8 +139,7 @@ export const DevServerManagerLive = Layer.effect(
 
     const stop: DevServerManagerShape["stop"] = (input) =>
       Effect.gen(function* () {
-        // Remove from the registry *before* closing so the PTY teardown cannot be
-        // mistaken for a crash by the reaper.
+        // remove from the registry BEFORE closing so teardown can't be mistaken for a crash by the reaper
         const removed = yield* Ref.modify(registry, (current) => {
           if (!current[input.projectId]) {
             return [false, current] as const;

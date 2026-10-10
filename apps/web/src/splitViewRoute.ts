@@ -1,8 +1,3 @@
-// FILE: splitViewRoute.ts
-// Purpose: Bridges route search params and split view state so route consumers can stay focused on UI logic.
-// Layer: Route helpers
-// Exports: split route helpers shared by chat surface, sidebar, and thread-scoped UI
-
 import { type ThreadId } from "@synara/contracts";
 import { type DiffRouteSearch } from "./diffRouteSearch";
 import {

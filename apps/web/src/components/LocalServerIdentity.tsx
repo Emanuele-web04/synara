@@ -1,8 +1,3 @@
-// FILE: LocalServerIdentity.tsx
-// Purpose: Shared name + "address · folder" identity column for a detected local dev server.
-// Layer: Web UI primitive (shared between the Environment menu and the in-app browser home).
-// Depends on: shared local-server presentation helpers.
-
 import type { ServerLocalServerProcess } from "@synara/contracts";
 import {
   localServerAddressLabel,

@@ -17,9 +17,7 @@ export function repositoryPullRequestIdentityKey(input: {
   return `${input.repository.trim().toLowerCase()}\u0000${input.number}`;
 }
 
-/** Stable project-local identity for a pull request. Repository casing is not significant on
- * GitHub, while the project id deliberately remains part of the key so two projects pointing at
- * the same repository can prioritize the same PR independently. */
+/** repo casing isn't significant on GitHub while the project id stays in the key so two projects on the same repo can prioritize the same PR independently */
 export function projectPullRequestIdentityKey(input: {
   projectId: string;
   repository: string;
@@ -28,9 +26,7 @@ export function projectPullRequestIdentityKey(input: {
   return `${input.projectId}\u0000${input.repository.trim().toLowerCase()}\u0000${input.number}`;
 }
 
-/** Select only pins whose own project/repository batch was cut off by the list cap. This keeps
- * recovery from probing complete lists, and prevents a stale project pin from borrowing a matching
- * repository that happens to be configured by a different project in the same aggregate request. */
+/** only pins whose own batch was cut off by the list cap — keeps recovery from probing complete lists and prevents a stale project pin borrowing a repo configured by a different project */
 export function selectRecoverablePullRequestPins<
   P extends string,
   T extends { projectId: P; repositoryKey: string; number: number },

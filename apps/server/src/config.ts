@@ -1,11 +1,3 @@
-/**
- * ServerConfig - Runtime configuration services.
- *
- * Defines process-level server configuration and networking helpers used by
- * startup and runtime layers.
- *
- * @module ServerConfig
- */
 import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect";
 import { existsSync } from "node:fs";
 import OS from "node:os";
@@ -66,9 +58,6 @@ export function remoteAccessPolicyError(
   return null;
 }
 
-/**
- * ServerDerivedPaths - Derived paths from the base directory.
- */
 export interface ServerDerivedPaths {
   readonly stateDir: string;
   readonly secretsDir: string;
@@ -87,9 +76,6 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
 }
 
-/**
- * ServerConfigShape - Process/runtime configuration required by the server.
- */
 export interface ServerConfigShape extends ServerDerivedPaths {
   readonly mode: RuntimeMode;
   readonly port: number;
@@ -135,10 +121,7 @@ export function preparePrivateServerPaths(
   if (!existsSync(repairMarkerPath)) {
     repairPrivateTreeSync(paths.stateDir, platform);
   }
-  // Create or repair the main database before any SQLite client can open it.
-  // SQLite sidecars are created inside this 0700 state directory, which is the
-  // portable privacy boundary while SQLite owns their creation; POSIX startup
-  // repair additionally narrows existing regular files to 0600.
+  // sidecars are created inside this 0700 dir — the portable privacy boundary while SQLite owns their creation; POSIX startup also narrows existing files to 0600
   ensurePrivateFileSync(paths.dbPath, { platform });
   ensurePrivateFileSync(repairMarkerPath, { platform });
 }
@@ -237,9 +220,6 @@ export const resolveCanonicalWorkspaceRoots = Effect.fn(function* (input: {
   return { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot };
 });
 
-/**
- * ServerConfig - Service tag for server runtime configuration.
- */
 export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigShape>()(
   "synara/config/ServerConfig",
 ) {
@@ -305,11 +285,7 @@ export const resolveStaticDir = Effect.fn(function* () {
   const { join, resolve } = yield* Path.Path;
   const { exists } = yield* FileSystem.FileSystem;
 
-  // The desktop shell passes a real-disk snapshot of the bundled client so static
-  // serving survives app.asar being replaced beneath the running app (a stale
-  // in-process asar header otherwise serves bytes from the wrong offsets).
-  // Honored only when it actually contains the client, so a stale or bogus env
-  // value degrades to the normal lookup instead of breaking serving.
+  // a real-disk snapshot of the bundled client survives app.asar being replaced beneath the running app; honored only when it actually contains the client so a bogus env degrades to the normal lookup
   const snapshotDir = process.env.SYNARA_STATIC_DIR?.trim();
   if (snapshotDir) {
     const snapshotClient = resolve(snapshotDir);

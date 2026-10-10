@@ -29,8 +29,6 @@ export const useLatestProjectStore = create<LatestProjectStore>()(
     {
       name: LATEST_PROJECT_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
-      // Guard against a corrupt persisted value (non-string) reaching consumers
-      // that treat it as a project id.
       merge: (persisted, current) => {
         const persistedId = (persisted as { latestProjectId?: unknown } | undefined)
           ?.latestProjectId;

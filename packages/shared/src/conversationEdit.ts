@@ -1,8 +1,3 @@
-// FILE: conversationEdit.ts
-// Purpose: Shared policy for deciding whether a user message can be edited and replayed.
-// Layer: Shared orchestration utility
-// Exports: collectTailTurnIds, resolveTailUserMessageEditTarget, resolveLatestTailUserMessageEditTarget
-
 type TurnMessageLike<TTurnId extends string = string> = {
   readonly id: string;
   readonly turnId?: TTurnId | null | undefined;
@@ -63,7 +58,7 @@ function findLatestConversationUserMessageIndex(
 ): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    // Structured replies are not editable, but still close the preceding prompt tail.
+    // structured replies aren't editable but still close the preceding prompt tail
     if (
       message?.role === "user" &&
       (isNativeEditableSource(message.source) || message.source === "async-user-input")
@@ -74,7 +69,7 @@ function findLatestConversationUserMessageIndex(
   return -1;
 }
 
-// Edits are only safe at the tail: either replay the last concrete turn, or replace the active prompt.
+// edits are only safe at the tail: replay the last concrete turn or replace the active prompt
 export function resolveTailUserMessageEditTarget(input: {
   readonly messages: ReadonlyArray<EditableMessageLike>;
   readonly messageId: string;

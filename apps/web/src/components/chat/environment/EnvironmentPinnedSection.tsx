@@ -1,9 +1,3 @@
-// FILE: EnvironmentPinnedSection.tsx
-// Purpose: "Pinned" section of the Environment panel — a checklist of pinned assistant
-//          messages with jump-to-message navigation, done toggling (strikethrough),
-//          inline rename (double-click), and unpin. Pins are per-thread, server-synced.
-// Layer: Environment panel section
-
 import type { MessageId, PinnedMessage } from "@synara/contracts";
 import { displayLabelFor } from "~/pinnedMessages";
 

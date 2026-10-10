@@ -227,13 +227,7 @@ function isOpaqueIdentifier(value: string, fullTitle: string): boolean {
   return /[A-Z]/u.test(value) && /[a-z]/u.test(value);
 }
 
-/**
- * Removes page titles that appear to expose private identifiers or credentials.
- *
- * Page titles are controlled by the visited document and can include account
- * details, reset tokens, or form values. Ordinary human-readable titles are
- * preserved verbatim so they remain useful annotation context.
- */
+/** page titles are document-controlled and can carry account details, tokens, or form values — strip those, keep ordinary titles verbatim */
 export function sanitizeBrowserAnnotationPageTitle(value: string): string {
   const title = value.trim();
   if (
@@ -323,13 +317,7 @@ function sanitizeSearchParams(searchParams: URLSearchParams): string {
   return sanitized.toString();
 }
 
-/**
- * Produces the durable/public URL attached to a browser annotation.
- *
- * The full live URL may contain credentials, magic links, personal identifiers,
- * opaque tokens, or application state. It must remain an ephemeral browser
- * affinity value and never cross the annotation persistence boundary.
- */
+/** the live URL may contain credentials/tokens/state — it must never cross the annotation persistence boundary */
 export function sanitizeBrowserAnnotationUrl(value: string): string {
   try {
     const url = new URL(value);
@@ -348,12 +336,7 @@ export function sanitizeBrowserAnnotationUrl(value: string): string {
   }
 }
 
-/**
- * Returns the private live URL identity used to distinguish annotation
- * documents while intentionally ignoring only the fragment. Unlike the public
- * annotation URL sanitizer, this keeps query state so unrelated private pages
- * cannot share a marker projection.
- */
+/** ignores only the fragment — keeps query state so unrelated private pages can't share a marker projection */
 export function browserAnnotationDocumentIdentityUrl(value: string): string {
   try {
     const url = new URL(value);

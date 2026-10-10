@@ -1,8 +1,3 @@
-// FILE: appSnapSound.ts
-// Purpose: Synthesized camera-shutter cue for AppSnap captures (Web Audio, no bundled asset).
-// Layer: Web UI support
-// Exports: playAppSnapCaptureSound
-
 const NOISE_BUFFER_SECONDS = 0.2;
 
 let sharedContext: AudioContext | null = null;
@@ -29,7 +24,7 @@ function getNoiseBuffer(context: AudioContext): AudioBuffer {
   return sharedNoiseBuffer;
 }
 
-// One mechanical "click": a band-passed noise burst with a fast exponential decay.
+// one mechanical click: band-passed noise burst with fast exponential decay
 function scheduleClick(
   context: AudioContext,
   at: number,
