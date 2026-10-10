@@ -316,8 +316,8 @@ describe("providerModelsQueryOptions", () => {
 
   it("caches runtime catalogs long enough to skip respawning provider CLIs", () => {
     // Server-side catalogs persist across restarts (30min fresh / 24h SWR), so
-    // the client keeps a matching window; OMP stays short because its
-    // file-backed modelRoles are re-resolved per request.
+    // the client keeps a matching window; OMP stays short to revalidate its
+    // adapter-owned five-minute catalog cache while observed.
     expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(15 * 60_000);
     expect(providerModelsQueryOptions({ provider: "codex" }).staleTime).toBe(15 * 60_000);
     expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(30 * 60_000);
@@ -407,18 +407,50 @@ describe("providerModelsQueryOptions", () => {
     },
   );
 
-  it("scopes OMP's model query by cwd so project modelRoles participate", () => {
+  it("shares OMP's account-global model query across projects", async () => {
+    const catalog = {
+      models: [{ slug: "upstream/model", name: "Model" }],
+      source: "omp-cli",
+      cached: false,
+    };
+    const listModels = mockListModels(vi.fn().mockResolvedValue(catalog));
     const options = providerModelsQueryOptions({
       provider: "omp",
       binaryPath: "/bin/omp",
       agentDir: "/agent",
       cwd: "/some/project",
     });
-    // The catalog is global, but OMP merges `<cwd>/.omp/config.yml` roles into
-    // the picker — the query key carries cwd so a project's own roles show.
     expect(options.queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", "/some/project"),
+      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", null),
     );
+    const client = new QueryClient();
+    try {
+      await expect(client.fetchQuery(options)).resolves.toEqual(catalog);
+      await expect(
+        client.fetchQuery(
+          providerModelsQueryOptions({
+            provider: "omp",
+            binaryPath: "/bin/omp",
+            agentDir: "/agent",
+            cwd: "/another/project",
+          }),
+        ),
+      ).resolves.toEqual(catalog);
+      expect(listModels).toHaveBeenCalledExactlyOnceWith({
+        provider: "omp",
+        binaryPath: "/bin/omp",
+        agentDir: "/agent",
+      });
+    } finally {
+      client.clear();
+    }
+  });
+
+  it("keeps OMP catalogs isolated by provider instance and agent directory", () => {
+    const key = (instanceId: string, agentDir: string) =>
+      providerModelsQueryOptions({ provider: "omp", instanceId, agentDir }).queryKey;
+    expect(key("omp_work", "/work")).not.toEqual(key("omp_personal", "/work"));
+    expect(key("omp_work", "/work")).not.toEqual(key("omp_work", "/other"));
   });
 
   it("scopes non-OMP providers by cwd in their query key", () => {

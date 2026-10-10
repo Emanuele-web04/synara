@@ -490,9 +490,8 @@ function ProviderModelDiscoveryWarmer() {
   // provider that doesn't render instantly when the model picker opens. Warm it
   // at app startup — ahead of the picker opening — so the catalog is ready by
   // the time the user browses to OMP. The server caches that catalog globally
-  // (keyed by binary path + agent dir), so any warm primes it for every later
-  // query; `modelRoles` merge a per-cwd project layer, so the picker's own
-  // cwd-scoped query key then only pays for the config reads on top.
+  // (keyed by account, binary path and agent dir), and the picker shares this
+  // account-global query across projects.
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const ompHidden = !isBetaFeatureOn("omp") || settings.hiddenProviders.includes("omp");

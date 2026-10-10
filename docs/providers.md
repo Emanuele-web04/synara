@@ -161,6 +161,12 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+OMP's internal sub-agent roles are not user-selectable models. Synara discovers the runtime's
+model catalog without reading `modelRoles` from repository configuration. A stale saved `role:`
+selection that the runtime does not advertise requires an explicit model choice; Synara does
+not silently substitute another model or account. Concrete model selections saved by the old
+role picker retain their model, account and thinking options, including custom selectors.
+
 Claude Code may discover a model under an alias while reporting its concrete model ID separately.
 For a release newer than Synara's catalog, the picker shows the concrete ID. Agent Gateway accepts
 that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact

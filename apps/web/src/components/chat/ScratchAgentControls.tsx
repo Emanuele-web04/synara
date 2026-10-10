@@ -47,9 +47,6 @@ export function ScratchModelPickers({
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
         onProviderModelChange={catalog.handleProviderModelChange}
-        onProviderModelRoleSelect={(model, options, instanceId) =>
-          catalog.handleProviderModelChange("omp", model, instanceId, options)
-        }
         open={catalog.isModelPickerOpen}
         onOpenChange={catalog.setIsModelPickerOpen}
       />
