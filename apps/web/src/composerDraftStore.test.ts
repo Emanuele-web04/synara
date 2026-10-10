@@ -5,8 +5,10 @@ import { runComposerSendOnce } from "./lib/composerSendOwnership";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
+  reclaimUnreachableDetachedDraftThreads,
   useComposerDraftStore,
 } from "./composerDraftStore";
+import { stageDraftNavigation } from "./lib/stagedDraftNavigation";
 import {
   makeImage,
   makeQueuedChatTurn,
@@ -275,6 +277,107 @@ describe("composerDraftStore project draft thread mapping", () => {
     );
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+
+  it("keeps the mapped draft and its text when a detached draft skips the slot claim", () => {
+    // preserveProjectDraft callers (bug-report drafting) stage a routable draft
+    // via registerDraftThread only — no setProjectDraftThreadId — so the user's
+    // unsent project draft must survive untouched.
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "unsent work in progress");
+
+    store.registerDraftThread(otherThreadId, {
+      projectId,
+      entryPoint: "chat",
+      envMode: "local",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    store.setPrompt(otherThreadId, "bug-report interview prompt");
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getDraftThreadByProjectId(projectId)?.threadId).toBe(threadId);
+    expect(state.draftsByThreadId[threadId]?.prompt).toContain("unsent work in progress");
+    expect(state.getDraftThread(otherThreadId)).toMatchObject({ projectId, entryPoint: "chat" });
+    expect(state.draftsByThreadId[otherThreadId]?.prompt).toContain("bug-report interview prompt");
+  });
+
+  it("preserves unmapped task drafts even when their composer is empty", () => {
+    const store = useComposerDraftStore.getState();
+    const taskId = ThreadId.makeUnsafe("linked-empty-task");
+    store.registerDraftThread(taskId, { projectId, entryPoint: "chat" });
+    reclaimUnreachableDetachedDraftThreads(new Set());
+    expect(store.getDraftThread(taskId)).not.toBeNull();
+  });
+
+  it("keeps queued work in a transient draft even with an empty composer", () => {
+    const store = useComposerDraftStore.getState();
+    const detachedId = ThreadId.makeUnsafe("queued-detached");
+    store.registerDraftThread(detachedId, {
+      projectId,
+      entryPoint: "chat",
+      isReclaimableDraft: true,
+    });
+    store.enqueueQueuedTurn(
+      detachedId,
+      makeQueuedChatTurn(
+        "keep-queued",
+        makeImage({ id: "queue-image", previewUrl: "blob:keep-queued" }),
+      ),
+    );
+    reclaimUnreachableDetachedDraftThreads(new Set());
+    expect(store.getDraftThread(detachedId)).not.toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[detachedId]?.queuedTurns).toHaveLength(
+      1,
+    );
+  });
+
+  it("never reclaims detached drafts containing unsent work", () => {
+    const store = useComposerDraftStore.getState();
+    const detachedId = ThreadId.makeUnsafe("unsent-detached");
+    store.registerDraftThread(detachedId, {
+      projectId,
+      entryPoint: "chat",
+      isReclaimableDraft: true,
+    });
+    store.setPrompt(detachedId, "keep my report edits");
+    reclaimUnreachableDetachedDraftThreads(new Set());
+    expect(store.getDraftThread(detachedId)).not.toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[detachedId]?.prompt).toBe(
+      "keep my report edits",
+    );
+  });
+
+  it("reclaims only detached drafts that are unreachable", () => {
+    const store = useComposerDraftStore.getState();
+    const detachedId = ThreadId.makeUnsafe("thread-detached");
+    const displayedId = ThreadId.makeUnsafe("thread-displayed");
+    const promotedId = ThreadId.makeUnsafe("thread-promoted");
+
+    // The mapped project draft keeps its unsent text.
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "unsent");
+    // Detached drafts: one abandoned (unreachable), one still displayed, one
+    // mid-promotion.
+    store.registerDraftThread(detachedId, {
+      projectId,
+      entryPoint: "chat",
+      isReclaimableDraft: true,
+    });
+    store.setPrompt(detachedId, "");
+    store.registerDraftThread(displayedId, { projectId, entryPoint: "chat" });
+    store.registerDraftThread(promotedId, { projectId, entryPoint: "chat" });
+    store.markDraftThreadPromoting(promotedId);
+
+    reclaimUnreachableDetachedDraftThreads(new Set([displayedId]));
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getDraftThreadByProjectId(projectId)?.threadId).toBe(threadId);
+    expect(state.draftsByThreadId[threadId]?.prompt).toContain("unsent");
+    expect(state.getDraftThread(detachedId)).toBeNull();
+    expect(state.draftsByThreadId[detachedId]).toBeUndefined();
+    expect(state.getDraftThread(displayedId)).not.toBeNull();
+    expect(state.getDraftThread(promotedId)?.promotedTo).toBe(promotedId);
   });
 
   it("keeps a promoted task's retry prompt when another draft takes its project slot", () => {
@@ -559,10 +662,29 @@ describe("composerDraftStore project draft thread mapping", () => {
       envMode: "worktree",
     });
   });
+
+  it("removes standalone Kanban drafts when a project is deleted", () => {
+    const store = useComposerDraftStore.getState();
+    const kanbanId = ThreadId.makeUnsafe("thread-kanban-delete");
+
+    store.registerDraftThread(kanbanId, {
+      projectId,
+      entryPoint: "chat",
+    });
+    store.setPrompt(kanbanId, "kanban task to delete");
+    store.setProjectDraftThreadId(otherProjectId, otherThreadId);
+
+    store.clearProjectDraftThreads(projectId);
+
+    expect(store.getDraftThread(kanbanId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[kanbanId]).toBeUndefined();
+    expect(store.getDraftThreadByProjectId(otherProjectId)?.threadId).toBe(otherThreadId);
+  });
 });
 
 describe("composerDraftStore runtime and interaction settings", () => {
   const threadId = ThreadId.makeUnsafe("thread-settings");
+  const projectId = ProjectId.makeUnsafe("project-settings");
 
   beforeEach(() => {
     resetComposerDraftStore();
@@ -595,5 +717,53 @@ describe("composerDraftStore runtime and interaction settings", () => {
     store.setInteractionMode(threadId, null);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+
+  it("preserves Kanban drafts and in-flight staged drafts during reclamation", async () => {
+    const store = useComposerDraftStore.getState();
+    const kanbanId = ThreadId.makeUnsafe("thread-kanban");
+    const stagedId = ThreadId.makeUnsafe("thread-staged");
+    const abandonedId = ThreadId.makeUnsafe("thread-abandoned");
+
+    store.registerDraftThread(kanbanId, { projectId, entryPoint: "chat" });
+    store.setPrompt(kanbanId, "kanban task");
+    store.registerDraftThread(stagedId, {
+      projectId,
+      entryPoint: "chat",
+      isReclaimableDraft: true,
+    });
+    store.setPrompt(stagedId, "");
+    store.registerDraftThread(abandonedId, {
+      projectId,
+      entryPoint: "chat",
+      isReclaimableDraft: true,
+    });
+    store.setPrompt(abandonedId, "");
+
+    let resolveStagedNavigate!: () => void;
+    const stagedNavigate = new Promise<void>((resolve) => {
+      resolveStagedNavigate = resolve;
+    });
+
+    const stagedStagePromise = stageDraftNavigation({
+      draftThreadId: stagedId,
+      stage: () => undefined,
+      navigate: () => stagedNavigate,
+      isDestinationActive: () => true,
+      finalize: () => undefined,
+      rollback: () => store.clearDraftThread(stagedId),
+    });
+
+    // Stage runs synchronously, so the staged draft is in the in-flight set
+    // before the navigate promise resolves.
+    reclaimUnreachableDetachedDraftThreads(new Set());
+
+    expect(store.getDraftThread(kanbanId)).not.toBeNull();
+    expect(store.getDraftThread(stagedId)).not.toBeNull();
+    expect(store.getDraftThread(abandonedId)).toBeNull();
+
+    resolveStagedNavigate();
+    // Wait for the stage to complete so the in-flight set is cleaned up.
+    await stagedStagePromise;
   });
 });

@@ -41,6 +41,7 @@ import {
   flushStorageBeforePageHide,
   type StateStorage,
 } from "./lib/storage";
+import { getInFlightDraftThreadIds } from "./lib/stagedDraftNavigation";
 
 export {
   findSupersededComposerImageBlobAttachments,
@@ -192,5 +193,35 @@ export function finalizePromotedDraftThreads(serverThreadIds: ReadonlySet<Thread
   const store = useComposerDraftStore.getState();
   for (const threadId of serverThreadIds) {
     store.finalizePromotedDraftThread(threadId);
+  }
+}
+
+/** Reclaim only explicitly transient, empty drafts. Unmapped task drafts can
+ * still be reached through Tasks/boards, and unsent reports belong to the user. */
+export function reclaimUnreachableDetachedDraftThreads(
+  displayedThreadIds: ReadonlySet<ThreadId>,
+): void {
+  const store = useComposerDraftStore.getState();
+  const mappedThreadIds = new Set(Object.values(store.projectDraftThreadIdByProjectId));
+  const inFlightThreadIds = getInFlightDraftThreadIds();
+  for (const threadId of Object.keys(store.draftThreadsByThreadId) as ThreadId[]) {
+    const draftThread = store.draftThreadsByThreadId[threadId];
+    if (
+      !draftThread ||
+      draftThread.promotedTo !== undefined ||
+      draftThread.isReclaimableDraft !== true
+    )
+      continue;
+    const composer = store.draftsByThreadId[threadId];
+    if (composer && (composerThreadDraftIsPending(composer) || composer.queuedTurns.length > 0))
+      continue;
+    if (
+      mappedThreadIds.has(threadId) ||
+      displayedThreadIds.has(threadId) ||
+      inFlightThreadIds.has(threadId)
+    ) {
+      continue;
+    }
+    store.clearDraftThread(threadId);
   }
 }
