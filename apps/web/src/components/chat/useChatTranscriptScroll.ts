@@ -627,23 +627,19 @@ export function useChatTranscriptScroll({
   // Temporary, synthetic-test-only trace for the thread re-entry CI failure.
   // Removed once the native/list geometry divergence has been diagnosed.
   useEffect(() => {
-    const trace = (
-      window as Window & {
-        __synaraFollowTrace?: (sample: Record<string, number | boolean>) => void;
-      }
-    ).__synaraFollowTrace;
+    const traceWindow = window as Window & {
+      __synaraFollowTrace?: (sample: Record<string, number | boolean | string>) => void;
+      __synaraFollowSnapshot?: () => void;
+    };
+    const trace = traceWindow.__synaraFollowTrace;
     if (!trace) return;
-    let frame = 0;
-    let nextSampleAt = 0;
-    const sample = () => {
-      frame = window.requestAnimationFrame(sample);
-      if (performance.now() < nextSampleAt) return;
-      nextSampleAt = performance.now() + 50;
-      const target = legendListRef.current;
-      const node = target?.getScrollableNode();
-      if (!target || !(node instanceof HTMLElement)) return;
+    const target = legendListRef.current;
+    if (!target) return;
+    const sample = (event: string, readNative = false) => {
       const state = target.getState();
+      const node = readNative ? target.getScrollableNode() : undefined;
       trace({
+        event,
         streaming: hasStreamingAssistantText,
         detached: isUserScrollDetachedRef.current,
         following: isAtEndRef.current,
@@ -655,13 +651,31 @@ export function useChatTranscriptScroll({
         listTop: Math.round(state.scroll),
         listHeight: Math.round(state.contentLength),
         listViewport: Math.round(state.scrollLength),
-        nativeTop: Math.round(node.scrollTop),
-        nativeHeight: node.scrollHeight,
-        nativeViewport: node.clientHeight,
+        ...(node instanceof HTMLElement
+          ? {
+              nativeTop: Math.round(node.scrollTop),
+              nativeHeight: node.scrollHeight,
+              nativeViewport: node.clientHeight,
+            }
+          : {}),
       });
     };
-    frame = window.requestAnimationFrame(sample);
-    return () => window.cancelAnimationFrame(frame);
+    const snapshot = () => sample("final", true);
+    traceWindow.__synaraFollowSnapshot = snapshot;
+    const state = target.getState();
+    const stopEnd = state.listen("isAtEnd", () => sample("end"));
+    const stopThreshold = state.listen("isWithinMaintainScrollAtEndThreshold", () =>
+      sample("threshold"),
+    );
+    const stopSize = state.listen("totalSize", () => sample("size"));
+    sample("mount");
+    return () => {
+      stopEnd();
+      stopThreshold();
+      stopSize();
+      if (traceWindow.__synaraFollowSnapshot === snapshot)
+        delete traceWindow.__synaraFollowSnapshot;
+    };
   }, [activeThreadId, hasStreamingAssistantText, legendListRef]);
 
   return {

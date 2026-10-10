@@ -6556,7 +6556,8 @@ describe("ChatView transcript geometry (full app)", () => {
     let tracePhase = "setup";
     const traceStart = performance.now();
     const traceWindow = window as Window & {
-      __synaraFollowTrace?: (sample: Record<string, number | boolean>) => void;
+      __synaraFollowTrace?: (sample: Record<string, number | boolean | string>) => void;
+      __synaraFollowSnapshot?: () => void;
     };
     if (action === "thread switch") {
       traceWindow.__synaraFollowTrace = (sample) => {
@@ -6915,6 +6916,7 @@ describe("ChatView transcript geometry (full app)", () => {
       );
     } finally {
       if (action === "thread switch") {
+        traceWindow.__synaraFollowSnapshot?.();
         console.info("SYNARA_FOLLOW_DIAGNOSTIC", JSON.stringify(followTrace));
         delete traceWindow.__synaraFollowTrace;
       }
