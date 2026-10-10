@@ -13,6 +13,7 @@ import { formatTimestamp } from "../../timestampFormat";
 import { deriveTimelineEntries, type TimelineEntry } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
+import { BackgroundTaskRow, BackgroundTaskStopContext } from "./BackgroundTaskRow";
 
 function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
   return (
@@ -109,6 +110,44 @@ async function settleLayout(): Promise<void> {
 }
 
 describe("MessagesTimeline tool details", () => {
+  it("updates one background row through completion and sends Stop to the running task", async () => {
+    const host = createTimelineHost();
+    const onStop = vi.fn();
+    const task = {
+      taskId: "background-command",
+      taskType: "local_bash",
+      description: "Delayed echo",
+      command: "sleep 20 && echo done",
+      status: "running" as const,
+      startedAt: "2026-10-10T00:00:00Z",
+      completedAt: null,
+      exitCode: null,
+    };
+    const view = (next: Parameters<typeof BackgroundTaskRow>[0]["task"]) => (
+      <BackgroundTaskStopContext.Provider value={onStop}>
+        <BackgroundTaskRow task={next} fontSizePx={13} />
+      </BackgroundTaskStopContext.Provider>
+    );
+    const screen = await render(view(task), { container: host });
+    try {
+      const row = host.querySelector("[data-background-task='background-command']");
+      const button = host.querySelector<HTMLButtonElement>("button");
+      expect(button?.textContent).toContain("Stop");
+      button?.click();
+      expect(onStop).toHaveBeenCalledWith("background-command");
+      await screen.rerender(
+        view({ ...task, status: "finished", completedAt: "2026-10-10T00:00:20Z", exitCode: 0 }),
+      );
+      expect(host.querySelector("[data-background-task='background-command']")).toBe(row);
+      expect(host.textContent).toContain("finished");
+      expect(host.textContent).toContain("20s");
+      expect(host.querySelector("button")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
   });

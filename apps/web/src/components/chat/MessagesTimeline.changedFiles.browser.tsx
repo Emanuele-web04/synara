@@ -16,7 +16,10 @@ const VISIBLE_FILE_PATHS = Array.from(
   { length: 5 },
   (_, index) => `apps/web/src/visible-${index + 1}.tsx`,
 );
-const OVERFLOW_FILE_PATHS = ["apps/web/src/overflow-1.tsx", "apps/web/src/overflow-2.tsx"];
+const OVERFLOW_FILE_PATHS = Array.from(
+  { length: 3 },
+  (_, index) => `apps/web/src/overflow-${index + 1}.tsx`,
+);
 
 const TIMELINE_ENTRIES: TimelineEntry[] = [
   {
@@ -34,8 +37,12 @@ const TIMELINE_ENTRIES: TimelineEntry[] = [
   },
 ];
 
-function ChangedFilesTimeline() {
-  const files = [...VISIBLE_FILE_PATHS, ...OVERFLOW_FILE_PATHS].map((path) => ({
+function ChangedFilesTimeline({
+  overflowFilePaths = OVERFLOW_FILE_PATHS,
+}: {
+  overflowFilePaths?: readonly string[];
+}) {
+  const files = [...VISIBLE_FILE_PATHS, ...overflowFilePaths].map((path) => ({
     path,
     additions: 1,
     deletions: 0,
@@ -102,7 +109,7 @@ describe("MessagesTimeline changed files", () => {
       }
 
       const expandButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => (button.textContent ?? "").includes("Show 2 more files"),
+        (button) => (button.textContent ?? "").includes("Show 3 more files"),
       );
       expect(expandButton).toBeDefined();
       expect(expandButton?.getAttribute("aria-expanded")).toBe("false");
@@ -115,6 +122,31 @@ describe("MessagesTimeline changed files", () => {
         expect(document.body.textContent ?? "").toContain(path);
       }
       await expect.poll(() => expandButton?.getAttribute("aria-expanded")).toBe("true");
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("keeps two overflow rows mounted without a trivial expansion", async () => {
+    const host = createTimelineHost();
+    const overflowFilePaths = OVERFLOW_FILE_PATHS.slice(0, 2);
+    const screen = await render(<ChangedFilesTimeline overflowFilePaths={overflowFilePaths} />, {
+      container: host,
+    });
+
+    try {
+      await expect
+        .poll(() => document.querySelectorAll('[data-edited-file-row="true"]').length)
+        .toBe(VISIBLE_FILE_PATHS.length + overflowFilePaths.length);
+      for (const path of overflowFilePaths) {
+        expect(document.body.textContent ?? "").toContain(path);
+      }
+      expect(
+        [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+          (button.textContent ?? "").includes("more files"),
+        ),
+      ).toBeUndefined();
     } finally {
       await screen.unmount();
       host.remove();
