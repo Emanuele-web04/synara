@@ -113,6 +113,42 @@ describe("MessagesTimeline tool details", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps Monitor notices compact and exposes multiline output only on disclosure", async () => {
+    const screen = await render(
+      <TimelineWorkEntryRow
+        workEntry={{
+          id: "monitor-ci-failure",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Monitor · CI checks failed",
+          detail: "Lint failed\nSecond diagnostic",
+          tone: "error",
+          monitorNotification: {
+            taskId: "ci",
+            name: "CI checks",
+            outcome: "failed",
+            output: "Lint failed\nSecond diagnostic",
+          },
+        }}
+        chatMetaFontSizePx={18}
+        textFontSizePx={22}
+        markdownCwd={undefined}
+        onImageExpand={() => {}}
+        timestampFormat="locale"
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Monitor · CI checks failed" });
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect.poll(() => document.querySelector("[data-tool-details-inline]")).toBeNull();
+    await trigger.click();
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect.element(screen.getByText(/Lint failed\s+Second diagnostic/)).toBeVisible();
+    await expect
+      .element(screen.getByText(formatTimestamp("2026-03-17T19:12:28.000Z", "locale")))
+      .toBeVisible();
+    await trigger.click();
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("keeps historical tool disclosures above the next request after late updates", async () => {
     const oldTurn = TurnId.makeUnsafe("old-tools");
     const newTurn = TurnId.makeUnsafe("current-tools");
