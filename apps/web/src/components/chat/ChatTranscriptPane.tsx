@@ -120,6 +120,7 @@ interface ChatTranscriptPaneProps {
   /** Core Audio UID of the microphone the trail listens to; "" follows the Mac default. */
   messageTrailMicrophoneId?: string;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  turnTimingByTurnId?: ComponentProps<typeof MessagesTimeline>["turnTimingByTurnId"];
   conversationOnly?: boolean;
   /** Stored thread-level error, rendered in flow above the transcript. */
   threadError?: string | null;
@@ -216,6 +217,7 @@ export function ChatTranscriptPane({
   messageTrailAudioSource,
   messageTrailMicrophoneId,
   turnDiffSummaryByAssistantMessageId,
+  turnTimingByTurnId,
   conversationOnly,
   threadError,
   recoverableTurnId,
@@ -379,6 +381,7 @@ export function ChatTranscriptPane({
             hubWorkItemsByMessageId={hubWorkItemsByMessageId}
             messageChangeSignal={messageChangeSignal ?? timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            turnTimingByTurnId={turnTimingByTurnId}
             conversationOnly={conversationOnly === true}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}

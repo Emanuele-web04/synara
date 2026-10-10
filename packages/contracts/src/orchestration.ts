@@ -882,6 +882,8 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
+  /** When the provider started the turn; lets clients report its real duration. */
+  startedAt: Schema.optional(IsoDateTime),
   completedAt: IsoDateTime,
 });
 export type OrchestrationCheckpointSummary = typeof OrchestrationCheckpointSummary.Type;
@@ -901,7 +903,14 @@ export const OrchestrationThreadActivity = Schema.Struct({
   summary: TrimmedNonEmptyString,
   payload: Schema.Json,
   turnId: Schema.NullOr(TurnId),
+  /** Provider runtime sequence, or the orchestration event sequence when `sequenceSource` says so. */
   sequence: Schema.optional(NonNegativeInt),
+  /**
+   * "orchestration" when the activity was created by the server and `sequence`
+   * fell back to the orchestration event sequence. That counter is unrelated to
+   * provider runtime sequences, so the two must not be compared for ordering.
+   */
+  sequenceSource: Schema.optional(Schema.Literal("orchestration")),
   createdAt: IsoDateTime,
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
