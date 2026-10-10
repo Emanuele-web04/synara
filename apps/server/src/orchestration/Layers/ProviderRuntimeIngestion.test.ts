@@ -9101,6 +9101,109 @@ describe("ProviderRuntimeIngestion", () => {
     expect(acks.length).toBeLessThanOrEqual(4);
   });
 
+  it.each(["turn.completed", "turn.aborted", "session.exited"] as const)(
+    "keeps a newer turn's live tools after a stale %s",
+    async (type) => {
+      const harness = await createHarness();
+      const parentThreadId = asThreadId("thread-1");
+      const threadId = asThreadId("subagent:thread-1:reused-child");
+      const providerRefs = { providerThreadId: "reused-child", providerParentThreadId: "thread-1" };
+      const turnId = asTurnId("new-child-turn");
+      const createdAt = new Date().toISOString();
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("new-native-child-turn"),
+        payload: {},
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+      });
+      await harness.drain();
+      // The replacement generation owns a newer turn on the persisted child.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("replacement-child-session"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      harness.emit({
+        type: "item.started",
+        eventId: asEventId("new-child-tool"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+        itemId: asItemId("reused-tool"),
+        payload: { itemType: "command_execution", status: "inProgress" },
+      });
+      await harness.drain();
+      const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+      const tools = () =>
+        runtime!.runPromise(sql<{ readonly itemId: string }>`
+        SELECT item_id AS "itemId" FROM projection_thread_active_tools WHERE thread_id = ${threadId}`);
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type,
+        eventId: asEventId("old-child-terminal"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId: asTurnId("old-child-turn"),
+        createdAt,
+        payload:
+          type === "turn.completed"
+            ? { state: "completed" }
+            : type === "session.exited"
+              ? { exitKind: "graceful" }
+              : {},
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId("old-child-tool-close"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId: asTurnId("old-child-turn"),
+        createdAt,
+        itemId: asItemId("reused-tool"),
+        payload: { itemType: "command_execution", status: "completed" },
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("new-child-terminal"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+        payload: { state: "completed" },
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([]);
+    },
+  );
+
   it("maintains durable last-activity + in-flight tool rows for the worker monitor", async () => {
     const harness = await createHarness();
     const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
