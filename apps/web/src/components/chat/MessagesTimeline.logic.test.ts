@@ -183,7 +183,7 @@ describe("computeStableMessagesTimelineRows", () => {
     result: [],
   });
 
-  it.each(["failure", "settledAt"] as const)(
+  it.each(["failure", "settledAt", "nextLaunchedAt"] as const)(
     "refreshes a subagent card when %s arrives",
     (field) => {
       const member = {
