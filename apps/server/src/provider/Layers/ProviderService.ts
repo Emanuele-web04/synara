@@ -811,6 +811,31 @@ function isStaleSettlingRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   return isTerminalRuntimeEvent(event) || isInteractionResolutionRuntimeEvent(event);
 }
 
+/** Preserve turn-local output after an epoch rotates only when the durable
+ * binding still owns the exact turn. Never adopt old lifecycle/account events.
+ */
+function isStaleTurnProgressRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  switch (event.type) {
+    case "content.delta":
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+    case "turn.proposed.delta":
+    case "turn.proposed.completed":
+    case "turn.diff.updated":
+    case "turn.steered":
+    case "tool.progress":
+    case "tool.summary":
+    case "hook.started":
+    case "hook.progress":
+    case "hook.completed":
+    case "files.persisted":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function runtimeStatusForEvent(
   event: ProviderRuntimeEvent,
   activeTurnId?: unknown,
@@ -2114,7 +2139,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const staleEventIsSettling =
               isStaleSettlingRuntimeEvent(event) &&
               (currentGeneration === undefined || event.turnId !== undefined);
-            if (!staleEventIsSettling) {
+            const staleTurnProgress =
+              event.turnId !== undefined && isStaleTurnProgressRuntimeEvent(event);
+            if (!staleEventIsSettling && !staleTurnProgress) {
               // Warn, not debug: a persistent mismatch silently discards every
               // runtime event for the thread — the provider runs, the UI shows
               // nothing, and the runtime reconciler later settles the turn as
@@ -2127,10 +2154,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 currentLifecycleGeneration: currentGeneration,
               });
             }
-            if (currentGeneration !== undefined) {
-              // A newer generation exists: only accept the stale settling event
-              // when it still names the turn the binding has active. If the
-              // binding already moved on (or is gone), keep dropping it.
+            if (currentGeneration !== undefined || staleTurnProgress) {
+              // Turn-local progress from a retired or replaced generation must
+              // still name the binding's exact active turn; never resurrect a
+              // replaced session or copy output into a different turn.
               return directory.getBinding(event.threadId).pipe(
                 Effect.flatMap((maybeBinding) => {
                   const binding = Option.getOrUndefined(maybeBinding);
@@ -2147,7 +2174,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     });
                   }
                   return Effect.logInfo(
-                    "provider.session.stale_generation_terminal_event_accepted",
+                    staleTurnProgress
+                      ? "provider.session.stale_generation_turn_progress_accepted"
+                      : "provider.session.stale_generation_terminal_event_accepted",
                     {
                       threadId: event.threadId,
                       provider: event.provider,

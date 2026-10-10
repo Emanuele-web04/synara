@@ -2638,8 +2638,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         // A dying runtime cancels its outstanding user-input request during
         // teardown, after the generation has already rotated. That resolution is
         // the only signal that can settle the durable pending row, so it must
-        // pass the stale-generation gate like a terminal event does. Ordinary
-        // stale stream events stay dropped.
+        // pass the stale-generation gate like a terminal event does. Turn-local
+        // output remains valid only while the binding owns the same turn.
         staleSettlementRouting.codex.emit({
           type: "user-input.resolved",
           eventId: asEventId("stale-user-input-resolved-matching-turn"),
@@ -2683,7 +2683,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
           staleSettlementPersistedEvents.get("stale-user-input-resolved-matching-turn")?.type,
           "user-input.resolved",
         );
-        assert.equal(staleSettlementPersistedEvents.has("stale-delta-matching-turn"), false);
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-delta-matching-turn"),
+          500,
+          10,
+          "matching stale turn progress to be persisted",
+        );
         assert.equal(
           staleSettlementPersistedEvents.has("stale-user-input-resolved-other-turn"),
           false,
