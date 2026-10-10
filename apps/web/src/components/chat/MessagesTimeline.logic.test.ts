@@ -4,6 +4,7 @@ import {
   MessageId,
   OrchestrationProposedPlanId,
   TurnId,
+  type OrchestrationThreadActivity,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -764,7 +765,7 @@ describe("deriveMessagesTimelineRows", () => {
     revertTurnCountByUserMessageId: new Map(),
   };
 
-  const userEntry = (id: string, createdAt: string): TimelineEntry => ({
+  const userEntry = (id: string, createdAt: string, turnId?: string): TimelineEntry => ({
     id: `entry-${id}`,
     kind: "message",
     createdAt,
@@ -774,6 +775,7 @@ describe("deriveMessagesTimelineRows", () => {
       text: "ask",
       createdAt,
       streaming: false,
+      ...(turnId ? { turnId: TurnId.makeUnsafe(turnId) } : {}),
     },
   });
 
@@ -1369,7 +1371,7 @@ describe("deriveMessagesTimelineRows", () => {
       id: string,
       turnId: string,
       kind: string,
-      payload: Record<string, unknown>,
+      payload: OrchestrationThreadActivity["payload"],
       createdAt: string,
       tone: "info" | "error" = "info",
     ) => ({
@@ -1380,6 +1382,73 @@ describe("deriveMessagesTimelineRows", () => {
       payload,
       turnId: TurnId.makeUnsafe(turnId),
       createdAt,
+    });
+    it.each([
+      { state: "interrupted", stopRequested: true, outcome: "stopped" },
+      { state: "interrupted", stopRequested: false, outcome: "interrupted" },
+      { state: "failed", stopRequested: true, outcome: "interrupted" },
+    ] as const)(
+      "gives an empty $state turn its own $outcome header without marking queued requests",
+      ({ state, stopRequested, outcome }) => {
+        const rows = deriveMessagesTimelineRows({
+          ...baseInput,
+          timelineEntries: [
+            userEntry("request", "2026-01-01T00:00:00Z", "empty-turn"),
+            userEntry("queued", "2026-01-01T00:00:01Z"),
+          ],
+          turnTimingByTurnId: deriveTurnTimingByTurnId({
+            turnDiffSummaries: [],
+            latestTurn: null,
+            activities: [
+              turnActivity("start", "empty-turn", "turn.started", {}, "2026-01-01T00:00:00Z"),
+              ...(stopRequested
+                ? [
+                    turnActivity(
+                      "stop",
+                      "empty-turn",
+                      "turn.stop-requested",
+                      {},
+                      "2026-01-01T00:00:01Z",
+                    ),
+                  ]
+                : []),
+              turnActivity(
+                "done",
+                "empty-turn",
+                "turn.completed",
+                { state },
+                "2026-01-01T00:00:02Z",
+              ),
+            ],
+          }),
+        });
+        expect(messageRow(rows, "request")?.turnHeader).toEqual({
+          elapsed: "2.0s",
+          endedAt: "2026-01-01T00:00:02Z",
+          outcome,
+          reason: null,
+          modelChange: null,
+          resumedBy: null,
+        });
+        expect(messageRow(rows, "queued")?.turnHeader).toBeUndefined();
+        expect(messageRow(rows, "queued")?.turnEndMarker).toBeUndefined();
+      },
+    );
+
+    it("keeps an empty live request without a terminal header after Stop intent", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: [userEntry("request", "2026-01-01T00:00:00Z", "empty-turn")],
+        turnTimingByTurnId: deriveTurnTimingByTurnId({
+          turnDiffSummaries: [],
+          latestTurn: null,
+          activities: [
+            turnActivity("start", "empty-turn", "turn.started", {}, "2026-01-01T00:00:00Z"),
+            turnActivity("stop", "empty-turn", "turn.stop-requested", {}, "2026-01-01T00:00:01Z"),
+          ],
+        }),
+      });
+      expect(messageRow(rows, "request")?.turnHeader).toBeUndefined();
     });
     const threeTurns = [
       userEntry("u1", "2026-01-01T00:00:00Z"),
