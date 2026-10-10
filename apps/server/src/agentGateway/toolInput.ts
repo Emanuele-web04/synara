@@ -9,7 +9,7 @@ import { Schema } from "effect";
 
 import { AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION } from "./targetResolver.ts";
 
-export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
+export const PROVIDER_KINDS: ReadonlyArray<Exclude<ProviderKind, "external">> = [
   "codex",
   "claudeAgent",
   "cursor",
@@ -181,7 +181,9 @@ export function buildModelSelection(
   const effectiveModel =
     model ??
     inherited?.model ??
-    (provider === "pi" || provider === "omp" ? undefined : DEFAULT_MODEL_BY_PROVIDER[provider]);
+    (provider === "pi" || provider === "omp" || provider === "external"
+      ? undefined
+      : DEFAULT_MODEL_BY_PROVIDER[provider]);
   if (!effectiveModel) {
     throw new ToolInputError(
       `Provider "${provider}" has no default model; pass an explicit "model" argument.`,

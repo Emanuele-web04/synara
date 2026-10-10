@@ -22,6 +22,7 @@ import {
   type ProviderKind,
   type ProviderRuntimeEvent,
   type RuntimeMode,
+  type RuntimeTurnFeedbackInput,
 } from "@synara/contracts";
 import {
   Cache,
@@ -114,6 +115,12 @@ import {
   runtimePayloadRecord,
   runtimeTurnState,
 } from "../providerRuntimeActivityProjection.ts";
+import {
+  classifyRuntimeTurnDisposition,
+  classifyRuntimeTurnFeedbackInput,
+  type RuntimeTurnFeedbackTurnSignals,
+} from "../../capabilityEvidence/Services/RuntimeTurnFeedbackClassifier.ts";
+import { RuntimeTurnFeedbackService } from "../../capabilityEvidence/Services/RuntimeTurnFeedbackService.ts";
 
 // FILE: ProviderRuntimeIngestion.ts
 // Purpose: Projects provider runtime events into orchestration read-model updates and thread activity.
@@ -742,6 +749,11 @@ const make = Effect.gen(function* () {
   // Throttle map for the durable last-runtime-activity timestamp: one row
   // write per thread per ~15s of observed activity instead of per event.
   const lastActivityFlushByThreadRef = yield* Ref.make(new Map<string, number>());
+  // Capability evidence is an optional integration: layers that don't provide
+  // the evidence graph (e.g. focused projection tests) get no-op feedback.
+  const runtimeTurnFeedback = Option.getOrUndefined(
+    yield* Effect.serviceOption(RuntimeTurnFeedbackService),
+  );
   const outstandingTurnIdsByThreadRef = yield* Ref.make<ReadonlyMap<ThreadId, ReadonlySet<TurnId>>>(
     new Map(),
   );
@@ -2170,14 +2182,16 @@ const make = Effect.gen(function* () {
           // flags (e.g. supportsAutoMode) survive; a diverging subagent model gets
           // a bare selection because the parent's flags don't describe it.
           const resolvedModelSelection =
-            identity?.model && identity.modelIsRequestedHint !== true
-              ? identity.model === parentThread.modelSelection.model
-                ? parentThread.modelSelection
-                : {
-                    ...parentThread.modelSelection,
-                    model: identity.model,
-                  }
-              : undefined;
+            parentThread.modelSelection.provider === "external"
+              ? parentThread.modelSelection
+              : identity?.model && identity.modelIsRequestedHint !== true
+                ? identity.model === parentThread.modelSelection.model
+                  ? parentThread.modelSelection
+                  : {
+                      ...parentThread.modelSelection,
+                      model: identity.model,
+                    }
+                : undefined;
 
           if (Option.isNone(existingThread)) {
             // The read above hides soft-deleted threads, but `thread.create` is
@@ -2995,6 +3009,57 @@ const make = Effect.gen(function* () {
       if (isTerminalTurnEvent) {
         const finalizedTurnId = eventTurnId ?? activeTurnId ?? undefined;
         if (finalizedTurnId) {
+          // KAR-530: live-session turn outcomes feed capability evidence for
+          // the running external agent profile. Attribution uses the parent
+          // thread (the session owner) so subagent turns land on the profile
+          // identity, and the classifier keeps every disposition moving the
+          // badge toward `purge`/`demote`/neutral, never toward promotion of
+          // unsafe outcomes.
+          if (
+            runtimeTurnFeedback !== undefined &&
+            shouldApplyThreadLifecycle &&
+            parentThread.modelSelection.provider === "external"
+          ) {
+            const turnState =
+              event.type === "turn.completed" ? runtimeTurnState(event) : "cancelled";
+            const signals: RuntimeTurnFeedbackTurnSignals = {
+              turnState,
+              errorMessage:
+                event.type === "turn.completed" && event.payload.errorMessage
+                  ? event.payload.errorMessage
+                  : event.type === "turn.aborted"
+                    ? event.payload.reason
+                    : undefined,
+              stopReason: event.type === "turn.completed" ? event.payload.stopReason : undefined,
+            };
+            const shadow = classifyRuntimeTurnFeedbackInput(signals);
+            const feedbackInput: RuntimeTurnFeedbackInput = {
+              threadId: parentThread.id,
+              turnId: finalizedTurnId,
+              profileId: parentThread.modelSelection.profileId,
+              ...(parentThread.modelSelection.revisionId
+                ? { revisionId: parentThread.modelSelection.revisionId }
+                : {}),
+              capabilityId: "prompt",
+              outcome: shadow.outcome,
+              attribution: shadow.attribution,
+              disposition: classifyRuntimeTurnDisposition(signals),
+              ...(signals.errorMessage != null && signals.errorMessage.trim().length > 0
+                ? { detail: signals.errorMessage }
+                : {}),
+              completedAt: event.createdAt,
+            };
+            yield* runtimeTurnFeedback.recordTurnFeedback(feedbackInput).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("provider.runtime.turn_feedback_failed", {
+                  threadId: parentThread.id,
+                  turnId: finalizedTurnId,
+                  cause: String(error),
+                }),
+              ),
+            );
+          }
+
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
             thread.id,
             finalizedTurnId,

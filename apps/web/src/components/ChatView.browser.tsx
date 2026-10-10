@@ -4561,8 +4561,8 @@ describe("ChatView transcript geometry (full app)", () => {
                   ...thread,
                   ...(outcome === "completed"
                     ? {
-                        modelSelection: {
-                          provider: targetProvider,
+                        modelSelection: modelSelection ?? {
+                          provider: "claudeAgent",
                           model: targetModel,
                         },
                         session: {

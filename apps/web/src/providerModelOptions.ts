@@ -599,6 +599,11 @@ export function buildModelSelection(
         options ? { provider, model, options: options as OmpModelOptions } : { provider, model },
         metadata,
       );
+    case "external":
+      // External agent selections require connector-owned profileId and revisionId
+      // references, which cannot be synthesized from a bare provider/model pair.
+      // Callers holding a stored external selection must preserve it directly.
+      throw new Error("buildModelSelection does not support the external provider");
   }
 }
 

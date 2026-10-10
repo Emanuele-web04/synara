@@ -109,7 +109,7 @@ export function useProviderUsageSummary(input: {
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
-  const provider = input.provider ?? null;
+  const provider = input.provider === "external" ? null : (input.provider ?? null);
   const instanceId = input.instanceId ?? input.providerSnapshot?.instanceId;
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
   const allProviderUsageQuery = useQuery(

@@ -316,7 +316,7 @@ function instanceUsageContext(
   baseDir: string,
 ): ProviderUsageContext {
   const start = providerStartOptionsFromInstance(instance);
-  const options = start?.[instance.driver];
+  const options = instance.driver === "external" ? undefined : start?.[instance.driver];
   const selectedEnvironment =
     options?.environment === undefined
       ? undefined
