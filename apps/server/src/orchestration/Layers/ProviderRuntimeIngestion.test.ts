@@ -4989,7 +4989,7 @@ describe("ProviderRuntimeIngestion", () => {
           const afterGrace = await waitForThread(harness.engine, (entry) =>
             entry.messages.some(
               (message: ProviderRuntimeTestMessage) =>
-                message.id === "assistant:item-after-buffered-grace" && message.streaming,
+                message.id === "assistant:item-after-buffered-grace" && !message.streaming,
             ),
           );
           expect(
@@ -9156,6 +9156,94 @@ describe("ProviderRuntimeIngestion", () => {
         }
       },
     );
+
+    it("settles a new late assistant item after ingestion restarts", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-ended-before-restart");
+      await startTurn(harness, turnId, "buffered");
+      await push(
+        harness,
+        assistantDelta(turnId, "restart-answer", "restart-answer-delta", "Answer."),
+      );
+      await push(harness, assistantCompleted(turnId, "restart-answer", "restart-answer-completed"));
+      await push(harness, turnCompleted(turnId, "restart-turn-completed"));
+      await harness.drain();
+
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+      const drain = await harness.restartIngestion();
+      await push(
+        harness,
+        assistantDelta(turnId, "restart-answer", "restart-answer-tail", " Tail."),
+      );
+      await push(
+        harness,
+        assistantDelta(turnId, "restart-new-item", "restart-new-item-delta", "Extra."),
+      );
+      await drain();
+      await push(harness, {
+        type: "turn.started",
+        eventId: asEventId("restart-next-turn-started"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: asTurnId("turn-after-restart"),
+        payload: {},
+      });
+      await drain();
+
+      for (const read of [projectedMessage, engineMessage]) {
+        expect(await read(harness, "assistant:restart-answer")).toMatchObject({
+          text: "Answer. Tail.",
+          streaming: false,
+        });
+        expect(await read(harness, "assistant:restart-new-item")).toMatchObject({
+          text: "Extra.",
+          streaming: false,
+        });
+      }
+    });
+
+    it("attaches images to a later nonempty completion instead of an earlier skipped item", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-image-after-empty-item");
+      const imagePath = "/tmp/provider-thread/later-answer.png";
+      await startTurn(harness, turnId, "streaming");
+      await push(harness, assistantCompleted(turnId, "earlier-empty", "earlier-empty-completed"));
+      await push(
+        harness,
+        assistantCompleted(turnId, "later-answer", "later-answer-completed", "Final answer."),
+      );
+      await push(harness, {
+        type: "item.completed",
+        eventId: asEventId("later-answer-image-completed"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId,
+        itemId: asItemId("later-answer-image"),
+        payload: {
+          itemType: "image_generation",
+          status: "completed",
+          title: "Generated image",
+          detail: imagePath,
+          data: { kind: "codex.generated_image", path: imagePath, callId: "later-answer-image" },
+        },
+      });
+      await push(harness, turnCompleted(turnId, "later-answer-turn-completed"));
+      await harness.drain();
+
+      const thread = await harness.readProjectedThread();
+      expect(
+        thread?.messages.find((message) => message.id === "assistant:earlier-empty"),
+      ).toBeUndefined();
+      expect(
+        thread?.messages.find((message) => message.id === "assistant:later-answer"),
+      ).toMatchObject({
+        text: `Final answer.\n\n![Generated image](${imagePath})`,
+        streaming: false,
+      });
+    });
 
     it("leaves the live turn untouched when a turnless terminal event is ambiguous", async () => {
       const harness = await createHarness();
