@@ -10,6 +10,7 @@ import { Schema } from "effect";
 import { ProjectId, ThreadId, TurnId } from "./baseSchemas";
 import { ModelSelection, ProviderKind } from "./orchestration";
 import { ProviderModelDescriptor } from "./providerDiscovery";
+import { ProviderInstanceId } from "./providerInstance";
 import { ServerProviderAuthStatus } from "./server";
 
 export const SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION = 20;
@@ -98,10 +99,22 @@ export const SynaraCreateThreadsInput = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type SynaraCreateThreadsInput = typeof SynaraCreateThreadsInput.Type;
 
+export const SynaraProviderInstanceCatalog = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  displayName: Schema.String.check(Schema.isNonEmpty()),
+  isDefault: Schema.Boolean,
+  enabled: Schema.Boolean,
+});
+export type SynaraProviderInstanceCatalog = typeof SynaraProviderInstanceCatalog.Type;
+
 export const SynaraProviderCatalog = Schema.Struct({
   provider: ProviderKind,
   defaultModel: Schema.NullOr(Schema.String),
   models: Schema.Array(ProviderModelDescriptor),
+  // Optional for older MCP clients that decode a capability response from a
+  // server predating provider-instance discovery. Current servers always emit
+  // the field, including an empty array when no extra instances are configured.
+  instances: Schema.optional(Schema.Array(SynaraProviderInstanceCatalog)),
   enabled: Schema.Boolean,
   available: Schema.Boolean,
   authStatus: Schema.optional(ServerProviderAuthStatus),
