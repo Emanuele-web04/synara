@@ -1009,7 +1009,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : {}),
               latestTurnId:
                 event.type === "thread.session-set"
-                  ? event.payload.session.activeTurnId
+                  ? (event.payload.session.activeTurnId ?? existingRow.value.latestTurnId)
                   : event.payload.preserveLatestTurn
                     ? existingRow.value.latestTurnId
                     : event.payload.turnId,

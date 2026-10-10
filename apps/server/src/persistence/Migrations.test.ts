@@ -630,6 +630,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -713,6 +714,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 129, name: "ProjectionThreadsSnooze" },
           { migration_id: 130, name: "PullRequestAutoFix" },
           { migration_id: 131, name: "ProjectSourceFolders" },
+          { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -876,6 +878,7 @@ agentGatewayRetentionLegacyLayer(
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1002,6 +1005,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1069,6 +1073,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
         ],
       );
 
@@ -1190,6 +1195,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1253,6 +1259,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

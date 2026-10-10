@@ -120,7 +120,7 @@ export interface WorkLogEntry {
   id: string;
   createdAt: string;
   /**
-   * Provider runtime sequence for causal ordering within the provider stream.
+   * Provider runtime sequence, used to break equal-time ties in the timeline.
    * Absent for server-created rows: their orchestration event sequence is a
    * different counter, so they order by `createdAt` instead.
    */
@@ -3058,17 +3058,24 @@ function compareActivityLifecycleRank(kind: string): number {
   return 1;
 }
 
+// Time first: messages carry no sequence, and mergeTimelineEntries is only
+// correct when both sides sort by the same key. Sequence-first let one late
+// row with an unrelated low sequence lead the work list, and every message of
+// the block was emitted above all of that block's work.
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
   if (
     "sequence" in left &&
     "sequence" in right &&
     left.sequence !== undefined &&
-    right.sequence !== undefined &&
-    left.sequence !== right.sequence
+    right.sequence !== undefined
   ) {
     return left.sequence - right.sequence;
   }
-  return left.createdAt.localeCompare(right.createdAt);
+  return 0;
 }
 
 type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;
@@ -3382,10 +3389,9 @@ export function deriveTimelineEntries(
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
 
-  // Sequenced work rows order causally among themselves; rows without a
-  // provider sequence (server-created) order by time. Sorting both kinds in one
-  // list mixes the two orders into a cycle, so each list is sorted on its own
-  // and only merged.
+  // Keep provider-sequenced work separate from server-created rows so unrelated
+  // counters never break ties against each other. All lists use the same
+  // chronological comparator; provider sequences only order equal-time ties.
   const sequencedWorkRows = workRows.filter(isSequenced);
   const timedWorkRows =
     sequencedWorkRows.length === workRows.length ? [] : workRows.filter((row) => !isSequenced(row));
