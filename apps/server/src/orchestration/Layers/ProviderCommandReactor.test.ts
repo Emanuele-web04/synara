@@ -8001,7 +8001,13 @@ describe("ProviderCommandReactor", () => {
     );
     expect(Option.getOrThrow(delivery).state).toBe(recovered ? "succeeded" : "uncertain");
     const thread = await readHarnessThread(harness);
-    expect(thread?.session?.lastError).toBe(scenario === "proven quit" ? null : sessionError);
+    expect(thread?.session?.lastError).toBe(
+      scenario === "proven quit"
+        ? null
+        : scenario === "another blocker"
+          ? formatProviderDeliveryBlockDetail("Acceptance unknown")
+          : sessionError,
+    );
     expect(
       thread?.activities.some((activity) => activity.summary === "Previous messages were not sent"),
     ).toBe(recovered);
