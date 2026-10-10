@@ -816,6 +816,8 @@ export function prepareCodexTextGenerationAuthSnapshot(
     candidateAuth = {
       auth_mode: "chatgptAuthTokens",
       tokens: candidateTokens,
+      // Codex requires this timestamp to expose token data, even for externally managed auth.
+      last_refresh: new Date(nowMs).toISOString(),
     };
   } else {
     candidateAuth = { auth_mode: "apikey", OPENAI_API_KEY: apiKey };

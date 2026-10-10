@@ -11,6 +11,7 @@
 import { pluralize } from "@synara/shared/text";
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
+import { isReasoningUpdateWorkEntry } from "./agentActivity.logic";
 
 // A single tool row collapses into nothing useful; only runs of 2+ rows fold.
 export const MIN_COLLAPSIBLE_TOOL_GROUP_SIZE = 2;
@@ -60,6 +61,7 @@ export interface ToolCallGroupSummary {
 export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
   return (
     entry.tone === "tool" &&
+    !(entry.toolCallId && isReasoningUpdateWorkEntry(entry)) &&
     !entry.synaraThreadCreation &&
     !entry.automation &&
     !entry.subagentAction &&

@@ -22,7 +22,7 @@ import type {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer, Stream } from "effect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   deriveServerPaths,
@@ -415,6 +415,39 @@ describe("ProviderDiscoveryService.getComposerCapabilities", () => {
 });
 
 describe("ProviderDiscoveryService.listModels", () => {
+  it("honors an explicit refresh through the decoded discovery request", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let calls = 0;
+    try {
+      const refreshed = await runDiscovery({
+        adapter: {
+          listModels: () =>
+            Effect.sync(() => ({
+              models: [{ slug: `model-${++calls}`, name: "Model" }],
+              source: "codex-app-server",
+            })),
+        },
+        effect: Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          yield* discovery.listModels({ provider: "codex", cwd });
+          now += 61_000;
+          const cached = yield* discovery.listModels({
+            provider: "codex",
+            cwd,
+            refresh: "if-stale",
+          });
+          expect(cached.models[0]?.slug).toBe("model-1");
+          return yield* discovery.listModels({ provider: "codex", cwd, refresh: "now" });
+        }),
+      });
+      expect(refreshed.models[0]?.slug).toBe("model-2");
+      expect(calls).toBe(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each(["running service", "restart"])(
     "refreshes Claude models after a CLI update across a %s",
     async (mode) => {

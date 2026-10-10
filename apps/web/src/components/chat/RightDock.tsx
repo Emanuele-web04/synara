@@ -41,9 +41,8 @@ import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
-  SurfaceTabChip,
-  SurfaceTabStrip,
 } from "./chatHeaderControls";
+import { SurfaceContentTabs } from "./SurfaceContentTabs";
 import {
   getRightDockPaneMeta,
   type RightDockLauncherItem,
@@ -81,6 +80,8 @@ interface RightDockProps {
   // provide the callback and keep the normal selectable-tab behavior.
   onSelectPane?: ((paneId: string) => void) | undefined;
   onClosePane: (paneId: string) => void;
+  /** Drops a dragged tab onto another tab's slot. Hosts that omit it get fixed tabs. */
+  onMovePane?: ((paneId: string, overPaneId: string) => void) | undefined;
   onCollapse: () => void;
   onOpenChange: (open: boolean) => void;
   onAddPane: (kind: RightDockPaneKind) => void;
@@ -122,28 +123,6 @@ function RightDockLauncher(props: {
         ))}
       </div>
     </nav>
-  );
-}
-
-function RightDockTab(props: {
-  pane: RightDockPane;
-  label: string;
-  icon?: ReactNode;
-  active: boolean;
-  onSelect?: (() => void) | undefined;
-  onClose: () => void;
-}) {
-  return (
-    <SurfaceTabChip
-      active={props.active}
-      title={props.label}
-      label={props.label}
-      labelClassName="max-w-[10rem]"
-      icon={props.icon ?? resolveRightDockPaneIcon(props.pane)}
-      closeLabel={`Close ${props.label}`}
-      onSelect={props.onSelect}
-      onClose={props.onClose}
-    />
   );
 }
 
@@ -269,9 +248,11 @@ export function RightDock(props: RightDockProps) {
       wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, openWidth)}px`);
     }
   }, [props.state.open, minWidth, openWidthFraction, activePaneKind]);
-  const renderedPanes = props.state.panes.filter(
-    (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
-  );
+  // Mounted in id order rather than tab order: reordering the tabs must not move a pane's
+  // DOM node, which would reload an embedded frame (the panes overlap, so order is unseen).
+  const renderedPanes = props.state.panes
+    .filter((pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id))
+    .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // Motion allowance keyed to the current motionKey: a key change (reposition/
   // remount) derives straight back to "suppressed" in that same render, and the
   // rAF below re-enables motion once the suppressed frame has painted. Mounting
@@ -320,6 +301,7 @@ export function RightDock(props: RightDockProps) {
         innerClassName={CHAT_BACKGROUND_CLASS_NAME}
         gapClassName={chromeMotionClass}
         transparentSurface
+        rail={!maximized && <SidebarRail />}
         resizable={{
           minWidth: props.minWidth,
           shouldAcceptWidth: props.shouldAcceptWidth,
@@ -337,19 +319,18 @@ export function RightDock(props: RightDockProps) {
               desktopTopBarWindowControlsGutterClassName,
             )}
           >
-            <SurfaceTabStrip className="flex-1" activeKey={props.state.activePaneId} dividers>
-              {props.state.panes.map((pane) => (
-                <RightDockTab
-                  key={pane.id}
-                  pane={pane}
-                  label={resolveRightDockPaneLabel(pane, props.paneLabelOverrides)}
-                  icon={props.paneIconOverrides?.[pane.id]}
-                  active={pane.id === props.state.activePaneId}
-                  onSelect={onSelectPane ? () => onSelectPane(pane.id) : undefined}
-                  onClose={() => props.onClosePane(pane.id)}
-                />
-              ))}
-            </SurfaceTabStrip>
+            <SurfaceContentTabs
+              ariaLabel="Open panels"
+              activeKey={props.state.activePaneId}
+              onMove={props.onMovePane}
+              tabs={props.state.panes.map((pane) => ({
+                key: pane.id,
+                title: resolveRightDockPaneLabel(pane, props.paneLabelOverrides),
+                icon: props.paneIconOverrides?.[pane.id] ?? resolveRightDockPaneIcon(pane),
+                onSelect: onSelectPane ? () => onSelectPane(pane.id) : undefined,
+                onClose: () => props.onClosePane(pane.id),
+              }))}
+            />
             {props.state.panes.length > 0 && props.addMenuKinds.length > 0 ? (
               <Menu modal={false}>
                 <MenuTrigger
@@ -458,7 +439,6 @@ export function RightDock(props: RightDockProps) {
             })}
           </div>
         </div>
-        {!maximized && <SidebarRail />}
       </Sidebar>
     </SidebarProvider>
   );

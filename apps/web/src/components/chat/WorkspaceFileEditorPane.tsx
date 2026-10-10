@@ -38,10 +38,7 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
   const [history, setHistory] = useState(INITIAL_CODE_EDIT_HISTORY_STATE);
 
   return (
-    <div
-      ref={paneRef}
-      className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]"
-    >
+    <div ref={paneRef} className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
       <WorkspaceFileEditorHeader
         workspaceRoot={props.workspaceRoot}
         filePath={props.filePath}

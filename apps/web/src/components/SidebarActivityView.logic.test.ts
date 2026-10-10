@@ -14,6 +14,7 @@ import {
   resolveActivityDateBucket,
   resolveActivityScope,
   resolveActivitySectionRows,
+  resolveActivityThreadReadAt,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
@@ -86,6 +87,83 @@ function completedTurn(completedAt: string): SidebarThreadSummary["latestTurn"] 
 }
 
 describe("buildActivityViewModel", () => {
+  it("keeps snoozed empty top-level threads accessible and restores them after expiry", () => {
+    const snoozed = { ...makeThread({ id: "empty" }), snoozedUntil: "2026-08-02T09:00:00.000Z" };
+    const archived = {
+      ...snoozed,
+      id: ThreadId.makeUnsafe("archived"),
+      archivedAt: "2026-08-01T12:00:00.000Z",
+    };
+    const child = { ...snoozed, id: ThreadId.makeUnsafe("child"), parentThreadId: snoozed.id };
+    const beforeExpiry = buildActivityViewModel({
+      threads: [snoozed, archived, child],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(beforeExpiry.snoozed.map((row) => row.id)).toEqual(["empty"]);
+    const returned = {
+      ...snoozed,
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-02T09:00:00.000Z",
+    };
+    const afterExpiry = buildActivityViewModel({
+      threads: [returned],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(afterExpiry.active.map((row) => row.id)).toEqual(["empty"]);
+    expect(
+      splitRecentActivityThreads(afterExpiry.active, {
+        nowMs: Date.parse("2026-08-02T10:00:00.000Z"),
+      }).recent.map((row) => row.id),
+    ).toEqual(["empty"]);
+  });
+
+  it("keeps snoozed threads separate before pinned and done, including overdue deadlines", () => {
+    const snoozed = {
+      ...makeThread({ id: "snoozed", latestTurn: completedTurn("2026-08-01T10:00:00.000Z") }),
+      snoozedUntil: "2026-08-01T08:00:00.000Z",
+      settledAt: "2026-08-01T11:00:00.000Z",
+    };
+    const later = {
+      ...snoozed,
+      id: ThreadId.makeUnsafe("later"),
+      snoozedUntil: "2026-08-02T09:00:00.000Z",
+    };
+    const model = buildActivityViewModel({
+      threads: [later, snoozed],
+      pinnedThreadIdSet: new Set([snoozed.id]),
+    });
+    expect(model.snoozed.map((thread) => thread.id)).toEqual(["snoozed", "later"]);
+    expect(model.pinned).toEqual([]);
+    expect(model.active).toEqual([]);
+    expect(model.settled).toEqual([]);
+  });
+
+  it("restores an older thread to recent activity using its reminder time", () => {
+    const reminded = {
+      ...makeThread({
+        id: "reminded",
+        latestHumanMessageAt: "2026-07-01T10:00:00.000Z",
+        latestTurn: completedTurn("2026-07-01T10:05:00.000Z"),
+      }),
+      snoozeReminderAt: "2026-08-02T11:30:00.000Z",
+    };
+    const newer = makeThread({
+      id: "newer",
+      latestHumanMessageAt: "2026-08-02T10:00:00.000Z",
+      latestTurn: completedTurn("2026-08-02T10:05:00.000Z"),
+    });
+    const model = buildActivityViewModel({
+      threads: [newer, reminded],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(model.active.map((thread) => thread.id)).toEqual(["reminded", "newer"]);
+    expect(
+      splitRecentActivityThreads(model.active, {
+        nowMs: Date.parse("2026-08-02T12:00:00.000Z"),
+      }).recent.map((thread) => thread.id),
+    ).toEqual(["reminded", "newer"]);
+  });
+
   it("keeps human-send order through startup, completion, attention, reads, and MCP sends", () => {
     const older = makeThread({
       id: "older",
@@ -674,6 +752,19 @@ describe("resolveActivitySectionRows", () => {
 });
 
 describe("collectUnreadActivityThreads", () => {
+  it("holds unread snoozed threads out of the activity bell and read sweep", () => {
+    const thread = {
+      ...makeThread({
+        id: "snoozed",
+        latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+        lastVisitedAt: "2026-08-01T09:00:00.000Z",
+      }),
+      snoozedUntil: "2026-08-01T08:00:00.000Z",
+    };
+    expect(collectUnreadActivityThreads([thread])).toEqual([]);
+    expect(hasUnreadActivity([thread], null)).toBe(false);
+  });
+
   it("collects only eligible threads with unseen completions", () => {
     const unread = makeThread({
       id: "unread",
@@ -695,6 +786,23 @@ describe("collectUnreadActivityThreads", () => {
     expect(collectUnreadActivityThreads([unread, read, archivedUnread]).map((t) => t.id)).toEqual([
       "unread",
     ]);
+  });
+
+  it("reads a chat back from snooze at the reminder, or at a later completion", () => {
+    const returned = {
+      ...makeThread({
+        id: "returned",
+        latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+        lastVisitedAt: "2026-08-01T09:45:00.000Z",
+      }),
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-01T11:00:00.000Z",
+    };
+    // A turn left running when the chat was snoozed can finish after the reminder.
+    const finishedLater = { ...returned, latestTurn: completedTurn("2026-08-01T11:30:00.000Z") };
+
+    expect(resolveActivityThreadReadAt(returned)).toBe("2026-08-01T11:00:00.000Z");
+    expect(resolveActivityThreadReadAt(finishedLater)).toBe("2026-08-01T11:30:00.000Z");
   });
 
   it("does not light the bell for the thread currently being read", () => {

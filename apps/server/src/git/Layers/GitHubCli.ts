@@ -1,7 +1,8 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  type GitHubInboxSort,
   type GitHubIssueState,
   type GitHubIssueStateReason,
   type GitPullRequestCheck,
@@ -25,6 +26,7 @@ import {
 import { runProcess } from "../../processRunner";
 import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache";
 import { GitHubCliError } from "../Errors.ts";
+import { makeGitHubReadGate } from "../githubReadGate.ts";
 import {
   GitHubCli,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
@@ -322,6 +324,7 @@ const RawPullRequestDetailSchema = Schema.Struct({
 const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
   ...RawGitHubPullRequestSchema.fields,
   ...RawPullRequestChecksSchema.fields,
+  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
@@ -974,19 +977,23 @@ fragment InboxIssueFields on Issue {
 }
 
 /**
- * Lists document for one repository and state: the 50 most recently updated pull requests and
+ * Lists document for one repository, state, and sort: the first 50 pull requests and
  * issues with full row fields, the review-requested numbers and count, the viewer, and the
  * GraphQL budget. Sent together with {@link buildGitHubInboxInvolvementQuery}.
  */
-export function buildGitHubInboxQuery(options: { readonly includeStacks: boolean }): string {
+export function buildGitHubInboxQuery(options: {
+  readonly includeStacks: boolean;
+  readonly sort?: GitHubInboxSort;
+}): string {
+  const orderField = options.sort === "created" ? "CREATED_AT" : "UPDATED_AT";
   return `query($owner: String!, $name: String!, $prStates: [PullRequestState!], $issueStates: [IssueState!], $reviewQuery: String!, $includeReview: Boolean!) {
   viewer { login }
   rateLimit { cost remaining resetAt }
   repository(owner: $owner, name: $name) {
-    pullRequests(states: $prStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(states: $prStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: ${orderField}, direction: DESC}) {
       totalCount nodes { ...InboxPullRequestFields }
     }
-    issues(states: $issueStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    issues(states: $issueStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: ${orderField}, direction: DESC}) {
       totalCount nodes { ...InboxIssueFields }
     }
   }
@@ -1040,8 +1047,9 @@ ${githubInboxFragments(options)}`;
 export function githubInboxInvolvementQueryVariables(
   repository: string,
   state: "open" | "closed",
+  sort: GitHubInboxSort = "updated",
 ): string[] {
-  return ["-f", `mineQuery=repo:${repository} is:${state} involves:@me`];
+  return ["-f", `mineQuery=repo:${repository} is:${state} involves:@me sort:${sort}-desc`];
 }
 
 /** `gh api graphql` variables for {@link buildGitHubInboxQuery}. The repository must already be
@@ -1741,6 +1749,8 @@ const makeGitHubCli = Effect.gen(function* () {
     { discard: true },
   );
 
+  const readGate = makeGitHubReadGate();
+
   // Flipped once if GitHub ever rejects the optional stack fields, so later inbox reads skip them
   // instead of failing and retrying on every poll.
   let inboxStackFieldsSupported = true;
@@ -1765,7 +1775,8 @@ const makeGitHubCli = Effect.gen(function* () {
           ...(input.onStderrChunk !== undefined ? { onStderrChunk: input.onStderrChunk } : {}),
         }),
       catch: (error) => normalizeGitHubCliError("execute", error),
-    });
+      // Every command reports here, mutations included, so a limit hit by any of them pauses reads.
+    }).pipe(Effect.tapError((error) => Effect.sync(() => readGate.noteFailure(error))));
 
   const PULL_REQUEST_DIFF_TOO_LARGE_PATTERN = /exceeded the maximum number of files|too_large/i;
   const PULL_REQUEST_DIFF_MISSING_OBJECT_PATTERN =
@@ -2111,7 +2122,7 @@ const makeGitHubCli = Effect.gen(function* () {
     );
   };
 
-  const service = {
+  const service: Omit<GitHubCliShape, "withRead"> = {
     execute,
     getViewerLogin: (input) =>
       execute({
@@ -2137,7 +2148,7 @@ const makeGitHubCli = Effect.gen(function* () {
           runInboxGraphQl(
             input.cwd,
             (includeStacks) => [
-              `query=${buildGitHubInboxQuery({ includeStacks })}`,
+              `query=${buildGitHubInboxQuery({ includeStacks, sort: input.sort ?? "updated" })}`,
               ...githubInboxQueryVariables(repository, input.state),
             ],
             decodeRepositoryInboxJson,
@@ -2151,7 +2162,7 @@ const makeGitHubCli = Effect.gen(function* () {
             input.cwd,
             (includeStacks) => [
               `query=${buildGitHubInboxInvolvementQuery({ includeStacks })}`,
-              ...githubInboxInvolvementQueryVariables(repository, input.state),
+              ...githubInboxInvolvementQueryVariables(repository, input.state, input.sort),
             ],
             decodeRepositoryInvolvementJson,
           ),
@@ -2554,7 +2565,7 @@ const makeGitHubCli = Effect.gen(function* () {
           "view",
           input.reference,
           "--json",
-          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -2569,6 +2580,7 @@ const makeGitHubCli = Effect.gen(function* () {
         Effect.map((decoded) => ({
           summary: normalizePullRequestSummary(decoded),
           checks: normalizePullRequestChecks(decoded),
+          headSha: decoded.headRefOid?.trim() || null,
         })),
       ),
     getPullRequestReviewComments: (input) =>
@@ -2699,22 +2711,30 @@ const makeGitHubCli = Effect.gen(function* () {
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
       }).pipe(Effect.asVoid),
-  } satisfies GitHubCliShape;
+  };
 
-  // `listOpenPullRequests` stays uncached: it backs the create-PR flow, which must observe the
-  // pull request it just created.
+  // `listOpenPullRequests` stays uncached and ungated: it backs the create-PR flow, which must
+  // observe the pull request it just created. `listPullRequests` only serves background lookups
+  // (git status, thread metadata), so a cache miss waits for a read slot and honours the pause.
   return {
     ...service,
+    withRead: readGate.withRead,
     listPullRequests: (input) =>
       pullRequestHeadListCache.get(
         [input.cwd, input.headSelector, input.limit ?? ""].join("\u0000"),
-        service.listPullRequests(input),
+        readGate.withRead(service.listPullRequests(input)),
       ),
     getPullRequest: (input) =>
-      pullRequestLookupCache.get(
-        [input.cwd, input.reference].join("\u0000"),
-        service.getPullRequest(input),
-      ),
+      Effect.gen(function* () {
+        const key = [input.cwd, input.reference].join("\u0000");
+        const lookup = pullRequestLookupCache.get(key, service.getPullRequest(input));
+        if (!input.background) return yield* lookup;
+        const cached = yield* pullRequestLookupCache.getCached(key);
+        if (Option.isSome(cached)) return cached.value;
+        // Admission belongs to this polling caller, not the shared remote computation.
+        // A mutation may start or join the actual lookup without waiting for a read slot.
+        return yield* readGate.withRead(lookup);
+      }),
     runPullRequestAction: (input) =>
       service.runPullRequestAction(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
     createPullRequest: (input) =>

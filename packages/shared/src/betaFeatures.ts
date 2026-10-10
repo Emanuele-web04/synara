@@ -14,31 +14,26 @@ import {
 /**
  * Features that ship only in non-Stable builds. Keep a feature out of Stable
  * by adding its key here; promote it by deleting the entry. A provider's key
- * is its ProviderKind: today that is "omp". "groups" is Groups (below);
- * "tasks" is the Tasks to-do list, which replaces Kanban in Beta while Stable
- * keeps Kanban.
+ * is its ProviderKind. "groups" is Groups (below).
  */
 export type BetaOnlyFeature = string;
 
 /** Groups: the coordinator, its threads, the Group panel and the Library. */
 export const GROUPS_BETA_FEATURE = "groups";
 
-/** Inbox: the Inbox page and its `stats.getRecap` RPC. */
+/** Inbox (Stable and Beta): the Inbox page and its `stats.getRecap` RPC. */
 export const INBOX_BETA_FEATURE = "inbox";
 
 /**
- * Audio trail: the chat message trail moves with the Mac's audio output and/or
- * the microphone, read by the AppSnap helper's `--audio-level` mode.
+ * Audio trail (Stable and Beta): the chat message trail moves with the Mac's
+ * audio output and/or the microphone, read by the AppSnap helper's `--audio-level` mode.
  */
 export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
-  "omp",
-  GROUPS_BETA_FEATURE,
-  INBOX_BETA_FEATURE,
-  "tasks",
-  AUDIO_TRAIL_BETA_FEATURE,
-];
+/** Auto-fix CI (Stable and Beta): the PR menu checkbox, RPCs, and check watcher. */
+export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [GROUPS_BETA_FEATURE];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

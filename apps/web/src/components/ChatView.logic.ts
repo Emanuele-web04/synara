@@ -1247,6 +1247,7 @@ export type WorktreeCreationFlowOutcome<Result> =
 export async function runWorktreeCreationFlow<Result extends { worktree: { path: string } }>(
   deps: WorktreeCreationFlowDeps<Result>,
 ): Promise<WorktreeCreationFlowOutcome<Result>> {
+  if (deps.resolution.action !== null) return { outcome: "resolved" };
   const unsubscribe = deps.subscribeToProgress((event) => {
     if (
       event.progressId !== deps.progressId ||
@@ -1423,14 +1424,20 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
 /** The exact label set the transcript's working indicator can render. */
-export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
+export type WorkingLabel =
+  | "Loading"
+  | "Thinking"
+  | "Checking message delivery…"
+  | `Starting ${string}…`;
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
+  isSettlingTurnDispatch?: boolean;
   providerName?: string;
 }): WorkingLabel {
+  if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
     return "Loading";
   }
@@ -1916,24 +1923,6 @@ export function shouldRenderTerminalWorkspace(options: {
   // The workspace shell should paint immediately; the terminal viewport gates the
   // backend attach until a valid cwd is available.
   return options.terminalOpen && options.presentationMode === "workspace";
-}
-
-export function resolveProjectScriptTerminalTarget(options: {
-  baseTerminalId: string;
-  createTerminalId: () => string;
-  hasRunningTerminal: boolean;
-  preferNewTerminal?: boolean | undefined;
-  terminalOpen: boolean;
-}): { shouldCreateNewTerminal: boolean; terminalId: string } {
-  // Project scripts require their requested cwd/env before the command write;
-  // live PTYs keep their launch context, so visible or running terminals get a new tab.
-  const shouldCreateNewTerminal =
-    Boolean(options.preferNewTerminal) || options.terminalOpen || options.hasRunningTerminal;
-
-  return {
-    shouldCreateNewTerminal,
-    terminalId: shouldCreateNewTerminal ? options.createTerminalId() : options.baseTerminalId,
-  };
 }
 
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {

@@ -19,6 +19,7 @@ import {
   mergeGitHubInboxSearch,
   parseGitHubInboxSearch,
   resolveGitHubInboxFilters,
+  githubInboxListState,
   selectVisibleInboxItems,
   toggleGitHubInboxLabel,
   type GitHubInboxFilterSettings,
@@ -171,7 +172,7 @@ describe("parseGitHubInboxSearch", () => {
     });
     expect(parseGitHubInboxSearch({ involvement: "reviewing", state: "merged" })).toEqual({
       involvement: "reviewRequested",
-      state: "closed",
+      state: "merged",
     });
     expect(parseGitHubInboxSearch({ involvement: "authored" })).toEqual({
       involvement: "authored",
@@ -317,16 +318,19 @@ describe("selectVisibleInboxItems", () => {
     expect(numbers(filters({ kind: "pullRequest", involvement: "assigned" }))).toEqual([]);
   });
 
-  it("orders rows by latest activity, pull requests and issues interleaved", () => {
+  it.each([
+    { sort: "created" as const, expected: [4, 3, 2, 1] },
+    { sort: "updated" as const, expected: [4, 1, 3, 2] },
+  ])("orders interleaved rows by $sort with pins first", ({ sort, expected }) => {
     const older = items.map((item) =>
       item.number === 1 ? { ...item, updatedAt: "2030-01-01T00:00:00.000Z" } : item,
     );
     const ordered = selectVisibleInboxItems(older, filters(), {
+      sort,
       viewer,
       normalizedQuery: "",
     });
-    // The pinned row still leads; the freshly updated one comes right after it.
-    expect(ordered.map((item) => item.number)).toEqual([4, 1, 3, 2]);
+    expect(ordered.map((item) => item.number)).toEqual(expected);
   });
 
   it("lists pins first, then every other row in one list by latest activity", () => {
@@ -337,6 +341,7 @@ describe("selectVisibleInboxItems", () => {
         : item,
     );
     const visible = selectVisibleInboxItems(ownIsOldest, filters(), {
+      sort: "updated",
       viewer,
       normalizedQuery: "",
     });
@@ -349,6 +354,41 @@ describe("selectVisibleInboxItems", () => {
     );
     expect(pinned.map((group) => group.key)).toEqual(["pinned", "all"]);
     expect(pinned[0]?.entries.map((item) => item.number)).toEqual([4]);
+  });
+});
+
+describe("merged state filter", () => {
+  it("reads the closed list and keeps only merged pull requests", () => {
+    const closedList = [
+      pullRequest(1, { state: "merged" }),
+      pullRequest(2, { state: "closed" }),
+      issue(3, { state: "closed" }),
+    ];
+    const merged = filters({ state: "merged" });
+    expect(githubInboxListState("merged")).toBe("closed");
+    expect(
+      selectVisibleInboxItems(closedList, merged, { viewer: "me", normalizedQuery: "" }).map(
+        (item) => item.number,
+      ),
+    ).toEqual([1]);
+    // GitHub's closed totals would overcount, so the tabs count the matching rows.
+    expect(
+      countInboxItemsByKind(closedList, merged, {
+        viewer: "me",
+        normalizedQuery: "",
+        repositoryBatches: [
+          {
+            repository: "acme/widgets",
+            projectIds: [projectA],
+            truncatedPullRequests: false,
+            truncatedIssues: false,
+            totalPullRequests: 40,
+            totalIssues: 9,
+            fetchedAt: "2026-09-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    ).toEqual({ all: 1, pullRequest: 1, issue: 0 });
   });
 });
 

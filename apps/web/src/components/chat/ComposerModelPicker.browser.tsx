@@ -91,11 +91,13 @@ type HarnessProps = {
     typeof ComposerModelPicker
   >["modelOptionsByProviderInstance"];
   lockedProvider?: ProviderKind | null;
+  boundProviderInstance?: React.ComponentProps<typeof ComposerModelPicker>["boundProviderInstance"];
   modelOptionsByProvider?: React.ComponentProps<
     typeof ComposerModelPicker
   >["modelOptionsByProvider"];
   effortControl?: "menu" | "slider";
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
+  onRefreshModels?: React.ComponentProps<typeof ComposerModelPicker>["onRefreshModels"];
 };
 
 function Harness(props: HarnessProps) {
@@ -113,6 +115,7 @@ function Harness(props: HarnessProps) {
       provider="codex"
       model={(selectedModel ?? GPT_5_5) as ModelSlug}
       lockedProvider={props.lockedProvider ?? null}
+      boundProviderInstance={props.boundProviderInstance ?? null}
       effortControl={props.effortControl ?? "menu"}
       providers={props.providers ?? [readyProvider("codex"), readyProvider("claudeAgent")]}
       {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
@@ -124,6 +127,7 @@ function Harness(props: HarnessProps) {
         : {})}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
+      {...(props.onRefreshModels ? { onRefreshModels: props.onRefreshModels } : {})}
       threadId={THREAD_ID}
       modelOptions={modelOptions?.codex}
       prompt={prompt}
@@ -155,6 +159,91 @@ function readStoredStars(): unknown {
 }
 
 describe("ComposerModelPicker", () => {
+  it("hides a globally disabled provider's tabs and starred models, including the active default", async () => {
+    const screen = await mountPicker(
+      {
+        providers: [
+          { ...readyProvider("codex"), enabled: false, available: false },
+          readyProvider("claudeAgent"),
+        ],
+        providerInstances: CODEX_ACCOUNTS.map((instance) => ({ ...instance, enabled: false })),
+      },
+      undefined,
+      [{ provider: "codex", model: GPT_5_5, effort: null, fastMode: null, thinking: null }],
+    );
+    try {
+      expect(page.getByRole("tab", { name: /^Codex/u }).elements()).toHaveLength(0);
+      await expect.element(page.getByRole("menuitem", { name: /Claude Sonnet/u })).toBeVisible();
+      await page.getByRole("tab", { name: "Starred", exact: true }).click();
+      expect(page.getByRole("menuitem", { name: /GPT-5\.5/u }).elements()).toHaveLength(0);
+      expect(readStoredStars()).toHaveLength(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("checks the viewed account silently and offers retry only after failure", async () => {
+    let finish!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const onRefreshModels = vi.fn().mockReturnValueOnce(promise);
+    const screen = await mountPicker({ onRefreshModels });
+    try {
+      await vi.waitFor(() =>
+        expect(onRefreshModels).toHaveBeenCalledExactlyOnceWith("codex", "codex", "if-stale"),
+      );
+      expect(page.getByRole("button", { name: "Refresh models" }).elements()).toHaveLength(0);
+      expect(page.getByRole("status").elements()).toHaveLength(0);
+      await expect.element(page.getByRole("menuitem", { name: /GPT-5.5/u }).first()).toBeVisible();
+      finish();
+      await promise;
+      expect(page.getByRole("button", { name: "Refresh models" }).elements()).toHaveLength(0);
+
+      onRefreshModels.mockRejectedValueOnce(new Error("offline"));
+      await page.getByRole("tab", { name: "Claude" }).click();
+      await expect.element(page.getByText("Couldn’t update models.")).toBeVisible();
+      expect(onRefreshModels).toHaveBeenLastCalledWith("claudeAgent", "claudeAgent", "if-stale");
+      let finishRetry!: () => void;
+      onRefreshModels.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishRetry = resolve;
+        }),
+      );
+      const retryButton = page.getByRole("button", { name: "Retry" });
+      await retryButton.click();
+      await expect.element(retryButton).toBeDisabled();
+      expect(onRefreshModels).toHaveBeenLastCalledWith("claudeAgent", "claudeAgent", "now");
+      finishRetry();
+      await expect.element(retryButton).not.toBeInTheDocument();
+      expect(page.getByRole("status").elements()).toHaveLength(0);
+      await page.getByRole("tab", { name: "Starred" }).click();
+      expect(onRefreshModels).toHaveBeenCalledTimes(3);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("does not restart a pending check when the refresh callback changes", async () => {
+    let finish!: () => void;
+    const onRefreshModels = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const screen = await mountPicker({ onRefreshModels });
+    try {
+      await vi.waitFor(() => expect(onRefreshModels).toHaveBeenCalledTimes(1));
+      await screen.rerender(<Harness onRefreshModels={(...args) => onRefreshModels(...args)} />);
+      expect(page.getByRole("status").elements()).toHaveLength(0);
+      finish();
+      expect(onRefreshModels).toHaveBeenCalledTimes(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
     localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
@@ -593,6 +682,25 @@ describe("ComposerModelPicker with several accounts", () => {
         .element(page.getByRole("tab", { name: "Codex", exact: true }))
         .toHaveAttribute("aria-selected", "true");
       expect(page.getByRole("tab", { name: "Claude" }).elements()).toHaveLength(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("opens other providers for a handoff but keeps the thread's account", async () => {
+    const screen = await mountPicker({
+      ...multiAccount,
+      boundProviderInstance: { provider: "codex", instanceId: "codex" },
+    });
+    try {
+      // Another provider is pickable: choosing it hands the thread off.
+      await expect
+        .element(page.getByRole("tab", { name: "Claude" }))
+        .not.toHaveAttribute("aria-disabled", "true");
+      // A sibling account of the thread's own provider stays closed.
+      await expect
+        .element(page.getByRole("tab", { name: "Codex · Work", exact: true }))
+        .toHaveAttribute("aria-disabled", "true");
     } finally {
       await screen.unmount();
     }

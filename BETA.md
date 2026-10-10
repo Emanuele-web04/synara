@@ -284,10 +284,10 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi), `groups` (Hubs), `tasks` (Tasks),
-`inbox` (Inbox), and `audio-trail` (message trail sound), all gated off in Stable.
-The rail sidebar layout is available in
-both Stable and Beta.
+The list currently contains `groups` (Hubs), gated off in Stable.
+Tasks, Inbox, and Auto-fix CI are available in both apps.
+Oh My Pi, the rail sidebar layout, and message trail
+sound are available in both Stable and Beta.
 
 On Stable, Hubs are inert rather than hidden data: the server refuses the hub
 APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
@@ -299,20 +299,28 @@ chats stay reachable. The gate lives in
 `apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
 `apps/web/src/betaFeatures.ts`.
 
-`tasks` enables the Tasks list and delegation APIs. In Beta, Tasks takes Kanban's
-navigation slot and preserves its saved order and visibility; Stable keeps Kanban.
-A Beta client connected to a server that refuses Tasks returns to Kanban.
+Tasks and its delegation APIs are available in Stable and Beta. Tasks takes
+Kanban's navigation slot and preserves its saved order and visibility; its
+List / Kanban switch keeps the board accessible. A client connected to an older
+server that refuses Tasks returns to Kanban.
 
-`inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
-web hides its rail and sidebar entries and redirects the route, and a saved rail or
-sidebar order that mentions it is ignored there.
+Inbox and its `stats.getRecap` RPC are available in Stable and Beta. Stable shows
+chat attention, running and finished work, review requests, and the activity recap.
+The to-do list, quick-add, delegation card, and **All tasks** link appear only where
+Tasks is available, including Stable and Beta.
 
-`audio-trail` is opt-in under **Settings → Chat → Message trail sound** on macOS
-desktop. It follows system audio (macOS 14.2+), the microphone, or both. The
-desktop IPC handler is authoritative and refuses Stable and other platforms;
-the web hides the selector there and leaves saved preferences inert. Only
-loudness levels are sent to the trail, and the reader stops when the visible
-trail no longer subscribes. First use can request macOS audio access.
+`pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull
+request's menu. The server watches checks for an enabled PR and can ask its
+linked agent chat to address failures in both Stable and Beta. It keeps the chat
+permissions and retry limits, and waits for active work, approvals, and questions.
+This does not enable automatic merging.
+
+Message trail sound is opt-in under **Settings → Chat → Message trail sound**
+on macOS desktop in both Stable and Beta. It follows system audio (macOS 14.2+),
+the microphone, or both. The desktop IPC handler refuses other platforms,
+and the web hides the selector on hosts without a supported desktop bridge.
+Only loudness levels are sent to the trail, and the reader stops when the
+visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 

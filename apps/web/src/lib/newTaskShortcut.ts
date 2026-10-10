@@ -2,13 +2,11 @@
 // Purpose: The "new task" shortcut shared by Kanban and Tasks: ⌘⌥T on macOS, Ctrl+Alt+T
 //          elsewhere — the app's mod convention and its ⌘⌥ "create new X" family.
 // Layer: Web keyboard helper
-// Exports: NEW_TASK_SHORTCUT_LABEL, NEW_TASK_SHORTCUT_PARTS, isNewTaskShortcut
+// Exports: NEW_TASK_SHORTCUT_LABEL, isNewTaskShortcut
 
-import { splitShortcutLabel } from "~/keybindings";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 
 export const NEW_TASK_SHORTCUT_LABEL = isMacNavigatorPlatform() ? "⌥⌘T" : "Ctrl+Alt+T";
-export const NEW_TASK_SHORTCUT_PARTS = splitShortcutLabel(NEW_TASK_SHORTCUT_LABEL);
 
 /** Matched on event.code so it survives Alt remapping the produced character on some layouts. */
 export function isNewTaskShortcut(event: KeyboardEvent): boolean {

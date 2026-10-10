@@ -21,6 +21,7 @@ import {
 
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
+const MAX_REASONING_DETAIL_CHARS = 8_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
 const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
@@ -345,7 +346,9 @@ function buildToolProgressActivityPayload(
   return toActivityPayload({
     itemType: "mcp_tool_call" as const,
     title: "MCP tool call",
-    ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+    ...(event.payload.summary
+      ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
+      : {}),
     data: {
       ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
       ...(event.payload.toolName ? { toolName: event.payload.toolName } : {}),
@@ -656,13 +659,13 @@ export function projectProviderRuntimeActivities(
     typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
       ? { sequence: sessionSequence }
       : {};
-  // Codex and Antigravity only render completed reasoning items with a readable summary.
-  // Empty starts/completions are private/encrypted reasoning boundaries, not
-  // transcript rows. Waiting for the authoritative completion also avoids
-  // per-token activity writes and transcript height churn.
+  // Claude previews are coalesced by ingestion; other providers publish their
+  // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
   if (
-    (event.provider === "codex" || event.provider === "antigravity") &&
-    event.type === "item.completed" &&
+    (((event.provider === "codex" || event.provider === "antigravity") &&
+      event.type === "item.completed") ||
+      (event.provider === "claudeAgent" &&
+        (event.type === "item.updated" || event.type === "item.completed"))) &&
     event.payload.itemType === "reasoning" &&
     event.itemId !== undefined &&
     readableReasoningDetail(event.payload.detail) !== undefined
@@ -678,7 +681,12 @@ export function projectProviderRuntimeActivities(
         summary: "Reasoning trace",
         payload: toActivityPayload({
           ...(event.payload.status ? { status: event.payload.status } : {}),
-          detail: truncateDetail(reasoningDetail, MAX_ACTIVITY_DATA_STRING_CHARS),
+          detail: truncateDetail(
+            reasoningDetail,
+            event.provider === "claudeAgent"
+              ? MAX_REASONING_DETAIL_CHARS
+              : MAX_ACTIVITY_DATA_STRING_CHARS,
+          ),
           data: { toolCallId: reasoningItemId },
         }),
         turnId: toTurnId(event.turnId) ?? null,
@@ -750,7 +758,7 @@ export function projectProviderRuntimeActivities(
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.type === "request.opened" && event.payload.detail
-              ? { detail: truncateDetail(event.payload.detail) }
+              ? { detail: truncateDetail(event.payload.detail, MAX_ACTIVITY_DATA_STRING_CHARS) }
               : {}),
             ...(permissionProfile ? { permissionProfile } : {}),
             ...toolCallPresentation,
@@ -784,6 +792,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             message: truncateDetail(message, 500),
             ...(errorClass ? { class: errorClass } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -799,11 +808,17 @@ export function projectProviderRuntimeActivities(
       // line ("Moved to background: <work>"), not as a runtime warning.
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
+      const isClaudeRetry = event.provider === "claudeAgent" && detailSubtype === "api_retry";
+      const willRetry =
+        event.payload.willRetry === true || asObject(event.payload.detail)?.willRetry === true;
       const isPiInfoNotification =
         event.provider === "pi" &&
         raw?.method === "extension/ui/notify" &&
         asObject(event.payload.detail)?.type === "info";
-      const message = truncateDetail(event.payload.message);
+      // The row already clips the notice to one line via CSS; the hover card can
+      // only reveal what the server stored, so keep the full message (bounded by
+      // the shared activity-data cap) instead of pre-truncating it to fit the row.
+      const message = truncateDetail(event.payload.message, MAX_ACTIVITY_DATA_STRING_CHARS);
       return [
         {
           id: event.eventId,
@@ -812,17 +827,22 @@ export function projectProviderRuntimeActivities(
           kind: "runtime.warning",
           summary: isPiInfoNotification
             ? "Pi extension"
-            : isBackgroundMove
-              ? "Moved to background"
-              : event.provider === "opencode" &&
-                  (nativeType === "session.next.retried" || nativeType === "session.status")
-                ? "OpenCode retrying"
-                : "Runtime warning",
+            : willRetry
+              ? "Provider retrying"
+              : isClaudeRetry
+                ? message
+                : isBackgroundMove
+                  ? "Moved to background"
+                  : event.provider === "opencode" &&
+                      (nativeType === "session.next.retried" || nativeType === "session.status")
+                    ? "OpenCode retrying"
+                    : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
             detail: message,
-            ...(isBackgroundMove
+            ...(willRetry ? { willRetry: true } : {}),
+            ...(isBackgroundMove || isClaudeRetry
               ? { nativeEventType: detailSubtype }
               : nativeType
                 ? { nativeEventType: nativeType }
@@ -986,7 +1006,9 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
-            ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+            ...(event.payload.summary
+              ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
+              : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
@@ -1023,7 +1045,9 @@ export function projectProviderRuntimeActivities(
               ? { isBackgrounded: event.payload.isBackgrounded }
               : {}),
             ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
-            ...(event.payload.error ? { detail: truncateDetail(event.payload.error) } : {}),
+            ...(event.payload.error
+              ? { detail: truncateDetail(event.payload.error, MAX_ACTIVITY_DATA_STRING_CHARS) }
+              : {}),
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
               : {}),
@@ -1167,6 +1191,60 @@ export function projectProviderRuntimeActivities(
       ];
     }
 
+    case "tool.summary": {
+      if (event.provider !== "claudeAgent") return [];
+      const summary = nonEmptyTrimmed(event.payload.summary);
+      if (!summary) return [];
+      const precedingToolUseIds = event.payload.precedingToolUseIds;
+      const lastToolUseId = precedingToolUseIds?.at(-1);
+      return [
+        {
+          id: lastToolUseId
+            ? EventId.makeUnsafe(
+                `provider-tool-summary:${event.provider}:${event.threadId}:${event.turnId ?? "session"}:${lastToolUseId}`,
+              )
+            : event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "tool.summary",
+          summary: "Tool summary",
+          payload: toActivityPayload({
+            detail: truncateDetail(summary, MAX_REASONING_DETAIL_CHARS),
+            ...(precedingToolUseIds ? { data: { precedingToolUseIds } } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "auth.status": {
+      if (event.provider !== "claudeAgent") return [];
+      const failed = Boolean(nonEmptyTrimmed(event.payload.error));
+      if (!failed && event.payload.isAuthenticating === undefined) return [];
+      // Login output and errors can contain credentials or one-time URLs. Only
+      // project the state; raw provider output stays out of the transcript.
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: failed ? "error" : "info",
+          kind: "auth.status",
+          summary: failed
+            ? "Claude authentication needs attention."
+            : event.payload.isAuthenticating
+              ? "Claude authentication started"
+              : "Claude authentication finished",
+          payload: toActivityPayload({
+            provider: event.provider,
+            ...(failed ? { detail: "Check your Claude account in Settings." } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "tool.progress": {
       return [
         {
@@ -1217,6 +1295,7 @@ export function projectProviderRuntimeActivities(
               ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
             ...(errorMessage ? { errorMessage } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1418,6 +1497,13 @@ export function providerActivityUpdateDedupeKey(
 
   const payload = asObject(activity.payload);
   if (activity.kind === "task.progress") {
+    if (
+      (event.type === "item.updated" || event.type === "item.completed") &&
+      event.payload.itemType === "reasoning" &&
+      event.itemId
+    ) {
+      return `${prefix}:reasoning:${event.itemId}`;
+    }
     const taskId = asString(payload?.taskId);
     return taskId ? `${prefix}:${taskId}` : undefined;
   }

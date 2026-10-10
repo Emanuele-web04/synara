@@ -30,8 +30,6 @@ import {
   getDefaultNativeFontSmoothing,
   getCustomModelsByProvider,
   getCustomModelsForProviderInstance,
-  getGitTextGenerationModelOptions,
-  getGitTextGenerationPickerOptions,
   getManageableProviderInstances,
   getProviderInstanceOptions,
   getUnsupportedProviderInstanceOptions,
@@ -51,7 +49,43 @@ import {
   resolveFollowUpDispatchMode,
   resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
+  serverSettingsToAppSettings,
 } from "./appSettings";
+
+describe("provider process priority settings", () => {
+  it("defaults on and forwards explicit opt-out and reset to the server", () => {
+    expect(Schema.decodeSync(AppSettingsSchema)({}).lowerProviderProcessPriority).toBe(true);
+    expect(appSettingsPatchToServerSettingsPatch({ lowerProviderProcessPriority: false })).toEqual({
+      lowerProviderProcessPriority: false,
+    });
+    expect(appSettingsPatchToServerSettingsPatch({ lowerProviderProcessPriority: true })).toEqual({
+      lowerProviderProcessPriority: true,
+    });
+  });
+});
+
+describe("source control writing settings", () => {
+  it("defaults old settings to repository conventions and saves both preferences to the server", () => {
+    const settings = Schema.decodeSync(AppSettingsSchema)({});
+    expect(settings.sourceControlWritingStyle).toBe("repository");
+    expect(settings.sourceControlCustomInstructions).toBe("");
+    expect(
+      appSettingsPatchToServerSettingsPatch({
+        sourceControlWritingStyle: "custom",
+        sourceControlCustomInstructions: "Use short bullets.",
+      }),
+    ).toEqual({
+      sourceControlWritingStyle: "custom",
+      sourceControlCustomInstructions: "Use short bullets.",
+    });
+    expect(
+      appSettingsPatchToServerSettingsPatch({ sourceControlWritingStyle: "conventional" }),
+    ).toEqual({ sourceControlWritingStyle: "conventional" });
+    expect(appSettingsPatchToServerSettingsPatch({ sourceControlCustomInstructions: "" })).toEqual({
+      sourceControlCustomInstructions: "",
+    });
+  });
+});
 
 describe("computer control defaults", () => {
   it("leaves computer control off until a preference is explicitly saved", () => {
@@ -287,72 +321,6 @@ describe("getAppModelOptions", () => {
   });
 });
 
-describe("getGitTextGenerationModelOptions", () => {
-  it("merges codex and OpenCode model options for git writing settings", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: ["custom/codex-model"],
-      customOpenCodeModels: ["openrouter/gpt-oss-120b"],
-      textGenerationModel: "openai/gpt-5",
-      textGenerationProvider: "opencode",
-    });
-
-    expect(options.some((option) => option.slug === "gpt-5.4-mini")).toBe(true);
-    expect(options.some((option) => option.slug === "openai/gpt-5")).toBe(true);
-    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-  });
-
-  it("prefers runtime-discovered OpenCode models for git writing settings", () => {
-    const options = getGitTextGenerationModelOptions(
-      {
-        customCodexModels: [],
-        customOpenCodeModels: [],
-        textGenerationModel: "openrouter/custom-model",
-        textGenerationProvider: "opencode",
-      },
-      {
-        opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
-      },
-    );
-
-    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-    expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
-  });
-
-  it("includes Git text-generation providers and omits chat-only providers", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: [],
-      customClaudeModels: ["claude-opus-4-8"],
-      customGrokModels: ["grok-4.6"],
-      customOpenCodeModels: [],
-      textGenerationModel: "gpt-5.6-luna",
-      textGenerationProvider: "codex",
-    });
-
-    expect(options.some((option) => option.provider === "claudeAgent")).toBe(true);
-    expect(options.some((option) => option.provider === "grok")).toBe(false);
-    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
-    expect(options.some((option) => option.provider === "pi")).toBe(false);
-    expect(options.some((option) => option.provider === "devin")).toBe(false);
-  });
-
-  it("omits chat-only providers that have no Git text-generation backend", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: [],
-      customClaudeModels: ["claude-opus-4-8"],
-      customGrokModels: ["grok-4.6"],
-      customOpenCodeModels: [],
-      textGenerationModel: "gpt-5.6-luna",
-      textGenerationProvider: "codex",
-    });
-
-    expect(options.some((option) => option.provider === "claudeAgent")).toBe(true);
-    expect(options.some((option) => option.provider === "grok")).toBe(false);
-    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
-    expect(options.some((option) => option.provider === "pi")).toBe(false);
-    expect(options.some((option) => option.provider === "devin")).toBe(false);
-  });
-});
-
 describe("isGitTextGenerationSettingsDirty", () => {
   it("compares the normalized provider and model defaults", () => {
     const defaults = AppSettingsSchema.makeUnsafe({});
@@ -367,6 +335,14 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("code review sort", () => {
+  it("defaults existing settings to newest and preserves a stored activity order", () => {
+    const decode = Schema.decodeUnknownSync(AppSettingsSchema);
+    expect(decode({}).githubInboxSort).toBe("created");
+    expect(decode({ githubInboxSort: "updated" }).githubInboxSort).toBe("updated");
+  });
+});
+
 describe("removed settings", () => {
   it("ignores a code review list width stored before widths became fractions", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
@@ -375,13 +351,6 @@ describe("removed settings", () => {
     });
     expect(decoded).not.toHaveProperty("githubInboxListWidth");
     expect(decoded.githubInboxKind).toBe("issue");
-  });
-});
-
-describe("sidebar layout", () => {
-  it("decodes settings without a layout choice as the rail default", () => {
-    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });
-    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("rail");
   });
 });
 
@@ -401,52 +370,6 @@ describe("environment panel defaults", () => {
       showEnvironmentInstructions: true,
       showEnvironmentNotepad: true,
     });
-  });
-
-  it("keeps runtime-discovered git-writing models isolated by provider instance", () => {
-    const options = getGitTextGenerationPickerOptions(
-      {
-        customCodexModels: [],
-        customClaudeModels: [],
-        customCursorModels: [],
-        customAntigravityModels: [],
-        customGrokModels: [],
-        customDroidModels: [],
-        customDevinModels: [],
-        customOpenCodeModels: [],
-        customPiModels: [],
-        customOmpModels: [],
-        codexAccounts: [],
-        codexHomePath: "",
-        selectedCodexAccountId: "default",
-        textGenerationModel: "openrouter/work-model",
-        textGenerationProvider: "opencode",
-        textGenerationProviderInstanceId: "opencode_work",
-        providerInstances: {
-          opencode_work: {
-            driver: "opencode",
-            enabled: true,
-            displayName: "OpenCode Work",
-          },
-        },
-      },
-      {
-        opencode: [{ slug: "openrouter/personal-model", name: "Personal Model" }],
-        opencode_work: [{ slug: "openrouter/work-model", name: "Work Model" }],
-      },
-    );
-
-    const defaultModels = options
-      .filter((entry) => entry.instance.instanceId === "opencode")
-      .map((entry) => entry.option.slug);
-    const workModels = options
-      .filter((entry) => entry.instance.instanceId === "opencode_work")
-      .map((entry) => entry.option.slug);
-
-    expect(defaultModels).toContain("openrouter/personal-model");
-    expect(defaultModels).not.toContain("openrouter/work-model");
-    expect(workModels).toContain("openrouter/work-model");
-    expect(workModels).not.toContain("openrouter/personal-model");
   });
 });
 
@@ -1188,6 +1111,26 @@ describe("mergeProviderStartOptions", () => {
 });
 
 describe("getProviderInstanceOptions", () => {
+  it("disables every account of a globally disabled provider and preserves account switches", () => {
+    const settings = {
+      ...AppSettingsSchema.makeUnsafe({}),
+      disabledProviders: ["codex" as const],
+      codexAccounts: [{ id: "work", label: "Work", homePath: "", shadowHomePath: "" }],
+      providerInstances: {
+        codex_personal: { driver: "codex", enabled: true },
+        codex_off: { driver: "codex", enabled: false },
+      },
+    };
+    const options = getProviderInstanceOptions(settings);
+    expect(
+      options.filter((option) => option.provider === "codex").map((option) => option.enabled),
+    ).toEqual([false, false, false, false]);
+    expect(options.find((option) => option.provider === "claudeAgent")?.enabled).toBe(true);
+    const restored = getProviderInstanceOptions({ ...settings, disabledProviders: [] });
+    expect(restored.find((option) => option.instanceId === "codex_personal")?.enabled).toBe(true);
+    expect(restored.find((option) => option.instanceId === "codex_off")?.enabled).toBe(false);
+  });
+
   it("keeps derived Codex account instance ids schema-valid for long account ids", () => {
     const accountId = `a${"b".repeat(63)}`;
     const options = getProviderInstanceOptions({
@@ -1870,6 +1813,28 @@ describe("provider-indexed custom model settings", () => {
 });
 
 describe("AppSettingsSchema", () => {
+  it("keeps sent-message anchoring enabled for settings saved before the preference existed", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ chatFontSizePx: 17 }))).toMatchObject({
+      anchorSentMessagesToTop: true,
+      chatFontSizePx: 17,
+    });
+  });
+
+  it("preserves disabled sent-message anchoring across persistence until defaults are restored", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const defaults = decode("{}");
+    const settings = applyLocalAppSettingsPatch(defaults, { anchorSentMessagesToTop: false });
+    const restored = decode(Schema.encodeSync(codec)(settings));
+
+    expect(restored).toMatchObject({ anchorSentMessagesToTop: false });
+    expect(applyLocalAppSettingsPatch(restored, defaults)).toMatchObject({
+      anchorSentMessagesToTop: true,
+    });
+  });
+
   it("opens Tasks as the list until the user picks the Kanban view", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
@@ -1935,20 +1900,74 @@ describe("AppSettingsSchema", () => {
       JSON.stringify({
         hiddenProviders: ["some-future-provider", "codex"],
         providerOrder: ["gemini", "codex"],
+        railUsageProviders: ["some-future-provider", "codex", "gemini"],
+        chatFontSizePx: 17,
       }),
     );
 
     expect(decoded).toMatchObject({
       hiddenProviders: ["codex"],
       providerOrder: ["antigravity", "codex"],
+      railUsageProviders: ["codex", "antigravity"],
+      chatFontSizePx: 17,
     });
   });
 
-  it("drops rail and nav ids this build does not know instead of resetting every setting", () => {
+  it("migrates sidebar provider selections to their default account ids", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(normalizeStoredAppSettings(decode("{}")).railUsageInstanceIds).toEqual([
+      "codex",
+      "claudeAgent",
+    ]);
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ railUsageProviders: ["gemini"] })))
+        .railUsageInstanceIds,
+    ).toEqual(["antigravity"]);
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ railUsageProviders: [] })))
+        .railUsageInstanceIds,
+    ).toEqual([]);
+  });
+
+  it("persists two Claude accounts and an explicit empty sidebar selection", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const updated = applyLocalAppSettingsPatch(decode("{}"), {
+      railUsageInstanceIds: ["claudeAgent", "claude_work"],
+    });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(updated))).railUsageInstanceIds,
+    ).toEqual(["claudeAgent", "claude_work"]);
+    const withDisabledChoice = applyLocalAppSettingsPatch(updated, {
+      railUsageInstanceIds: ["claudeAgent", "claude_work", "codex"],
+    });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(withDisabledChoice)))
+        .railUsageInstanceIds,
+    ).toEqual(["claudeAgent", "claude_work", "codex"]);
+    const hidden = applyLocalAppSettingsPatch(updated, { railUsageInstanceIds: [] });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(hidden))).railUsageInstanceIds,
+    ).toEqual([]);
+  });
+
+  it("drops malformed sidebar account ids without resetting unrelated preferences", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
       JSON.stringify({
-        sidebarLayout: "rail",
+        railUsageInstanceIds: ["claude_work", "invalid id", "", "../account"],
+        chatFontSizePx: 17,
+      }),
+    );
+    expect(decoded.railUsageInstanceIds).toEqual(["claude_work"]);
+    expect(decoded.chatFontSizePx).toBe(17);
+  });
+
+  it("drops rail ids this build does not know and ignores the retired classic-sidebar keys", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        sidebarLayout: "classic",
         railItemOrder: ["some-future-item", "kanban", "home"],
         hiddenRailItems: ["some-future-item", "studio"],
         sidebarNavOrder: ["some-future-item", "kanban"],
@@ -1957,12 +1976,13 @@ describe("AppSettingsSchema", () => {
     );
 
     expect(decoded).toMatchObject({
-      sidebarLayout: "rail",
       railItemOrder: ["kanban", "home"],
       hiddenRailItems: ["studio"],
-      sidebarNavOrder: ["kanban"],
-      hiddenSidebarNavItems: [],
     });
+    // Settings saved while the classic sidebar existed still decode; its keys are dropped.
+    expect(decoded).not.toHaveProperty("sidebarLayout");
+    expect(decoded).not.toHaveProperty("sidebarNavOrder");
+    expect(decoded).not.toHaveProperty("hiddenSidebarNavItems");
   });
 
   it("defaults the Environment panel closed and preserves an explicit open preference", () => {
@@ -1972,6 +1992,20 @@ describe("AppSettingsSchema", () => {
     expect(
       decode(JSON.stringify({ environmentPanelDefaultOpen: true })).environmentPanelDefaultOpen,
     ).toBe(true);
+  });
+
+  it("keeps usage popover details collapsed by default and preserves an explicit choice", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode("{}").usageDetailsDefaultOpen).toBe(false);
+    expect(decode("{}").usagePopoverShowResetCredits).toBe(true);
+    expect(decode("{}").usagePopoverShowUsageLines).toBe(true);
+    expect(
+      decode(JSON.stringify({ usagePopoverShowUsageLines: false })).usagePopoverShowUsageLines,
+    ).toBe(false);
+    expect(decode(JSON.stringify({ usageDetailsDefaultOpen: true })).usageDetailsDefaultOpen).toBe(
+      true,
+    );
   });
 
   it("preserves a disabled simulator auto-open preference across settings persistence", () => {
@@ -2039,5 +2073,29 @@ describe("AppSettingsSchema", () => {
     expect(
       normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
     ).not.toHaveProperty("enableAppshots");
+  });
+});
+
+describe("keepAwakeMode mapping", () => {
+  it("defaults to off when absent from stored settings", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(decode("{}").keepAwakeMode).toBe("off");
+  });
+
+  it("maps the server setting into app settings", () => {
+    const mapped = serverSettingsToAppSettings({
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      keepAwakeMode: "always",
+    });
+    expect(mapped.keepAwakeMode).toBe("always");
+  });
+
+  it("maps the app setting into a server patch", () => {
+    expect(appSettingsPatchToServerSettingsPatch({ keepAwakeMode: "agent" })).toEqual({
+      keepAwakeMode: "agent",
+    });
+    expect(
+      appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true }),
+    ).not.toHaveProperty("keepAwakeMode");
   });
 });

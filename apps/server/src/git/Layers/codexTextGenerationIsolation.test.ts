@@ -436,6 +436,7 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
       const candidate = JSON.parse(readFileSync(snapshot!.effectiveAuthFilePath, "utf8"));
       expect(snapshot?.mode).toBe("chatgpt");
       expect(candidate.auth_mode).toBe("chatgptAuthTokens");
+      expect(candidate.last_refresh).toBe(new Date(nowMs).toISOString());
       expect(candidate.tokens).toMatchObject({
         access_token: accessToken,
         id_token: idToken,

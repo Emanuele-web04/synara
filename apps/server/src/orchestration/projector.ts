@@ -499,6 +499,7 @@ export function projectEvent(
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
             spaceId: payload.spaceId ?? null,
+            additionalFolders: payload.additionalFolders ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -608,6 +609,8 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
             archivedAt: null,
             settledAt: null,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             deletedAt: null,
             handoff: payload.handoff,
             messages: [],
@@ -665,6 +668,8 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: payload.deletedAt,
           }),
         })),
@@ -678,6 +683,8 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt,
+              snoozedUntil: null,
+              snoozeReminderAt: null,
               updatedAt: payload.updatedAt ?? archivedAt,
             }),
           };
@@ -767,6 +774,10 @@ export function projectEvent(
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
               ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
+              ...(payload.snoozedUntil !== undefined ? { snoozedUntil: payload.snoozedUntil } : {}),
+              ...(payload.snoozeReminderAt !== undefined
+                ? { snoozeReminderAt: payload.snoozeReminderAt }
+                : {}),
               ...(payload.parentThreadId !== undefined
                 ? { parentThreadId: payload.parentThreadId }
                 : {}),

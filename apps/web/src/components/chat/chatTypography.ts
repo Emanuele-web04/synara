@@ -31,6 +31,17 @@ const USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME = [
   "border-transparent",
 ].join(" ");
 
+// Answered agent questions wear a neutral dashed outline on both bubbles: they are
+// part of the agent's run, not ordinary chat turns. Neutral, not primary, so they
+// never read as the temporary-chat outline above.
+export const USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
+  "border-dashed border-[color:var(--color-border)]",
+  "w-max max-w-[85%] min-w-0",
+].join(" ");
+
 export function userMessageBubbleBorderClassName(isTemporaryThread: boolean): string {
   return isTemporaryThread
     ? USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME

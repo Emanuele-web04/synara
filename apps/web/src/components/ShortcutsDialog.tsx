@@ -15,7 +15,7 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { cn } from "~/lib/utils";
-import { ShortcutKbd } from "./ui/shortcut-kbd";
+import { ShortcutKbd } from "./ui/kbd";
 import {
   buildShortcutSheetSections,
   filterShortcutSheetSections,

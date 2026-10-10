@@ -1,6 +1,6 @@
 // FILE: chatHeaderControls.browser.tsx
 // Purpose: Browser regressions for interactive versus static shared surface-tab chips, the
-//          trailing close treatment and pointer-down selection used by open-thread tabs,
+//          trailing close treatment used by open-thread tabs,
 //          the strip revealing its active tab, and the surface-panel toggle's accessible
 //          name — the needs-you dot is announced as "needs attention", not only shown.
 // Layer: Chat header controls test
@@ -82,48 +82,38 @@ describe("SurfaceTabChip selection", () => {
   });
 });
 
-describe("SurfaceTabChip pointer-down selection", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
-  it("selects once per mouse press and still selects from a click without a press", async () => {
-    const onSelect = vi.fn();
-    await render(
-      <SurfaceTabChip
-        closePlacement="trailing"
-        selectionAria="current"
-        selectOnPointerDown
-        icon={<span aria-hidden>AI</span>}
-        label="Fix reconnect race"
-        onSelect={onSelect}
-      />,
-    );
-    const selectButton = page
-      .getByRole("button", { name: "Fix reconnect race", exact: true })
-      .element() as HTMLButtonElement;
-
-    // A real mouse press: the pointer-down selects, the click ending it must not repeat.
-    await userEvent.click(selectButton);
-    expect(onSelect).toHaveBeenCalledOnce();
-
-    // Keyboard activation fires a click with no pointer-down before it.
-    selectButton.click();
-    expect(onSelect).toHaveBeenCalledTimes(2);
-
-    // A press that leaves the tab never clicks; the next click selects again.
-    selectButton.dispatchEvent(
-      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
-    );
-    selectButton.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
-    selectButton.click();
-    expect(onSelect).toHaveBeenCalledTimes(4);
-  });
-});
-
 describe("SurfaceTabStrip", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("leaves vertical drift within a horizontal gesture alone, then accepts a fresh mouse wheel", async () => {
+    await render(
+      <SurfaceTabStrip style={{ width: 240 }} data-testid="strip">
+        <div style={{ width: 1200, height: 40, flexShrink: 0 }}>Tabs</div>
+      </SurfaceTabStrip>,
+    );
+    const strip = page.getByTestId("strip").element() as HTMLElement;
+
+    // Native input exercises the browser's scrolling, rather than implementing it in a mock.
+    await userEvent.wheel(strip, { delta: { x: 120, y: 0 } });
+    await vi.waitFor(() => expect(strip.scrollLeft).toBe(120));
+
+    // A trackpad can briefly report no horizontal movement while the fingers stay down.
+    // These samples must not become programmatic scrolls in the opposite direction.
+    for (const deltaY of [-24, 16, -8]) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      strip.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+      expect(strip.scrollLeft).toBe(120);
+    }
+
+    await userEvent.wheel(strip, { delta: { x: -60, y: 0 } });
+    await vi.waitFor(() => expect(strip.scrollLeft).toBe(60));
+
+    // After the gesture is quiet, an ordinary vertical mouse wheel still scrolls tabs.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await userEvent.wheel(strip, { delta: { x: 0, y: 40 } });
+    await vi.waitFor(() => expect(strip.scrollLeft).toBe(100));
   });
 
   it("scrolls a newly active tab hidden past the strip's edge into view", async () => {

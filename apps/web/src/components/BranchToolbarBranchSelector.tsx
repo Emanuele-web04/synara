@@ -7,8 +7,7 @@ import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "
 import { pluralize } from "@synara/shared/text";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
-import { CentralIcon } from "~/lib/central-icons";
+import { ChevronDownIcon, GitBranchIcon, PlusIcon } from "~/lib/icons";
 import {
   type CSSProperties,
   useCallback,
@@ -871,13 +870,13 @@ export function BranchToolbarBranchSelector({
       >
         {isPanel ? (
           <EnvironmentRowBody
-            icon={<CentralIcon name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+            icon={<GitBranchIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
             label={triggerLabel}
             trailing={<EnvironmentRowChevron />}
           />
         ) : (
           <>
-            <CentralIcon name="branch" className="size-3.5 shrink-0" />
+            <GitBranchIcon className="size-3.5 shrink-0" />
             <span className="max-w-[240px] truncate">{triggerLabel}</span>
             <ChevronDownIcon className="size-3 opacity-60" />
           </>

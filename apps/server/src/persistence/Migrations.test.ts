@@ -8,6 +8,7 @@ import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
+import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -624,6 +625,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [124, "ProjectionTurnsPendingMessageIndex"],
         [125, "Todos"],
         [126, "ProjectionThreadsSidechatContext"],
+        [127, "ProjectImportHistory"],
+        [128, "HubWork"],
+        [129, "ProjectionThreadsSnooze"],
+        [130, "PullRequestAutoFix"],
+        [131, "ProjectSourceFolders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -702,6 +708,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 124, name: "ProjectionTurnsPendingMessageIndex" },
           { migration_id: 125, name: "Todos" },
           { migration_id: 126, name: "ProjectionThreadsSidechatContext" },
+          { migration_id: 127, name: "ProjectImportHistory" },
+          { migration_id: 128, name: "HubWork" },
+          { migration_id: 129, name: "ProjectionThreadsSnooze" },
+          { migration_id: 130, name: "PullRequestAutoFix" },
+          { migration_id: 131, name: "ProjectSourceFolders" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -860,6 +871,11 @@ agentGatewayRetentionLegacyLayer(
           [124, "ProjectionTurnsPendingMessageIndex"],
           [125, "Todos"],
           [126, "ProjectionThreadsSidechatContext"],
+          [127, "ProjectImportHistory"],
+          [128, "HubWork"],
+          [129, "ProjectionThreadsSnooze"],
+          [130, "PullRequestAutoFix"],
+          [131, "ProjectSourceFolders"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -981,6 +997,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [124, "ProjectionTurnsPendingMessageIndex"],
         [125, "Todos"],
         [126, "ProjectionThreadsSidechatContext"],
+        [127, "ProjectImportHistory"],
+        [128, "HubWork"],
+        [129, "ProjectionThreadsSnooze"],
+        [130, "PullRequestAutoFix"],
+        [131, "ProjectSourceFolders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1043,6 +1064,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [124, "ProjectionTurnsPendingMessageIndex"],
           [125, "Todos"],
           [126, "ProjectionThreadsSidechatContext"],
+          [127, "ProjectImportHistory"],
+          [128, "HubWork"],
+          [129, "ProjectionThreadsSnooze"],
+          [130, "PullRequestAutoFix"],
+          [131, "ProjectSourceFolders"],
         ],
       );
 
@@ -1159,6 +1185,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [124, "ProjectionTurnsPendingMessageIndex"],
         [125, "Todos"],
         [126, "ProjectionThreadsSidechatContext"],
+        [127, "ProjectImportHistory"],
+        [128, "HubWork"],
+        [129, "ProjectionThreadsSnooze"],
+        [130, "PullRequestAutoFix"],
+        [131, "ProjectSourceFolders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1217,6 +1248,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [124, "ProjectionTurnsPendingMessageIndex"],
           [125, "Todos"],
           [126, "ProjectionThreadsSidechatContext"],
+          [127, "ProjectImportHistory"],
+          [128, "HubWork"],
+          [129, "ProjectionThreadsSnooze"],
+          [130, "PullRequestAutoFix"],
+          [131, "ProjectSourceFolders"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -1463,5 +1499,49 @@ divergedBeyondAliasLayer("tracker that diverges beyond a known alias", (it) => {
         migrationEntries.map(([id, name]) => [id, name]),
       );
     }),
+  );
+});
+
+layer("Auto-fix migration replay", (it) => {
+  it.effect(
+    "adds the optional alias to an existing Auto-fix table and preserves its watch on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DROP TABLE IF EXISTS pull_request_auto_fix`;
+        yield* sql`CREATE TABLE pull_request_auto_fix (
+      thread_id TEXT NOT NULL, pull_request_url TEXT NOT NULL, status TEXT NOT NULL,
+      pause_reason TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_handled_head_sha TEXT,
+      updated_at TEXT NOT NULL, PRIMARY KEY (thread_id, pull_request_url)
+    )`;
+        yield* sql`INSERT INTO pull_request_auto_fix (thread_id, pull_request_url, status, attempts, last_handled_head_sha, updated_at)
+      VALUES ('chat', 'https://github.com/o/r/pull/1', 'watching', 1, 'original-head', '2026-10-03T10:00:00.000Z')`;
+        yield* PullRequestAutoFixMigration;
+        yield* PullRequestAutoFixMigration;
+        assert.include(
+          yield* tableColumnNames(sql, "pull_request_auto_fix"),
+          "requested_pull_request_url",
+        );
+        assert.include(
+          yield* tableIndexNames(sql, "pull_request_auto_fix"),
+          "pull_request_auto_fix_active_owner",
+        );
+        const rows = yield* sql<{
+          thread_id: string;
+          status: string;
+          attempts: number;
+          last_handled_head_sha: string;
+          requested_pull_request_url: string | null;
+        }>`SELECT thread_id, status, attempts, last_handled_head_sha, requested_pull_request_url FROM pull_request_auto_fix`;
+        assert.deepStrictEqual(rows, [
+          {
+            thread_id: "chat",
+            status: "watching",
+            attempts: 1,
+            last_handled_head_sha: "original-head",
+            requested_pull_request_url: null,
+          },
+        ]);
+      }),
   );
 });

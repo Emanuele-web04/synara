@@ -9,7 +9,7 @@
 
 import type { ProjectId } from "@synara/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { toastManager } from "~/components/ui/toast";
@@ -17,6 +17,7 @@ import { addChatPullRequestContext } from "~/lib/chatReferences";
 import { gitPreparePullRequestThreadMutationOptions } from "~/lib/gitReactQuery";
 import type { PullRequestContextDraft } from "~/lib/pullRequestContext";
 import { useStore } from "~/store";
+import { useProjectEnvironmentStore } from "~/projectEnvironmentStore";
 import { useHandleNewThread } from "./useHandleNewThread";
 
 export type GitHubItemThreadAction = "send" | "findings" | "conflicts";
@@ -39,6 +40,7 @@ export function useStartGitHubItemThread(input: {
   const { settings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
   const [pendingAction, setPendingAction] = useState<GitHubItemThreadAction | null>(null);
+  const inFlight = useRef(false);
   // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
   // invalidate exactly like every other prepare-thread flow in the app.
   const prepareThreadMutation = useMutation(
@@ -48,10 +50,23 @@ export function useStartGitHubItemThread(input: {
   // Promise chain instead of async/try-finally: React Compiler does not yet support
   // try/finally and would skip this hook.
   const start = (request: StartGitHubItemThreadRequest) => {
-    if (pendingAction !== null) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setPendingAction(request.action);
-    const mode = settings.defaultThreadEnvMode;
+    const mode =
+      useProjectEnvironmentStore.getState().envModeByProjectId[request.projectId] ??
+      settings.defaultThreadEnvMode;
     const pullRequestUrl = request.pullRequestUrl;
+    // A toast stays visible when the initiating menu closes and during navigation.
+    const toastId = toastManager.add({
+      type: "loading",
+      title: pullRequestUrl
+        ? mode === "worktree"
+          ? "Preparing pull request worktree…"
+          : "Checking out pull request branch…"
+        : "Opening chat…",
+      timeout: 0,
+    });
     const targetCwd =
       useStore.getState().projects.find((project) => project.id === request.projectId)?.cwd ??
       undefined;
@@ -63,17 +78,18 @@ export function useStartGitHubItemThread(input: {
           )
         : prepareThreadMutation
             .mutateAsync({ reference: pullRequestUrl, mode, cwd: targetCwd })
-            .then((prepared) =>
-              handleNewThread(request.projectId, {
+            .then((prepared) => {
+              toastManager.update(toastId, { title: "Opening chat…" });
+              return handleNewThread(request.projectId, {
                 branch: prepared.branch,
                 worktreePath: prepared.worktreePath,
-                envMode: mode,
+                envMode: prepared.worktreePath ? "worktree" : "local",
                 // An explicit handoff from the GitHub surface. Reusing the project's existing
                 // draft can leave the user on this route and insert the card into a hidden
                 // composer, making the button appear inert.
                 fresh: true,
-              }),
-            )
+              });
+            })
             .then((threadId) => ({ threadId, checkedOut: true }));
     void createThread
       .then(({ threadId, checkedOut }) => {
@@ -88,6 +104,8 @@ export function useStartGitHubItemThread(input: {
         });
       })
       .finally(() => {
+        toastManager.close(toastId);
+        inFlight.current = false;
         setPendingAction(null);
       });
   };

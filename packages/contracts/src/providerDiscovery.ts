@@ -278,6 +278,8 @@ export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 
 export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  // Interactive reads await revalidation; manual refresh still respects server throttling.
+  refresh: Schema.optional(Schema.Literals(["if-stale", "now"])),
   instanceId: Schema.optional(ProviderInstanceId),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),

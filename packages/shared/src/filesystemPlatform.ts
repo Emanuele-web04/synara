@@ -4,6 +4,7 @@
 
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set(["EINVAL", "ENOTSUP", "EBADF"]);
 
@@ -58,4 +59,16 @@ export function sameFileIdentity(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   return !supportsPosixPermissions(platform) || (left.dev === right.dev && left.ino === right.ino);
+}
+
+/**
+ * macOS launches an `.app` directory when it is opened, so actions that
+ * promise to show one in Finder must reveal it like a file. Other dotted
+ * folder names (`next.js`, `v1.2`) are plain folders and still open.
+ */
+export function isMacAppBundlePath(
+  directoryPath: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "darwin" && path.extname(directoryPath).toLowerCase() === ".app";
 }

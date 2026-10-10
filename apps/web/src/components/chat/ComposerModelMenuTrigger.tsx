@@ -13,7 +13,7 @@ import { ProviderAccountDot } from "../ProviderAccountMark";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Button } from "../ui/button";
 import { MenuTrigger } from "../ui/menu";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { ShortcutKbd } from "../ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
@@ -129,7 +129,7 @@ export function ComposerModelMenuTrigger(props: {
           {label.showsFastBadge ? (
             <FastModeIcon
               aria-hidden="true"
-              className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+              className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"
             />
           ) : null}
           {label.statusLabel ? (
@@ -137,12 +137,20 @@ export function ComposerModelMenuTrigger(props: {
               <>
                 <SettingsIcon
                   aria-hidden="true"
-                  className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+                  className={cn(
+                    "size-3.5 shrink-0 dark:text-muted-foreground/45",
+                    COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                  )}
                 />
                 <span className="sr-only">{label.statusLabel}</span>
               </>
             ) : (
-              <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
+              <span
+                className={cn(
+                  "shrink-0 dark:text-muted-foreground/45",
+                  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                )}
+              >
                 {label.statusLabel}
               </span>
             )
@@ -186,10 +194,7 @@ export function ComposerModelMenuTrigger(props: {
         <TooltipPopup side="top" sideOffset={6} variant="picker">
           <span className="inline-flex items-center gap-2 px-1 py-0.5">
             <span>Change model</span>
-            <ShortcutKbd
-              shortcutLabel={props.shortcutLabel}
-              className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
-            />
+            <ShortcutKbd shortcutLabel={props.shortcutLabel} className="h-4 min-w-4 text-ui-2xs" />
           </span>
         </TooltipPopup>
       ) : null}

@@ -23,7 +23,7 @@ import { dispatchDraftThread, type DraftDispatchProviderInstance } from "./draft
 
 export type KanbanDraftDispatchResult =
   /** The drafted prompt is on its way; runtime events move the card to In Progress. */
-  | { kind: "dispatched" }
+  | { kind: "dispatched"; warning?: string | undefined; deferred?: true | undefined }
   /** The board cannot dispatch this card faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: KanbanDraftOpenThreadReason }
   | { kind: "unavailable" }
@@ -32,6 +32,32 @@ export type KanbanDraftDispatchResult =
 export { resolveDraftThreadDispatchTarget as resolveKanbanDraftDispatchTarget } from "./draftThreadDispatch";
 export type { DraftThreadDispatchTarget as KanbanDraftDispatchTarget } from "./draftThreadDispatch";
 
+export function kanbanDispatchFailureToast(
+  result: Exclude<KanbanDraftDispatchResult, { kind: "dispatched" }>,
+  errorTitle: string,
+): { type: "info" | "error"; title: string; description: string } {
+  if (result.kind === "open-thread") {
+    return {
+      type: "info",
+      title: "Finish this draft in the chat",
+      description:
+        result.reason === "empty"
+          ? "Nothing to send yet. Write the prompt in the composer."
+          : result.reason === "worktree-pending"
+            ? "Open the chat to create the worktree with the normal send flow."
+            : "Open the chat to continue this task.",
+    };
+  }
+  if (result.kind === "unavailable") {
+    return {
+      type: "error",
+      title: "Not connected",
+      description: "Reconnect to the server before sending drafts.",
+    };
+  }
+  return { type: "error", title: errorTitle, description: result.message };
+}
+
 export async function dispatchKanbanDraftCard(input: {
   card: KanbanCard;
   defaultProvider: ProviderKind;
@@ -39,6 +65,19 @@ export async function dispatchKanbanDraftCard(input: {
   providerOptions?: ProviderStartOptions | undefined;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
 }): Promise<KanbanDraftDispatchResult> {
+  return dispatchKanbanDraftCardInternal(input, false);
+}
+
+export function dispatchKanbanDraftCardAsGoal(
+  input: Parameters<typeof dispatchKanbanDraftCard>[0],
+): Promise<KanbanDraftDispatchResult> {
+  return dispatchKanbanDraftCardInternal(input, true);
+}
+
+async function dispatchKanbanDraftCardInternal(
+  input: Parameters<typeof dispatchKanbanDraftCard>[0],
+  sendAsGoal: boolean,
+): Promise<KanbanDraftDispatchResult> {
   const { card } = input;
   if (resolveDraftDropAction(card) !== "dispatch") {
     return {
@@ -46,15 +85,18 @@ export async function dispatchKanbanDraftCard(input: {
       reason: resolveKanbanDraftOpenThreadReason(card) ?? "not-draft",
     };
   }
-  return dispatchKanbanDraftThread({
-    threadId: card.threadId,
-    projectId: card.projectId,
-    thread: card.thread,
-    defaultProvider: input.defaultProvider,
-    assistantDeliveryMode: input.assistantDeliveryMode,
-    providerOptions: input.providerOptions,
-    providerInstances: input.providerInstances,
-  });
+  return dispatchKanbanDraftThreadInternal(
+    {
+      threadId: card.threadId,
+      projectId: card.projectId,
+      thread: card.thread,
+      defaultProvider: input.defaultProvider,
+      assistantDeliveryMode: input.assistantDeliveryMode,
+      providerOptions: input.providerOptions,
+      providerInstances: input.providerInstances,
+    },
+    sendAsGoal,
+  );
 }
 
 interface KanbanDraftDispatchInput {
@@ -77,10 +119,25 @@ interface KanbanDraftDispatchInput {
 export function dispatchKanbanDraftThread(
   input: KanbanDraftDispatchInput,
 ): Promise<KanbanDraftDispatchResult> {
+  return dispatchKanbanDraftThreadInternal(input, false);
+}
+
+export function dispatchKanbanDraftThreadAsGoal(
+  input: KanbanDraftDispatchInput,
+): Promise<KanbanDraftDispatchResult> {
+  return dispatchKanbanDraftThreadInternal(input, true);
+}
+
+function dispatchKanbanDraftThreadInternal(
+  input: KanbanDraftDispatchInput,
+  sendAsGoal: boolean,
+): Promise<KanbanDraftDispatchResult> {
   const { threadId, projectId } = input;
   const kanbanUi = useKanbanUiStore.getState();
   return dispatchDraftThread({
     ...input,
+    sendAsGoal,
+    promptAsFile: true,
     hooks: {
       // Optimistic move: show the card In Progress before any round-trip. Provider
       // session init can take seconds; runtime events confirm the move (reconciliation

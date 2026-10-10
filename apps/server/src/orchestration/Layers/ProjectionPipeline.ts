@@ -113,7 +113,6 @@ type ProjectorName =
 
 interface ProjectorDefinition {
   readonly name: ProjectorName;
-  readonly phase: "hot" | "deferred";
   readonly shouldApply?: (event: OrchestrationEvent) => boolean;
   readonly replayFilter: {
     readonly eventTypes: ReadonlyArray<OrchestrationEvent["type"]>;
@@ -613,6 +612,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
             settledAt: null,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             deletedAt: null,
           });
           return;
@@ -688,6 +689,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
               ...(event.payload.settledAt !== undefined
                 ? { settledAt: event.payload.settledAt }
+                : {}),
+              ...(event.payload.snoozedUntil !== undefined
+                ? { snoozedUntil: event.payload.snoozedUntil }
+                : {}),
+              ...(event.payload.snoozeReminderAt !== undefined
+                ? { snoozeReminderAt: event.payload.snoozeReminderAt }
                 : {}),
               ...(event.payload.parentThreadId !== undefined
                 ? { parentThreadId: event.payload.parentThreadId }
@@ -888,6 +895,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             deletedAt: event.payload.deletedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: event.payload.deletedAt,
           }));
         }
@@ -898,6 +907,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             archivedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: event.payload.updatedAt ?? archivedAt,
           }));
         }
@@ -914,7 +925,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       }
     });
 
-  // Keep denormalized shell summary work out of the live transcript projector path.
+  // Shell notifications read these persisted fields at the published event's
+  // sequence. Commit their indexed summaries after the other hot projectors.
   const applyThreadShellSummariesProjection: ProjectorDefinition["apply"] = (event) =>
     Effect.gen(function* () {
       switch (event.type) {
@@ -930,7 +942,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               humanMessageAt === null
                 ? (thread.latestHumanMessageAt ?? null)
                 : maxIso(thread.latestHumanMessageAt ?? null, humanMessageAt),
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }));
         }
 
@@ -944,7 +956,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const nextRow = yield* withRefreshedActionablePlanSummary({
             thread: {
               ...existingRow.value,
-              updatedAt: event.occurredAt,
+              updatedAt: maxIso(existingRow.value.updatedAt, event.occurredAt),
             },
             projectionThreadProposedPlanRepository,
           });
@@ -964,7 +976,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             thread: {
               ...existingRow.value,
               latestTurnId: null,
-              updatedAt: event.occurredAt,
+              updatedAt: maxIso(existingRow.value.updatedAt, event.occurredAt),
             },
             projectionThreadMessageRepository,
             projectionThreadProposedPlanRepository,
@@ -988,7 +1000,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...(event.type === "thread.session-set" &&
               isSidechatThread(existingRow.value) &&
               !existingRow.value.sidechatExpiredAt
-                ? { sidechatLastActivityAt: event.payload.session.updatedAt }
+                ? {
+                    sidechatLastActivityAt: maxIso(
+                      existingRow.value.sidechatLastActivityAt ?? null,
+                      event.payload.session.updatedAt,
+                    ),
+                  }
                 : {}),
               latestTurnId:
                 event.type === "thread.session-set"
@@ -1830,8 +1847,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               }
               nextRow = {
                 ...existingRow.value,
-                status: "uncertain",
-                resolvedAt: null,
+                status: "confirmed",
+                resolvedAt: activity.createdAt,
               };
             } else {
               if (existingRow.value.status !== "responding") {
@@ -1847,12 +1864,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               if (existingRow.value.responseCommandId !== responseCommandId) {
                 return;
               }
-              const nextStatus =
-                extractApprovalFailureSettlementStatus(activity.payload) ?? "uncertain";
+              const isStale = createStalePendingInteractionMatcher([activity])(existingRow.value);
+              const nextStatus = isStale
+                ? "confirmed"
+                : (extractApprovalFailureSettlementStatus(activity.payload) ?? "uncertain");
               nextRow = {
                 ...existingRow.value,
                 status: nextStatus,
-                resolvedAt: null,
+                resolvedAt: isStale ? activity.createdAt : null,
               };
             }
           } else {
@@ -1946,49 +1965,42 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectors: ReadonlyArray<ProjectorDefinition> = [
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.projects,
-      phase: "hot",
       shouldApply: (event) => PROJECT_EVENT_TYPES.has(event.type),
       replayFilter: { eventTypes: [...PROJECT_EVENT_TYPES] },
       apply: applyProjectsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
-      phase: "hot",
       shouldApply: (event) => THREAD_MESSAGE_PROJECTION_EVENT_TYPES.has(event.type),
       replayFilter: { eventTypes: [...THREAD_MESSAGE_PROJECTION_EVENT_TYPES] },
       apply: applyThreadMessagesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
-      phase: "hot",
       shouldApply: (event) => THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES.has(event.type),
       replayFilter: { eventTypes: [...THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES] },
       apply: applyThreadProposedPlansProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
-      phase: "hot",
       shouldApply: (event) => THREAD_ACTIVITY_PROJECTION_EVENT_TYPES.has(event.type),
       replayFilter: { eventTypes: [...THREAD_ACTIVITY_PROJECTION_EVENT_TYPES] },
       apply: applyThreadActivitiesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threads,
-      phase: "hot",
       shouldApply: shouldApplyThreadsProjection,
       replayFilter: { eventTypes: [...THREAD_PROJECTION_EVENT_TYPES] },
       apply: applyThreadsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
-      phase: "hot",
       shouldApply: (event) => THREAD_SESSION_PROJECTION_EVENT_TYPES.has(event.type),
       replayFilter: { eventTypes: [...THREAD_SESSION_PROJECTION_EVENT_TYPES] },
       apply: applyThreadSessionsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
-      phase: "hot",
       shouldApply: shouldApplyThreadTurnsProjection,
       replayFilter: {
         eventTypes: [...THREAD_TURN_PROJECTION_EVENT_TYPES, "thread.message-sent"],
@@ -1997,14 +2009,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
-      phase: "hot",
       shouldApply: () => false,
       replayFilter: { eventTypes: [] },
       apply: applyCheckpointsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.pendingInteractions,
-      phase: "hot",
       shouldApply: shouldApplyPendingInteractionsProjection,
       replayFilter: {
         eventTypes: [...PENDING_INTERACTION_EVENT_TYPES],
@@ -2014,7 +2024,6 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
-      phase: "deferred",
       shouldApply: shouldApplyDeferredThreadShellSummary,
       replayFilter: { eventTypes: [...DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES] },
       apply: applyThreadShellSummariesProjection,
@@ -2028,14 +2037,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   // off the slower full-projector pass used by thread and runtime events.
   const selectProjectorsForEvent = (
     event: OrchestrationEvent,
-    phase?: ProjectorDefinition["phase"],
   ): ReadonlyArray<ProjectorDefinition> => {
     const filterProjectors = (candidates: ReadonlyArray<ProjectorDefinition>) =>
-      candidates.filter(
-        (projector) =>
-          (phase === undefined || projector.phase === phase) &&
-          (projector.shouldApply?.(event) ?? true),
-      );
+      candidates.filter((projector) => projector.shouldApply?.(event) ?? true);
 
     return filterProjectors(
       PROJECT_EVENT_TYPES.has(event.type) && projectsProjector ? [projectsProjector] : projectors,
@@ -2119,35 +2123,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           ),
         );
 
-  // A phase whose projectors all rejected the event still has to keep its cursor
-  // moving, because the snapshot sequence exposed to clients is the minimum of
-  // the phase cursors (see ProjectionSnapshotQuery.computeSnapshotSequence) and
-  // a lagging cursor would make clients replay push events they already have.
-  // The write is one idempotent upsert, so it does not need — and must not pay
-  // for — an explicit transaction: SQLite already commits a lone statement
-  // atomically. The deferred phase rejects every assistant delta, so this is the
-  // difference between one transaction per streamed token and one statement.
-  const advancePhaseCursorOnly = (event: OrchestrationEvent, phaseCursor: ProjectorName) =>
-    projectionStateRepository.upsert({
-      projector: phaseCursor,
-      lastAppliedSequence: event.sequence,
-      updatedAt: event.occurredAt,
-    });
-
   const runProjectorsForEvent = (
     selectedProjectors: ReadonlyArray<ProjectorDefinition>,
     event: OrchestrationEvent,
     phaseCursor?: ProjectorName,
   ) =>
     Effect.gen(function* () {
-      if (selectedProjectors.length === 0) {
-        if (phaseCursor !== undefined) {
-          yield* advancePhaseCursorOnly(event, phaseCursor);
-        }
-        return;
-      }
       const attachmentSideEffects = yield* sql.withTransaction(
-        runProjectorsForEventCore(selectedProjectors, event, phaseCursor),
+        settleShellCursorInCurrentTransaction(event).pipe(
+          Effect.andThen(runProjectorsForEventCore(selectedProjectors, event, phaseCursor)),
+        ),
       );
       yield* runProjectorAttachmentSideEffects(selectedProjectors, event, attachmentSideEffects);
     }).pipe(
@@ -2171,11 +2156,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     );
 
   const initializeHotProjectionCursor = Effect.gen(function* () {
-    const hotProjectorNames = new Set(
-      projectors
-        .filter((projector) => projector.phase === "hot")
-        .map((projector) => projector.name),
-    );
+    const hotProjectorNames = new Set(projectors.map((projector) => projector.name));
     const stateRows = yield* projectionStateRepository.listAll();
     const sourceRows = stateRows.filter((row) =>
       hotProjectorNames.has(row.projector as ProjectorName),
@@ -2217,7 +2198,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     }
 
     const laggingProjectors = projectors.filter((projector) => {
-      if (projector.phase !== "hot") {
+      // This projector used to be deferred. Its older cursor can cover accepted
+      // user/plan events, so promotion must replay it rather than infer rejection.
+      if (projector.name === ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries) {
         return false;
       }
       const projectorState = stateByProjector.get(projector.name);
@@ -2373,7 +2356,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectMetadataEvent: OrchestrationProjectionPipelineShape["projectMetadataEvent"] = (
     event,
   ) =>
-    applyShellMetadataProjection(event).pipe(
+    settleShellCursorInCurrentTransaction(event).pipe(
+      Effect.andThen(applyShellMetadataProjection(event)),
       Effect.flatMap(() =>
         advanceProjectMetadataSnapshotState({
           event,
@@ -2383,49 +2367,45 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       Effect.asVoid,
     );
 
-  // The deferred phase rejects every streamed assistant delta, so for those
-  // events its only work is moving its cursor (see advancePhaseCursorOnly). Do
-  // that inside the hot transaction, which already dirties the projection_state
-  // page, instead of paying a second commit per token chunk after it. Only a
-  // cursor that is caught up with the hot phase may be moved here: a lagging
-  // cursor belongs to a failed or in-flight deferred catch-up that must still
-  // replay the events it is behind on.
-  const settleDeferredPhaseInHotTransaction = (event: OrchestrationEvent) =>
-    Effect.gen(function* () {
-      if (selectProjectorsForEvent(event, "deferred").length > 0) return false;
-      const rows = yield* sql<{ readonly projector: string }>`
-        UPDATE projection_state
-        SET last_applied_sequence = ${event.sequence}, updated_at = ${event.occurredAt}
-        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
-          AND last_applied_sequence < ${event.sequence}
-          AND last_applied_sequence >= (
-            SELECT last_applied_sequence FROM projection_state
-            WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.hot}
-          )
-        RETURNING projector
-      `.pipe(
-        Effect.mapError(
-          toPersistenceSqlError("ProjectionPipeline.settleDeferredPhaseInHotTransaction:query"),
-        ),
-      );
-      return rows.length > 0;
-    });
+  // The historical shell cursor is still part of snapshot/replay state. Move
+  // it in the same transaction as every live hot/metadata event. A legacy cursor
+  // behind the hot fence must replay accepted summaries at bootstrap; an empty
+  // event must not fast-forward that pending work.
+  const settleShellCursorInCurrentTransaction = (event: OrchestrationEvent) =>
+    sql`
+      INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
+      SELECT ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}, ${event.sequence}, ${event.occurredAt}
+      WHERE COALESCE((SELECT last_applied_sequence FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}), 0) >=
+        COALESCE((SELECT last_applied_sequence FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.hot}), 0)
+      ON CONFLICT (projector) DO UPDATE SET
+        last_applied_sequence = MAX(projection_state.last_applied_sequence, excluded.last_applied_sequence),
+        updated_at = CASE WHEN excluded.last_applied_sequence > projection_state.last_applied_sequence
+          THEN excluded.updated_at ELSE projection_state.updated_at END
+    `.pipe(
+      Effect.asVoid,
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionPipeline.settleShellCursorInCurrentTransaction:query"),
+      ),
+    );
 
   const projectHotEventInCurrentTransaction: OrchestrationProjectionPipelineShape["projectHotEventInCurrentTransaction"] =
     (event) =>
-      settleDeferredPhaseInHotTransaction(event).pipe(
-        Effect.flatMap((deferredPhaseSettled) =>
+      settleShellCursorInCurrentTransaction(event).pipe(
+        Effect.andThen(
           runProjectorsForHotEvent(
-            selectProjectorsForEvent(event, "hot"),
+            selectProjectorsForEvent(event),
             event,
             ORCHESTRATION_PROJECTOR_NAMES.hot,
-          ).pipe(Effect.as({ deferredPhaseSettled })),
+          ),
         ),
+        Effect.asVoid,
       );
 
   const projectHotEventInOwnTransaction = (event: OrchestrationEvent) =>
     runProjectorsForEvent(
-      selectProjectorsForEvent(event, "hot"),
+      selectProjectorsForEvent(event),
       event,
       ORCHESTRATION_PROJECTOR_NAMES.hot,
     ).pipe(
@@ -2438,24 +2418,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
-  const projectDeferredEvent: OrchestrationProjectionPipelineShape["projectDeferredEvent"] = (
-    event,
-  ) =>
-    runProjectorsForEvent(
-      selectProjectorsForEvent(event, "deferred"),
-      event,
-      ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
-    ).pipe(
-      Effect.catchTag("SqlError", (sqlError) =>
-        Effect.fail(
-          toPersistenceSqlError("ProjectionPipeline.projectDeferredEvent:query")(sqlError),
-        ),
-      ),
-    );
-
   const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
     projectHotEventInOwnTransaction(event).pipe(
-      Effect.andThen(projectDeferredEvent(event)),
       Effect.flatMap(() =>
         PROJECT_EVENT_TYPES.has(event.type) ? advanceSnapshotProjectorStates(event) : Effect.void,
       ),
@@ -2540,7 +2504,6 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     bootstrap,
     projectEvent,
     projectHotEventInCurrentTransaction,
-    projectDeferredEvent,
     projectMetadataEvent,
   } satisfies OrchestrationProjectionPipelineShape;
 });

@@ -62,7 +62,6 @@ import {
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveGitRepoUiState,
-  resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
   resolveSettledThreadBranchMismatch,
@@ -1613,63 +1612,6 @@ describe("deriveComposerSendState", () => {
   });
 });
 
-describe("resolveProjectScriptTerminalTarget", () => {
-  it("reuses the base terminal only when no terminal is open or running", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "new-terminal",
-      hasRunningTerminal: false,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: false,
-      terminalId: "default",
-    });
-  });
-
-  it("creates a fresh terminal when a live terminal could keep stale cwd or env", () => {
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "visible-script-terminal",
-        hasRunningTerminal: false,
-        terminalOpen: true,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "visible-script-terminal",
-    });
-
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "running-script-terminal",
-        hasRunningTerminal: true,
-        terminalOpen: false,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "running-script-terminal",
-    });
-  });
-
-  it("honors explicit requests for a new terminal", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "forced-script-terminal",
-      hasRunningTerminal: false,
-      preferNewTerminal: true,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "forced-script-terminal",
-    });
-  });
-});
-
 describe("shouldRenderProviderHealthBanner", () => {
   it("does not show chat provider health while a terminal thread is active", () => {
     expect(
@@ -1957,6 +1899,25 @@ describe("runWorktreeCreationFlow", () => {
       flow,
     };
   }
+
+  it("does not start Git if setup was resolved during task registration", async () => {
+    const resolution = createWorktreeSetupResolution();
+    resolution.resolve("cancel");
+    let starts = 0;
+    const result = await runWorktreeCreationFlow({
+      progressId: "cancelled-before-git",
+      resolution,
+      subscribeToProgress: () => () => undefined,
+      onCreationStep: () => undefined,
+      startCreation: async () => {
+        starts += 1;
+        return { worktree: { path: "/unused" } };
+      },
+      removeWorktree: async () => undefined,
+    });
+    expect(result).toEqual({ outcome: "resolved" });
+    expect(starts).toBe(0);
+  });
 
   it("advances steps only for this creation's phase-started events", async () => {
     const harness = startFlowHarness();

@@ -1,12 +1,9 @@
 // FILE: sidebarNavOrdering.ts
-// Purpose: Keeps primary sidebar navigation order and visibility stable, including Inbox
-//          availability and the shared Kanban/Tasks slot.
+// Purpose: Names the primary navigation destinations and resolves the shared Kanban/Tasks slot.
 // Layer: Web settings utility
-// Exports: nav item ids, default order, normalization helpers, and the Kanban/Tasks slot.
+// Exports: nav item ids and the Kanban/Tasks slot resolver.
 
-import { normalizeIdOrder, normalizeKnownIds, placeNewIdAfter } from "./lib/orderedIds";
-
-/** Inbox is Beta-only: the sidebar drops it where INBOX_ON is off. */
+/** The rail drops Inbox only where INBOX_ON is off. */
 export const SIDEBAR_NAV_ITEM_IDS = [
   "newThread",
   "inbox",
@@ -17,26 +14,6 @@ export const SIDEBAR_NAV_ITEM_IDS = [
 ] as const;
 
 export type SidebarNavItemId = (typeof SIDEBAR_NAV_ITEM_IDS)[number];
-
-export const DEFAULT_SIDEBAR_NAV_ORDER: readonly SidebarNavItemId[] = SIDEBAR_NAV_ITEM_IDS;
-
-const SIDEBAR_NAV_ITEM_ID_SET: ReadonlySet<SidebarNavItemId> = new Set(SIDEBAR_NAV_ITEM_IDS);
-
-export function isSidebarNavItemId(value: string): value is SidebarNavItemId {
-  return SIDEBAR_NAV_ITEM_ID_SET.has(value as SidebarNavItemId);
-}
-
-export function normalizeHiddenSidebarNavItems(
-  hiddenItems: ReadonlyArray<string>,
-): SidebarNavItemId[] {
-  return normalizeKnownIds(hiddenItems, isSidebarNavItemId);
-}
-
-export function normalizeSidebarNavOrder(order: ReadonlyArray<string>): SidebarNavItemId[] {
-  const normalized = normalizeIdOrder(order, DEFAULT_SIDEBAR_NAV_ORDER, isSidebarNavItemId);
-  // Inbox shipped after users saved an order: it joins under New thread, as by default.
-  return placeNewIdAfter(normalized, order, "inbox", "newThread");
-}
 
 /**
  * Kanban and Tasks share one slot in the nav and rail (see tasksSurface.ts for which one

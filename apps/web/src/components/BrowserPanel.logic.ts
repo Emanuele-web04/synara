@@ -284,8 +284,9 @@ export interface BrowserChromeStatus {
 // the tab strip overrides the height and type size for compact chrome.
 export const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-ui leading-snug";
 // The address field's filled look, reused by the active tab so the selected tab visually
-// matches the search input (same border tone + faint fill).
-export const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME = "border-border bg-background/70";
+// matches the capsule groups (same border tone + translucent button material).
+export const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME =
+  "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)]";
 
 export function browserAnnotationDraftFromCommittedEvent(
   event: Extract<BrowserAnnotationEvent, { kind: "committed" }>,

@@ -36,6 +36,8 @@ import humanMessageSchema from "./107_ProjectionThreadsHumanMessage.ts";
 import workerMonitoringLivenessSchema from "./117_WorkerMonitoringLiveness.ts";
 import providerInstanceSessionSchema from "./118_ProjectionThreadSessionProviderInstance.ts";
 import sidechatContextSchema from "./126_ProjectionThreadsSidechatContext.ts";
+import threadSnoozeSchema from "./129_ProjectionThreadsSnooze.ts";
+import projectSourceFoldersSchema from "./131_ProjectSourceFolders.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),
@@ -69,7 +71,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         // already has migration 98 applied and a projection.threads cursor at
         // the journal head.
         yield* runMigrations({ toMigrationInclusive: 98 });
-        // Current projector readers require later additive message schemas.
+        // Current projector readers require later additive schemas.
         // Install them without changing the migration-99 tracker state under test.
         yield* messageTextChunkSchema;
         yield* messageTurnBoundarySchema;
@@ -79,6 +81,8 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         yield* workerMonitoringLivenessSchema;
         yield* providerInstanceSessionSchema;
         yield* sidechatContextSchema;
+        yield* threadSnoozeSchema;
+        yield* projectSourceFoldersSchema;
 
         const threadId = ThreadId.makeUnsafe("thread-099");
         const projectId = ProjectId.makeUnsafe("project-099");

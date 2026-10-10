@@ -10,7 +10,11 @@ import "~/index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ProjectAgentConfig, ProjectId, ThreadId, TurnId } from "@synara/contracts";
-import type { ProjectAgentOverview, ProjectAgentStreamEvent } from "@synara/contracts";
+import type {
+  ProjectAgentOverview,
+  ProjectAgentStreamEvent,
+  ProjectAgentSummary,
+} from "@synara/contracts";
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -25,7 +29,7 @@ const harness = vi.hoisted(() => {
   const api = {
     projectAgent: {
       getOverview: vi.fn(),
-      listSummaries: vi.fn(async () => ({ summaries: [] })),
+      listSummaries: vi.fn(async () => ({ summaries: [] as ProjectAgentSummary[] })),
       listTasks: vi.fn(async () => ({ tasks: [] })),
       listActivity: vi.fn(async () => ({ activity: [], nextCursor: null })),
       listDocuments: vi.fn(async () => ({ documents: [] })),
@@ -492,5 +496,57 @@ describe("ProjectPanel polished sections", () => {
       expect(document.body.textContent).toContain("Idle one");
     });
     expect(document.querySelector('[role="img"][aria-label*="working now"]')).toBeNull();
+  });
+
+  it("moves a worker into and out of Waiting on you from live summaries while its overview stays unchanged", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    const worker = makeThreadSummary(ThreadId.makeUnsafe("worker-recovery"), {
+      title: "Recover login",
+    });
+    harness.api.projectAgent.getOverview.mockResolvedValue(overview({ workers: [] }));
+    harness.api.projectAgent.listThreadIndex.mockResolvedValue(threadIndexEntries([worker.id]));
+    const initialSummary: ProjectAgentSummary = {
+      projectId: PROJECT_ID,
+      configured: true,
+      coordinatorThreadId: COORDINATOR_THREAD_ID,
+      coordinatorName: "alpha Coordinator",
+      coordinatorIcon: null,
+      coordinatorColor: null,
+      coordinatorStatus: "idle",
+      revision: 1,
+      memberThreadIds: [worker.id],
+      needsYouThreadIds: [],
+    };
+    harness.api.projectAgent.listSummaries.mockResolvedValue({ summaries: [initialSummary] });
+    setSidebarSummaries([worker]);
+    const screen = await renderPanel();
+    const workerSection = () =>
+      [...document.querySelectorAll("section")].find((section) =>
+        section.textContent?.includes(worker.title),
+      );
+    try {
+      await vi.waitFor(() => expect(workerSection()?.textContent).toContain("Idle"));
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      harness.api.projectAgent.listSummaries.mockResolvedValue({
+        summaries: [{ ...initialSummary, needsYouThreadIds: [worker.id] }],
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(workerSection()?.textContent).toContain("Waiting on you"), {
+        timeout: 1_000,
+      });
+
+      harness.api.projectAgent.listSummaries.mockResolvedValue({ summaries: [initialSummary] });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(workerSection()?.textContent).toContain("Idle"), {
+        timeout: 1_000,
+      });
+      expect(harness.api.projectAgent.getOverview).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+      harness.api.projectAgent.listSummaries.mockResolvedValue({ summaries: [] });
+    }
   });
 });

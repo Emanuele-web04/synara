@@ -117,6 +117,7 @@ import {
   normalizeCommandPath,
   parseGenericCliVersion,
   resolveProviderMaintenanceCapabilitiesEffect,
+  withOpenCodeMaintenanceVersion,
   type PackageManagedProviderMaintenanceDefinition,
 } from "../providerMaintenance";
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
@@ -720,7 +721,19 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     };
   }
   if (result.code === 0) {
-    return { status: "ready", authStatus: "authenticated" };
+    // Current Codex CLI prints login status as plain text (on stderr), not JSON.
+    // Only explicit login methods establish voice capability; unknown successful
+    // output remains authenticated without advertising ChatGPT-only dictation.
+    const voiceTranscriptionAvailable = /^logged in using chatgpt\s*$/m.test(lowerOutput)
+      ? true
+      : /^logged in using an api key\b/m.test(lowerOutput)
+        ? false
+        : undefined;
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(voiceTranscriptionAvailable !== undefined ? { voiceTranscriptionAvailable } : {}),
+    };
   }
 
   const detail = detailFromResult(result);
@@ -756,12 +769,12 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 const runProviderCommand = (
   executable: string,
   args: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv,
+  options: { readonly env: NodeJS.ProcessEnv; readonly cwd?: string | undefined },
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = makeEffectProcessCommand(executable, args, {
-      env,
+      ...options,
       // Health probes are non-interactive. Leaving stdin as a pipe can keep CLIs
       // such as Antigravity waiting even after a read-only subcommand has finished.
       stdin: "ignore",
@@ -786,7 +799,8 @@ const runCodexCommand = (
   executable = "codex",
   env: NodeJS.ProcessEnv = providerCommandEnv(CODEX_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  // Account health must not merge project config from the desktop's working directory.
+  runProviderCommand(executable, args, { env, cwd: env.CODEX_HOME }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -799,7 +813,7 @@ const runClaudeCommand = (
   executable = "claude",
   env: NodeJS.ProcessEnv = buildClaudeProcessEnv(),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -866,7 +880,11 @@ function isAccountIsolatedProviderDriver(
   provider: ProviderChildKind,
 ): provider is Extract<ProviderProcessEnvDriver, ProviderChildKind> {
   return (
-    provider === "cursor" || provider === "grok" || provider === "opencode" || provider === "pi"
+    provider === "cursor" ||
+    provider === "grok" ||
+    provider === "opencode" ||
+    provider === "pi" ||
+    provider === "omp"
   );
 }
 
@@ -899,7 +917,7 @@ const runGrokCommand = (
   executable = "grok",
   env: NodeJS.ProcessEnv = providerCommandEnv(GROK_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -912,7 +930,7 @@ const runOpenCodeCommand = (
   executable = "opencode",
   env: NodeJS.ProcessEnv = providerCommandEnv(OPENCODE_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -926,7 +944,7 @@ const runCursorCommand = (
   env: NodeJS.ProcessEnv = buildCursorAgentHeadlessEnv(),
 ) => {
   const command = buildCursorAgentCommand(executable, args);
-  return runProviderCommand(command.command, command.args, env).pipe(
+  return runProviderCommand(command.command, command.args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${command.command} ENOENT`))
@@ -1012,7 +1030,7 @@ const runPiCommand = (
   executable = "pi",
   env: NodeJS.ProcessEnv = providerCommandEnv(PI_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1020,8 +1038,12 @@ const runPiCommand = (
     ),
   );
 
-const runOmpCommand = (args: ReadonlyArray<string>, executable = "omp") =>
-  runProviderCommand(executable, args, providerCommandEnv(OMP_PROVIDER)).pipe(
+const runOmpCommand = (
+  args: ReadonlyArray<string>,
+  executable = "omp",
+  env: NodeJS.ProcessEnv = providerCommandEnv(OMP_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1034,7 +1056,7 @@ const runAntigravityCommand = (
   executable = "agy",
   env: NodeJS.ProcessEnv = providerCommandEnv(ANTIGRAVITY_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1652,7 +1674,7 @@ const runDroidCommand = (
   args: ReadonlyArray<string>,
   executable = "droid",
   env: NodeJS.ProcessEnv = providerCommandEnv(DROID_PROVIDER),
-) => runProviderCommand(executable, args, env);
+) => runProviderCommand(executable, args, { env });
 
 export const makeCheckDroidProviderStatus = (
   binaryPath?: string,
@@ -1972,13 +1994,24 @@ export const checkPiProviderStatus = (
 export const checkOmpProviderStatus = (
   agentDir?: string,
   binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined);
+    const probeEnvResult = tryMakeProviderProbeEnv(OMP_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(OMP_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
+    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined, {
+      env: probeEnv,
+      ...(probeEnv.HOME ? { homeDir: probeEnv.HOME } : {}),
+    });
 
     const versionProbe = yield* probeProviderCliVersion(
-      runOmpCommand(["--version"], executable),
+      runOmpCommand(["--version"], executable, probeEnv),
       DEFAULT_TIMEOUT_MS,
     );
 
@@ -2057,6 +2090,10 @@ export const checkAntigravityProviderStatus = (
     const probeEnv = {
       ...makeProviderProbeEnv(ANTIGRAVITY_PROVIDER, environment),
       NO_BROWSER: "true",
+      // Health probes are read-only. Prevent Antigravity from starting its
+      // detached updater, which can flash a console on Windows when Synara
+      // refreshes provider status (#1029).
+      AGY_CLI_DISABLE_AUTO_UPDATE: "true",
     };
     const versionProbe = yield* probeProviderCliVersion(
       runAntigravityCommand(["--version"], executable, probeEnv),
@@ -2406,7 +2443,7 @@ export const makeCheckDevinProviderStatus = (
     const env = makeProviderProbeEnv(DEVIN_PROVIDER, environment);
 
     const versionProbe = yield* probeProviderCliVersion(
-      runProviderCommand(executable, ["--version"], env),
+      runProviderCommand(executable, ["--version"], { env }),
       DEFAULT_TIMEOUT_MS,
     );
 
@@ -3011,10 +3048,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         function* (target: {
           readonly provider: ProviderKind;
           readonly instanceId?: ProviderInstanceId | undefined;
+          readonly installedVersion?: string | null | undefined;
         }) {
           const settings = yield* serverSettings.getSettings;
           const instance = resolveProviderInstanceTarget(settings, target);
           if (!instance || !instance.enabled) {
+            return makeManualProviderMaintenanceCapabilities(target.provider);
+          }
+          if (target.provider === "opencode" && readInstanceConfigString(instance, "serverUrl")) {
             return makeManualProviderMaintenanceCapabilities(target.provider);
           }
           const configuredBinaryPath = readInstanceConfigString(instance, "binaryPath");
@@ -3048,11 +3089,26 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 { cause },
               ),
           });
-          return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: binaryPath ?? null,
-            env: updateEnv,
-            platform: process.platform,
-          }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+          let installedVersion = target.installedVersion;
+          if (target.provider === "opencode" && installedVersion === undefined) {
+            const probe = yield* probeProviderCliVersion(
+              runOpenCodeCommand(["--version"], binaryPath ?? "opencode", updateEnv),
+              OPENCODE_HEALTH_TIMEOUT_MS,
+            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+            if (probe.outcome !== "success")
+              return makeManualProviderMaintenanceCapabilities(target.provider);
+            installedVersion = parseGenericCliVersion(
+              `${probe.result.stdout}\n${probe.result.stderr}`,
+            );
+          }
+          return yield* resolveProviderMaintenanceCapabilitiesEffect(
+            withOpenCodeMaintenanceVersion(definition, installedVersion),
+            {
+              binaryPath: binaryPath ?? null,
+              env: updateEnv,
+              platform: process.platform,
+            },
+          ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
         },
       );
 
@@ -3149,6 +3205,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return getProviderMaintenanceCapabilities({
               provider,
               instanceId: providerStatusInstanceKey(status),
+              installedVersion: status.version ?? null,
             }).pipe(
               Effect.flatMap((capabilities) =>
                 enrichProviderStatusWithVersionAdvisory(status, capabilities),
@@ -3312,11 +3369,19 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               ),
             );
           }
-          case "omp":
+          case "omp": {
+            const ompOptions = providerStartOptionsFromInstance(instance)?.omp;
             return checkProviderInstanceWhenEnabled(
               instance,
-              checkOmpProviderStatus(readInstanceConfigString(instance, "agentDir"), binaryPath),
+              checkOmpProviderStatus(
+                readInstanceConfigString(instance, "agentDir"),
+                binaryPath,
+                ompOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
             );
+          }
         }
       };
 

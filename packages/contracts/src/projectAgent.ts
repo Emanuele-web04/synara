@@ -19,6 +19,7 @@ import {
   TurnId,
 } from "./baseSchemas";
 import { ModelSelection, ProviderStartOptions } from "./orchestration";
+import { HubWorkItem } from "./hubWork";
 
 export const PROJECT_AGENT_DOCUMENT_MAX_BYTES = 256 * 1024;
 export const PROJECT_AGENT_CONTEXT_BUDGET_CHARS = 32_000;
@@ -434,6 +435,7 @@ export const ProjectAgentOverview = Schema.Struct({
   /** Durable managed-worker rows so the Overview can bucket threads (a
    * `needsYou` worker lands in "Waiting on you") and render worker state. */
   workers: Schema.optional(Schema.Array(ProjectManagedWorker)),
+  hubWorkItems: Schema.optional(Schema.Array(HubWorkItem)),
 });
 export type ProjectAgentOverview = typeof ProjectAgentOverview.Type;
 
@@ -480,6 +482,7 @@ export const ProjectAgentSummary = Schema.Struct({
   /** Threads that belong to the group (same union as the panel Overview):
    * task-assigned + indexed + the coordinator thread itself. */
   memberThreadIds: Schema.optional(Schema.Array(ThreadId)),
+  needsYouThreadIds: Schema.optional(Schema.Array(ThreadId)),
   /** Projects linked into the group as repositories. */
   linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
   /** An active or paused goal exists — completed/stopped goals do not count. */
@@ -831,6 +834,11 @@ export const ProjectAgentSubscribeInput = Schema.Struct({
 export type ProjectAgentSubscribeInput = typeof ProjectAgentSubscribeInput.Type;
 
 export const ProjectAgentStreamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("work-item-upserted"),
+    projectId: ProjectId,
+    workItem: HubWorkItem,
+  }),
   Schema.Struct({
     type: Schema.Literal("snapshot"),
     overview: ProjectAgentOverview,

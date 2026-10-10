@@ -3,6 +3,8 @@
 // Layer: Route/UI support
 // Exports: section ids, nav items, and search normalization helper
 
+import { KEYBINDINGS_ICON_NAME } from "~/lib/icons";
+
 export const SETTINGS_SECTION_IDS = [
   "general",
   "profile",
@@ -108,8 +110,8 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     id: "shortcuts",
     group: "personal",
     label: "Keybindings",
-    description: "Capture, customize, and add shortcuts for every Synara command.",
-    icon: "shortcut",
+    description: "Change, add, or remove the shortcut for every Synara command.",
+    icon: KEYBINDINGS_ICON_NAME,
     eyebrow: "Key bindings",
   },
   {
@@ -157,7 +159,8 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     id: "models",
     group: "coding",
     label: "Models & writing",
-    description: "Choose the model used for Git writing and add custom model slugs.",
+    description:
+      "Choose the source control writing style, Git writing model, and custom model slugs.",
     icon: "brain",
     eyebrow: "Model configuration",
   },

@@ -6,10 +6,14 @@
 // Layer: GitHub inbox presentation
 // Exports: GitHubInboxFilterBar
 
-import type { GitHubInboxState, ProjectId } from "@synara/contracts";
+import type { GitHubInboxSort, ProjectId } from "@synara/contracts";
 import type { ReactNode } from "react";
 
-import type { GitHubInboxInvolvementFilter, GitHubInboxKindFilter } from "~/appSettings";
+import type {
+  GitHubInboxInvolvementFilter,
+  GitHubInboxKindFilter,
+  GitHubInboxStateFilter,
+} from "~/appSettings";
 import {
   CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
@@ -44,9 +48,11 @@ import {
   EllipsisIcon,
   FilterIcon,
   FoldersIcon,
+  GitMergedSimpleIcon,
   IssueClosedIcon,
   IssueOpenedIcon,
   RefreshCwIcon,
+  SortIcon,
   TagIcon,
   XIcon,
 } from "~/lib/icons";
@@ -60,13 +66,19 @@ import {
 } from "./githubInbox.logic";
 
 const STATE_OPTIONS: ReadonlyArray<{
-  value: GitHubInboxState;
+  value: GitHubInboxStateFilter;
   label: string;
   icon: typeof IssueOpenedIcon;
 }> = [
   { value: "open", label: "Open", icon: IssueOpenedIcon },
-  // Closed includes merged pull requests.
+  // Closed includes merged pull requests; Merged shows only those.
   { value: "closed", label: "Closed", icon: IssueClosedIcon },
+  { value: "merged", label: "Merged", icon: GitMergedSimpleIcon },
+];
+
+const SORT_OPTIONS: ReadonlyArray<{ value: GitHubInboxSort; label: string }> = [
+  { value: "created", label: "Newest" },
+  { value: "updated", label: "Recently updated" },
 ];
 
 const INVOLVEMENT_OPTIONS: ReadonlyArray<{
@@ -171,6 +183,8 @@ function ActiveFilterChip({
 
 export function GitHubInboxFilterBar({
   filters,
+  sort,
+  onSortChange,
   query,
   kindCounts,
   projectOptions,
@@ -188,6 +202,8 @@ export function GitHubInboxFilterBar({
   onPasteReference,
 }: {
   filters: GitHubInboxFilters;
+  sort: GitHubInboxSort;
+  onSortChange: (sort: GitHubInboxSort) => void;
   query: string;
   /** Rows each kind would show under the other filters; null while the list loads. */
   kindCounts: GitHubInboxKindCounts | null;
@@ -198,7 +214,7 @@ export function GitHubInboxFilterBar({
   refreshBlockedReason: string | null;
   onQueryChange: (query: string) => void;
   onKindChange: (kind: GitHubInboxKindFilter) => void;
-  onStateChange: (state: GitHubInboxState) => void;
+  onStateChange: (state: GitHubInboxStateFilter) => void;
   onInvolvementChange: (involvement: GitHubInboxInvolvementFilter) => void;
   onProjectIdsChange: (projectIds: ProjectId[]) => void;
   onLabelsChange: (labels: string[]) => void;
@@ -207,6 +223,7 @@ export function GitHubInboxFilterBar({
   /** Opens the item a pasted link or #number names; false leaves the paste as search text. */
   onPasteReference: (text: string) => boolean;
 }) {
+  const sortLabel = SORT_OPTIONS.find((option) => option.value === sort)!.label;
   const involvement =
     INVOLVEMENT_OPTIONS.find((option) => option.value === filters.involvement) ??
     INVOLVEMENT_OPTIONS[0]!;
@@ -234,6 +251,35 @@ export function GitHubInboxFilterBar({
               <Button
                 variant="ghost"
                 size="icon-xs"
+                aria-label={`Sort: ${sortLabel}`}
+                title={`Sort: ${sortLabel}`}
+              />
+            }
+          >
+            <SortIcon className="size-3.5" />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="end" className="min-w-44">
+            <MenuGroup>
+              <MenuGroupLabel>Sort by</MenuGroupLabel>
+              <MenuRadioGroup
+                value={sort}
+                onValueChange={(value) => onSortChange(value as GitHubInboxSort)}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <MenuRadioItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </ComposerPickerMenuPopup>
+        </Menu>
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 aria-label={menuFilterCount > 0 ? `Filter (${menuFilterCount} active)` : "Filter"}
                 title="Filter"
                 className={cn("relative", menuFilterCount > 0 && "text-[var(--color-text-accent)]")}
@@ -253,7 +299,7 @@ export function GitHubInboxFilterBar({
               <MenuGroupLabel>Status</MenuGroupLabel>
               <MenuRadioGroup
                 value={filters.state}
-                onValueChange={(value) => onStateChange(value as GitHubInboxState)}
+                onValueChange={(value) => onStateChange(value as GitHubInboxStateFilter)}
               >
                 {STATE_OPTIONS.map((option) => (
                   <MenuRadioItem key={option.value} value={option.value}>
@@ -394,7 +440,10 @@ export function GitHubInboxFilterBar({
         {menuFilterCount > 0 ? (
           <div className="flex flex-wrap items-center gap-1" aria-label="Active filters">
             {filters.state !== "open" ? (
-              <ActiveFilterChip label="Closed" onRemove={() => onStateChange("open")} />
+              <ActiveFilterChip
+                label={filters.state === "merged" ? "Merged" : "Closed"}
+                onRemove={() => onStateChange("open")}
+              />
             ) : null}
             {filters.involvement !== "everything" ? (
               <ActiveFilterChip

@@ -100,6 +100,8 @@ export interface GitManagerShape {
    */
   readonly resolvePullRequest: (
     input: GitPullRequestRefInput,
+    /** Only polling callers opt into the background read gate. */
+    options?: { readonly background?: boolean },
   ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
 
   /**

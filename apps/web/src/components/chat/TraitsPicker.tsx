@@ -37,7 +37,7 @@ import {
 } from "./composerTraits";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { ShortcutKbd } from "../ui/kbd";
 
 export function defaultAgentForProvider(provider: ProviderKind): string | null {
   if (provider === "opencode") return "build";
@@ -664,10 +664,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change effort, context, and speed</span>
-                <ShortcutKbd
-                  shortcutLabel={shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
-                />
+                <ShortcutKbd shortcutLabel={shortcutLabel} className="h-4 min-w-4 text-ui-2xs" />
               </span>
             </TooltipPopup>
           ) : null}

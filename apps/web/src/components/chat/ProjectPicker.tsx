@@ -1,6 +1,6 @@
 // FILE: ProjectPicker.tsx
-// Purpose: Folder selector beneath the new-chat composer that groups active folders and home
-//          folders while always creating chats as rows inside the shared Chats container.
+// Purpose: Folder selector beneath the new-chat composer for registered projects, home folders,
+//          and the current draft's selected workspace. Other tasks' worktrees stay with those tasks.
 // Layer: Chat / empty-state entrypoint
 
 import {
@@ -16,17 +16,14 @@ import {
   type ReactElement,
 } from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
-import { useAppSettings } from "../../appSettings";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
-import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
-import { PlusIcon, XIcon } from "~/lib/icons";
+import { PlusIcon, XIcon, FolderIcon } from "~/lib/icons";
 import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
 import { useVoidSpace } from "~/voidSpaceStore";
 import { cn } from "~/lib/utils";
-import { FolderClosed } from "../FolderClosed";
 import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 import { SpaceIcon } from "../SpaceIcon";
 import { PickerPanelShell } from "./PickerPanelShell";
@@ -174,14 +171,6 @@ export const ProjectPicker = memo(function ProjectPicker({
   const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
-  const { settings } = useAppSettings();
-  const hideAutomationRunThreads = !settings.showAutomationRunThreads;
-  const sidebarThreads = useStore(
-    useMemo(
-      () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads }),
-      [hideAutomationRunThreads],
-    ),
-  );
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   const voidSpace = useVoidSpace();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
@@ -199,12 +188,11 @@ export const ProjectPicker = memo(function ProjectPicker({
   const activeFolderOptions = useMemo(() => {
     const seen = new Set<string>();
     const nextOptions: ActiveFolderOption[] = [];
-    const projectById = new Map(projects.map((project) => [project.id, project] as const));
     const getSpaceName = (spaceId: SpaceId | null) => spaceDisplayName(spaceId, spaces, voidSpace);
 
     for (const project of projects.filter((project) => project.kind === "project")) {
       const folderName = basenameOfPath(project.cwd) ?? project.folderName ?? project.name;
-      if (!folderName || folderName.startsWith(".") || seen.has(project.cwd)) {
+      if (!folderName || seen.has(project.cwd)) {
         continue;
       }
       seen.add(project.cwd);
@@ -223,38 +211,11 @@ export const ProjectPicker = memo(function ProjectPicker({
       });
     }
 
-    if (!isProjectSelectionMode) {
-      for (const thread of sidebarThreads) {
-        const workspaceRoot = thread.worktreePath ?? null;
-        const folderName = basenameOfPath(workspaceRoot);
-        if (
-          !workspaceRoot ||
-          !folderName ||
-          folderName.startsWith(".") ||
-          seen.has(workspaceRoot)
-        ) {
-          continue;
-        }
-        seen.add(workspaceRoot);
-        const spaceId = projectById.get(thread.projectId)?.spaceId ?? null;
-        nextOptions.push({
-          projectId: null,
-          appearance: null,
-          spaceId,
-          spaceName: getSpaceName(spaceId),
-          cwd: workspaceRoot,
-          primaryLabel: folderName,
-          secondaryLabel: null,
-        });
-      }
-    }
-
     const selectedFolderName = basenameOfPath(selectedWorkspaceRoot);
     if (
       !isProjectSelectionMode &&
       selectedWorkspaceRoot &&
       selectedFolderName &&
-      !selectedFolderName.startsWith(".") &&
       !seen.has(selectedWorkspaceRoot)
     ) {
       nextOptions.unshift({
@@ -264,20 +225,12 @@ export const ProjectPicker = memo(function ProjectPicker({
         spaceName: getSpaceName(activeSpaceId),
         cwd: selectedWorkspaceRoot,
         primaryLabel: selectedFolderName,
-        secondaryLabel: null,
+        secondaryLabel: selectedWorkspaceRoot,
       });
     }
 
     return nextOptions;
-  }, [
-    activeSpaceId,
-    isProjectSelectionMode,
-    projects,
-    selectedWorkspaceRoot,
-    sidebarThreads,
-    spaces,
-    voidSpace,
-  ]);
+  }, [activeSpaceId, isProjectSelectionMode, projects, selectedWorkspaceRoot, spaces, voidSpace]);
   const activeFolderPathSet = useMemo(
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
     [activeFolderOptions],
@@ -563,7 +516,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               />
             </span>
           ) : (
-            <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
+            <FolderIcon className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
           )}
           <span className="min-w-0 truncate">{folder.primaryLabel}</span>
           {folder.secondaryLabel ? (
@@ -615,7 +568,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                   isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
                 }
                 icon={
-                  <FolderClosed
+                  <FolderIcon
                     className={cn(
                       "size-3.5 transition-opacity duration-150 ease-out motion-reduce:transition-none",
                       canResetFromTrigger && "group-hover/project-picker-trigger:opacity-0",
@@ -766,7 +719,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                     )}
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
+                      <FolderIcon className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
                       <span className="truncate">{entry.name}</span>
                     </div>
                   </ComboboxItem>

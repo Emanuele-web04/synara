@@ -20,7 +20,7 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { GITHUB_INBOX_STATES } from "./githubInboxQueryOptions";
 
-// List caches are the GitHub inbox lists (`["github-inbox", "list", state]`), which hold pull
+// List caches are the GitHub inbox lists (`["github-inbox", "list", state, sort]`), which hold pull
 // requests and issues. Pins apply to both kinds; action fields only ever match pull requests
 // because GitHub numbers both kinds from one sequence per repository.
 export type PullRequestListCacheEntry = {
@@ -55,7 +55,7 @@ export type ActionListCacheRollback = {
   previousFields: PullRequestActionListPatch;
 };
 
-/** One inbox list per state; project and every other filter are applied on the client. */
+/** Mutation scopes span every sort of a state; filters are applied on the client. */
 export type PullRequestListQueryScope = {
   state: GitHubInboxState;
 };

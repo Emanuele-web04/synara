@@ -161,6 +161,8 @@ describe("GroupSettingsDialog", () => {
     await renderDialog();
 
     await page.getByLabelText("Hub goal").fill("grow the library");
+    await page.getByRole("combobox", { name: "Parallel threads" }).click();
+    await page.getByRole("option", { name: "3", exact: true }).click();
     await page.getByRole("button", { name: "Save", exact: true }).click();
 
     await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
@@ -170,6 +172,7 @@ describe("GroupSettingsDialog", () => {
     expect(payload.expectedRevision).toBe(4);
     expect(payload.captureEnabled).toBe(true);
     expect(payload.autoMemoryEnabled).toBe(true);
+    expect(payload.limits).toMatchObject({ maxConcurrentWorkers: 3 });
     expect(payload.coordinatorModelSelection).toEqual({
       provider: "codex",
       model: "gpt-5-codex",
@@ -181,6 +184,46 @@ describe("GroupSettingsDialog", () => {
     expect(typeof payload.requestId).toBe("string");
     // Name unchanged: no rename command dispatched.
     expect(api.orchestration.dispatchCommand).not.toHaveBeenCalled();
+  });
+
+  it("shows the effective ceiling for a legacy limit while preserving the saved value until explicitly changed", async () => {
+    const existing = overview();
+    const legacy = overview({
+      config: {
+        ...existing.config!,
+        limits: { ...existing.config!.limits, maxConcurrentWorkers: 16 },
+      },
+    });
+    api.projectAgent.getOverview.mockResolvedValue(legacy);
+    api.projectAgent.configure.mockResolvedValue(legacy);
+    const screen = await renderDialog();
+    try {
+      await vi.waitFor(
+        () =>
+          expect(
+            document.querySelector('[role="combobox"][aria-label="Parallel threads"]')?.textContent,
+          ).toBe("8"),
+        { timeout: 1_000 },
+      );
+      await page.getByLabelText("Hub goal").fill("keep existing limits");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+      const unchanged = api.projectAgent.configure.mock.calls[0]?.[0] as {
+        limits: { maxConcurrentWorkers: number };
+      };
+      expect(unchanged.limits.maxConcurrentWorkers).toBe(16);
+
+      await page.getByRole("combobox", { name: "Parallel threads" }).click();
+      await page.getByRole("option", { name: "8", exact: true }).click();
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledTimes(2));
+      const explicitlyChanged = api.projectAgent.configure.mock.calls[1]?.[0] as {
+        limits: { maxConcurrentWorkers: number };
+      };
+      expect(explicitlyChanged.limits.maxConcurrentWorkers).toBe(8);
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("clears the footer save error when the draft changes", async () => {

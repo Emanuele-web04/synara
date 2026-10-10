@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
-import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import type { ProjectId, ResolvedKeybindingsConfig, ThreadId, TurnId } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { useNavigate } from "@tanstack/react-router";
@@ -17,6 +17,8 @@ import {
 } from "react";
 import type { EditorLeaveGuard } from "../EditorWorkspaceView";
 
+import { closeTerminalSurface } from "../../hooks/useTerminalSurfaceController";
+import { dockTerminalThreadId } from "../../lib/dockTerminalScope";
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
@@ -69,6 +71,7 @@ import {
   useSplitViewStore,
 } from "../../splitViewStore";
 import { useStore } from "../../store";
+import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import {
   createProjectSelector,
   createSidebarThreadSummariesSelector,
@@ -76,7 +79,6 @@ import {
   createThreadWorkspaceMetadataSelector,
 } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
-import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import {
   ChatMountLoader,
   DeferredChatView,
@@ -99,6 +101,7 @@ import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
 import { routeSingleDockPaneOpenRequest } from "./dockPaneOpenRequest";
 import {
@@ -110,7 +113,7 @@ import {
   pullRequestPaneTabLabel,
 } from "../pullRequest/pullRequestDetail.logic";
 import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneStateIcon";
-import { RouteInsetSurface } from "../RouteInsetSurface";
+import { ChatPaneBody, KeptChatPane } from "./ChatPaneKeepAlive";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { WorkspaceSearchPalette, type WorkspaceSearchPaletteMode } from "../WorkspaceSearchPalette";
@@ -120,9 +123,12 @@ import {
   resolveRoutePanelBootstrap,
   stripEditorViewSearchParams,
 } from "../../routes/-chatThreadRoute.logic";
+import { isShortcutDispatchSuspended, resolveShortcutCommand } from "~/keybindings";
+import { isTerminalFocused } from "~/lib/terminalFocus";
 import { cn } from "~/lib/utils";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EditorWorkspaceView = lazy(() =>
   import("../EditorWorkspaceView").then((module) => ({
     default: module.EditorWorkspaceView,
@@ -192,6 +198,7 @@ export function SingleChatSurface(props: {
   const openPane = useRightDockStore((store) => store.openPane);
   const toggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
   const closePane = useRightDockStore((store) => store.closePane);
+  const movePane = useRightDockStore((store) => store.movePane);
   const setActivePane = useRightDockStore((store) => store.setActivePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   const updatePane = useRightDockStore((store) => store.updatePane);
@@ -216,6 +223,7 @@ export function SingleChatSurface(props: {
     threadWorkingDirectory:
       threadWorkspaceMetadata.workingDirectory ?? draftThread?.workingDirectory ?? null,
   });
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const dockGitRepositoryQuery = useQuery(gitBranchesQueryOptions(workspaceRoot));
   const hasGitRepository = dockGitRepositoryQuery.data?.isRepo === true;
   const dockDiffTotals = useRepoDiffTotals({
@@ -383,28 +391,32 @@ export function SingleChatSurface(props: {
 
   // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the
   // snippet (content) search. Registered with capture so it wins over page-level
-  // defaults (print, browser find) while the chat surface is mounted.
+  // defaults (print, browser find) while the chat surface is mounted. Resolve through
+  // the configured keybindings so Settings and keybindings.json can rebind or unassign
+  // these actions, while the shipped !terminalFocus guard keeps shell input intact.
+  const shortcutConfig = useQuery(serverConfigQueryOptions());
+  const searchKeybindings = shortcutConfig.data?.keybindings ?? EMPTY_KEYBINDINGS;
   useEffect(() => {
     // Editor view returns before rendering the palette, so leave its shortcuts
     // available to the editor instead of swallowing them invisibly.
     if (editorViewActive) return;
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.repeat || event.altKey) return;
-      const isPrimaryModifier = event.ctrlKey || event.metaKey;
-      if (!isPrimaryModifier) return;
-      const key = event.key.toLowerCase();
-      if (key !== "p" && key !== "f") return;
-      if (key === "f" && !event.shiftKey) return;
-      if (key === "p" && event.shiftKey) return;
+      if (event.repeat || isShortcutDispatchSuspended()) return;
+      const command = resolveShortcutCommand(event, searchKeybindings, {
+        context: { terminalFocus: isTerminalFocused() },
+      });
+      const mode =
+        command === "search.files" ? "files" : command === "search.content" ? "snippets" : null;
+      if (mode === null) return;
       event.preventDefault();
       event.stopPropagation();
-      setSearchPaletteMode(key === "p" ? "files" : "snippets");
+      setSearchPaletteMode(mode);
       setSearchPaletteOpen(true);
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [editorViewActive]);
+  }, [editorViewActive, searchKeybindings]);
 
   const handleOpenEditorView = () => {
     void navigate({
@@ -828,7 +840,6 @@ export function SingleChatSurface(props: {
   const sourceSidechats = useStore(
     useMemo(() => createSidechatSummariesForSourceSelector(props.threadId), [props.threadId]),
   );
-  const shortcutConfig = useQuery(serverConfigQueryOptions());
   useSidechatShortcut({
     threadId: props.threadId,
     enabled: props.search.view !== "editor",
@@ -929,6 +940,7 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
             <DockTerminalPane
+              paneId={pane.id}
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
@@ -1134,13 +1146,22 @@ export function SingleChatSurface(props: {
       <div
         className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
       >
-        <ChatPaneDropOverlay
-          canDropInDirection={allowAnySplitDirection}
-          excludedThreadIds={excludedThreadIds}
-          onDrop={handleDropThread}
-          className="flex h-full min-h-0 min-w-0 flex-1"
-        >
-          <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
+        {/* Kept alive across the swap with SplitChatSurface: the pane showing this thread
+            there takes the same chat over instead of mounting a new one. */}
+        <KeptChatPane slotKey={SINGLE_CHAT_PANE_SCOPE_ID} threadId={props.threadId}>
+          <ChatPaneBody
+            fileOpener={dockFileOpener}
+            dropOverlay={{
+              canDropInDirection: allowAnySplitDirection,
+              excludedThreadIds,
+              onDrop: handleDropThread,
+              className: "flex h-full min-h-0 min-w-0 flex-1",
+            }}
+            inset={{
+              className: CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
+              surfaceClassName: CHAT_BACKGROUND_CLASS_NAME,
+            }}
+          >
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
@@ -1173,8 +1194,8 @@ export function SingleChatSurface(props: {
                 }}
               />
             ) : null}
-          </RouteInsetSurface>
-        </ChatPaneDropOverlay>
+          </ChatPaneBody>
+        </KeptChatPane>
         <RightDock
           state={dockState}
           minWidth={SINGLE_PANEL_MIN_WIDTH}
@@ -1193,6 +1214,24 @@ export function SingleChatSurface(props: {
           {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => {
+            if (dockState.panes.find((pane) => pane.id === paneId)?.kind === "terminal") {
+              void closeTerminalSurface(
+                dockTerminalThreadId(props.threadId),
+                appSettings.confirmTerminalTabClose,
+                paneId,
+              )
+                .then((closed) => {
+                  if (closed) closePane(props.threadId, paneId);
+                })
+                .catch((error: unknown) => {
+                  toastManager.add({
+                    type: "error",
+                    title: "Unable to close terminal",
+                    description: error instanceof Error ? error.message : "Please try again.",
+                  });
+                });
+              return;
+            }
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind !== "explorer") {
               closePane(props.threadId, paneId);
               return;
@@ -1201,6 +1240,7 @@ export function SingleChatSurface(props: {
               if (saved) closePane(props.threadId, paneId);
             });
           }}
+          onMovePane={(paneId, overPaneId) => movePane(props.threadId, paneId, overPaneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}
           onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}
@@ -1211,6 +1251,7 @@ export function SingleChatSurface(props: {
           mode={searchPaletteMode}
           onOpenChange={setSearchPaletteOpen}
           cwd={workspaceRoot}
+          homeDir={homeDir}
           onOpenFile={handleOpenWorkspaceSearchFile}
           onOpenDirectory={handleOpenWorkspaceSearchDirectory}
         />
