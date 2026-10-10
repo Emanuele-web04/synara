@@ -1,9 +1,9 @@
 import { ThreadId } from "@synara/contracts";
 import type { RefObject } from "react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { collapseExpandedComposerCursor, detectComposerTrigger } from "../../composer-logic";
 import { resolveComputerControlMode } from "../../computerControlMode";
-import { type QueuedComposerTurn, useComposerDraftStore } from "../../composerDraftStore";
+import { type QueuedComposerTurn } from "../../composerDraftStore";
 import { cloneComposerImageAttachment } from "../../lib/composerSend";
 import {
   armQueuedComposerSteerGate,
@@ -18,7 +18,6 @@ import {
   runLockedQueuedComposerAutoDispatch,
   tryBeginQueuedComposerAutoDispatch,
 } from "../../lib/queuedComposerDrain";
-import { deriveQueuedComposerPause } from "../../lib/queuedComposerPause";
 import { derivePhase } from "../../session-logic";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
@@ -151,32 +150,6 @@ export function useChatQueuedTurns({
 }: ChatQueuedTurnsInput) {
   const hasPendingCacheReview =
     hasPendingCacheReviewInput === true || activeThread?.claudeCacheReview != null;
-  const queueResumedTurnId = useComposerDraftStore(
-    (store) => store.draftsByThreadId[threadId]?.queueResumedTurnId ?? null,
-  );
-  const queueStoppedTurnId = useComposerDraftStore(
-    (store) => store.draftsByThreadId[threadId]?.queueStoppedTurnId ?? null,
-  );
-  // A stop, failure, or usage limit pauses the queue until Resume or a new turn ends normally.
-  const queuePause = useMemo(
-    () =>
-      deriveQueuedComposerPause({
-        latestTurn: activeLatestTurn,
-        activities: activeThread?.activities ?? [],
-        threadError: activeThread?.error,
-        queuedTurnCount: queuedComposerTurns.length,
-        stoppedTurnId: queueStoppedTurnId,
-        resumedTurnId: queueResumedTurnId,
-      }),
-    [
-      activeLatestTurn,
-      activeThread?.activities,
-      activeThread?.error,
-      queueResumedTurnId,
-      queueStoppedTurnId,
-      queuedComposerTurns.length,
-    ],
-  );
   const queuedComposerTurnsRef = useRef<QueuedComposerTurn[]>([]);
 
   const autoDispatchingQueuedTurnRef = useRef(false);
@@ -389,22 +362,6 @@ export function useChatQueuedTurns({
     [removeQueuedComposerTurn, restoreQueuedTurnToComposer],
   );
 
-  const onResumeQueuedComposerTurns = useCallback(() => {
-    if (!queuePause) {
-      return;
-    }
-    useComposerDraftStore.getState().resumeQueuedTurns(threadId, queuePause.turnId);
-  }, [queuePause, threadId]);
-
-  // Edit on the paused notice takes the next queued message back into the composer;
-  // the rest stays paused until that message is sent and its turn ends normally.
-  const onEditPausedQueuedComposerTurn = useCallback(() => {
-    const nextQueuedTurn = queuedComposerTurnsRef.current[0];
-    if (nextQueuedTurn) {
-      onEditQueuedComposerTurn(nextQueuedTurn);
-    }
-  }, [onEditQueuedComposerTurn]);
-
   // Advance/expire the steer gate as the session moves through the
   // interrupt→steered-turn handoff (or fails out of it).
   const sessionErroredForSteerGate = activeThread?.session?.status === "error";
@@ -462,15 +419,12 @@ export function useChatQueuedTurns({
     activeThread.messages.length === 0 &&
     activeLatestTurn == null;
 
-  const isQueuePaused = queuePause !== null;
-
   useEffect(() => {
     if (hasPendingCacheReview) {
       clearQueuedComposerAutoDispatchRetry(threadId);
       return;
     }
     if (
-      isQueuePaused ||
       isQueuedComposerAwaitingTurnStart(threadId) ||
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
@@ -557,7 +511,6 @@ export function useChatQueuedTurns({
     hasPendingCacheReview,
     isConnecting,
     isLocalDraftThread,
-    isQueuePaused,
     isUnstartedThread,
     localDispatch,
     pendingUserInputs.length,
@@ -573,8 +526,5 @@ export function useChatQueuedTurns({
     removeQueuedComposerTurn,
     onSteerQueuedComposerTurn,
     onEditQueuedComposerTurn,
-    queuePause,
-    onResumeQueuedComposerTurns,
-    onEditPausedQueuedComposerTurn,
   };
 }

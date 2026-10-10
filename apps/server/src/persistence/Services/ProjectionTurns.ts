@@ -42,6 +42,10 @@ export const ProjectionTurn = Schema.Struct({
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
@@ -60,6 +64,10 @@ export const ProjectionTurnById = Schema.Struct({
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
@@ -73,6 +81,10 @@ export const ProjectionPendingTurnStart = Schema.Struct({
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
   requestedAt: IsoDateTime,
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
 });
 export type ProjectionPendingTurnStart = typeof ProjectionPendingTurnStart.Type;
 
@@ -127,6 +139,12 @@ export interface ProjectionTurnRepositoryShape {
   readonly replacePendingTurnStart: (
     row: ProjectionPendingTurnStart,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /** Records workspace classification on the request's current pending or concrete row. */
+  readonly markStartedWithoutGitWorkspace: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
    * Returns the newest pending-start placeholder for a thread; this is expected to be at most one row after replacement writes.

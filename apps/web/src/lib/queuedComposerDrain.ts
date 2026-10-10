@@ -3,8 +3,7 @@
 //          whose ChatView is unmounted, using the same gates as the open chat.
 // Layer: Web subscription utility
 // Exports: drain gates, bounded retry state, exclusive per-thread send lock,
-//          locked-dispatch helper, steer-gate sharing, stop hold, ChatView
-//          claim/release, watcher start
+//          locked-dispatch helper, steer-gate sharing, ChatView claim/release, watcher start
 
 import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
@@ -22,7 +21,6 @@ import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SessionPhase } from "../types";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
-import { deriveQueuedComposerPause } from "./queuedComposerPause";
 import { newMessageId } from "./utils";
 
 export interface QueuedComposerAutoDispatchGates {
@@ -37,8 +35,6 @@ export interface QueuedComposerAutoDispatchGates {
   hasPendingProgress: boolean;
   pendingUserInputCount: number;
   queuedTurnCount: number;
-  /** The previous turn was stopped, failed, or hit a usage limit and the user has not resumed. */
-  isQueuePaused?: boolean;
 }
 
 export function shouldAutoDispatchQueuedComposerTurn(
@@ -55,8 +51,7 @@ export function shouldAutoDispatchQueuedComposerTurn(
     gates.hasPendingCacheReview ||
     gates.hasPendingProgress ||
     gates.pendingUserInputCount > 0 ||
-    gates.queuedTurnCount === 0 ||
-    gates.isQueuePaused === true
+    gates.queuedTurnCount === 0
   );
 }
 
@@ -141,27 +136,6 @@ export async function runLockedQueuedComposerAutoDispatch(input: {
     input.onSettled?.();
     endQueuedComposerAutoDispatch(input.threadId);
   }
-}
-
-/**
- * Records a user Stop so the thread's waiting queue pauses instead of sending
- * when the stopped turn ends. Returns an undo for a stop request that failed.
- */
-export function holdQueuedComposerTurnsForStop(threadId: ThreadId): () => void {
-  const thread = getThreadFromState(useStore.getState(), threadId);
-  const stoppedTurnId = thread?.session?.activeTurnId ?? thread?.latestTurn?.turnId ?? null;
-  const drafts = useComposerDraftStore.getState();
-  const previousStoppedTurnId = drafts.draftsByThreadId[threadId]?.queueStoppedTurnId ?? null;
-  if (stoppedTurnId === null || stoppedTurnId === previousStoppedTurnId) {
-    return () => {};
-  }
-  drafts.pauseQueuedTurnsAfterStop(threadId, stoppedTurnId);
-  return () => {
-    const current = useComposerDraftStore.getState().draftsByThreadId[threadId];
-    if (current?.queueStoppedTurnId === stoppedTurnId) {
-      useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(threadId, previousStoppedTurnId);
-    }
-  };
 }
 
 export function claimQueuedComposerAutoDispatch(threadId: ThreadId): void {
@@ -288,11 +262,7 @@ function haveQueuedTurnsChanged(
     ...(Object.keys(previous) as ThreadId[]),
   ]);
   for (const threadId of threadIds) {
-    if (
-      current[threadId]?.queuedTurns !== previous[threadId]?.queuedTurns ||
-      current[threadId]?.queueResumedTurnId !== previous[threadId]?.queueResumedTurnId ||
-      current[threadId]?.queueStoppedTurnId !== previous[threadId]?.queueStoppedTurnId
-    ) {
+    if (current[threadId]?.queuedTurns !== previous[threadId]?.queuedTurns) {
       return true;
     }
   }
@@ -344,7 +314,6 @@ function threadDrainSignal(state: AppState, threadId: ThreadId): string {
     thread.session?.orchestrationStatus ?? "",
     thread.session?.activeTurnId ?? "",
     thread.latestTurn?.turnId ?? "",
-    thread.latestTurn?.state ?? "",
     thread.latestTurn?.startedAt ?? "",
     thread.latestTurn?.completedAt ?? "",
     thread.error ?? "",
@@ -416,15 +385,6 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
     hasPendingProgress: pendingUserInputs.length > 0,
     pendingUserInputCount: pendingUserInputs.length,
     queuedTurnCount: draft?.queuedTurns.length ?? 0,
-    isQueuePaused:
-      deriveQueuedComposerPause({
-        latestTurn: thread?.latestTurn,
-        activities: thread?.activities ?? [],
-        threadError: thread?.error,
-        queuedTurnCount: draft?.queuedTurns.length ?? 0,
-        stoppedTurnId: draft?.queueStoppedTurnId,
-        resumedTurnId: draft?.queueResumedTurnId,
-      }) !== null,
   };
 }
 
